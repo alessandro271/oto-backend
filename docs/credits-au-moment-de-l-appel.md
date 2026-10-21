@@ -79,7 +79,7 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
 | `PUT /api/service/orgs/{id}/credits/payer-mode` | qui paie dans l'org : `org` (défaut) ou `person` |
 | `POST /api/service/credits/movements` | verse un montant signé à un payeur, une fois par `(payeur, idempotency_key)` ; même clé, autre contenu : 409 `idempotency_conflict` |
 | `GET /api/service/credits/balance?payer=` | `balance` (versé − réglé), `holds_open` (réservé, pas encore réglé), `available` |
-| `GET /api/service/credits/movements?after=&limit=` | les mouvements de tous les payeurs, 500 par défaut, 1 000 au plus ; `as_of` sur chaque page |
+| `GET /api/service/credits/movements?after=&limit=` | les mouvements de tous les payeurs, 500 par défaut, 1 000 au plus ; `as_of` et `settled_as_of` sur chaque page |
 
 - **Une ligne de barème** : `(connector, function, unit)` → `budget` unités par paquet de
   `per_n` unités de la fonction. Réservation et règlement s'arrondissent au paquet
@@ -118,8 +118,9 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   visibles, plus anciens que `as_of` : il faut lire la suite.
   - **Le calcul** (`db/credits.page_de_mouvements`) : le plus ancien de trois instants.
     (1) L'instant de lecture, moins une seconde. (2) Le début de toute transaction
-    ouverte de la base courante dont le rôle peut insérer dans `credit_movements`, lu
-    dans `pg_stat_activity` AVANT l'instantané de la page. `created_at` vaut `NOW()`,
+    ouverte de la base courante dont le rôle peut insérer dans `credit_movements` ou
+    dans `credit_holds` (pour `settled_as_of`, ci-dessous), lu dans
+    `pg_stat_activity` AVANT l'instantané de la page. `created_at` vaut `NOW()`,
     le DÉBUT de la transaction qui écrit : une transaction qui n'a encore que lu (sans
     xid, donc invisible au curseur) peut valider plus tard un mouvement daté de son
     début — elle compte, xid ou non. (3) Le plus ancien mouvement déjà validé que
@@ -149,6 +150,34 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
     alors ni son état ni son début), ou une transaction préparée. Le cœur ne promet
     rien plutôt qu'un horizon faux, et le journalise. **Prérequis de production** : le
     rôle applicatif porte `pg_read_all_stats` (ou `pg_monitor`).
+- **`settled_as_of`**, sur chaque page, vide comprise : l'instant sous lequel tout appel
+  est réglé ou libéré. `as_of` dit qu'aucun MOUVEMENT daté d'avant ne peut plus
+  apparaître ; mais une réservation encore ouverte n'a pas de mouvement — une soumission
+  asynchrone attend sa relève, ou son échéance de 24 h (`OTO_CREDITS_HOLD_MAX_S`) — et
+  son règlement, à venir, sera daté de plus tard. Juger réglés les appels d'une
+  période se fait donc sur `settled_as_of`, pas sur `as_of`, sans connaître l'échéance.
+  - **Le calcul** : le plus ancien de `as_of` et du début (`created_at`) de la plus
+    ancienne réservation, tous payeurs confondus, encore OUVERTE ou réglée par un
+    mouvement `settle` que l'horizon du curseur retient encore (`xid >=
+    pg_snapshot_xmin`) — lu dans le MÊME instantané que la page et le terme (3)
+    d'`as_of`. Toute réservation posée avant est close (réglée, libérée ou échue), et
+    son mouvement, s'il en a un, est servi par le flux. Une échéance est un mouvement
+    `settle` ; une libération n'en écrit aucun, rien ne reste à servir. Une transaction
+    longue du serveur, qui retient le curseur, retient donc aussi `settled_as_of` au
+    début des réservations qu'elle empêche de servir.
+  - **Ce que cela coûte** : deux lectures bornées, l'une par l'index partiel des
+    réservations ouvertes, l'autre par l'index du curseur (les seuls mouvements
+    retenus), puis la clé de leur réservation.
+  - **Monotone**, comme `as_of`. Une réservation close ne se rouvre pas, et un
+    règlement retenu à une lecture l'était déjà à la précédente s'il était visible
+    (l'horizon ne recule pas) ; une réservation retenue à une lecture et invisible à la
+    précédente vient d'une transaction qui n'était pas validée à l'instantané
+    précédent : elle courait à la
+    lecture de `pg_stat_activity` d'alors, qui l'a comptée à son début — c'est-à-dire à
+    son `created_at` (`NOW()`, le début de la transaction) —, ou elle a commencé après.
+    D'où le terme (2), qui compte aussi les rôles qui peuvent insérer dans
+    `credit_holds`.
+  - **`null`** quand `as_of` l'est.
 - Le curseur porte les règlements (échéances comprises), les versements et les transferts.
   Les réservations en cours se lisent dans le solde (`holds_open`).
 - **Rapprocher un règlement de ce qui a consommé** : le `call_uid` d'un mouvement `settle`

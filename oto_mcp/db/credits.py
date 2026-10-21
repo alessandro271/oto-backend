@@ -16,7 +16,8 @@ Une unité est un ENTIER : rien ici ne connaît de monnaie.
 - **Curseur** (commerce) : les mouvements validés sous l'horizon
   `pg_snapshot_xmin(pg_current_snapshot())`, par `(xid, id)` : une transaction encore
   ouverte ne peut plus valider un mouvement EN DESSOUS de ce qui a été servi. Chaque
-  page dit aussi `as_of`, l'instant sous lequel aucun mouvement ne peut plus apparaître
+  page dit aussi `as_of`, l'instant sous lequel aucun mouvement ne peut plus apparaître,
+  et `settled_as_of`, l'instant sous lequel toute réservation est close
   (`page_de_mouvements`).
 """
 from __future__ import annotations
@@ -167,17 +168,18 @@ def solde(payer: str) -> dict:
     return dict(row)
 
 
-# Les sessions de la base qui peuvent encore écrire un mouvement daté d'AVANT la lecture.
-# `created_at` vaut `NOW()`, le DÉBUT de la transaction qui écrit (`xact_start`) : une
-# transaction ouverte, même sans xid encore (elle n'a fait que lire), peut valider plus
-# tard un mouvement daté de son début. Toutes comptent donc, xid ou non, à leur début —
-# ou au début de leur requête (`query_start`), publié AVANT `xact_start` quand une
-# transaction démarre. Seules les sessions de CETTE base (une autre ne peut pas écrire
-# ici) et d'un rôle qui peut insérer dans `credit_movements` ; ni la nôtre, ni le
-# nettoyage automatique. Une session que notre rôle ne peut pas lire (sans
-# `pg_read_all_stats`, celle d'un autre rôle n'a que sa base et son rôle) et une
-# transaction préparée (hors sessions) ont un début inconnu : elles rendent l'horizon
-# indéterminable.
+# Les sessions de la base qui peuvent encore écrire un mouvement — ou une réservation —
+# daté d'AVANT la lecture. `created_at` vaut `NOW()`, le DÉBUT de la transaction qui
+# écrit (`xact_start`) : une transaction ouverte, même sans xid encore (elle n'a fait que
+# lire), peut valider plus tard une ligne datée de son début. Toutes comptent donc, xid
+# ou non, à leur début — ou au début de leur requête (`query_start`), publié AVANT
+# `xact_start` quand une transaction démarre. Seules les sessions de CETTE base (une
+# autre ne peut pas écrire ici) et d'un rôle qui peut insérer dans `credit_movements` ou
+# dans `credit_holds` (`settled_as_of` ne recule pas devant une réservation validée en
+# retard) ; ni la nôtre, ni le nettoyage automatique. Une session que notre rôle ne peut
+# pas lire (sans `pg_read_all_stats`, celle d'un autre rôle n'a que sa base et son rôle)
+# et une transaction préparée (hors sessions) ont un début inconnu : elles rendent
+# l'horizon indéterminable.
 _SESSIONS_ECRIVANTES = """
 SELECT least(clock_timestamp() - make_interval(secs => %s),
              min(least(a.xact_start, a.query_start))
@@ -190,21 +192,33 @@ SELECT least(clock_timestamp() - make_interval(secs => %s),
 FROM pg_stat_activity a LEFT JOIN pg_roles r ON r.oid = a.usesysid
 WHERE a.datname = current_database() AND a.pid <> pg_backend_pid()
   AND a.backend_type IS DISTINCT FROM 'autovacuum worker'
-  AND has_any_column_privilege(r.oid, 'credit_movements'::regclass, 'INSERT')
-      IS NOT FALSE
+  AND (has_any_column_privilege(r.oid, 'credit_movements'::regclass, 'INSERT')
+           IS NOT FALSE
+       OR has_any_column_privilege(r.oid, 'credit_holds'::regclass, 'INSERT')
+           IS NOT FALSE)
 """
 
 # La marge sur l'instant de lecture : une transaction qui démarre a déjà pris son
 # horodatage quelques microsecondes avant de se publier dans `pg_stat_activity`.
 _MARGE_S = 1
 
-# La page et ce que l'horizon retient encore, dans le MÊME instantané : les mouvements
-# déjà validés au-dessus de l'horizon ne sont pas servis, et le seront plus tard.
+# La page, ce que l'horizon retient encore et la plus ancienne réservation dont le
+# règlement n'est pas servi, dans le MÊME instantané : les mouvements déjà validés
+# au-dessus de l'horizon ne sont pas servis, et le seront plus tard ; une réservation
+# ouverte n'a pas encore de mouvement, une réservation réglée n'est servie qu'avec son
+# mouvement `settle` (une échéance en est un ; une libération n'en écrit aucun). Deux
+# lectures bornées plutôt qu'un `OR` : les réservations ouvertes par leur index partiel,
+# les règlements retenus par l'index du curseur puis la clé de leur réservation.
 _PAGE = f"""
 WITH h AS MATERIALIZED (
-    SELECT x, (SELECT min(r.created_at) FROM credit_movements r WHERE r.xid >= x) AS retenu
+    SELECT x, least(%s::timestamptz, (SELECT min(r.created_at) FROM credit_movements r
+                                       WHERE r.xid >= x)) AS as_of,
+           least((SELECT min(o.created_at) FROM credit_holds o WHERE o.state = 'open'),
+                 (SELECT min(o.created_at) FROM credit_movements r
+                  JOIN credit_holds o ON o.call_uid = r.call_uid
+                  WHERE r.xid >= x AND r.kind = 'settle')) AS non_reglee
     FROM (SELECT pg_snapshot_xmin(pg_current_snapshot()) AS x) s)
-SELECT least(%s::timestamptz, h.retenu) AS as_of, p.*
+SELECT h.as_of, least(h.as_of, h.non_reglee) AS settled_as_of, p.*
 FROM h LEFT JOIN LATERAL (
     SELECT {_MOUVEMENT}, xid AS _ordre FROM credit_movements
     WHERE xid < h.x AND (xid, id) > (%s::text::xid8, %s) ORDER BY xid, id LIMIT %s
@@ -214,30 +228,46 @@ ORDER BY p._ordre, p.id
 
 
 def page_de_mouvements(xid: int, id_: int, limite: int) -> dict:
-    """`{mouvements, as_of}` : les mouvements d'après `(xid, id)`, validés sous
-    l'horizon, par `(xid, id)` ; et `as_of`, l'instant sous lequel aucun mouvement
+    """`{mouvements, as_of, settled_as_of}` : les mouvements d'après `(xid, id)`, validés
+    sous l'horizon, par `(xid, id)` ; et `as_of`, l'instant sous lequel aucun mouvement
     ne peut plus apparaître : tout mouvement qui n'est pas DÉJÀ sous l'horizon (servi
     sur cette page ou sur les suivantes du même flux) sera daté (`created_at`) d'au
     moins `as_of`. Une période qui s'achève avant `as_of` est donc complète une fois le
     flux lu jusqu'au bout (une page plus courte que `limite`).
 
     `as_of` = le plus ancien de : l'instant de lecture (moins `_MARGE_S`), le début de
-    toute transaction ouverte de la base qui peut écrire un mouvement (lu AVANT
-    l'instantané de la page, `_SESSIONS_ECRIVANTES`), et le plus ancien mouvement déjà
-    validé que l'horizon retient encore (lu DANS l'instantané de la page). Chaque terme
-    ne fait qu'avancer d'une lecture à l'autre : `as_of` ne recule jamais, quel que soit
-    le curseur. `None` quand une transaction de la base a un début illisible."""
+    toute transaction ouverte de la base qui peut écrire un mouvement ou une réservation
+    (lu AVANT l'instantané de la page, `_SESSIONS_ECRIVANTES`), et le plus ancien
+    mouvement déjà validé que l'horizon retient encore (lu DANS l'instantané de la
+    page). Chaque terme ne fait qu'avancer d'une lecture à l'autre : `as_of` ne recule
+    jamais, quel que soit le curseur. `None` quand une transaction de la base a un début illisible.
+
+    `settled_as_of` = le plus ancien de `as_of` et du début (`created_at`) de la plus
+    ancienne réservation, tous payeurs, encore OUVERTE ou réglée par un mouvement que
+    l'horizon retient encore, lue dans le même instantané : toute réservation posée avant
+    est close (réglée, libérée ou échue), et son mouvement, s'il en a un, est servi par
+    le flux (sur cette page ou les suivantes). Une réservation asynchrone reste ouverte
+    jusqu'à sa relève ou son échéance : elle tient `settled_as_of` à son début, sans que
+    le lecteur ait à connaître l'échéance. Monotone lui aussi : une réservation retenue
+    maintenant l'était déjà à la lecture précédente (une réservation close ne se rouvre
+    pas, et un règlement retenu maintenant l'était déjà s'il était visible), ou vient
+    d'une transaction que `_SESSIONS_ECRIVANTES` comptait alors, ou qui a commencé
+    après — datée, donc, d'au moins l'`as_of` d'alors. `None` avec `as_of`."""
     with _connect() as conn:
         s = conn.execute(_SESSIONS_ECRIVANTES, (_MARGE_S,)).fetchone()
         rows = conn.execute(_PAGE, (s["borne"], str(xid), id_, limite)).fetchall()
     if s["indeterminees"]:
         logger.warning("credits: horizon indéterminable, %s transaction(s) de la base "
                        "au début illisible (rôle sans pg_read_all_stats, ou transaction "
-                       "préparée) : as_of non servi", s["indeterminees"])
-    mouvements = [{k: v for k, v in r.items() if k not in ("as_of", "_ordre")}
+                       "préparée) : as_of et settled_as_of non servis",
+                       s["indeterminees"])
+    mouvements = [{k: v for k, v in r.items()
+                   if k not in ("as_of", "settled_as_of", "_ordre")}
                   for r in rows if r["id"] is not None]
-    return {"mouvements": mouvements,
-            "as_of": None if s["indeterminees"] else rows[0]["as_of"]}
+    if s["indeterminees"]:
+        return {"mouvements": mouvements, "as_of": None, "settled_as_of": None}
+    return {"mouvements": mouvements, "as_of": rows[0]["as_of"],
+            "settled_as_of": rows[0]["settled_as_of"]}
 
 
 # ── le moteur réserve, règle, libère ─────────────────────────────────────────
