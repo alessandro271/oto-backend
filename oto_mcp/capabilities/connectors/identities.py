@@ -73,7 +73,9 @@ class Identity(BaseModel):
     # `ok` by default. On a hosted Unipile account, the status is confirmed by
     # a liveness probe (users/me) and downgraded to `disconnected` — the account
     # status reported by the provider can stay « OK » while the session
-    # is dead (#236). Fail-soft: a probe incident leaves `ok`.
+    # is dead (#236). Fail-soft: a probe incident leaves `ok`. On an OAuth account
+    # (Google, Microsoft), `reauth_required` = its vault row carries the health mark
+    # (`health_ko`, refused refresh): the card offers « Reconnect » on its line.
     status: Optional[str] = None
     # Identity actually operated on ITS channel. Several entries can therefore
     # be `is_default` at the same time on a multi-channel connector (one per channel).

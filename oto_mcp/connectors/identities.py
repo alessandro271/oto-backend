@@ -111,6 +111,14 @@ def select_identity(sub: str, connector: str, identity_id: str, scope: str = "me
     return fn(sub, identity_id)
 
 
+def _oauth_status(meta: dict) -> str:
+    """An OAuth account's line status: `reauth_required` when its vault row carries
+    the health mark (refresh refused, `connector_health.mark_rejected`) — the mark that
+    `/api/me` already reads for « État pour toi ». A fixed `ok` showed a green dot next
+    to a « Connexion KO » verdict, with no way to reconnect from the line."""
+    return "reauth_required" if meta.get("health_ko") else "ok"
+
+
 # --- Google: N vault credentials (account=email) ----------------------------
 
 def _google_list(sub: str, service: "str | None" = None) -> list[dict]:
@@ -120,7 +128,7 @@ def _google_list(sub: str, service: "str | None" = None) -> list[dict]:
     from ..auth import google as google_oauth
     ok = (lambda a: a.get("google_email") and (
         service is None or service in google_oauth.services_granted(a.get("scopes"))))
-    mine = [{"id": a["google_email"], "label": a["google_email"], "status": "ok",
+    mine = [{"id": a["google_email"], "label": a["google_email"], "status": _oauth_status(a),
              "is_default": a["is_default"], "channel": None}
             for a in google_oauth.list_accounts(sub) if ok(a)]
     # Accounts SHARED by the team or org (2026-09-27): reachable via
@@ -695,7 +703,7 @@ def _microsoft_list(sub: str, service: "str | None") -> list[dict]:
     for c in comptes:
         meta = c.get("meta") or {}
         ident = {"id": c["account"], "label": meta.get("label") or c["account"],
-                 "status": "ok", "is_default": bool(meta.get("is_default")),
+                 "status": _oauth_status(meta), "is_default": bool(meta.get("is_default")),
                  "channel": None}
         if c.get("shared"):
             ident.update(shared=True, shared_owner=c["shared_owner"],

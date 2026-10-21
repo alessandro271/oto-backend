@@ -345,7 +345,7 @@ def test_le_dialogue_d_un_service_demande_ses_scopes(env):
     client_id, retour, etat = appel.args
     assert client_id == "app-id-fictif" and retour == _RETOUR
     assert appel.kwargs == {"scopes": env.coeur.scopes.IDENTITY + env.coeur.scopes.FILES,
-                            "tenant": "organizations"}
+                            "tenant": "organizations", "login_hint": None}
     assert env.auth.verify_state(etat) == (SUB, ORG, "", SERVICE, None, "member", None)
 
 
@@ -537,6 +537,38 @@ def test_reconnecter_le_meme_compte_remplace_sa_ligne_meme_renommee(env):
     assert env.coffre.meta("client-a")["is_default"] is False, "le défaut ne bouge pas"
 
 
+def test_reconnecter_un_compte_par_son_nom_vise_son_adresse_et_son_annuaire(env):
+    """« Reconnecter » sur la ligne d'un compte KO : le dialogue est pré-rempli de SON
+    adresse, sur SON annuaire (un invité revient chez son client) ; le retour retrouve sa
+    ligne par l'id Microsoft (`persist_grant`)."""
+    from oto_mcp.connectors import flow as connector_flow
+
+    _connecter(env, JANE, "RT-JANE")
+    _connecter(env, JOHN, "RT-JOHN", tenant="contoso.onmicrosoft.com")
+    start = connector_flow.entries()[SERVICE].start
+    start(types.SimpleNamespace(sub=SUB),
+          {"account": "john@fabrikam.example (contoso.onmicrosoft.com)"})
+    appel = env.coeur.auth.authorize_url.call_args
+    assert appel.kwargs["login_hint"] == "john@fabrikam.example"
+    assert appel.kwargs["tenant"] == "contoso.onmicrosoft.com"
+    assert env.auth.verify_state(appel.args[2]).tenant == "contoso.onmicrosoft.com"
+
+
+@pytest.mark.parametrize("valeurs, statut, code", [
+    ({"account": "inconnu@exemple.test"}, 404, "account_not_found"),
+    ({"account": "jane@contoso.example", "scope": "org"}, 400, "invalid_scope"),
+])
+def test_reconnecter_un_compte_qui_n_est_pas_le_sien_est_refuse(env, valeurs, statut, code):
+    from oto_mcp.capabilities._types import AuthzDenied
+    from oto_mcp.connectors import flow as connector_flow
+
+    _connecter(env, JANE, "RT-JANE")
+    with pytest.raises(AuthzDenied) as e:
+        connector_flow.entries()[SERVICE].start(types.SimpleNamespace(sub=SUB), valeurs)
+    assert (e.value.status, e.value.code) == (statut, code)
+    env.coeur.auth.authorize_url.assert_not_called()
+
+
 def test_un_nom_pris_par_un_autre_compte_n_est_pas_ecrase(env):
     env.coffre.poser("jane@contoso.example", "RT-AUTRE", {"microsoft_id": "id-autre"})
     with pytest.raises(RuntimeError, match="rename"):
@@ -718,6 +750,21 @@ def test_autorisation_morte_marque_ce_compte_seulement(env):
         assert etat.linked and etat.accounts == 2 and etat.health_ko
         assert "john@fabrikam.example" in etat.health_reason
         assert "jane@contoso.example" not in etat.health_reason
+
+
+def test_le_compte_ko_se_lit_sur_sa_ligne_et_le_message_dit_le_bouton(env):
+    """La carte montrait une pastille verte à côté de « Connexion KO » : la ligne d'un
+    compte marqué dit `reauth_required`, l'autre reste `ok`."""
+    from oto_mcp.connectors import identities
+
+    _deux_comptes(env)
+    env.coeur.auth.refresh.side_effect = env.coeur.MicrosoftGrantExpired("expiré")
+    with pytest.raises(env.auth.MicrosoftReauthRequired, match="« Reconnect »") as e:
+        env.sous_compte("john@fabrikam.example")(env.auth.access_token_for, SUB, SERVICE)
+    assert "default setting and its loans are kept" in str(e.value)
+    for carte in (PORTEUR, SERVICE):
+        assert [(i["id"], i["status"]) for i in identities.list_identities(SUB, carte)] == [
+            ("jane@contoso.example", "ok"), ("john@fabrikam.example", "reauth_required")]
 
 
 def test_secret_d_application_faux_ne_marque_pas_la_personne(env):

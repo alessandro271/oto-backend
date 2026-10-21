@@ -399,17 +399,32 @@ def verify_admin_state(state: Optional[str]) -> Optional[EtatApprobation]:
 # --- starting the flow -------------------------------------------------------
 
 def build_auth_url(sub: str, return_app: str = "", connector: str = CONNECTOR,
-                   tenant: Optional[str] = None, scope: str = "member") -> str:
+                   tenant: Optional[str] = None, scope: str = "member",
+                   login_hint: Optional[str] = None) -> str:
     """The Microsoft dialog URL — for the account, or for ONE service (identity +
     its scopes, `scopes_for`), on the directory `tenant` (already normalized), for the
-    tier `scope` (`scope_target`: raises `PermissionError`/`ValueError`)."""
+    tier `scope` (`scope_target`: raises `PermissionError`/`ValueError`). `login_hint`
+    pre-fills the address (a reconnection: `reconnection_target`)."""
     group = scope_target(sub, scope)
     org_id = _ctx_org(sub)
     return _coeur().auth.authorize_url(
         app()["client_id"], oauth_flow.redirect_uri(_CALLBACK_PATH),
         make_state(sub, org_id, oauth_flow.resolve_return_app(return_app), connector,
                    tenant, scope, group),
-        scopes=scopes_for(connector), tenant=annuaire(tenant))
+        scopes=scopes_for(connector), tenant=annuaire(tenant), login_hint=login_hint)
+
+
+def reconnection_target(sub: str, account: str) -> tuple[str, Optional[str]]:
+    """The address and directory to reconnect the person's linked account `account`
+    with: the dialog is pre-filled with ITS address, on ITS directory (a guest connected
+    on a client's directory must come back there, or Entra serves another account). The
+    callback recognizes the account by its Microsoft `id` (`persist_grant`): its row,
+    default status and loans stay. Raises `LookupError` for an account she has not linked."""
+    meta = next((c.get("meta") or {} for c in _comptes(_ctx_org(sub), sub)
+                 if c["account"] == account), None)
+    if meta is None:
+        raise LookupError(f"No linked Microsoft account named `{account}` to reconnect.")
+    return meta.get("email") or "", meta.get("tenant")
 
 
 _PALIERS = ("member", "org", "group")
@@ -503,11 +518,22 @@ def _start_flow_for(connector: str):
             tenant = normalize_tenant(values.get("tenant"))
         except ValueError as e:
             raise AuthzDenied(400, "invalid_tenant", str(e))
+        # `account` (hidden, like `scope`): « Reconnect » on the line of an account of
+        # hers — the dialog targets that account, on its directory.
+        login_hint = None
+        if values.get("account"):
+            if (values.get("scope") or "member") != "member":
+                raise AuthzDenied(400, "invalid_scope",
+                                  "Only an account of your own is reconnected by name.")
+            try:
+                login_hint, tenant = reconnection_target(ctx.sub, values["account"])
+            except LookupError as e:
+                raise AuthzDenied(404, "account_not_found", str(e))
         try:
             # `scope` is a HIDDEN key like `app` (Google, Salesforce): never a form field.
             return connector_flow.FlowStart(auth_url=build_auth_url(
                 ctx.sub, values.get("app") or "", connector, tenant,
-                values.get("scope") or "member"))
+                values.get("scope") or "member", login_hint=login_hint))
         except PermissionError as e:
             raise AuthzDenied(403, "scope_forbidden", str(e))
         except ValueError as e:
@@ -792,8 +818,9 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
                                    tenant=annuaire(meta.get("tenant")))
     except coeur.MicrosoftGrantExpired as e:
         message = (f"Microsoft no longer accepts the sign-in of `{rc.account}` (expired, "
-                   "revoked, or the password changed). Reconnect this account from your "
-                   f"connectors page, card « {label} ».")
+                   "revoked, or the password changed). Reconnect it with the « Reconnect » "
+                   f"button on its line, card « {label} » of the connectors page: its "
+                   "default setting and its loans are kept.")
         connector_health.mark_rejected(rc.entity_type, rc.entity_id, CONNECTOR,
                                        rc.account, message)
         raise MicrosoftReauthRequired(message) from e

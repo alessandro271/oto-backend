@@ -133,6 +133,7 @@ def list_google_accounts(sub: str, org_id: Optional[int]) -> list[dict]:
         "scopes": a["meta"].get("scopes"),
         "granted_at": a["meta"].get("granted_at"),
         "updated_at": a["set_at"],
+        "health_ko": bool(a["meta"].get("health_ko")),
     } for a in accts]
     out.sort(key=lambda r: (not r["is_default"], r["granted_at"] or ""))
     return out

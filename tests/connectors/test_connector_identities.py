@@ -33,10 +33,13 @@ def test_google_list_and_select(monkeypatch):
     monkeypatch.setattr("oto_mcp.auth.google.list_shared_accounts", lambda sub: [])
     monkeypatch.setattr("oto_mcp.auth.google.list_accounts",
                         lambda sub: [{"google_email": "a@x.io", "is_default": True},
-                                     {"google_email": "b@x.io", "is_default": False}])
+                                     {"google_email": "b@x.io", "is_default": False,
+                                      "health_ko": True}])
     ids = connector_identities.list_identities("u1", "google")
     assert {i["id"] for i in ids} == {"a@x.io", "b@x.io"}
     assert next(i for i in ids if i["id"] == "a@x.io")["is_default"]
+    # Un compte au refresh refusé (marque `health_ko`) se dit sur SA ligne.
+    assert {i["id"]: i["status"] for i in ids} == {"a@x.io": "ok", "b@x.io": "reauth_required"}
 
     called = {}
     monkeypatch.setattr("oto_mcp.db.set_default_google_account",
