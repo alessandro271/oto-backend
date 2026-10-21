@@ -139,8 +139,7 @@ def erreurs(lc: dict, *, declared: set, contraignant: bool,
     parallèle qui divergerait le jour où le moteur apprend un opérateur. S'y ajoutent
     ce qu'un filtre d'appel ne vérifie pas et qu'une déclaration doit : une clause
     INERTE (`in: []`) est refusée à la source depuis #353 ; une colonne inconnue quand le
-    format fait contrat (`validation_complete.complete`, partout à partir du
-    21/10/2026) ; un
+    format fait contrat (`validation_complete.complete`) ; un
     état du statut que le cycle de vie ne déclare pas — la file serait vide pour
     toujours, sans un mot."""
     if CLE not in lc or lc[CLE] is None:

@@ -33,7 +33,8 @@ SCHEMA = {
         {"key": "siren", "type": "text"},
         {"key": "contacts", "type": "list", "of": {"type": "object", "fields": [
             {"key": "nom", "type": "text"},
-            {"key": "email", "type": "email"}]}},
+            {"key": "email", "type": "email"},
+            {"key": "role", "type": "text"}]}},
     ],
 }
 

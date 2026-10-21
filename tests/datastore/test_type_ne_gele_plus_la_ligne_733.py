@@ -24,7 +24,6 @@ from __future__ import annotations
 from oto_mcp.datastore import schema as dsv2
 
 SCHEMA = {
-    "unknown_columns": "report",
     "fields": [
         {"key": "linkedin_url", "type": "url"},
         {"key": "notes", "type": "text"},
@@ -93,7 +92,7 @@ def test_la_borne_de_liste_suit_la_meme_regle():
     valeur qu'on POSE. La laisser sur le mergé aurait gardé le défaut que le type
     venait de quitter, sur son voisin immédiat — deux contrôles de la même famille
     se comportant différemment, ce que personne n'aurait pu deviner."""
-    schema = {"unknown_columns": "report", "fields": [
+    schema = {"fields": [
         {"key": "contacts", "type": "list", "of": {"type": "text"}, "max_items": 2},
         {"key": "notes", "type": "text"},
     ]}
@@ -118,7 +117,7 @@ def test_le_requis_continue_de_se_juger_sur_la_ligne_ENTIERE():
     LA LIGNE reste sur le mergé. Un requis manquant est un défaut de la ligne, quel
     que soit le geste qui l'y laisse — sans quoi on pourrait laisser une ligne
     incomplète en écrivant toujours à côté."""
-    schema = {"unknown_columns": "report", "fields": [
+    schema = {"fields": [
         {"key": "siren", "type": "text", "required": True},
         {"key": "notes", "type": "text"},
     ]}
@@ -154,13 +153,14 @@ def test_un_etat_devenu_invalide_ne_gele_plus_la_ligne():
     assert dsv2.validate_row(schema, {**en_base, "notes": "neuve"},
                              prev_status="en_pause", written={"notes"},
                              gelees=gelees) == []
-    assert [g["champ"] for g in gelees] == ["statut"]
-    assert "unknown state" in gelees[0]["refus"]
+    # hors des options ET hors des états : deux refus, une seule colonne signalée
+    assert {g["champ"] for g in gelees} == {"statut"}
+    assert any("unknown state" in g["refus"] for g in gelees)
 
     # écrire un état invalide refuse toujours
     errs = dsv2.validate_row(schema, {**en_base, "statut": "n_importe_quoi"},
                              prev_status="en_pause", written={"statut"})
-    assert errs and "unknown state" in errs[0]
+    assert any("unknown state" in e for e in errs), errs
 
     # et une transition interdite refuse toujours
     errs = dsv2.validate_row(schema, {"statut": "a_faire", "notes": "x"},

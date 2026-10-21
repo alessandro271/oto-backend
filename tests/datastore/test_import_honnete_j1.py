@@ -61,7 +61,8 @@ def _notices(store) -> str:
 # ── oto#164 : une origine vide est ABSENTE, un ré-import la pose ────────────────
 
 _CHEMINS = {
-    "fusion": lambda st, ns, rid, row: st.append_row(ns, row, donnees_d_origine=True),
+    "fusion": lambda st, ns, rid, row: st.append_row(ns, row, donnees_d_origine=True,
+                                                     upsert=True),
     "patch_par_id": lambda st, ns, rid, row: st.update_row(
         ns, rid, {k: v for k, v in row.items() if k != "siren"}, donnees_d_origine=True),
     "lot": lambda st, ns, rid, row: st.write_rows(ns, [row], key="siren",
@@ -165,7 +166,7 @@ def test_fusion_n_ecrit_pas_l_objet_vide_sur_une_case_vide(live):
     ns, ns_id = _tableau(_TYPES)
     ligne = _store().append_row(ns, {"siren": "1", "t": "garde"})
     st = _store()
-    st.append_row(ns, {"siren": "1", "n": {}, "t": "neuf"})
+    st.append_row(ns, {"siren": "1", "n": {}, "t": "neuf"}, upsert=True)
     blob = _blob(ns_id, ligne["_id"])
     assert "n" not in blob and blob["t"] == "neuf", blob
     assert _ecartes(st) == ["n"]

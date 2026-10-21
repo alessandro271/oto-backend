@@ -288,48 +288,6 @@ def _tenant_primaire_declare() -> Iterator[None]:
 # aucun banc n'affirme sur leur valeur littérale (les envois réels sont mockés/
 # court-circuités par l'absence d'`OTO_MAILER_SEND_BEARER` en test) : les anciens
 # défauts servent de valeur gréée, sans risque de masquer une régression.
-# ── Les bascules DATÉES de l'écriture (oto#141, oto#124 ×2) ──────────────────────────
-#
-# Elles tombent à leur date, dans le code, sans déploiement : sans ce gréement, la suite
-# changerait de verdict le 21 octobre 2026, sans qu'une ligne ait bougé. Le jour qui les
-# juge est fixé à la VEILLE de leur date par défaut — le comportement d'avant, que la
-# plupart des bancs décrivent. Un banc qui veut l'APRÈS déplace la date par son réglage
-# (`OTO_UPSERT_IMPLICITE_REFUSE_LE`, `OTO_COLONNE_NON_DECLAREE_REFUSEE_LE`,
-# `OTO_VALIDATION_COMPLETE_LE`), jamais l'horloge.
-def _figer_a_la_veille(monkeypatch: pytest.MonkeyPatch) -> None:
-    from datetime import timedelta
-
-    from oto_mcp.datastore import colonnes_non_declarees as cnd
-    from oto_mcp.datastore import upsert_implicite as upi
-    from oto_mcp.datastore import validation_complete as vc
-
-    veille = timedelta(days=1)
-    monkeypatch.setattr(upi, "_aujourdhui",
-                        lambda: upi.UPSERT_IMPLICITE_REFUSE_LE - veille)
-    monkeypatch.setattr(cnd, "_aujourdhui",
-                        lambda: cnd.COLONNE_NON_DECLAREE_REFUSEE_LE - veille)
-    monkeypatch.setattr(vc, "_aujourdhui",
-                        lambda: vc.VALIDATION_COMPLETE_LE - veille)
-
-
-@pytest.fixture(autouse=True)
-def _bascules_datees_a_la_veille(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Par test aussi : un banc qui déplace `_aujourdhui` est remis à la veille au suivant.
-    _figer_a_la_veille(monkeypatch)
-
-
-@pytest.fixture
-def validation_complete_partout(monkeypatch: pytest.MonkeyPatch) -> None:
-    """L'APRÈS de la bascule d'oto#124 : le format déclaré fait contrat sur TOUS les
-    tableaux à schéma (`validation_complete`). Par son réglage, jamais l'horloge — le
-    jour reste la veille (`_bascules_datees_a_la_veille`), la date passe avant lui.
-    C'est ce qu'un banc pose à la place de l'ancien `unknown_columns: "report"`."""
-    from oto_mcp.datastore import validation_complete as vc
-
-    monkeypatch.setenv(vc.ENV_VALIDATION_COMPLETE_LE,
-                       (vc.VALIDATION_COMPLETE_LE.replace(day=1)).isoformat())
-
-
 @pytest.fixture(autouse=True)
 def _email_transactionnel(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTO_MAILER_URL", "https://mailer.oto.zone/api/send")
@@ -474,20 +432,7 @@ def pytest_collect_file(file_path, parent):
     return collectes
 
 
-#: Le gréement des bascules datées posé pour TOUT le processus (`pytest_configure`) : la
-#: collecte (un texte servi construit à l'import d'un module de tests) et les fixtures de
-#: portée module (un tableau semé une fois pour tout un fichier) passent AVANT les fixtures
-#: de test, donc avant `_bascules_datees_a_la_veille` — sans ceci, elles jugent au VRAI
-#: jour, et la suite change de verdict à la date d'une bascule.
-_VEILLE_DU_PROCESSUS = pytest.MonkeyPatch()
-
-
-def pytest_unconfigure(config: pytest.Config) -> None:
-    _VEILLE_DU_PROCESSUS.undo()
-
-
 def pytest_configure(config: pytest.Config) -> None:
-    _figer_a_la_veille(_VEILLE_DU_PROCESSUS)
     config.addinivalue_line(
         "markers",
         f"{MARQUEUR}: ce test n'a de SENS que face à l'oto-core épinglé — il est "

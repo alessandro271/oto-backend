@@ -54,6 +54,9 @@ class _Verifier:
 
 
 SUB = "usr_vide"
+#: Les colonnes que les bancs écrivent, déclarées : une colonne non déclarée est refusée.
+SCHEMA = {"fields": [{"key": k} for k in ("siren", "contacts", "statut", "qualification",
+                                          "notes_verification")]}
 
 
 def _h() -> dict:
@@ -106,6 +109,7 @@ def fiche(live):
 
     ns = "vivier-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    make_store(SUB).set_schema(ns, SCHEMA)
     row = make_store(SUB).append_row(
         ns, {"siren": "552032534", "contacts": ["a@exemple.invalid"], "statut": "nouveau"})
     return ns, ns_id, row["_id"]
@@ -260,6 +264,7 @@ def test_un_vide_sur_une_colonne_DEJA_vide_passe_et_ne_dit_rien(client, live):
 
     ns = "neuve-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    make_store(SUB).set_schema(ns, SCHEMA)
     rid = make_store(SUB).append_row(ns, {"siren": "552032534"})["_id"]
     r = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                      json={"contacts": []})
@@ -279,8 +284,9 @@ def test_un_LOT_qui_porte_la_cle_metier_ne_casse_pas_et_la_liste_vide_remplace(l
     ns = "lot-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
     store = make_store(SUB)
-    store.set_schema(ns, {"key": "siren", "fields": [{"key": "siren", "type": "text"}]})
+    store.set_schema(ns, {"key": "siren", "fields": [{"key": "siren", "type": "text"},
+                                                     {"key": "contacts"}]})
     store.write_rows(ns, [{"siren": "552032534", "contacts": ["a@exemple.invalid"]}])
-    out = store.write_rows(ns, [{"siren": "552032534", "contacts": []}])
+    out = store.write_rows(ns, [{"siren": "552032534", "contacts": []}], key="siren")
     assert out["updated"] == 1, out
     assert _blob(ns_id, out["ids"][0])["contacts"] == []

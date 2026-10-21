@@ -274,7 +274,6 @@
   "tests/datastore/test_rename_datastore_live_840.py": 1.4,
   "tests/datastore/test_required_gel_284.py": 1.72,
   "tests/datastore/test_retention_revisions_273.py": 1.86,
-  "tests/datastore/test_retirer_unknown_columns.py": 2.04,
   "tests/datastore/test_retrait_attribut_de_colonne.py": 0.03,
   "tests/datastore/test_revision_de_ligne.py": 10.31,
   "tests/datastore/test_sentinelles_dans_les_listes.py": 9.06,

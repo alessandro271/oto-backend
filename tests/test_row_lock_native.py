@@ -28,6 +28,8 @@ def table(live):
     from oto_mcp import db
     ns = "q-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", "sub-test", ns)
+    # `societe` déclarée : une colonne non déclarée est refusée (oto#124).
+    _store().set_schema(ns, {"fields": [{"key": "societe", "type": "text"}]})
     for i in range(3):
         db.datastore_insert_row(ns_id, f"r{i}", {"societe": f"Boîte {i}"})
     return ns, ns_id
@@ -338,10 +340,7 @@ def test_a_table_without_a_lifecycle_hears_nothing(table):
     ns, ns_id = table
     st = _store()
     st.update_row(ns, "r1", {"societe": "Rien à dire"})
-    # Seul le préavis des colonnes non déclarées (oto#124) peut parler ici — `societe`
-    # n'est déclarée nulle part ; aucun message de cycle de vie.
-    assert not [n for n in st.off_schema_report().get("notices") or []
-                if "column not declared" not in n]
+    assert not (st.off_schema_report().get("notices") or [])
 
 
 def test_a_free_row_hears_nothing_either(table):
@@ -393,7 +392,8 @@ def test_the_holder_MERGES_freely_through_its_run(table):
     jeton = session_org.set_call_run("run-fusion")
     try:
         _store().claim_row(ns, "rk", worker="w1")     # SA ligne, désignée
-        _store().write_rows(ns, [{"siren": "123456789", "societe": "Après"}])
+        _store().write_rows(ns, [{"siren": "123456789", "societe": "Après"}],
+                            key="siren")
     finally:
         session_org.reset_call_run(jeton)
 
@@ -418,6 +418,7 @@ def test_ANOTHER_run_is_refused_on_the_merge_path(table):
     autre = session_org.set_call_run("run-intrus")
     try:
         with pytest.raises(RowLocked):
-            _store().write_rows(ns, [{"siren": "123456789", "societe": "Volée"}])
+            _store().write_rows(ns, [{"siren": "123456789", "societe": "Volée"}],
+                                key="siren")
     finally:
         session_org.reset_call_run(autre)

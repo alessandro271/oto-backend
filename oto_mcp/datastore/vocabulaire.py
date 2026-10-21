@@ -74,8 +74,7 @@ _ENFORCEMENT_PROBES = (
      {"fields": [{"key": "x", "max_length": 8, "pattern": "^ok$"}]},
      {"x": "non"}, None),
     ("max_items",
-     {"unknown_columns": "report",
-      "fields": [{"key": "x", "type": "list", "of": {"type": "text"},
+     {"fields": [{"key": "x", "type": "list", "of": {"type": "text"},
                   "max_items": 1}]},
      {"x": ["a", "b"]}, None),
     # ⚠️ Sonde passée d'`enum` à `text` le 10/09/2026 (#98). Sur un enum, elle
@@ -84,17 +83,14 @@ _ENFORCEMENT_PROBES = (
     # lisait `enforced` se croyait protégé. Elle éprouve désormais le cas général —
     # celui qui était cassé —, et l'annonce retombera si le trou se rouvre.
     ("options",
-     {"unknown_columns": "report",
-      "fields": [{"key": "x", "type": "text", "options": ["a"]}]},
+     {"fields": [{"key": "x", "type": "text", "options": ["a"]}]},
      {"x": "b"}, None),
     ("type",
-     {"unknown_columns": "report", "fields": [{"key": "x", "type": "number"}]},
+     {"fields": [{"key": "x", "type": "number"}]},
      {"x": "abc"}, None),
     # ⚠️ La sonde `unknown_columns` est RETIRÉE le 05/10/2026 avec le réglage (oto#124) :
-    # plus aucun réglage ne décide de ce qui est vérifié. Les sondes `options` et `type`
-    # gardent leur schéma `report` d'ici au 21/10 — c'est le réglage stocké, encore lu
-    # jusque-là (`reglages.format_contraignant`), qui y arme la validation complète ;
-    # à partir de la date elle s'applique sans lui.
+    # plus aucun réglage ne décide de ce qui est vérifié — la validation complète
+    # s'applique à tout tableau qui déclare une colonne.
     ("lifecycle",
      {"fields": [{"key": "s", "role": "status",
                   "lifecycle": {"states": ["a", "b"]}}]},

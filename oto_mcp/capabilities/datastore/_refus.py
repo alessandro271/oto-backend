@@ -51,20 +51,20 @@ _PRECONDITION_REFUSEE = DeclaredError(
     "`details.current_revision` porte la révision actuelle — relire, décider de "
     "nouveau, rejouer")
 
-#: oto#141 — la fusion implicite sur la clé métier, refusée à partir de sa date.
+#: oto#141 — la fusion implicite sur la clé métier, refusée.
 _CLE_DEJA_PORTEE = DeclaredError(
     409, "business_key_exists",
-    "sans `upsert=true` (à partir de la date annoncée par `upsert`) : une écriture qui "
+    "sans `upsert=true` : une écriture qui "
     "AJOUTE (ni `id` ni `key`) porte une valeur de clé métier qu'une ligne a déjà, ou "
     "deux lignes d'un même lot portent la même : rien n'est écrit (un lot est jugé "
     "ENTIER avant sa première ligne). Le message et `details` nomment la ligne en place "
     "(`id`) ou les rangs (`doublons`, `existantes`) ; désigner par `id`/`key` pour "
     "modifier, ou passer `upsert=true` pour fusionner")
 
-#: oto#124 — une colonne que le schéma ne déclare pas, refusée à partir de sa date.
+#: oto#124 — une colonne que le schéma ne déclare pas, refusée.
 _COLONNE_NON_DECLAREE = DeclaredError(
     400, "unknown_column",
-    "à partir de la date annoncée par la description : l'écriture pose une colonne que "
+    "l'écriture pose une colonne que "
     "le schéma ne déclare pas, sur n'importe quel tableau. Rien n'est écrit (un lot est "
     "jugé ENTIER avant sa première ligne). `details.colonnes` les nomme ; le geste est "
     "de déclarer la colonne (`PATCH …/schema`, `{\"fields\": [{\"key\": …}]}`) puis "

@@ -17,9 +17,6 @@ dans le même ordre : *à qui appartient cette destination ?*
   est refusé (oto#70) ;
 - `agent_access` — délégué à `acces_agent.py`, dont ce module appelle les refus.
 
-Il tient aussi les deux outils PARTAGÉS par les bascules datées du datastore
-(`date_reglee`, `jour_utc`, et la date en français `_en_francais`).
-
 Ce qu'il ne tient pas :
 - **le palier qui décide qui peut forcer** → `core.DatastorePg._forcage_readonly` ;
 - **le geste du store** qui applique ces refus → `reserves.py` ;
@@ -29,7 +26,6 @@ Ce qu'il ne tient pas :
 """
 from __future__ import annotations
 
-from datetime import date as _date, datetime as _datetime, timezone as _timezone
 from typing import Any, Optional
 
 from . import acces_agent as aga
@@ -58,39 +54,6 @@ from .formule import colonnes_formule
 #: sans dire qu'on sait ce qu'on fait. Rien à demander à personne, rien à provisionner :
 #: le paramètre suffit, et sa présence engage celui qui l'envoie.
 PARAMETRE_ORIGINE = "origine_override"
-
-_MOIS_FR = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet",
-            "août", "septembre", "octobre", "novembre", "décembre")
-
-
-def date_reglee(reglage: str, brut: Optional[str], defaut: "_date") -> "_date":
-    """La date d'une BASCULE en vigueur : `brut` (la valeur du réglage `reglage`) s'il
-    est posé, le défaut du code sinon. Partagée par toutes les bascules datées du
-    datastore : une seule façon de lire, une seule façon de lever. Chaque appelant lit
-    LUI-MÊME son réglage (`os.environ.get(ENV_…)`), pour que l'inventaire des variables
-    le voie.
-
-    ⚠️ Une valeur illisible LÈVE : le réglage décide à la fois de ce qui est ANNONCÉ
-    et de ce qui est APPLIQUÉ, et le lire de travers ferait promettre une échéance
-    que rien n'applique."""
-    brut = (brut or "").strip()
-    if not brut:
-        return defaut
-    try:
-        return _date.fromisoformat(brut)
-    except ValueError:
-        raise ValueError(
-            f"{reglage}={brut!r} n'est pas une date `YYYY-MM-DD`. "
-            "Ce réglage décide à la fois de ce qui est ANNONCÉ et de ce qui est "
-            "APPLIQUÉ : le lire de travers ferait promettre une échéance que rien "
-            "n'applique.") from None
-
-
-def jour_utc() -> "_date":
-    """Le jour qui juge une bascule — en UTC, pas au fuseau du process : la bascule
-    doit tomber au même instant sur toutes les box, et le fuseau d'une machine n'est
-    pas un fait de produit."""
-    return _datetime.now(_timezone.utc).date()
 
 
 def description_parametre_origine(en: bool = False) -> str:
@@ -152,13 +115,6 @@ def description_parametre_origine(en: bool = False) -> str:
             f"couche », et il ne vaut que pour cet appel. Une case sans couche "
             f"`origine` n'a pas de valeur de départ connue : c'est l'absence de la "
             f"couche qui le dit, jamais un texte à sa place.")
-
-
-def _en_francais(quand: "_date") -> str:
-    """La date telle qu'une personne la lit — DÉRIVÉE de la date d'une bascule : un
-    texte saisi à côté d'elle finirait par annoncer un autre jour que celui qui coupe."""
-    jour = "1er" if quand.day == 1 else str(quand.day)
-    return f"{jour} {_MOIS_FR[quand.month - 1]} {quand.year}"
 
 
 def _les_deux_gestes(colonnes: list) -> str:

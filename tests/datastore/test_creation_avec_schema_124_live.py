@@ -1,6 +1,6 @@
 """Un tableau NAÎT avec son schéma (oto#124, suite).
 
-**Le fait.** À partir du 21/10/2026, une écriture dans une colonne non déclarée est
+**Le fait.** Depuis le 21/10/2026, une écriture dans une colonne non déclarée est
 refusée. Un tableau neuf naît sans colonne : sa première écriture est refusée, et il
 fallait un `data_patch_schema` préalable — deux gestes pour le plus banal du produit.
 `data_create_datastore` et `POST /api/datastores` prennent donc `schema`, le MÊME objet
@@ -9,8 +9,7 @@ que `data_set_schema` / `PUT …/schema`, posé par le même chemin (`_poser_sch
 **Atomique pour l'appelant** : un schéma refusé ne laisse aucun tableau derrière lui —
 sinon la reprise, sous le même nom, prendrait `datastore_exists`.
 
-Joué sur les deux faces contre un vrai PostgreSQL, en lisant la BASE ; la date du refus
-est reculée par le RÉGLAGE, jamais par l'horloge.
+Joué sur les deux faces contre un vrai PostgreSQL, en lisant la BASE.
 """
 from __future__ import annotations
 
@@ -20,9 +19,6 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from oto_mcp.datastore import colonnes_non_declarees as cnd
-
-PASSEE = "2026-01-01"
 SUB = "usr_creation124"
 SCHEMA = {"fields": [{"key": "siren", "type": "text"}, {"key": "nom", "type": "text"}],
           "key": "siren"}
@@ -53,7 +49,7 @@ def _nom() -> str:
 
 # ── le texte servi (sans base) ───────────────────────────────────────────────
 
-def test_le_texte_servi_dit_que_c_est_le_geste_normal_et_le_date(monkeypatch):
+def test_le_texte_servi_dit_que_c_est_le_geste_normal():
     import asyncio
 
     from fastmcp import FastMCP
@@ -68,13 +64,10 @@ def test_le_texte_servi_dit_que_c_est_le_geste_normal_et_le_date(monkeypatch):
     assert "schema" in cap.Input.model_fields
     for texte in (outil.description, cap.description):
         assert "<<" not in texte
-        assert "From 2026-10-21 on" in texte and "born with NO column" in texte
+        assert "is REFUSED" in texte and "born with NO column" in texte
         assert "pass `schema`" in texte and "`data_set_schema`" in texte
         assert "normal way to create a table you fill" in texte
         assert "the table is NOT created" in texte
-    monkeypatch.setenv(cnd.ENV_COLONNE_NON_DECLAREE_REFUSEE_LE, PASSEE)
-    apres = cnd.description_creation()
-    assert "From " not in apres and "is REFUSED" in apres and "pass `schema`" in apres
 
 
 # ── la base ──────────────────────────────────────────────────────────────────
@@ -124,11 +117,6 @@ def outils(live, monkeypatch):
             for nom in ("data_create_datastore", "data_write")}
 
 
-@pytest.fixture
-def apres(monkeypatch):
-    monkeypatch.setenv(cnd.ENV_COLONNE_NON_DECLAREE_REFUSEE_LE, PASSEE)
-
-
 def _en_base(nom: str):
     from oto_mcp import db
     ligne = db.get_datastore("user", SUB, nom)
@@ -150,7 +138,7 @@ def _creer(face, outils, client, nom, schema=None, *, avec_cle=True):
 
 
 @pytest.mark.parametrize("face", ["mcp", "rest"])
-def test_le_tableau_nait_avec_son_schema_et_sa_cle(face, outils, client, apres):
+def test_le_tableau_nait_avec_son_schema_et_sa_cle(face, outils, client):
     from oto_mcp import db
     nom = _nom()
     code, corps = _creer(face, outils, client, nom, SCHEMA)
@@ -162,12 +150,11 @@ def test_le_tableau_nait_avec_son_schema_et_sa_cle(face, outils, client, apres):
     assert corps["ns_id"] == corps["id"] == en_base["id"] and corps["is_personal"]
     # La clé métier déclarée porte son index UNIQUE dès la naissance.
     assert db.datastore_has_key_index(int(en_base["id"]))
-    # Le refus des colonnes non déclarées est ARMÉ : la première écriture passe quand
+    # Les colonnes non déclarées sont refusées : la première écriture passe quand
     # même, parce que ses colonnes sont déclarées.
     if face == "mcp":
-        rep = outils["data_write"](datastore=str(en_base["id"]),
-                                   row={"siren": "123456789", "nom": "A"})
-        assert not any("non déclarée" in n for n in rep.get("notices") or [])
+        outils["data_write"](datastore=str(en_base["id"]),
+                             row={"siren": "123456789", "nom": "A"})
     else:
         r = client.post(f"/api/datastores/{en_base['id']}/rows", headers=_h(),
                         json={"siren": "123456789", "nom": "A"})

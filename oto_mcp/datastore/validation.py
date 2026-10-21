@@ -196,9 +196,8 @@ def _type_error(value: Any, ftype: Optional[str], path: str,
         cle = of.get("key") if isinstance(of.get("key"), str) else None
         # Un attribut inconnu se nomme UNE fois pour toute la colonne, sur le premier
         # élément qui le porte : les items d'une liste partagent leur déclaration,
-        # donc 300 contacts fautifs diraient 300 fois la même chose. Même borne que
-        # l'agrégation du relevé `hors_schema` (`clé[].sous_clé`), et même raison :
-        # un refus qu'on ne peut pas lire ne vaut pas mieux qu'un silence.
+        # donc 300 contacts fautifs diraient 300 fois la même chose. Un chemin agrégé
+        # (`clé[].sous_clé`) par la même raison : un refus qu'on ne peut pas lire ne vaut pas mieux qu'un silence.
         vus: set = set()
         vus_geles: set = set()
         for i, item in enumerate(value):
@@ -282,7 +281,7 @@ def _row_errors(fields: list, data: dict, path: str,
     `@empty` n'y est pas une alternative.
 
     `contraignant` = le format du tableau fait contrat (`validation_complete.complete`,
-    partout à partir du 21/10/2026, oto#124). Il n'interdit rien ICI au premier niveau
+    oto#124). Il n'interdit rien ICI au premier niveau
     (une colonne non déclarée est l'affaire de `colonnes_non_declarees`, jugée sur le
     geste dans `_check_row`) ; il FERME les composites déclarés d'un cran plus bas
     (#544). `closed` porte cette fermeture.
@@ -540,24 +539,17 @@ def validate_row(schema: Optional[dict], merged: dict, *,
                  gelees: Optional[list] = None,
                  en_place: Optional[dict] = None,
                  pose: Optional[dict] = None,
-                 ecrits_par_rang: Optional[dict] = None,
-                 preavis: Optional[list] = None) -> list[str]:
+                 ecrits_par_rang: Optional[dict] = None) -> list[str]:
     """Erreurs d'une row TELLE QU'ELLE SERA ÉCRITE (le résultat mergé, pas le
     patch) : required / required_when / types / structure imbriquée — si la
     validation est active — plus le cycle de vie (états + transitions) dès qu'un
     `lifecycle` est déclaré, même hors validation armée. Liste vide = OK.
 
-    Quand le format fait contrat (`validation_complete.complete` — partout à partir du
-    21/10/2026, oto#124), un composite DÉCLARÉ est en plus un référentiel FERMÉ (#544) :
+    Quand le format fait contrat (`validation_complete.complete` — tout tableau qui
+    déclare une colonne, oto#124), un composite DÉCLARÉ est en plus un référentiel FERMÉ (#544) :
     un attribut absent de `of.fields` / `fields` est refusé. La fermeture ne descend
     que dans les composites que le geste RÉÉCRIT — même restriction que `max_length`,
     et même raison.
-
-    `preavis` = liste OUT (oto#124) : sur un tableau en PRÉAVIS
-    (`validation_complete.en_preavis`), les fautes que la validation complète aurait
-    refusées et que le régime actuel laisse passer — jugées sur le même geste
-    (`written`, `en_place`, `ecrits_par_rang`), donc sur ce qu'il ÉCRIT. Elles ne
-    refusent rien : l'appelant les dit, datées. Absente = rien n'est calculé.
 
     `written` = les clés que ce geste réécrit (None = la row entière, cas d'un
     insert). **Quatre** contrôles s'y restreignent, et eux
@@ -606,24 +598,13 @@ def validate_row(schema: Optional[dict], merged: dict, *,
     ou sans `of.key` : le geste dit lui-même ce qu'il écrit, il n'y a rien à déduire."""
     errors: list[str] = []
     charge: Optional[dict] = {} if details is not None else None
-    actuelles: list[str] = []
     if validation_active(schema):
         # required_when se juge sur la row finale (le statut mergé, pas l'ancien)
-        actuelles = _row_errors(_fields(schema), merged, "", written,
-                                contraignant=vc.complete(schema),
-                                details=details, hors=hors, gelees=gelees,
-                                en_place=en_place, charge=charge,
-                                ecrits_par_rang=ecrits_par_rang)
-        errors.extend(actuelles)
-    if preavis is not None and vc.en_preavis(schema):
-        # Le MÊME juge, réglé comme il le sera à la date : ce qu'il refuserait de plus
-        # que le régime actuel est le préavis. Ses relevés propres (`hors`, `gelees`,
-        # charge) ne sont pas collectés : rien n'est écarté ni refusé à ce titre.
-        deja = set(actuelles)
-        preavis.extend(e for e in _row_errors(_fields(schema), merged, "", written,
-                                              contraignant=True, en_place=en_place,
-                                              ecrits_par_rang=ecrits_par_rang)
-                       if e not in deja)
+        errors.extend(_row_errors(_fields(schema), merged, "", written,
+                                  contraignant=vc.complete(schema),
+                                  details=details, hors=hors, gelees=gelees,
+                                  en_place=en_place, charge=charge,
+                                  ecrits_par_rang=ecrits_par_rang))
     # oto#75 barreau 1 : HORS du garde `validation_active`, comme le cycle de vie
     # ci-dessous — la déclaration `required_layers` s'arme elle-même.
     errors.extend(couches_manquantes(schema, merged, written=written, charge=charge,

@@ -110,7 +110,7 @@ def test_sans_effet_nomme_ce_qui_est_declare_et_que_rien_n_applique():
         "fields": [
             {"key": "ref", "type": "text", "agent_access": "none"},  # clé métier
             {"key": "x", "type": "text", "agent_access": "personne"},  # valeur inconnue
-            {"key": "choix", "type": "text", "options": ["a", "b"]},  # non strict
+            {"key": "choix", "type": "text", "options": ["a", "b"]},  # appliquée (oto#124)
             {"key": "statut", "type": "text",
              "lifecycle": {"states": ["a", "b"], "claimable": {"statut": "a"}}},
             {"key": "autre", "type": "text", "lifecycle": {"states": ["c"]}},
@@ -119,14 +119,13 @@ def test_sans_effet_nomme_ce_qui_est_declare_et_que_rien_n_applique():
     }
     vus = {(e["chemin"], e["cle"]) for e in lds.gardes(schema)["sans_effet"]}
     assert vus == {("ref", "agent_access"), ("x", "agent_access"),
-                   ("choix", "options"), ("autre", "lifecycle"), ("vieux", "enum")}
+                   ("autre", "lifecycle"), ("vieux", "enum")}
     raisons = {e["chemin"]: e["raison"] for e in lds.gardes(schema)["sans_effet"]
                if e["cle"] == "agent_access"}
     assert "business key" in raisons["ref"] and "not recognized" in raisons["x"]
 
 
-def test_contre_epreuve_un_tableau_strict_n_a_pas_d_options_inertes(
-        validation_complete_partout):
+def test_contre_epreuve_un_tableau_strict_n_a_pas_d_options_inertes():
     schema = {"fields": [{"key": "choix", "type": "text", "options": ["a", "b"]},
                          {"key": "suivi", "type": "text", "agent_access": "none"}]}
     assert lds.gardes(schema) == {"masquees_a_l_agent": ["suivi"]}

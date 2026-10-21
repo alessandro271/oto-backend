@@ -235,7 +235,7 @@ def test_un_RE_IMPORT_passe_sur_une_colonne_a_CRAN(live):
     Avant le correctif, le second appel partait en 400 sur `siren.origine`."""
     st, ns, _ = _table_a_cran()
     st.append_row(ns, {"siren": "1", "libre": "a"})
-    st.append_row(ns, {"siren": "1", "libre": "b"}, donnees_d_origine=True)
+    st.append_row(ns, {"siren": "1", "libre": "b"}, donnees_d_origine=True, upsert=True)
 
     assert st.list_rows(ns)[0]["libre"] == "b"
 

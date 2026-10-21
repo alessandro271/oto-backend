@@ -44,12 +44,12 @@ def test_un_numero_lisible_passe_et_se_normalise(brut, compact):
     612345678,                                         # un nombre perd son 0
 ])
 def test_ce_qui_n_est_pas_un_numero_est_refuse_meme_sans_strict(brut):
-    """Armé par sa déclaration, comme `email` (`types_declares`) : pas besoin de
-    `strict`. Le refus dit où va ce qui n'est pas le numéro."""
-    assert not S.validation_active(_TEL)
+    """Armé par sa déclaration, comme `email` (`types_declares`). Le refus dit où va ce
+    qui n'est pas le numéro."""
     errs = S.validate_row(_TEL, {"ref": "r", "tel": brut}, written={"tel"})
-    assert errs and "`tel` is declared `phone`" in errs[0], errs
-    assert ".comment" in errs[0]
+    refus = [e for e in errs if "`tel` is declared `phone`" in e]
+    assert refus, errs
+    assert ".comment" in refus[0]
 
 
 def test_le_type_se_declare_et_se_dit():

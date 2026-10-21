@@ -396,8 +396,7 @@ def refuser_les_mots_mal_places(schema: Optional[dict], user_data: Optional[dict
 # (trois signaux, #407/#408/#409, sur une cause qui n'était pas la leur). L'écriture
 # a fait ce qu'on lui demandait ; c'est ce qu'elle en a DIT qui manquait.
 #
-# Même patron que `hors_schema` (#294) et `hors_options` (#319) : on n'empêche rien,
-# on nomme. Et on nomme la VALEUR PERDUE — sans elle il n'y a rien à rétablir.
+# On n'empêche rien, on nomme. Et on nomme la VALEUR PERDUE — sans elle il n'y a rien à rétablir.
 #
 # ══ #608 (28/08/2026) : LA CHAÎNE VIDE N'EST PAS UNE VALEUR ═══════════════════
 #
@@ -507,9 +506,8 @@ def sans_les_nulls_sans_effet(user_data: Optional[dict],
 
     ⚠️ **Colonnes DÉCLARÉES seulement.** La lecture ne sert à `null` que le déclaré : un
     écho ne peut viser que lui. Une colonne HORS schéma écrite à `null` garde son
-    comportement — elle naît en base et le relevé la nomme, ou le tableau la refuse —,
-    sinon une faute de frappe écrite à `null` disparaîtrait sans refus ni relevé
-    (`test_hors_schema_tous_chemins.py`, rouge sur la première version de ce filtre).
+    comportement (`colonnes_non_declarees` : un `null` efface, il ne crée rien), sinon
+    une faute de frappe écrite à `null` disparaîtrait sans un mot.
 
     ⚠️ **Un vide ASSUMÉ (`@empty`) est une valeur en place** (oto#140, J2) : sa valeur
     est `""`, mais son marqueur dit « cherché, rien ». Un `null` dessus l'efface, marqueur

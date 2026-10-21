@@ -218,8 +218,8 @@ class RegistreMixin:
 
         `schema` (oto#124) : le tableau NAÎT avec ce schéma — le même objet que
         `data_set_schema`, posé par le même chemin (`_poser_schema` : validation,
-        vocabulaire fermé, index de clé métier, relevés). À partir du 21/10/2026 une
-        colonne non déclarée est refusée à l'écriture : un tableau créé nu refuse sa
+        vocabulaire fermé, index de clé métier, relevés). Une colonne non déclarée
+        est refusée à l'écriture : un tableau créé nu refuse sa
         première ligne, et c'est ici qu'on déclare ce qu'on va y écrire.
 
         ⚠️ **Un schéma refusé défait la création** : l'appelant voit un seul geste,

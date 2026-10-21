@@ -167,7 +167,8 @@ def test_un_champ_de_l_objet_qui_PORTE_le_nom_d_une_couche(table):
     with pytest.raises(RowValidationError) as e:
         st.append_row(ns, {"siren": "1",
                            "entreprise_social": {"comment": "champ métier", "n": 1},
-                           "entreprise_social.comment": "une autre valeur"})
+                           "entreprise_social.comment": "une autre valeur"},
+                      upsert=True)
     msg = str(e.value)
     assert "is no column" not in msg, "la colonne existe : ne pas mentir"
     assert "entreprise_social.comment" in msg and "`entreprise_social`" in msg, (

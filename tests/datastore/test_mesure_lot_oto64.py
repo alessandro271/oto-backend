@@ -85,7 +85,8 @@ def test_le_lot_s_ARRETE_a_la_ligne_refusee_il_ne_tombe_pas_en_entier(live):
     _six_lignes(st, ns, enfermee="r4")
 
     with pytest.raises(RowValidationError) as e:
-        st.write_rows(ns, [{"ref": f"r{i}", "statut": "en_cours"} for i in range(1, 7)])
+        st.write_rows(ns, [{"ref": f"r{i}", "statut": "en_cours"} for i in range(1, 7)],
+                      key="ref")
 
     etats = _etats(st, ns)
     assert [etats[f"r{i}"] for i in range(1, 7)] == [
@@ -104,7 +105,8 @@ def test_le_refus_dit_OU_reprendre_pas_seulement_ce_qui_a_echoue(live):
     _six_lignes(st, ns, enfermee="r4")
 
     with pytest.raises(RowValidationError) as e:
-        st.write_rows(ns, [{"ref": f"r{i}", "statut": "en_cours"} for i in range(1, 7)])
+        st.write_rows(ns, [{"ref": f"r{i}", "statut": "en_cours"} for i in range(1, 7)],
+                      key="ref")
 
     message = str(e.value)
     assert "row 4/6 of the batch" in message
@@ -124,7 +126,8 @@ def test_la_ligne_fautive_EN_TETE_fait_tout_perdre(live):
     _six_lignes(st, ns, enfermee="r1")
 
     with pytest.raises(RowValidationError) as e:
-        st.write_rows(ns, [{"ref": f"r{i}", "statut": "en_cours"} for i in range(1, 7)])
+        st.write_rows(ns, [{"ref": f"r{i}", "statut": "en_cours"} for i in range(1, 7)],
+                      key="ref")
 
     assert _etats(st, ns) == {"r1": "perdu", "r2": "neuf", "r3": "neuf",
                               "r4": "neuf", "r5": "neuf", "r6": "neuf"}

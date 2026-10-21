@@ -51,7 +51,7 @@ class UpdateWhereInput(EntreeDatastore):
 
 class UpdateWhereResult(BaseModel):
     """Des COMPTES, jamais des lignes. Les relevés du geste (`notices`,
-    `hors_schema`, `valeurs_ecartees`…) sont cumulés sur toutes les lignes ; les plus
+    `valeurs_ecartees`…) sont cumulés sur toutes les lignes ; les plus
     lus sont déclarés, les autres passent (`extra="allow"`), comme sur un lot."""
     model_config = ConfigDict(extra="allow")
 
@@ -71,8 +71,6 @@ class UpdateWhereResult(BaseModel):
     refused_sample: Optional[list] = None
     declared: Optional[list] = None
     next_cursor: Optional[str] = None
-    hors_schema: Optional[list[str]] = None
-    hors_schema_hint: Optional[str] = None
     valeurs_ecartees: Optional[list[dict]] = None
     valeurs_ecartees_hint: Optional[str] = None
     valeurs_ecartees_total: Optional[int] = None

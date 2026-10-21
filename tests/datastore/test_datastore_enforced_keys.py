@@ -92,6 +92,8 @@ def test_la_pose_annonce_ce_qu_elle_fera_respecter(monkeypatch):
     monkeypatch.setattr(ops.db, "datastore_has_key_index", lambda ns_id: False)
     monkeypatch.setattr(ops.db, "datastore_drop_key_index", lambda *a: None)
     monkeypatch.setattr(ops.db, "datastore_row_keys", lambda ns_id: [])
+    # oto-backend#479 : le relevé des lignes en place compte d'abord le tableau — vide ici.
+    monkeypatch.setattr(ops.db, "datastore_count_rows", lambda *a, **k: 0)
     monkeypatch.setattr(ops.db, "datastore_overlong_fields", lambda *a, **k: [])
     monkeypatch.setattr(ops.db, "datastore_offending_enum_values", lambda *a, **k: [])
     out = st.set_schema("viviers", {"fields": [{"key": "x", "type": "text"}]})

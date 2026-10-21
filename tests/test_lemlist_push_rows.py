@@ -30,6 +30,8 @@ _GENS = [
 _MAPPING = {"email": "email", "first_name": "prenom", "last_name": "nom"}
 #: Tout ce qu'aucune réponse ne doit jamais contenir.
 _PERSONNEL = [v for p in _GENS for v in p.values()]
+#: Les colonnes du tableau, déclarées : une colonne non déclarée est refusée (oto#124).
+_COLONNES = ["email", "prenom", "nom", "poste", "lemlist_lead_id", "lemlist_status"]
 
 
 @pytest.fixture
@@ -57,6 +59,7 @@ def _table(rows=_GENS) -> tuple[str, list[str]]:
     ns = "leads-" + uuid.uuid4().hex[:6]
     db.create_datastore("user", SUB, ns)
     st = make_store(SUB)
+    st.set_schema(ns, {"fields": [{"key": c, "type": "text"} for c in _COLONNES]})
     return ns, [str(st.append_row(ns, dict(r))["_id"]) for r in rows]
 
 
@@ -213,8 +216,7 @@ def test_une_colonne_inconnue_refuse_le_lot_entier(banc):
 
 
 def test_une_colonne_libre_vide_sur_tout_le_lot_n_est_pas_inconnue(banc):
-    """Une colonne non déclarée n'apparaît que là où elle a une valeur : vide sur
-    les lignes de ce lot, elle existe quand même dans le tableau."""
+    """Une colonne vide sur les lignes de ce lot existe quand même dans le tableau."""
     fn, client = banc
     ns, ids = _table([*_GENS, {"email": "x@acme.test", "poste": "CTO"}])
     out = fn(datastore=ns, campaign_id="cam_X", row_ids=ids[:2],

@@ -41,8 +41,8 @@ comprises (`data_row_history`).
 **La révision lue est passée en précondition.** Entre la sélection et l'écriture, une
 case peut se remplir : la ligne est alors SAUTÉE (`conflicts`), pas écrasée.
 
-**La colonne visée est DÉCLARÉE si elle manque** — à partir du 21/10/2026 une colonne
-non déclarée est refusée (`colonnes_non_declarees`). Seulement sur un tableau qui
+**La colonne visée est DÉCLARÉE si elle manque** — une colonne non déclarée est
+refusée (`colonnes_non_declarees`). Seulement sur un tableau qui
 déclare déjà des colonnes : poser un premier champ sur un tableau SANS schéma rendrait
 toutes ses autres colonnes « non déclarées » d'un coup.
 

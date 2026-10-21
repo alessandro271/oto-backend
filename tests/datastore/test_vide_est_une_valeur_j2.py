@@ -81,7 +81,7 @@ def test_null_efface_un_vide_assume_marqueur_compris(live, chemin):
     if chemin == "par_id":
         st.update_row(ns, rid, {"fonction": None})
     elif chemin == "fusion":
-        st.append_row(ns, {"siren": "5", "fonction": None})
+        st.append_row(ns, {"siren": "5", "fonction": None}, upsert=True)
     else:
         st.write_rows(ns, [{"siren": "5", "fonction": None}], key="siren")
 

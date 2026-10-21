@@ -59,6 +59,9 @@ def _table(rows=_GENS) -> tuple[str, list[str]]:
     ns = "contacts-" + uuid.uuid4().hex[:6]
     db.create_datastore("user", SUB, ns)
     st = make_store(SUB)
+    # Les colonnes lues ET celles où l'outil réécrit l'id et l'état, déclarées.
+    st.set_schema(ns, {"fields": [{"key": k} for k in (
+        "email", "prenom", "societe_id", "hubspot_id", "hubspot_status")]})
     return ns, [str(st.append_row(ns, dict(r))["_id"]) for r in rows]
 
 

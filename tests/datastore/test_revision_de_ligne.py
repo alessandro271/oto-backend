@@ -41,7 +41,11 @@ def _table(ligne: dict | None = None) -> tuple[str, int]:
     from oto_mcp import db
     ns = "rev-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
-    db.datastore_insert_row(ns_id, "r1", dict(ligne or {"statut": "a_faire"}))
+    ligne = dict(ligne or {"statut": "a_faire"})
+    # Les colonnes que les bancs écrivent, déclarées (oto#124).
+    db.set_datastore_schema(ns_id, {"fields": [{"key": k}
+                                               for k in sorted({"statut", *ligne})]})
+    db.datastore_insert_row(ns_id, "r1", ligne)
     return ns, ns_id
 
 

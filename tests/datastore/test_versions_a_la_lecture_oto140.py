@@ -408,7 +408,12 @@ def _table_liste(sub: str) -> tuple:
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
     db.create_datastore("user", sub, ns)
-    row = make_store(sub).append_row(ns, dict(_LISTE), origine_override=True)
+    st = make_store(sub)
+    # Les colonnes déclarées : une colonne non déclarée est refusée (oto#124).
+    st.set_schema(ns, {"fields": [{"key": "siren", "type": "text"},
+                                  {"key": "contacts", "type": "list",
+                                   "of": {"type": "object"}}]})
+    row = st.append_row(ns, dict(_LISTE), origine_override=True)
     return ns, row["_id"]
 
 

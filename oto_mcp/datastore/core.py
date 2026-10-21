@@ -156,17 +156,9 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         # du datastore résout UN tableau : le « dernier » est donc le sien. À lire
         # juste après l'appel au store, jamais gardé d'un geste à l'autre.
         self.dernier_tableau: Optional[dict] = None
-        # Relevé des champs écrits HORS SCHÉMA par ce store (#294), union sur un lot :
-        # rempli par `_check_row`, lu par les surfaces via `off_schema_report()`. Le
-        # store est instancié par requête, donc la portée est celle du geste.
-        self.off_schema: set = set()
-        # oto#124 : les colonnes NON DÉCLARÉES que ce geste a créées avant la date du
-        # refus — union sur un lot, dites en UNE phrase datée (`off_schema_report`).
-        self.off_non_declarees: set = set()
-        # oto#124 : les fautes au format déclaré que la validation complète refusera à
-        # partir du 21/10/2026 et que ce tableau laisse encore passer — chaque refus
-        # tel qu'il sera dit, union sur un lot, en UNE phrase datée.
-        self.off_format_preavis: set = set()
+        # Les relevés du geste, union sur un lot : remplis par `_check_row`, lus par
+        # les surfaces via `off_schema_report()`. Le store est instancié par requête,
+        # donc la portée est celle du geste.
         # Colonnes dont la valeur EN BASE ne passe plus le type déclaré, rencontrées
         # en écrivant AILLEURS sur la même ligne. `{champ: refus}` — le refus qu'on
         # aurait rendu, gardé pour que l'agent sache quoi y écrire s'il veut réparer.
@@ -186,7 +178,7 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         # Le critère qui décide de la place, et il vaut pour la suite : *un consommateur
         # qui ne lit que le statut et l'identifiant serait-il trompé ?* Ici oui — la
         # réponse annonce un succès avec un `_id`, et cette ligne-là est orpheline. Les
-        # relevés de routine (`hors_schema`, `hors_type`, `hors_options`) ne trompent
+        # relevés de routine (`hors_type`, `valeurs_ecartees`…) ne trompent
         # personne sur la nature du résultat : ils restent en annexe.
         self.off_non_rapprochables: dict = {}
         # Ce que ce geste a VIDÉ (#407/#408/#409) : les colonnes qu'il nomme avec un

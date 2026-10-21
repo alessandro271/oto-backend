@@ -7,7 +7,7 @@ le tri comme les filtres comparaient du texte. Quatre moitiés, quatre bancs :
 1. **la lecture** (`dates.lire`), pure : chaque forme d'entrée et ce qui est stocké ;
 2. **l'écriture** contre une vraie base, par les trois portes (création, lot, patch
    par `id` ; le remplacement `upsert_row` est retiré, oto#156) : la forme stockée, la notice « supposé UTC », les couches
-   qui survivent, le refus de l'illisible, le sous-champ illisible gardé et dit ;
+   qui survivent, le refus de l'illisible, au premier niveau comme en sous-champ ;
 3. **les filtres** : `eq`/`lte`/`gte`/`gt`/`lt`/`ne`/`in` comparent des instants, et
    la borne d'une date imprécise couvre sa période ;
 4. **le tri** lit une date imprécise à son début de période.
@@ -127,13 +127,10 @@ def test_normaliser_ligne_a_tous_les_niveaux_sans_toucher_les_couches():
     assert dates.normaliser_ligne(SCHEMA, sortie) == (sortie, set())
 
 
-def test_un_sous_champ_illisible_est_garde_et_dit_seulement_sans_validation():
-    souple, notices = dates.normaliser_ligne(SCHEMA, {"o": {"s": "bientôt"}})
-    assert souple == {"o": {"s": "bientôt"}}
-    assert any("`o.s`" in n and "unreadable" in n for n in notices)
-    strict = {**SCHEMA, "unknown_columns": "report"}
-    _, notices = dates.normaliser_ligne(strict, {"o": {"s": "bientôt"}})
-    assert notices == set(), "sous validation, c'est le refus qui parle"
+def test_un_sous_champ_illisible_n_est_pas_dit_c_est_le_refus_qui_parle():
+    """Le format fait contrat sur tout tableau à colonnes (oto#124) : pas de notice."""
+    _, notices = dates.normaliser_ligne(SCHEMA, {"o": {"s": "bientôt"}})
+    assert notices == set()
 
 
 def test_les_bornes_d_un_filtre_couvrent_la_periode():
@@ -166,10 +163,11 @@ def _monte(schema=SCHEMA, lignes=()):
     db.upsert_user(SUB, email=f"{SUB}@exemple.invalid", name=SUB)
     st = make_store(SUB)
     ns = "d859-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", SUB, ns)
-    # Les lignes AVANT le schéma : l'existant d'avant la normalisation.
+    ns_id = db.create_datastore("user", SUB, ns)
+    # L'existant d'avant la normalisation, posé en base tel quel : une colonne non
+    # déclarée est refusée à l'écriture (oto#124).
     for r in lignes:
-        st.append_row(ns, r)
+        db.datastore_insert_row(ns_id, uuid.uuid4().hex, r)
     if schema:
         st.set_schema(ns, schema)
     return st, ns
@@ -226,12 +224,11 @@ def test_l_illisible_est_refuse_au_premier_niveau_meme_sans_validation(live):
         st.append_row(ns, {"d": "bientôt"})
 
 
-def test_un_sous_champ_illisible_sur_un_tableau_souple_est_garde_et_dit(live):
+def test_un_sous_champ_illisible_est_refuse(live):
+    from oto_mcp.datastore.errors import RowValidationError
     st, ns = _monte()
-    st = _store()
-    row = st.append_row(ns, {"o": {"s": "fin du mois"}})
-    assert row["o"] == {"s": "fin du mois"}
-    assert any("`o.s`" in n for n in st.off_schema_report()["notices"])
+    with pytest.raises(RowValidationError, match="o.s"):
+        st.append_row(ns, {"o": {"s": "fin du mois"}})
 
 
 # ── 3. les filtres comparent des instants ─────────────────────────────────────

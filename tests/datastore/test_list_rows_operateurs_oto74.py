@@ -24,6 +24,8 @@ def _table():
     ns = "t-" + uuid.uuid4().hex[:6]
     db.create_datastore("user", "sub-test", ns)
     st = make_store("sub-test")
+    st.set_schema(ns, {"fields": [{"key": "ref"}, {"key": "statut"},
+                                  {"key": "score", "type": "number"}]})
     for ref, statut, score in (("a", "actif", 10), ("b", "actif", 30),
                                ("c", "clos", 25), ("d", "clos", 40),
                                ("e", "clos", 5)):

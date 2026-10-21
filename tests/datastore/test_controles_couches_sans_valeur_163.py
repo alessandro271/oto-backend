@@ -81,7 +81,7 @@ def _compte(ns_id: int, filtre: dict) -> int:
 # ── la pose et le patch d'un schéma ───────────────────────────────────────────
 
 def test_la_pose_d_un_enum_ne_signale_que_la_vraie_valeur_hors_options(
-        tableau, validation_complete_partout):
+        tableau):
     st, ns, ns_id, _ = tableau
     out = st.set_schema(ns, {"fields": [
         {"key": "etat", "type": "enum", "options": OPTIONS},
@@ -94,7 +94,7 @@ def test_la_pose_d_un_enum_ne_signale_que_la_vraie_valeur_hors_options(
 
 
 def test_le_patch_d_un_enum_ne_signale_que_la_vraie_valeur_hors_options(
-        tableau, validation_complete_partout):
+        tableau):
     st, ns, _, _ = tableau
     st.set_schema(ns, {"fields": [
         {"key": "etat", "type": "text"}, {"key": "n", "type": "number"}]})

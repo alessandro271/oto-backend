@@ -60,8 +60,8 @@ limitent chacune la sienne, et les autres ne sont alors pas parcourues.
   `required`, `new_rows`, `agent_access`, `type`…) reste dans `meta` et est
   seulement LISTÉE, « à arbitrer » : la sortir changerait ce que le tableau
   accepte ou montre, et ce n'est pas au rangement de le décider ;
-- **`unknown_columns` en tête** — LAISSÉ en place : son retrait a son propre script
-  et sa date (`retirer_unknown_columns`, après le 21/10/2026), qui le cherche en tête ;
+- **`unknown_columns` en tête** — SUPPRIMÉ : réglage retiré le 05/10/2026 (oto#124),
+  plus lu nulle part ;
 - **toute autre clé inconnue** — DÉPLACÉE dans `meta` au même niveau, telle quelle.
   Jamais convertie en clé active : un `read_only` reste inerte dans `meta`, il ne
   devient pas un `readonly`. Le script range, il ne devine pas une intention.
@@ -248,7 +248,9 @@ def _durcir_noeud(noeud: dict, niveau: str, chemin: str, plan: Plan) -> dict:
         _ranger_enum(noeud, chemin, plan)
     _sortir_de_meta(noeud, niveau, chemin, plan)
     for cle, motif in (("origine", "sans lecteur depuis le 08/09/2026"),
-                       ("semantic_search", "paramètre d'appel, appliqué ailleurs")):
+                       ("semantic_search", "paramètre d'appel, appliqué ailleurs"),
+                       (reglages.UNKNOWN_COLUMNS, "réglage retiré le 05/10/2026, "
+                                                  "plus lu nulle part (oto#124)")):
         if cle in noeud and (cle == "origine" or niveau == "tete"):
             del noeud[cle]
             plan.supprimees.append((chemin, cle, motif))
@@ -268,12 +270,8 @@ def _durcir_noeud(noeud: dict, niveau: str, chemin: str, plan: Plan) -> dict:
                                                f"{chemin}.lifecycle", plan)
     # oto#127 : les anciens réglages de tête ne sont pas des clés à ranger dans
     # `meta` — ils ont un équivalent, que `renommer_reglages_tete` pose.
-    # oto#124 : `unknown_columns` non plus — son retrait a son script et sa date
-    # (`retirer_unknown_columns`, après le 21/10/2026), qui le cherche EN TÊTE : rangé
-    # dans `meta`, il y resterait mort.
     reste = [k for k in noeud if k not in admises
-             and not (niveau == "tete" and (k in reglages.ANCIENS
-                                            or k == reglages.UNKNOWN_COLUMNS))]
+             and not (niveau == "tete" and k in reglages.ANCIENS)]
     if reste:
         _vers_meta(noeud, reste, chemin)
         plan.deplacees.append((chemin, reste))

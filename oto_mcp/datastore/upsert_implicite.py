@@ -1,5 +1,4 @@
-"""AJOUTER une ligne dont la clé existe déjà ne la FUSIONNE plus en silence (oto#141) —
-le préavis daté.
+"""AJOUTER une ligne dont la clé existe déjà ne la FUSIONNE plus en silence (oto#141).
 
 Quand un tableau déclare une clé métier, une écriture SANS `id` dont la valeur de clé
 existait déjà mettait la ligne en place à jour en silence — ligne seule, lot, REST,
@@ -14,12 +13,13 @@ Arbitré le 30/09/2026, précisé le 01/10 : tout dépend de ce que l'appel DIT 
   présente MODIFIE sa ligne, sans `upsert` et sans un mot ; une valeur absente crée la
   ligne (sauf tableau fermé, dont le refus de création s'applique).
 - **Ajouter** — ni `id` ni `key=`, sur un tableau qui déclare une clé : une valeur déjà
-  présente est un doublon que l'appelant n'a pas vu. Avant la date : la ligne fusionne
-  et `notices` l'avertit, daté ; à partir d'elle : REFUS `business_key_exists`, qui nomme
-  la ligne en place — sauf `upsert=true`, qui demande la fusion.
+  présente est un doublon que l'appelant n'a pas vu. REFUS `business_key_exists`, qui
+  nomme la ligne en place — sauf `upsert=true`, qui demande la fusion.
 - **Deux lignes du même appel à la même clé** : on ne désigne pas deux fois la même
-  ligne dans un appel. Sans `upsert`, avertie avant la date, le lot REFUSÉ ENTIER à
-  partir d'elle — en désignation comme en ajout.
+  ligne dans un appel. Sans `upsert`, le lot est REFUSÉ ENTIER — en désignation comme
+  en ajout.
+
+En vigueur depuis le 21/10/2026, après un préavis daté.
 
 Un lot rend chaque fusion dans `fusions` — `{rang, dans_rang, id, cle}`, `dans_rang` =
 le rang de la ligne du MÊME geste qui a posé la ligne visée, `null` pour une ligne déjà
@@ -30,56 +30,16 @@ en base —, et `ids` reste aligné rang pour rang.
 « à la même clé » se jugent sur le texte que la BASE rend de leur valeur déballée
 (`db.datastore_textes_de_cle`, la conversion du lookup, oto#223) — jamais sur une
 conversion Python.
-
-**Le refus tombe À LA DATE, dans le code** : rien n'est à déployer le jour J. Le réglage
-`OTO_UPSERT_IMPLICITE_REFUSE_LE` déplace la date sans déployer.
 """
 from __future__ import annotations
 
-import os
-from datetime import date as _date
 from typing import Any, Callable, Iterable, Optional
 
 from . import schema as dsv2
 from .errors import BusinessKeyExists
 
-#: La date à partir de laquelle la fusion implicite est REFUSÉE. Une seule constante :
-#: le texte servi en est DÉRIVÉ, pour que ce qu'on annonce soit ce qu'on refusera.
-UPSERT_IMPLICITE_REFUSE_LE = _date(2026, 10, 21)
-
-#: Déplace la date sans déployer (`YYYY-MM-DD`). Une valeur illisible LÈVE, elle ne
-#: retombe pas sur le défaut (cf. `champs_reserves.date_reglee`).
-ENV_UPSERT_IMPLICITE_REFUSE_LE = "OTO_UPSERT_IMPLICITE_REFUSE_LE"
-
 #: Au-delà, un refus de lot cite les premiers cas et compte les autres.
 _CITES = 5
-
-
-def date_du_refus() -> _date:
-    """La date en vigueur : le réglage s'il est posé, le défaut du code sinon."""
-    from .champs_reserves import date_reglee
-
-    return date_reglee(ENV_UPSERT_IMPLICITE_REFUSE_LE,
-                       os.environ.get(ENV_UPSERT_IMPLICITE_REFUSE_LE),
-                       UPSERT_IMPLICITE_REFUSE_LE)
-
-
-def _aujourdhui() -> _date:
-    """Le jour qui juge le refus (UTC). Un point d'appui à part, pour que les bancs
-    fixent le jour de CETTE bascule sans toucher à l'horloge ni aux autres."""
-    from .champs_reserves import jour_utc
-
-    return jour_utc()
-
-
-def refus_arme(aujourdhui: Optional[_date] = None) -> bool:
-    """La fusion implicite est-elle refusée, AUJOURD'HUI (jour UTC) ?"""
-    return (aujourdhui or _aujourdhui()) >= date_du_refus()
-
-
-def _quand() -> str:
-    # Date ISO : le texte servi est en anglais (décision du 03/09/2026).
-    return date_du_refus().isoformat()
 
 
 # ── le texte servi ───────────────────────────────────────────────────────────
@@ -98,56 +58,35 @@ _FERME_EN = ("On a CLOSED table (`new_rows: \"reject\"`) every write without `id
              "by the key.")
 
 
-def description_ecriture() -> str:
-    """L'annonce servie dans la description de `data_write`, DÉRIVÉE de la date.
-
-    Composée au démarrage : avant la date, le préavis — qui reste VRAI si le process
-    franchit la date sans redémarrer (« from … on » et « until then » décrivent chacun
-    leur côté) ; démarré après, la règle au présent."""
-    if refus_arme():
-        return ("⚠️ **Business key: ADDING a row whose key value already exists is "
-                "REFUSED** (`business_key_exists`, naming the existing row) unless you "
-                f"pass `upsert=true`, which merges onto it. {_GESTES_EN} Two rows of one "
-                "call with the same key value refuse the WHOLE batch, before anything is "
-                f"written, unless `upsert=true`. {_FUSIONS_EN} {_FERME_EN}")
-    return (f"⚠️ **Business key: from {date_du_refus().isoformat()} on, ADDING a row "
-            "whose key value already exists is REFUSED** (`business_key_exists`, naming "
-            "the existing row) instead of merging silently, unless you pass "
-            f"`upsert=true` (accepted now). {_GESTES_EN} From the same date, two rows of "
-            "one call with the same key value refuse the WHOLE batch, before anything "
-            "is written, unless `upsert=true`. Until then both still merge, and the "
-            f"response warns in `notices`. {_FUSIONS_EN} {_FERME_EN}")
-
-
-#: Composée une fois, au démarrage (cf. `description_ecriture`).
-DESCRIPTION_ECRITURE = description_ecriture()
+#: L'annonce servie dans la description de `data_write`.
+DESCRIPTION_ECRITURE = (
+    "⚠️ **Business key: ADDING a row whose key value already exists is "
+    "REFUSED** (`business_key_exists`, naming the existing row) unless you "
+    f"pass `upsert=true`, which merges onto it. {_GESTES_EN} Two rows of one "
+    "call with the same key value refuse the WHOLE batch, before anything is "
+    f"written, unless `upsert=true`. {_FUSIONS_EN} {_FERME_EN}")
 
 
 def description_cle_schema() -> str:
     """Ce que la clé métier DÉCLARÉE fait à l'écriture, pour `data_set_schema` et
     `data_patch_schema` — la phrase qui disait « EVERY write … then UPSERTs on it »."""
-    quand = ("" if refus_arme() else
-             f" from {date_du_refus().isoformat()} on (until then it merges, with a "
-             "warning in `notices`)")
     return ("A write that DESIGNATES by the key — `key=` passed to the call (a batch, "
             "or a single row naming this key), or any write without `id` on a CLOSED "
             "table — modifies the row of an existing key value and creates a new one. A "
             "write that ADDS (neither `id` nor `key=`) with a key value already present "
-            f"is REFUSED{quand} unless it passes `upsert=true`, which merges onto that "
+            "is REFUSED unless it passes `upsert=true`, which merges onto that "
             "row — `data_write`, REST and `oto_upload_url` alike. The key never "
             "duplicates: its UNIQUE index guarantees it.")
 
 
 def description_parametre() -> str:
     """Le paramètre `upsert`, tel que le servent les faces (MCP, REST, upload)."""
-    sans = ("is REFUSED (`business_key_exists`)" if refus_arme() else
-            f"still merges until {date_du_refus().isoformat()}, with a warning in "
-            "`notices`, and is REFUSED from that date on")
     return ("`true` = MERGE when the key value already exists — for a write that ADDS "
             "(neither `id` nor `key=`), and for rows of one call that share a key value. "
             "A write that designates by `key=` needs no `upsert`. Every merge of a batch "
-            f"comes back in `fusions`. Without it, an adding write on an existing key, "
-            f"or two rows of one call on the same key, {sans}. Refused on a table with "
+            "comes back in `fusions`. Without it, an adding write on an existing key, "
+            "or two rows of one call on the same key, is REFUSED (`business_key_exists`). "
+            "Refused on a table with "
             "no business key: there is nothing to merge on.")
 
 
@@ -196,8 +135,8 @@ def refus_unitaire(datastore: str, key: str, kv: Any, row_id: str, *,
     return BusinessKeyExists(
         f"this write ADDS a row (neither `id` nor `key=`), but `{key}` = "
         f"{str(kv)!r} already designates {ligne} of `{datastore}`: nothing was written for "
-        f"it. Since {_quand()}, an addition no longer merges by itself on the business "
-        f"key. {_geste(key, row_id if nommer else None)}",
+        f"it. An addition does not merge by itself on the business key. "
+        f"{_geste(key, row_id if nommer else None)}",
         key=key, details={"key": key, "valeur": kv,
                           **({"id": row_id} if nommer else {})})
 
@@ -207,59 +146,31 @@ def refus_de_doublon(datastore: str, key: str, kv: Any, rangs: list[int]) -> Bus
     course, le lot ayant été jugé entier avant sa première ligne."""
     return BusinessKeyExists(
         f"rows {_rangs(rangs)} of this call: same {key} {str(kv)!r} — the same row "
-        f"is not designated twice in one call. Since {_quand()}, this is refused "
-        "without `upsert=true`. Remove the duplicate from the batch, or pass `upsert=true` to "
+        f"is not designated twice in one call: this is refused without "
+        "`upsert=true`. Remove the duplicate from the batch, or pass `upsert=true` to "
         "merge.", key=key,
         details={"key": key, "doublons": [{"rangs": rangs, "valeur": kv}],
                  "existantes": []})
 
 
-def notice_unitaire(key: str, kv: Any, row_id: str) -> str:
-    return (f"From {_quand()} on, this write will be refused: it ADDS a "
-            f"row (neither `id` nor `key=`) and `{key}` = {str(kv)!r} already designates row "
-            f"`{row_id}` — it was merged into it. {_geste(key, row_id)}")
-
-
-def notice_lot(key: str) -> str:
-    """Une phrase par CLÉ et non par ligne : un import de huit mille lignes ne rend pas
-    huit mille avertissements, et un import découpé en tranches en rend un seul."""
-    return (f"From {_quand()} on, this batch will be refused: ADDED rows (neither `id` "
-            f"nor `key=`) were merged on the business key `{key}` without `upsert=true` — "
-            "their positions are in `fusions` (`dans_rang: null`). To modify "
-            f"rows in place, designate them: `key={key!r}`; to merge, pass "
-            "`upsert=true`.")
-
-
-def notice_doublon(key: str) -> str:
-    return (f"From {_quand()} on, this batch will be refused: rows of the same call "
-            f"carry the same value of `{key}` and were merged together — their positions "
-            "are in `fusions` (`dans_rang` filled in). The same row is not designated twice "
-            "in one call: remove the duplicate, or pass `upsert=true`.")
-
-
-def controler_fusion(notices: set, *, designation: bool, upsert: bool,
+def controler_fusion(*, designation: bool, upsert: bool,
                      datastore: str, key: str, kv: Any, row_id: str,
                      dans_rang: Optional[int] = None, rang: Optional[int] = None,
-                     lot: bool = False, nommer: bool = True) -> None:
+                     nommer: bool = True) -> None:
     """Une écriture sans `id` s'apprête à fusionner dans `row_id` par sa clé.
 
     `upsert` : demandé, rien à dire. `dans_rang` renseigné : la ligne visée vient d'être
-    posée par le MÊME appel — un doublon, en désignation comme en ajout. Sinon la ligne
-    était en base : une `designation` la modifie sans un mot, un AJOUT est averti avant
-    la date et refusé à partir d'elle. Sur un lot, seule une COURSE arrive encore ici
-    après la date, le lot ayant été jugé entier avant sa première ligne."""
+    posée par le MÊME appel — un doublon, en désignation comme en ajout : refusé. Sinon
+    la ligne était en base : une `designation` la modifie sans un mot, un AJOUT est
+    refusé. Sur un lot, seule une COURSE arrive encore ici, le lot ayant été jugé entier
+    avant sa première ligne."""
     if upsert:
         return
     if dans_rang is not None:
-        if refus_arme():
-            raise refus_de_doublon(datastore, key, kv, [dans_rang, rang])
-        notices.add(notice_doublon(key))
-        return
+        raise refus_de_doublon(datastore, key, kv, [dans_rang, rang])
     if designation:
         return
-    if refus_arme():
-        raise refus_unitaire(datastore, key, kv, row_id, nommer=nommer)
-    notices.add(notice_lot(key) if lot else notice_unitaire(key, kv, row_id))
+    raise refus_unitaire(datastore, key, kv, row_id, nommer=nommer)
 
 
 def _rangs(rangs: list[int]) -> str:
@@ -280,7 +191,7 @@ def juger_le_lot(rows: Iterable[Any], *, key: str, datastore: str, designation: 
                  chercher: Callable[[Any], Optional[str]],
                  textes: Callable[[list], list[str]], decalage: int = 0,
                  nommer: bool = True) -> None:
-    """Sans `upsert`, à partir de la date, le lot ENTIER est jugé avant sa première
+    """Sans `upsert`, le lot ENTIER est jugé avant sa première
     écriture : ses doublons internes toujours, et — s'il AJOUTE (`designation` fausse) —
     ses lignes dont la clé est déjà en base. Un refus ici n'a rien écrit — le lot n'étant
     pas atomique, le juger ligne à ligne laisserait sa première moitié écrite.
@@ -319,13 +230,13 @@ def juger_le_lot(rows: Iterable[Any], *, key: str, datastore: str, designation: 
     if doublons:
         regles.append("the same row is not designated twice in one call")
     if existantes:
-        regles.append("an ADDITION (neither `id` nor `key=`) no longer merges by itself on the "
+        regles.append("an ADDITION (neither `id` nor `key=`) does not merge by itself on the "
                       "business key")
     gestes = (["a duplicate is removed from the batch"] if doublons else []) + (
         [f"to modify the rows in place, designate them: `key={key!r}`"]
         if existantes else []) + ["to merge, pass `upsert=true`"]
     raise BusinessKeyExists(
-        f"batch refused ENTIRELY, nothing was written: since {_quand()}, "
+        f"batch refused ENTIRELY, nothing was written: "
         f"{'; '.join(regles)} (`{key}` of `{datastore}`). {_cites(phrases)} "
         f"{_majuscule('; '.join(gestes))}.",
         key=key,

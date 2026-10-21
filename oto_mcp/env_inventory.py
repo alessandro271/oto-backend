@@ -380,28 +380,6 @@ _REGLAGES: tuple[Variable, ...] = (
              "`off` le coupe pour les écritures de CE processus, sans redéployer (un "
              "redémarrage suffit). Toute autre valeur que `on`/`off` LÈVE au boot.",
              ("oto_mcp/db/journal_revisions.py:70",)),
-    Variable("OTO_UPSERT_IMPLICITE_REFUSE_LE", Classe.REGLAGE, None,
-             "Déplace la date par défaut "
-             "(`datastore/upsert_implicite.py:UPSERT_IMPLICITE_REFUSE_LE`, 2026-10-21) "
-             "à partir de laquelle une écriture sans `id` dont la valeur de clé métier "
-             "existe déjà est refusée sans `upsert=true` (oto#141). Une valeur illisible "
-             "LÈVE plutôt que de retomber sur le défaut.",
-             ("oto_mcp/datastore/upsert_implicite.py:59",)),
-    Variable("OTO_COLONNE_NON_DECLAREE_REFUSEE_LE", Classe.REGLAGE, None,
-             "Déplace la date par défaut "
-             "(`datastore/colonnes_non_declarees.py:COLONNE_NON_DECLAREE_REFUSEE_LE`, "
-             "2026-10-21) à partir de laquelle une écriture qui pose une colonne que le "
-             "schéma ne déclare pas est refusée, sur tous les tableaux (oto#124). Une "
-             "valeur illisible LÈVE plutôt que de retomber sur le défaut.",
-             ("oto_mcp/datastore/colonnes_non_declarees.py:71",)),
-    Variable("OTO_VALIDATION_COMPLETE_LE", Classe.REGLAGE, None,
-             "Déplace la date par défaut "
-             "(`datastore/validation_complete.py:VALIDATION_COMPLETE_LE`, 2026-10-21) à "
-             "partir de laquelle le format déclaré fait contrat sur tous les tableaux à "
-             "schéma — options, forme des valeurs, couches, sous-records fermés "
-             "(oto#124) ; d'ici là, une faute passe avec un préavis. Une valeur "
-             "illisible LÈVE plutôt que de retomber sur le défaut.",
-             ("oto_mcp/datastore/validation_complete.py:61",)),
     # -- timeouts / cadences / tailles / rétention -----------------------------
     Variable("OTO_SLOW_CALLBACK_WARN", Classe.REGLAGE, "1.0",
              "Seuil (s) d'avertissement d'un callback lent (event loop).",

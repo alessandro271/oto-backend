@@ -279,19 +279,10 @@ def test_un_operateur_inconnu_est_refuse_en_nommant_les_operateurs():
     assert "`matches`" in erreurs[0] and "eq" in erreurs[0] and "in" in erreurs[0]
 
 
-def test_avant_la_date_une_colonne_non_declaree_est_dite_a_la_pose():
-    """oto#124 : la garde de pose de la validation complète — dite d'ici au 21/10."""
-    from oto_mcp.datastore.definition import preavis_de_pose
-    assert _erreurs({"lot": "jalon-100"}) == []
-    dites = preavis_de_pose(_schema({"lot": "jalon-100"}))
-    assert len(dites) == 1 and "`lot`" in dites[0] and "unknown_columns" not in dites[0]
-
-
-def test_apres_la_date_une_colonne_non_declaree_est_refusee(validation_complete_partout):
-    from oto_mcp.datastore.definition import preavis_de_pose
+def test_une_colonne_non_declaree_est_refusee_a_la_pose():
+    """oto#124 : la garde de pose de la validation complète."""
     erreurs = _erreurs({"lot": "jalon-100"})
     assert any("`lot`" in e and "is binding" in e for e in erreurs)
-    assert preavis_de_pose(_schema({"lot": "jalon-100"})) == []
 
 
 @pytest.mark.parametrize("valeur", [{}, "jalon-100", ["jalon-100"], 3])

@@ -46,10 +46,14 @@ def _monte(schema_fields, rows):
     # ne peut donc plus les poser par la porte d'écriture, et c'est cohérent : ces
     # valeurs-là sont entrées quand le type n'était pas encore armé. Poser les lignes
     # d'abord reproduit exactement cette histoire, au lieu de désarmer le contrôle.
+    # Une colonne non déclarée étant refusée (oto#124), elles s'écrivent sous un
+    # schéma qui les déclare SANS type ; le format du banc se pose ensuite, et une
+    # colonne qu'il ne déclare pas redevient une colonne non déclarée des données.
+    colonnes = sorted({k for r in rows for k in r})
+    st.set_schema(ns, {"fields": [{"key": k} for k in colonnes]})
     for r in rows:
         st.append_row(ns, r)
-    if schema_fields:
-        st.set_schema(ns, {"fields": schema_fields})
+    st.set_schema(ns, {"fields": schema_fields or []})
     return st, ns
 
 

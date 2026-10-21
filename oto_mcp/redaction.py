@@ -216,7 +216,7 @@ _COUNTER_KEYS = ("total_count", "total", "count")
 # vide — une réponse tronquée n'est pas une absence de résultat, et la rendre en phrase
 # ferait conclure « il n'y a rien » là où le plafond a coupé avant d'avoir cherché.
 _NOTICE_KEYS = ("note", "hint", "warning", "warnings", "notices",
-                "error", "errors", "partial", "partial_errors", "hors_schema")
+                "error", "errors", "partial", "partial_errors")
 
 # Les mêmes, en FAMILLES : le suffixe est trop productif pour une liste fermée —
 # `_etablissements_truncated` (fr), `text_truncated`/`{champ}_truncated` (unipile, clé

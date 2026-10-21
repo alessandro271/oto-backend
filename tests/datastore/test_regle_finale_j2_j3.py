@@ -126,7 +126,7 @@ def test_j2_live_le_vide_remplace_sur_les_trois_chemins(live, chemin):
     if chemin == "par_id":
         st.update_row(ns, rid, corps)             # le vide SEUL : plus de #724
     elif chemin == "fusion":
-        st.append_row(ns, {"siren": "2", **corps})
+        st.append_row(ns, {"siren": "2", **corps}, upsert=True)
     else:
         st.write_rows(ns, [{"siren": "2", **corps}], key="siren")
     data = _data(ns_id, rid)

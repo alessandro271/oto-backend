@@ -60,12 +60,15 @@ def _h(sub: str = A) -> dict:
     return {"Authorization": f"Bearer {sub}"}
 
 
+#: Les colonnes que les bancs écrivent, déclarées sans type (oto#124).
+LIBRE = {"fields": [{"key": k} for k in ("n", "nom", "a", "b")]}
+
+
 def _table(schema: dict | None = None) -> tuple[str, int]:
     from oto_mcp import db
     ns = f"historique-{uuid.uuid4().hex[:6]}"
     ns_id = db.create_datastore("user", A, ns)
-    if schema is not None:
-        db.set_datastore_schema(ns_id, schema)
+    db.set_datastore_schema(ns_id, schema or LIBRE)
     return ns, ns_id
 
 

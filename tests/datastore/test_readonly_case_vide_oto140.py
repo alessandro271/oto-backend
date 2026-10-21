@@ -139,11 +139,15 @@ def test_fusion_par_cle_remplit_une_readonly_null(banc):
     assert etat["lignes"]["r1"]["adresse"] == "1 rue A"
 
 
-def test_le_lot_remplit_une_readonly_absente(banc):
+def test_le_lot_remplit_une_readonly_absente(banc, monkeypatch):
+    from oto_mcp.datastore import core as dsm
+    # Le lot juge ses doublons de clé sur le texte que la base rend (oto#141) : sans PG, `str`.
+    monkeypatch.setattr(dsm.db, "datastore_textes_de_cle",
+                        lambda valeurs: [str(v) for v in valeurs])
     st, etat = banc
     _sans_adresse(etat)
     out = st._write_rows_to_ns(7, [{"siren": "552081317", "adresse": "1 rue A"}],
-                               key="siren")
+                               key="siren", cle_passee=True)
     assert out["updated"] == 1
     assert etat["lignes"]["r1"]["adresse"] == "1 rue A"
 

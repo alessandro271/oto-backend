@@ -23,8 +23,6 @@ import uuid
 
 import pytest
 
-# oto#124 : le format déclaré fait contrat partout (ex-`unknown_columns: "report"`).
-pytestmark = pytest.mark.usefixtures("validation_complete_partout")
 
 
 # Le tableau de l'incident, réduit à ce qui porte la règle : une clé métier
@@ -182,10 +180,11 @@ def test_lajout_dune_ligne_neuve_a_un_effet(table):
 
 def test_lajout_sur_une_cle_metier_connue_fusionne_sans_dupliquer(table):
     """La dédup par clé métier est un chemin d'écriture à part entière : elle doit
-    ÉCRIRE sur la ligne existante, pas se contenter de ne pas dupliquer."""
+    ÉCRIRE sur la ligne existante, pas se contenter de ne pas dupliquer. Un ajout ne
+    fusionne que sur demande (`upsert`, oto#141)."""
     st, ns, ns_id, rid = table
 
-    st.append_row(ns, {"siren": "552032534", "contacts": CONTACTS})
+    st.append_row(ns, {"siren": "552032534", "contacts": CONTACTS}, upsert=True)
 
     assert _cardinal(ns_id) == 1, "même clé ⟹ pas de doublon"
     assert _donnees(ns_id, rid).get("contacts") == CONTACTS, "et la fusion écrit"
@@ -200,7 +199,7 @@ def test_le_lot_ecrit_ses_deux_regimes(table):
     recap = st.write_rows(ns, [
         {"siren": "552032534", "contacts": CONTACTS},        # fusion
         {"siren": "444555666", "raison_sociale": "DU LOT"},  # ajout
-    ])
+    ], upsert=True)
 
     assert (recap["updated"], recap["inserted"]) == (1, 1)
     assert _cardinal(ns_id) == 2

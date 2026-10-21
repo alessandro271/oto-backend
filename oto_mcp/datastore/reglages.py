@@ -11,17 +11,8 @@ remplacés le 02/10/2026 par deux, un par axe (oto#127) :
   05/10/2026 (oto#124) : plus aucun réglage, les colonnes et les valeurs sont toujours
   vérifiées.** Une colonne non déclarée est refusée sur tous les tableaux
   (`colonnes_non_declarees`) et le format déclaré fait contrat partout
-  (`validation_complete`), tous deux à partir du 21/10/2026, avec un préavis d'ici là.
-
-⚠️ **La seule lecture qui reste d'`unknown_columns` est transitoire.** Refusé à la pose
-et au patch (`schema_keys.CLES_RETIREES`, `refus_parametres`), il reste STOCKÉ sur une
-centaine de tableaux jusqu'au passage de `scripts/retirer_unknown_columns.py`. D'ici
-au 21/10, `format_contraignant` le lit encore — pour que ces tableaux gardent la
-validation complète qu'ils avaient, au lieu de retomber au préavis — et
-`colonnes_inconnues` garde le relevé `report` et le refus `reject` de la colonne non
-déclarée. À partir de la date, `validation_complete.complete` ne le consulte plus, et
-la colonne non déclarée est refusée avant que le relevé ou le cran `reject` ne la
-voient : le script se lance APRÈS la date, puis ces lectures se retirent.
+  (`validation_complete`). Refusé à la pose et au patch (`schema_keys.CLES_RETIREES`,
+  `refus_parametres`), il n'est plus lu nulle part.
 
 Les VALEURS sont des verbes : ce que la plateforme FAIT de la chose inconnue.
 
@@ -37,9 +28,9 @@ from typing import Any, Optional
 UNKNOWN_COLUMNS = "unknown_columns"
 NEW_ROWS = "new_rows"
 
-CREATE, REPORT, REJECT = "create", "report", "reject"
-#: Les crans de chaque axe, dans l'ordre où ils durcissent. Le défaut est le premier.
-MODES = {UNKNOWN_COLUMNS: (CREATE, REPORT, REJECT), NEW_ROWS: (CREATE, REJECT)}
+CREATE, REJECT = "create", "reject"
+#: Les crans de l'axe, dans l'ordre où ils durcissent. Le défaut est le premier.
+MODES = {NEW_ROWS: (CREATE, REJECT)}
 DEFAUT = CREATE
 
 #: Les trois anciens réglages, et l'axe que chacun nourrit.
@@ -84,22 +75,6 @@ def _lu(schema: Any, axe: str) -> str:
         return DEFAUT
     v = schema.get(axe, DEFAUT)
     return v if v in MODES[axe] else DEFAUT
-
-
-def colonnes_inconnues(schema: Any) -> str:
-    """TRANSITOIRE (oto#124) — le cran `unknown_columns` STOCKÉ, d'ici au retrait du
-    stocké : `report` garde le relevé `hors_schema`, `reject` le refus de la colonne
-    non déclarée, jusqu'au 21/10/2026 (`hors_schema`). Après la date, la colonne non
-    déclarée est refusée avant eux."""
-    return _lu(schema, UNKNOWN_COLUMNS)
-
-
-def format_contraignant(schema: Any) -> bool:
-    """TRANSITOIRE (oto#124) — le réglage STOCKÉ mettait-il le format sous contrat ?
-    Lu par `validation_complete.complete` jusqu'au 21/10/2026 seulement, pour que les
-    tableaux réglés `report`/`reject` gardent la validation complète d'ici là ; à
-    partir de la date, elle s'applique à tous et ce réglage n'est plus consulté."""
-    return colonnes_inconnues(schema) != CREATE
 
 
 def lignes_nouvelles(schema: Any) -> str:
@@ -147,14 +122,7 @@ PLUS_AUCUN_REGLAGE = ("plus aucun réglage : les colonnes et les valeurs sont to
                       "vérifiées — une colonne non déclarée est refusée, le format "
                       "déclaré (options, forme des valeurs, sous-records) fait contrat "
                       "sur tous les tableaux")
-#: La même phrase, telle que la sert l'avertissement de lecture (`data_get_schema`),
-#: en anglais depuis la décision du 03/09/2026 ; les dates y sont en ISO.
-PLUS_AUCUN_REGLAGE_EN = ("no setting any more: columns and values are always "
-                         "checked — an undeclared column is refused, the declared "
-                         "format (options, value shapes, sub-records) is a contract "
-                         "on every table")
 REMPLACES_LE_ISO = "2026-10-02"
-RETIRE_LE_ISO = "2026-10-05"
 
 
 def refus_unknown_columns() -> str:
@@ -201,13 +169,6 @@ def residu(tete: dict) -> str:
         out += (f"; `key_required` is now written `{NEW_ROWS}: \"{equivalent[NEW_ROWS]}\"` — "
                 f"set it (`data_patch_schema`)")
     return out + "; remove them (`data_set_schema`)"
-
-
-def residu_unknown_columns(valeur: Any) -> str:
-    """Ce qu'`unknown_columns` encore STOCKÉ fait d'ici à son retrait (oto#124)."""
-    return (f"`unknown_columns: {valeur!r}` (top level) was removed on {RETIRE_LE_ISO} — "
-            f"{PLUS_AUCUN_REGLAGE_EN}. It stays stored until the platform removes it, "
-            f"with no action on your part; modifying it is refused")
 
 
 #: Les PARAMÈTRES retirés de `data_patch_schema`.

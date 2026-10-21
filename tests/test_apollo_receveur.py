@@ -426,6 +426,9 @@ def _tableau(lignes: list[dict]) -> tuple[str, list[str]]:
     ns = "prospects-" + uuid.uuid4().hex[:6]
     db.create_datastore("user", _SUB, ns)
     st = make_store(_SUB)
+    # Les colonnes des lignes et celles où les numéros s'écrivent, déclarées.
+    colonnes = sorted({k for r in lignes for k in r} | {"phone", "tel"})
+    st.set_schema(ns, {"fields": [{"key": k} for k in colonnes]})
     return ns, [str(st.append_row(ns, dict(r))["_id"]) for r in lignes]
 
 

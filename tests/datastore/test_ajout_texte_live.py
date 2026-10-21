@@ -218,18 +218,6 @@ def test_la_face_MCP_ajoute_par_id_et_par_lot(outils, acteur, table):
     assert _valeur(_stockee(ns_id, rid)["journal"]) == "ligne 1\nligne 2\nligne 3"
 
 
-def test_une_colonne_non_declaree_qui_porte_du_texte_l_allonge(base):
-    st, ns, ns_id, rid = _table(remarque="vue")
-    st.update_row(ns, rid, {"remarque[+]": "rappel"})
-    assert _valeur(_stockee(ns_id, rid)["remarque"]) == "vue\nrappel"
-
-
-def test_une_colonne_non_declaree_vide_reste_une_liste(base):
-    st, ns, ns_id, rid = _table()
-    st.update_row(ns, rid, {"etapes[+]": "a"})
-    assert _valeur(_stockee(ns_id, rid)["etapes"]) == ["a"]
-
-
 # ══ la borne de l'ajout ════════════════════════════════════════════════════════
 
 def test_un_ajout_qui_deborde_est_refuse_et_oriente_vers_une_table(base):

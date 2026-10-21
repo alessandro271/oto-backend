@@ -335,14 +335,14 @@ def import_rows(sub: str, target: dict, rows: list, *, deadline: float,
     ns_id = int(target["ns_id"])
     # Retired-word refusals are judged on the whole file before the first slice.
     mdp.controler(*(r for r in rows[resume_from:] if isinstance(r, dict)))
-    # oto#124: so are undeclared columns, from their date — nothing written.
+    # oto#124: so are undeclared columns — nothing written.
     try:
         cnd.juger_le_lot(store._schema_of(ns_id), rows[resume_from:])
     except ds.ColonneNonDeclaree as e:
         raise UploadError(400, "unknown_column", str(e), details={
             **(e.details or {}), "row": resume_from + 1, "written": 0,
             "resume_from": resume_from})
-    # oto#141: so is the business key (from its date, without `upsert`): duplicates
+    # oto#141: so is the business key (without `upsert`): duplicates
     # inside the file — and, when the file ADDS (no `key` named at the call), keys
     # already in the table — refuse the WHOLE file before the first slice. One record
     # for all slices, so that `fusions` carries the file's ranks and `dans_rang`
@@ -351,7 +351,7 @@ def import_rows(sub: str, target: dict, rows: list, *, deadline: float,
     cle_passee = bool(target.get("cle_passee"))
     fusions = upi.Fusions()
     fusions.decalage = resume_from
-    if key and not upsert and upi.refus_arme():
+    if key and not upsert:
         try:
             upi.juger_le_lot(
                 rows[resume_from:], key=key, decalage=resume_from,

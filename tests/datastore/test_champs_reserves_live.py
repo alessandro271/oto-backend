@@ -86,6 +86,7 @@ def terrain(live):
     st.set_schema(ns, {"key": "siren", "fields": [
         {"key": "siren", "type": "text"},
         {"key": "raison_sociale", "type": "text", "readonly": True},
+        *({"key": k, "type": "text"} for k in ENRICHISSEMENT),
     ]})
     row = st.append_row(ns, {"siren": "552032534", "raison_sociale": "TEMOIN"})
     return st, ns, ns_id, row["_id"]
@@ -107,7 +108,7 @@ def test_terrain_2_la_fiche_entiere_passe(terrain):
     st, ns, ns_id, rid = terrain
     fiche = {"siren": "552032534",
              "raison_sociale": {"valeur": "TEMOIN", "origine": "TEMOIN"}, **ENRICHISSEMENT}
-    out = st.append_row(ns, fiche)
+    out = st.append_row(ns, fiche, upsert=True)
     assert out["_id"] == rid
     st.update_row(ns, rid, dict(fiche, enrich_01="valeur 1 bis"))
     d = _donnees(ns_id, rid)
@@ -122,7 +123,7 @@ def test_terrain_3_une_valeur_differente_est_refusee_rien_d_ecrit(terrain):
     with pytest.raises(RowValidationError, match="`raison_sociale`"):
         st.update_row(ns, rid, {"raison_sociale": "AUTRE", **ENRICHISSEMENT})
     with pytest.raises(RowValidationError, match="`raison_sociale`"):
-        st.append_row(ns, {"siren": "552032534", "raison_sociale": "AUTRE"})
+        st.append_row(ns, {"siren": "552032534", "raison_sociale": "AUTRE"}, upsert=True)
     assert _donnees(ns_id, rid) == avant
 
 

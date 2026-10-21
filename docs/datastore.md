@@ -849,7 +849,7 @@ remplacés par deux réglages (`datastore/reglages.py`, seule lecture des deux a
 
 | réglage | question | crans |
 |---|---|---|
-| `unknown_columns` | le sort d'une colonne que le schéma ne déclare pas — jusqu'au 21/10/2026 seulement (oto#124, ci-dessous en fin de document : ensuite refusée partout) | `"create"` (défaut, avec un préavis daté) · `"report"` (créée et relevée dans `hors_schema`) · `"reject"` (refusée ; exige une colonne déclarée) |
+| `unknown_columns` | le sort d'une colonne que le schéma ne déclare pas — **retiré le 05/10/2026** (oto#124, en fin de document) : depuis le 21/10/2026 une colonne non déclarée est refusée partout, et le réglage n'est plus lu | (étaient `"create"` · `"report"` · `"reject"`) |
 | `new_rows` | le droit d'une ligne nouvelle de naître | `"create"` (défaut) · `"reject"` (une écriture qui ne désigne aucune ligne existante est refusée ; exige `key`) |
 
 Les valeurs sont des verbes, les mêmes sur les deux axes : ce que la plateforme FAIT de
@@ -881,10 +881,10 @@ qu'on n'y touche pas, **ne sont plus lus**, et la lecture les nomme avec leur
 Les paragraphes qui suivent racontent ces crans sous leurs noms d'alors.
 
 > ⚠️ **`unknown_columns` est RETIRÉ le 05/10/2026 (oto#124)** — plus aucun réglage, les
-> colonnes et les valeurs sont toujours vérifiées. Ce qu'il réglait est désormais la
-> règle de tous les tableaux à partir du 21/10/2026 : la colonne non déclarée est
-> refusée (`colonnes_non_declarees`) et le format déclaré fait contrat
-> (`validation_complete`), cf. la dernière section. `scripts/renommer_reglages_tete.py`
+> colonnes et les valeurs sont toujours vérifiées. Ce qu'il réglait est la règle de
+> tous les tableaux depuis le 21/10/2026 : la colonne non déclarée est refusée
+> (`colonnes_non_declarees`) et le format déclaré fait contrat (`validation_complete`),
+> cf. la dernière section. `scripts/renommer_reglages_tete.py`
 > est retiré avec lui (il posait ce réglage) ; `new_rows` reste le seul réglage de tête.
 
 **`key_required` : un tableau où l'on ne crée pas, on VISE (#516, 29/08/2026).** Le
@@ -1682,7 +1682,7 @@ destruction accidentelle contre l'impossibilité de nettoyer, et une clé inconn
 REFUSÉE (un `remove` avalé sur une faute de frappe ferait croire au nettoyage) ;
 `remove_attrs` = `{colonne: [attribut, …]}`, le **retrait d'un ATTRIBUT sur une colonne
 qui reste** (`dsv2.remove_field_attrs`, 07/09/2026) ;
-`key`/`unknown_columns`/`new_rows` = les clés de tête, inchangées si omises (le cran
+`key`/`new_rows` = les clés de tête, inchangées si omises (le cran
 de création y entre le 29/08/2026 sous le nom `key_required`, #516 ; renommés oto#127) ; les crans de CHAMP
 `readonly` / `origine: "system"` (#586/#606) se posent et se lèvent par `fields`, `null`
 levant sans réécrire ni toucher les lignes. Le résultat repasse par
@@ -1719,6 +1719,11 @@ pas sur lui-même, mais **le filet reste tendu pour tout le reste** — c'est le
 de voir une fusion qui laisserait échapper quelque chose. ⚠️ Conséquence : `set_schema`
 RELIT le schéma en place avant de le remplacer (un `SELECT` de plus sur un geste rare) —
 un banc qui stubbe l'écriture doit désormais stubber aussi `_ns_of`.
+
+> ⚠️ **Retirés le 21/10/2026 (oto#124, oto-backend#1292)** : le relevé `hors_schema` et le
+> cran `reject` décrits dans les deux paragraphes suivants n'existent plus — une colonne
+> non déclarée est refusée sur tous les tableaux (`colonnes_non_declarees`, dernière
+> section), au même seam et sur le même `posed`. Ils restent ici pour l'histoire.
 
 **Écrire hors du format se DIT, sans être refusé (#294).** Sur un datastore `strict`,
 un nom de champ que le schéma ne déclare pas est accepté (contrat 0016 : un champ libre
@@ -1807,10 +1812,7 @@ Quatre bornes, toutes voulues :
 
 Le refus et le signal partagent **un seul prédicat** (`dsv2._unknown_subkeys`) : deux
 définitions du « hors référentiel » finiraient par diverger, et c'est l'appelant qui
-paierait la différence. Conséquence à connaître : sur un tableau `strict`, les chemins
-**imbriqués** ne sortent plus dans `hors_schema` — le refus arrive avant le relevé.
-`hors_schema` garde le premier niveau, qui est le seul endroit où la colonne libre est
-un droit. ⚠️ Le refus est **borné comme le relevé** : un attribut inconnu est nommé une
+paierait la différence. ⚠️ Le refus est **borné** : un attribut inconnu est nommé une
 fois par colonne-liste, sur le premier élément qui le porte — 300 contacts fautifs ne
 rendent pas 300 lignes de refus.
 
@@ -1959,8 +1961,8 @@ du LLM. Un datastore peut déclarer une **clé métier** au schéma (`schema.key
 `"email"`/`"siren"` ; cf. `data_set_schema`) : une écriture qui porte une valeur de clé
 déjà présente ne duplique pas (param `key` explicite prioritaire) — nommée par l'appel
 (`key=`), elle **désigne** la ligne et la modifie ; sinon l'écriture **ajoute**, et ne
-fusionne qu'avec `upsert=true` (sans lui avertie, puis refusée à partir du 21 octobre
-2026 : oto#141, ci-dessous) ; les rows sans clé sont appendées. Renvoie `{inserted,
+fusionne qu'avec `upsert=true` (sans lui refusée depuis le 21/10/2026 : oto#141,
+ci-dessous) ; les rows sans clé sont appendées. Renvoie `{inserted,
 updated, count, key, ids, fusions?}`.
 ⚠️ **Ajouter n'est pas désigner (oto#141, arbitré le 30/09/2026, précisé le 01/10).**
 Jusque-là, toute écriture SANS `id` dont la valeur de clé existait déjà mettait la ligne
@@ -1974,20 +1976,16 @@ lignes écrites, rien ne le disant). La règle :
     (`key_required`) : une valeur présente MODIFIE sa ligne, sans `upsert` ni
     avertissement ; une valeur absente crée la ligne (sauf tableau fermé).
   - **Ajouter** — ni `id` ni `key=` : une valeur déjà présente fusionne avec
-    `upsert=true` ; sans lui, avertie puis refusée à la date.
+    `upsert=true` ; sans lui, refusée.
   - **Deux lignes du même appel à la même clé** : on ne désigne pas deux fois la même
-    ligne — sans `upsert`, avertie puis lot refusé ENTIER à la date, en désignation
-    comme en ajout.
+    ligne — sans `upsert`, lot refusé ENTIER, en désignation comme en ajout.
   - Paramètre `upsert: bool` (défaut `false`) sur toutes les faces qui prennent une clé :
     `data_write` (ligne et lot), `POST …/rows` (`?upsert=true`), `POST …/rows/batch`, la
-    frappe d'un upload signé (scellé comme `donnees_d_origine`) et `oto_import`. Livré
-    en **préavis daté** (`datastore/upsert_implicite.py`) : une date `UPSERT_IMPLICITE_REFUSE_LE` (2026-10-21), déplaçable
-    par `OTO_UPSERT_IMPLICITE_REFUSE_LE` (illisible ⇒ lève, `champs_reserves.date_reglee`),
-    dont le texte servi est dérivé.
-  - **Avant la date** : rien ne change à l'écriture ; un ajout qui fusionne, ou un
-    doublon dans l'appel, porte dans `notices` un avertissement daté (ligne seule : la
-    ligne visée, `id=<r1>` et `key=` ; lot : une phrase par clé, pas par ligne).
-  - **À partir de la date** : refus `business_key_exists` (MCP : `INVALID_PARAMS` ;
+    frappe d'un upload signé (scellé comme `donnees_d_origine`) et `oto_import`
+    (`datastore/upsert_implicite.py`). Livré le 01/10/2026 en préavis daté (un
+    avertissement dans `notices`), le refus est en vigueur depuis le 21/10/2026 ; la
+    date, son réglage et les avertissements sont retirés (oto-backend#1292).
+  - **Le refus** : `business_key_exists` (MCP : `INVALID_PARAMS` ;
     REST et réception d'upload : 409), qui nomme la ligne en place et les gestes
     (désigner par `id=`/`key=`, ou `upsert=true`) ; un lot est jugé ENTIER avant sa
     première ligne — doublons internes toujours, clés déjà en base s'il ajoute
@@ -1995,7 +1993,7 @@ lignes écrites, rien ne le disant). La règle :
     texte de clé rendu par la base `db.datastore_textes_de_cle` : aucune règle de
     comparaison à part) —, un import en tranches sur le fichier entier avant la
     première tranche. Une course perdue sous l'index suit la même règle.
-  - **`fusions`** (lot, upload, import), rendu dès maintenant quand il y en a :
+  - **`fusions`** (lot, upload, import), rendu quand il y en a :
     `[{rang, dans_rang, id, cle}]`, `dans_rang` = la ligne du MÊME geste qui a posé la
     ligne visée (`null` : déjà en base), à travers les tranches d'un import ; `ids`
     reste aligné rang pour rang. L'accusé d'un upload signé, lu par un porteur de lien
@@ -2005,8 +2003,7 @@ lignes écrites, rien ne le disant). La règle :
     clé en vigueur (`upsert_without_key` à la frappe d'un upload, refus d'entrée
     ailleurs). Un `key=` de ligne seule qui ne nomme pas la clé déclarée reste refusé
     (`jetons.refus_de_key_sans_lot`), sur la face REST aussi.
-  - Bancs : `tests/datastore/test_upsert_implicite_141_live.py` (chaque face, avant et
-    après la date).
+  - Bancs : `tests/datastore/test_upsert_implicite_141_live.py` (chaque face).
 ⚠️ **La fusion par clé n'est PAS réservée au lot** (vérifié le 28/08 sur table jetable, et
 la doc servie disait le contraire jusqu'au 29/08) : `data_write(row={siren: X})` **sans
 `id`**, sur un tableau qui déclare `key: "siren"` et où X existe, met à jour la ligne
@@ -2398,8 +2395,8 @@ mêmes fichiers en une semaine (gels en série, un incident de tree). Où poser 
 | `datastore/telephone.py` | le type `phone` : la forme compacte d'un numéro (`normaliser`), que la validation juge (oto#103) |
 | `datastore/declaration.py` | LIRE une déclaration : « que déclare ce schéma ? » |
 | `datastore/cycle_de_vie.py` | états, transitions, terminaux, plafond de reprises, périmètre |
-| `datastore/hors_schema.py` | une clé que la déclaration ne nomme pas — signalée en haut, refusée dessous |
-| `datastore/champs_reserves.py` | `readonly` / `origine: system` / `agent_access`, et le préavis daté |
+| `datastore/hors_schema.py` | une clé qu'un sous-record déclaré ne nomme pas, refusée ; la couche mal écrite |
+| `datastore/champs_reserves.py` | `readonly` / `origine: system` / `agent_access` |
 | `datastore/definition.py` | valider le SCHÉMA lui-même, à la pose |
 | `datastore/cles_inconnues.py` | refuser une clé que son niveau n'admet pas (`schema_keys.ADMISES`) |
 | `datastore/couches_exigees.py` | `required_layers` — ce que la valeur doit porter avec elle |
@@ -3443,9 +3440,9 @@ et ni `options` ni `max_items` nulle part. Un schéma dont la seule exigence viv
 que `"create"` (ex-`strict`, oto#127), ou `required`,
 `required_when`, `max_length`, `pattern` (depuis oto#103), `max_items` à toute profondeur
 (`_walk_fields`), ou
-`options` dans un sous-record. ⚠️ `options` de premier niveau n'arme toujours pas : c'est le
-régime souple déclaré (#319), que `non_applique.py` dit à la pose et à l'écriture — l'armer
-basculerait tous les tableaux souples à options. Mesuré en production avant la bascule : un
+`options` dans un sous-record. ⚠️ `options` de premier niveau n'arme pas seule : elle relève
+de la validation complète (`validation_complete`, oto#124), en vigueur sur tout tableau à
+colonnes depuis le 21/10/2026. Mesuré en production avant la bascule : un
 seul tableau change de régime (34 lignes, les `options` de deux listes) et aucune ligne
 existante ne viole un `required` de sous-champ. Livré sans préavis.
 
@@ -3718,55 +3715,53 @@ l'état actif/inerte de CHAQUE contrainte de validation (oto#34).
 Une écriture qui nommait une colonne inconnue la créait à la volée : le schéma
 s'étendait au fil des écritures, sans geste dédié (« ça fait n'importe quoi dans les
 flottes d'agents », 07/09). Décidé le 05/10 : **une colonne que le schéma ne déclare pas
-est REFUSÉE, sur TOUS les tableaux**, quel que soit `unknown_columns`, tableau sans
-schéma compris. Pour écrire dans une colonne nouvelle, on la déclare d'abord
-(`data_patch_schema(fields=[{"key": …}])`, REST `PATCH …/schema`).
+est REFUSÉE, sur TOUS les tableaux**, tableau sans schéma compris. Pour écrire dans une
+colonne nouvelle, on la déclare d'abord (`data_patch_schema(fields=[{"key": …}])`, REST
+`PATCH …/schema`). Livré en préavis daté (la colonne créée, une phrase dans `notices`),
+**en vigueur depuis le 21/10/2026** ; la date, son réglage
+(`OTO_COLONNE_NON_DECLAREE_REFUSEE_LE`) et le préavis sont retirés le même jour
+(oto-backend#1292).
 
-- **Préavis daté** (`datastore/colonnes_non_declarees.py`, patron d'`upsert_implicite`) : `COLONNE_NON_DECLAREE_REFUSEE_LE` = 2026-10-21,
-  le même jour que la bascule d'`upsert` ; réglage `OTO_COLONNE_NON_DECLAREE_REFUSEE_LE`
-  (illisible ⇒ lève) ; texte servi DÉRIVÉ de la date (`data_write`, `data_set_schema`,
-  `data_patch_schema`, routes REST d'écriture, guide
-  `datastore-semantics` §4 sexies bis). Avant la date, la colonne est créée et la réponse
-  porte UNE phrase dans `notices` par geste (union sur un lot) : les colonnes, la date,
-  le geste — pour tous les réglages, `create` compris.
-- **À partir de la date, dans le code** : `ColonneNonDeclaree` (sous-classe de
-  `RowValidationError`) — REST et réception d'upload `400 unknown_column`
+- **Le refus** (`datastore/colonnes_non_declarees.py`) : `ColonneNonDeclaree` (sous-classe
+  de `RowValidationError`) — REST et réception d'upload `400 unknown_column`
   (`details.colonnes`, `details.expected_column` quand la clé est une couche mal
   écrite, `nom_comment` → `nom.comment`), MCP `INVALID_PARAMS` avec le même texte. Un lot
   (MCP, REST, upload signé) et un import en tranches sont jugés ENTIERS avant leur
-  première ligne (`juger_le_lot`) : rien n'est écrit.
+  première ligne (`juger_le_lot`) : rien n'est écrit. Texte servi : `data_write`,
+  `data_set_schema`, `data_patch_schema`, routes REST d'écriture, guide
+  `datastore-semantics` §4 sexies bis.
 - **Un seul seam** : `_check_row`, que traversent la création unitaire, la fusion par
-  clé, le patch par `id` et la ligne de lot — la même où vivent le relevé `hors_schema` et
-  le cran `reject`. Le prédicat (`non_declarees`) juge ce que le geste POSE : une ligne
-  qui porte une colonne ancienne non déclarée reste écrivable sur ses colonnes déclarées,
-  et `null` sur l'ancienne l'efface (un effacement ne crée rien).
+  clé, le patch par `id` et la ligne de lot. Le prédicat (`non_declarees`) juge ce que le
+  geste POSE : une ligne qui porte une colonne ancienne non déclarée reste écrivable sur
+  ses colonnes déclarées, et `null` sur l'ancienne l'efface (un effacement ne crée rien).
+  Le relevé `hors_schema` (#294) et le cran `unknown_columns: "reject"` (#614/#678), qui
+  vivaient au même seam, sont retirés : la règle commune les rend sans objet.
 - **Découplé du format qui fait contrat** — arbitré à part le même jour : c'est la
   section suivante.
-- **Le gel** (`scripts/figer_colonnes.py`, à blanc par défaut, `--appliquer`) : avant la
-  bascule, chaque tableau — à schéma ou sans — reçoit la déclaration des colonnes que
-  ses lignes portent ; type déduit des valeurs (`datastore/types_inferes.py` :
-  homogénéité stricte, sinon pas de `type`, qui ne contraint rien ; ni `options` ni
-  `required`). Par `set_schema` via le store système de `durcir_schemas`, journalisé,
-  schéma relu avant d'écrire (bougé ⇒ sauté), une requête bornée par tableau,
-  idempotent — **à relancer la veille de la bascule**, pour geler aussi les colonnes
-  créées pendant le préavis.
-- **Ceux qui déclaraient déjà, et ceux qui déclarent désormais** : `oto_import` déclare
-  les en-têtes CSV neufs, et maintenant les clés NDJSON neuves (typées par la même
-  règle) ; une recette déclare ses colonnes aussi sur un tableau libre. L'upload signé
-  (`oto_upload_url`) ne déclare rien : une colonne neuve y est refusée à la date.
-- **Un tableau créé après le gel** naît sans colonne : sa première écriture est refusée
-  tant qu'on ne lui a pas déclaré ses colonnes — le refus le dit (« ce tableau ne déclare
-  encore aucune colonne ») et donne le geste.
+- **Le gel** (`scripts/figer_colonnes.py`, à blanc par défaut, `--appliquer`) : chaque
+  tableau — à schéma ou sans — reçoit la déclaration des colonnes que ses lignes
+  portent ; type déduit des valeurs (`datastore/types_inferes.py` : homogénéité stricte,
+  sinon pas de `type`, qui ne contraint rien ; ni `options` ni `required`). Par
+  `set_schema` via le store système de `durcir_schemas`, journalisé, schéma relu avant
+  d'écrire (bougé ⇒ sauté), une requête bornée par tableau, idempotent. Joué sur la base
+  partagée le 20/10/2026 ; il reste le geste de toute AUTRE base née avant la règle
+  (une instance dédiée a sa propre base, `docs/instance-cible.md`) — sans lui, ses
+  tableaux refusent l'écriture des colonnes qu'ils portent sans les déclarer.
+- **Ceux qui déclarent pour celui qui écrit** : `oto_import` déclare les en-têtes CSV
+  neufs et les clés NDJSON neuves (typées par la même règle) ; une recette déclare ses
+  colonnes aussi sur un tableau libre. L'upload signé (`oto_upload_url`) ne déclare
+  rien : une colonne neuve y est refusée.
+- **Un tableau créé nu** naît sans colonne : sa première écriture est refusée tant qu'on
+  ne lui a pas déclaré ses colonnes — le refus le dit (« ce tableau ne déclare encore
+  aucune colonne ») et donne le geste.
 - **Naître avec son schéma** (suite d'oto#124) : `data_create_datastore(schema=…)` et
   `POST /api/datastores` (`{"datastore", "schema"}`) prennent le MÊME objet que
-  `data_set_schema` / `PUT …/schema` — c'est, après le 21/10, le geste normal pour créer
-  un tableau qu'on va remplir (texte servi dérivé de la date :
-  `colonnes_non_declarees.description_creation`).
+  `data_set_schema` / `PUT …/schema` — c'est le geste normal pour créer un tableau qu'on
+  va remplir (texte servi : `colonnes_non_declarees.description_creation`).
   - **Pourquoi `schema` entier et pas `fields`** : la clé métier se pose le plus souvent
-    à la naissance (c'est elle que désigne `key`, et la bascule d'`upsert` tombe le même
-    jour) ; `fields` seul imposerait un second appel pour elle, exactement ce qu'on
-    retire. Et `schema` est le nom et la forme du paramètre de `data_set_schema` : aucun
-    vocabulaire de plus.
+    à la naissance (c'est elle que désigne `key`) ; `fields` seul imposerait un second
+    appel pour elle, exactement ce qu'on retire. Et `schema` est le nom et la forme du
+    paramètre de `data_set_schema` : aucun vocabulaire de plus.
   - **Un seul chemin de pose** : `set_schema` est coupé en résolution + `_poser_schema`
     (validation, vocabulaire fermé, index de clé métier, relevés), que la création
     appelle sur le tableau qu'elle vient d'insérer — sans le re-résoudre par son nom, qui
@@ -3781,50 +3776,40 @@ schéma compris. Pour écrire dans une colonne nouvelle, on la déclare d'abord
 ## Le format déclaré fait contrat partout — plus aucun réglage (oto#124, 05/10/2026)
 
 La validation COMPLÈTE d'une écriture était un réglage : `unknown_columns` autre que
-`create` (`reglages.format_contraignant`) faisait respecter les `options` de premier
-niveau, la forme des valeurs `text`/`url`/`object`/`list`/`enum`, les couches inconnues,
-la fermeture des sous-records déclarés et, à la pose, la garde de `lifecycle.claimable`.
-Mesuré le 05/10 : active sur 100 tableaux, éteinte sur 382 — et 596 lignes déjà en faute
-sur 25 de ces 382 (options 295 lignes / 16 tableaux, forme 411 / 12, sous-records fermés
-3 / 1, couches 0). Décidé le 05/10 : **toujours refuser, plus aucun réglage.**
+`create` faisait respecter les `options` de premier niveau, la forme des valeurs
+`text`/`url`/`object`/`list`/`enum`, les couches inconnues, la fermeture des sous-records
+déclarés et, à la pose, la garde de `lifecycle.claimable`. Mesuré le 05/10 : active sur
+100 tableaux, éteinte sur 382 — et 596 lignes déjà en faute sur 25 de ces 382 (options
+295 lignes / 16 tableaux, forme 411 / 12, sous-records fermés 3 / 1, couches 0). Décidé le
+05/10 : **toujours refuser, plus aucun réglage.** Livré en préavis daté (la faute écrite,
+une phrase dans `notices`), **en vigueur depuis le 21/10/2026** ; la date, son réglage
+(`OTO_VALIDATION_COMPLETE_LE`), le préavis et la lecture transitoire du réglage stocké
+sont retirés le même jour (oto-backend#1292).
 
-- **La décision est UNE fonction** : `validation_complete.complete(schema)` — à partir de
-  `VALIDATION_COMPLETE_LE` (2026-10-21, réglage `OTO_VALIDATION_COMPLETE_LE`, illisible ⇒
-  lève), vraie pour tout tableau qui déclare une colonne ; avant, vraie là où le réglage
-  STOCKÉ le disait (lu jusqu'à la date seulement, pour que les 100 tableaux gardent leur
-  validation pendant le préavis). `declaration.validation_active`,
+- **La décision est UNE fonction** : `validation_complete.complete(schema)` — vraie pour
+  tout tableau qui déclare une colonne. `declaration.validation_active`,
   `validate_row(contraignant=…)`, la garde de `claimable` à la pose et l'avertissement
-  des colonnes orphelines la lisent ; rien d'autre ne lit `unknown_columns`.
-- **Le préavis** (patron de `colonnes_non_declarees`) : sur un tableau en préavis
-  (`en_preavis`), `validate_row(preavis=…)` refait le MÊME jugement réglé comme à la
-  date, et ce qu'il refuserait de plus part dans `notices` — UNE phrase par geste, union
-  sur un lot, chaque faute telle que le refus la dira (colonne, valeur, règle), la date,
-  le geste (corriger, ou étendre les `options` par `data_patch_schema`). Un seul seam
-  (`controles._check_row`) : MCP, REST, lots, upload signé, import. Rien n'est écarté ni
-  refusé à ce titre. Le relevé d'écriture `hors_options` (#319) est retiré : le préavis
-  le dit mieux. À la pose : `options_not_enforced_warning` donne la date, l'existant hors
-  liste est relevé (`_offending_enum_warning`) dès la pose, et la garde de `claimable`
-  est dite (`definition.preavis_de_pose`).
+  des colonnes orphelines la lisent.
+- **Un seul seam** (`controles._check_row`) : MCP, REST, lots, upload signé, import. Le
+  refus : `row_invalid`, ou la valeur hors options ÉCARTÉE quand elle est la seule faute
+  (#667). À la pose, l'existant hors liste est relevé (`_offending_enum_warning`).
 - **On juge ce que le geste ÉCRIT, jamais ce que la ligne porte déjà** — vérifié famille
   par famille dans `_row_errors` : options et forme (`errs_type and not pose` → `gelees`),
   sous-records fermés (`closed or (contraignant and pose)`), élément de liste non écrit
-  (`elements_reecrits`) l'étaient déjà ; **deux trous fermés** : une couche inconnue EN
-  PLACE refusait l'écriture d'une autre colonne (elle part désormais dans `gelees`,
-  servie en `hors_type`), et une valeur hors options en place entrait dans `hors` (ce que
-  l'écriture peut écarter, #667), ce qui faisait refuser l'écartement de la valeur que
-  le geste pose. Les données des tenants ne sont pas corrigées.
+  (`elements_reecrits`) ; une couche inconnue EN PLACE part dans `gelees` (servie en
+  `hors_type`), et une valeur hors options en place n'entre pas dans `hors` (ce que
+  l'écriture peut écarter, #667). Les données des tenants ne sont pas corrigées.
 - **`unknown_columns` retiré** : `schema_keys.CLES_RETIREES` (refusé à la pose, au patch,
   dans un slot, à la création, avec « plus aucun réglage : les colonnes et les valeurs
   sont toujours vérifiées »), paramètre de `data_patch_schema` retiré et refusé
-  (`reglages.refus_parametres`, les deux faces), plus servi dans `reglages` ni annoncé
-  dans `enforced`. Stocké et inchangé, il passe (`cles_inconnues._deja_stockee`) et la
-  lecture le dit (`reglages.residu_unknown_columns`).
-- **Le retrait du stocké** : `scripts/retirer_unknown_columns.py` (à blanc par défaut,
-  `--appliquer` ; tableaux, slots de procédure, bibliothèque ; bougé ⇒ sauté ;
-  idempotent). **À lancer APRÈS le 21/10/2026** : avant, le retirer ferait retomber les
-  tableaux `report`/`reject` au préavis. Ensuite, la lecture transitoire
-  (`reglages.colonnes_inconnues`/`format_contraignant`), le relevé `hors_schema`, le cran
-  `reject` et `non_applique.options_not_enforced` sont du code mort, à retirer.
+  (`reglages.refus_parametres`, les deux faces), ni servi dans `reglages` ni annoncé
+  dans `enforced`, et **plus lu nulle part**.
+- **Le retrait du stocké** : joué sur la base partagée le 21/10/2026 par un script
+  dédié (`retirer_unknown_columns`, 0 tableau sur 543 au passage à blanc suivant), retiré
+  ensuite (oto-backend#1292). Une autre base qui le porterait encore le garde sans effet
+  — toléré tant qu'on n'y touche pas, dit à la lecture comme toute clé qu'aucun niveau
+  n'admet (`cles_inconnues.residus_warning`) — et le range par
+  `scripts/durcir_schemas.py`, qui le supprime en tête.
 
 ## Ajouter une ligne à une cellule texte sans la relire (06/10/2026)
 

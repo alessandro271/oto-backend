@@ -393,9 +393,8 @@ silence.
 
 ## 4 sexies bis. A column is DECLARED before it is written
 
-**From 21 October 2026, a write to a column that the schema does not declare
-is REFUSED** (`unknown_column`), on ALL tables — tables without a schema
-included (oto#124). Nothing is written; a batch or an
+**A write to a column that the schema does not declare is REFUSED**
+(`unknown_column`), on ALL tables — tables without a schema included (oto#124). Nothing is written; a batch or an
 import is refused WHOLE, before its first row. To write to a new
 column, declare it first, then write:
 
@@ -405,12 +404,11 @@ data_patch_schema(datastore=…, fields=[{"key": "score", "type": "number"}])
 
 (REST: `PATCH /api/datastores/{datastore}/schema`, same body.) `fields` merges by
 key: the column is added, the others do not move. The columns that a table
-already carries on 21 October are declared for it before that date — nothing that
-exists becomes unwritable. A patch that touches a declared column of a row
+already carried when the rule came in were declared for it. A patch that touches a declared column of a row
 carrying an old undeclared column goes through; writing `null` to the latter erases it.
 
-**A new table is born without columns**: from 21 October, its first write
-is therefore refused as long as nothing is declared. For a table you are going to fill, the
+**A new table is born without columns**: its first write is therefore refused
+as long as nothing is declared. For a table you are going to fill, the
 normal operation is to create it WITH its schema, in a single call:
 
 ```
@@ -423,14 +421,12 @@ the SAME object as `data_set_schema` — same keys, same closed vocabulary, same
 validation, business key and top-level setting included. The table is born with it; if the schema
 is refused, the table is NOT created (nothing to clean up, the same name stays free).
 
-**Until then**, the column is still created, and the response says so in `notices`: the
-columns, the date, the operation. `oto_import` itself declares the new columns of a
-file (CSV headers, NDJSON keys).
+`oto_import` itself declares the new columns of a file (CSV headers, NDJSON keys).
 
 ## 4 sexies ter. The declared format is a contract — no more settings
 
-**From 21 October 2026, the declared format is a contract on ALL tables with a
-schema** (oto#124, decided on 2026-10-05: always refuse, no more settings):
+**The declared format is a contract on ALL tables with a schema** (oto#124: always
+refuse, no more settings):
 
 - the `options` of a column are applied, whatever its type;
 - the SHAPE of a `text`, `url`, `object`, `list` and `enum` value is checked
@@ -445,18 +441,15 @@ A fault is refused (`row_invalid`), nothing is written — except a value outsid
 `options` that is alone in its fault: it is DISCARDED and the rest of the row is written
 (`valeurs_ecartees`).
 
-**Until then**, on a table whose format was not a contract, the write
-goes through and `notices` states each fault — the column, the value, the rule (permitted
-options, expected shape) —, the date, and the operation: correct the value, or, if it
-is right, extend the format:
+If the value is right, extend the format:
 
 ```
 data_patch_schema(datastore=…, fields=[{"key": "statut", "options": ["a", "b", "c"]}])
 ```
 
 **What is judged is what the operation WRITES, never what the row already carries.** A row in which
-a value in place is out of format is written on its OTHER columns, before as well as after
-the date; the fault in place is stated (`hors_type`), it refuses nothing. Existing
+a value in place is out of format is written on its OTHER columns; the fault in place is
+stated (`hors_type`), it refuses nothing. Existing
 rows are not corrected by the platform.
 
 **Only one top-level setting remains: `new_rows`** — does a new row have the right
@@ -466,8 +459,7 @@ applies (`reglages`).
 
 `unknown_columns` is **retired** (2026-10-05): setting or patching it is refused,
 with this reason — no more settings, columns and values are always
-checked. A schema that still carries it keeps it as long as nobody touches it (the
-platform removes it itself; the read says so). `strict`, `unknown_fields` and
+checked. `strict`, `unknown_fields` and
 `key_required` have been refused since 2026-10-02 (`key_required: true` →
 `new_rows: "reject"`).
 
@@ -478,8 +470,7 @@ A table's validation is armed as soon as its schema declares a requirement:
 object sub-field or the attribute of a list element — and `options` in a
 sub-field. "Each contact carries a name" is declared on `of.fields`, and it is
 enforced. The rest of the format (the `options` of a top-level column, the shape of
-values) is a contract everywhere from 2026-10-21 (§4 sexies ter); until then, the
-response says so.
+values) is a contract everywhere (§4 sexies ter).
 
 Two forms that would not apply are **refused when the schema is set**, with the right one:
 `max_items` is set on the list (`{"type": "list", "max_items": 3, "of": {…}}`),
@@ -558,11 +549,11 @@ guarantees it. What it does to that row depends on what **your call says** (oto#
 - **You ADD** — neither `id` nor `key=`: a value already present is a duplicate you
   did not see.
 
-| | until 20 October 2026 | from **21 October 2026** |
-|---|---|---|
-| add, key already present, without `upsert` | merges, and `notices` warns, with the date | **refused** `business_key_exists`: the refusal names the row in place and the operations |
-| add, key already present, `upsert=true` | **merges** (its `_id` is returned) | **merges** |
-| two rows of the same call with the same key, without `upsert` (designation as well as add) | they merge, with a warning | the batch is **refused WHOLE** before its first row, ranks named ("Rows 1 and 2: same siren '111'.") |
+| | what happens |
+|---|---|
+| add, key already present, without `upsert` | **refused** `business_key_exists`: the refusal names the row in place and the operations |
+| add, key already present, `upsert=true` | **merges** (its `_id` is returned) |
+| two rows of the same call with the same key, without `upsert` (designation as well as add) | the batch is **refused WHOLE** before its first row, ranks named ("Rows 1 and 2: same siren '111'.") |
 
 You do not designate the same row twice in one call: remove the duplicate, or pass
 `upsert=true` if it must merge. `upsert` applies on every face — single row,
@@ -686,7 +677,7 @@ A success is not an acknowledgement of what you believe you did; read what is mi
 - **A response does not name the table it did not resolve.** `ns_id` is present
   as soon as the table was reached; an `ns_id: null` signals a path that returned
   without resolving, not a table without a number.
-- **A write `200`/`201` only carries what deviated.** `hors_schema`,
+- **A write `200`/`201` only carries what deviated.**
   `hors_type`, `valeurs_ecartees`, `valeurs_effacees`, `valeurs_ignorees`, `notices`
   are absent when
   everything is in format: their absence is the normal response, their presence is what

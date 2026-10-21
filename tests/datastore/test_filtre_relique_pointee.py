@@ -24,6 +24,7 @@ l'avait simplement pas étendue à la couche.
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -35,8 +36,9 @@ def _store():
 
 
 def _table_avec_relique():
-    """Un tableau portant les CINQ formes, dont la relique posée en base directement —
-    la garde d'écriture l'empêche aujourd'hui, mais la production en porte 765."""
+    """Un tableau portant les CINQ formes. La relique et les colonnes hors schéma sont
+    posées en base directement — les gardes d'écriture les refusent aujourd'hui
+    (oto#124 pour une colonne non déclarée), mais la production en porte."""
     from oto_mcp import db
     from oto_mcp.db._conn import _connect
 
@@ -49,13 +51,13 @@ def _table_avec_relique():
     st.append_row(ns, {
         "siren": "1",
         "declaree": {"valeur": "a", "comment": "c1", "link": "L1"},
-        "hors_schema": {"valeur": "b", "comment": "c2", "link": "L2"},
-        "plat_comment": "x",
     })
     rid = st.list_rows(ns)[0]["_id"]
+    existant = {"hors_schema": {"valeur": "b", "comment": "c2", "link": "L2"},
+                "plat_comment": "x", "relique_nom.link": "https://x"}
     with _connect() as c:
         c.execute("UPDATE datastore_rows SET data = data || %s::jsonb "
-                  "WHERE row_id = %s", ('{"relique_nom.link": "https://x"}', rid))
+                  "WHERE row_id = %s", (json.dumps(existant), rid))
         c.commit()
     return st, ns
 

@@ -24,7 +24,6 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import config, file_source, upload_tokens
-from ..datastore import colonnes_non_declarees as cnd
 from ..datastore import schema as dsv2
 from ..datastore import upsert_implicite as upi
 from ._authz import SUB_ONLY
@@ -312,8 +311,7 @@ class ImportInput(BaseModel):
     declare_columns: bool = Field(default=True, description=(
         "Declare headers that match no column as text columns (label = header); for "
         "NDJSON, keys no column declares, typed from their values. Existing columns are "
-        "never changed. Off, a column the schema does not declare is refused from "
-        + cnd.date_du_refus().isoformat() + " on."))
+        "never changed. Off, a column the schema does not declare is refused."))
     resume_from: Optional[int] = Field(default=None, description=(
         "From a previous receipt, when the file did not fit one call. Needs "
         "`source_sha256`."))
@@ -512,7 +510,7 @@ CAPABILITIES += [
                           "(`doublons`, `existantes`) — nothing written when judged "
                           "before the first slice, else `resume_from`"),
             DeclaredError(400, "unknown_column",
-                          "(oto#124, from its date) the file carries a column the "
+                          "(oto#124) the file carries a column the "
                           "table's schema does not declare and `declare_columns` did "
                           "not declare it: `details.colonnes` names it, nothing written"),
         ),

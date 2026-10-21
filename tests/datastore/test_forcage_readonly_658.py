@@ -168,6 +168,9 @@ def banc(acteurs, monkeypatch):
         return {"row_id": rid, "created_at": "t", "updated_at": "t", "data": data}
 
     monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key", find)
+    # Le lot juge ses clés avant d'écrire (oto#141) : le texte de chaque valeur.
+    monkeypatch.setattr(dsm.db, "datastore_textes_de_cle",
+                        lambda valeurs: [str(v) for v in valeurs])
     monkeypatch.setattr(dsm.db, "datastore_get_row", get_row)
     monkeypatch.setattr(dsm.db, "datastore_insert_row", insert)
     monkeypatch.setattr(dsm.db, "datastore_active_lease", lambda ns_id, rid: None)
@@ -237,11 +240,11 @@ def test_le_forcage_passe_aussi_par_la_FUSION_et_par_le_LOT(banc):
     fusion sur clé métier (`data_write(row=…)` sans `id`) et le lot."""
     store, etat = banc
     store("membre").append_row("viviers", {"siren": "552081317", "adresse": "2 rue B"},
-                               readonly_override=True)
+                               readonly_override=True, upsert=True)
     assert etat["lignes"]["r1"]["adresse"] == "2 rue B"
     store("membre")._write_rows_to_ns(
         NS_ID, [{"siren": "552081317", "adresse": "4 rue D"}], key="siren",
-        readonly_override=True)
+        cle_passee=True, readonly_override=True)
     assert etat["lignes"]["r1"]["adresse"] == "4 rue D"
 
 
@@ -251,11 +254,11 @@ def test_un_TIERS_est_refuse_sur_la_fusion_et_sur_le_lot_aussi(banc):
     with pytest.raises(RowValidationError, match="`adresse`"):
         store("partenaire").append_row(
             "viviers", {"siren": "552081317", "adresse": "2 rue B"},
-            readonly_override=True)
+            readonly_override=True, upsert=True)
     with pytest.raises(RowValidationError, match="`adresse`"):
         store("partenaire")._write_rows_to_ns(
             NS_ID, [{"siren": "552081317", "adresse": "2 rue B"}], key="siren",
-            readonly_override=True)
+            cle_passee=True, readonly_override=True)
     assert etat["lignes"]["r1"]["adresse"] == "1 rue A"
 
 
@@ -440,7 +443,7 @@ def test_le_lot_releve_CHAQUE_ligne_forcee(banc):
         store("membre")._write_rows_to_ns(
             NS_ID, [{"siren": "552081317", "adresse": "2 rue B"},
                     {"siren": "389256712", "adresse": "8 rue Y"}],
-            key="siren", readonly_override=True)
+            key="siren", cle_passee=True, readonly_override=True)
     finally:
         session_org.reset_call_trace(token)
     assert [(e["row"], e["was"], e["now"]) for e in holder["readonly_forced"]] == [

@@ -28,6 +28,8 @@ from oto_mcp.datastore import core as dsm
 from oto_mcp.datastore.core import DatastorePg
 
 ROW = "019fdba0-dd7b-7be2-ec51-37adae1cbfa4"
+#: Les colonnes écrites par les bancs, déclarées — `id` ne l'est pas.
+SCHEMA = {"fields": [{"key": "siren"}, {"key": "statut"}]}
 
 
 @pytest.fixture()
@@ -36,7 +38,7 @@ def store(monkeypatch):
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     calls = {"insert": [], "update": []}
     monkeypatch.setattr(dsm.db, "get_datastore_by_id",
-                        lambda ns_id: {"id": ns_id, "schema": None})
+                        lambda ns_id: {"id": ns_id, "schema": SCHEMA})
     monkeypatch.setattr(dsm.db, "datastore_insert_row",
                         lambda ns_id, rid, data, *a, **k: (
                             calls["insert"].append(data) or
@@ -113,11 +115,12 @@ def test_a_declared_id_column_is_plain_data(store, monkeypatch):
 
 
 def test_a_naked_undeclared_id_in_a_batch_is_refused_too(store):
-    """Le lot passe par le même seam : un `id` égaré dans une row de batch est
-    refusé pareil — pas de fantôme au volume."""
+    """Un `id` égaré dans une row de batch est refusé aussi — pas de fantôme au volume.
+    Colonne non déclarée, le lot ENTIER est refusé avant sa première ligne (oto#124)."""
     st, calls = store
-    with pytest.raises(ValueError, match="ghost row"):
+    with pytest.raises(ValueError, match="`id`: column not declared"):
         st.write_rows("v", [{"siren": "1"}, {"id": ROW, "siren": "2"}])
+    assert calls["insert"] == []
 
 
 def test_patch_with_a_coherent_id_passes(store):

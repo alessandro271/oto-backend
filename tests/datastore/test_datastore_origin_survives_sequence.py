@@ -21,6 +21,11 @@ import pytest
 from oto_mcp.datastore.core import DatastorePg
 
 
+#: Les colonnes écrites, déclarées : une colonne non déclarée est refusée (oto#124).
+_SCHEMA = {"fields": [{"key": "contact1_nom", "type": "text"},
+                      {"key": "qualification", "type": "text"}]}
+
+
 class _Db:
     """Base en mémoire : le round-trip suffit, et c'est LUI qu'on veut exercer."""
 
@@ -49,8 +54,8 @@ def store(monkeypatch):
     db = _Db()
     s = DatastorePg("u-1")
     monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 1)
-    monkeypatch.setattr(s, "_ns_of", lambda ns_id: {"schema": None, "datastore": "t"})
-    monkeypatch.setattr(s, "_schema_of", lambda ns_id: None)
+    monkeypatch.setattr(s, "_ns_of", lambda ns_id: {"schema": _SCHEMA, "datastore": "t"})
+    monkeypatch.setattr(s, "_schema_of", lambda ns_id: _SCHEMA)
     monkeypatch.setattr(s, "_trace", lambda *a, **k: None)
     for name in ("datastore_get_row", "datastore_merge_row_locked"):
         monkeypatch.setattr(ds.db, name, getattr(db, name))

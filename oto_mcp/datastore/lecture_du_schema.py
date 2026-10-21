@@ -39,8 +39,7 @@ from . import acces_agent as aga
 from . import cles_inconnues
 from . import schema_keys as sk
 from .declaration import readonly_fields
-from .non_applique import lifecycle_hors_statut, options_not_enforced
-from . import validation_complete as vc
+from .non_applique import lifecycle_hors_statut
 
 
 # ── La forme compacte ────────────────────────────────────────────────────────
@@ -85,25 +84,14 @@ def _chemin(pas: tuple) -> str:
 def _sans_effet(schema: Optional[dict]) -> list[dict]:
     out = [{"chemin": c, "cle": "agent_access", "raison": r}
            for c, r in aga.sans_effet(schema)]
-    out += [{"chemin": c, "cle": "options",
-             "raison": f"enforced from {vc.date_de_bascule().isoformat()} on "
-                       "(oto#124): until then, an off-list value is written, with a "
-                       "notice"}
-            for c in options_not_enforced(schema)]
     out += [{"chemin": c, "cle": "lifecycle",
              "raison": "only the queue column has its transitions validated"}
             for c in lifecycle_hors_statut(schema)]
     for niveau, pas, noeud in cles_inconnues.parcours(schema):
         out += [{"chemin": _chemin(pas), "cle": c,
-                 "raison": (_RETIRE if not pas and c == "unknown_columns" else
-                            "no level accepts it: stored, never read")}
+                 "raison": "no level accepts it: stored, never read"}
                 for c in cles_inconnues.inconnues(niveau, noeud)]
     return out
-
-
-#: oto#124 : le réglage retiré, encore STOCKÉ, est lu jusqu'à la date — puis plus.
-_RETIRE = ("setting removed on 2026-10-05 (no settings any more): stored, read until the "
-           "date the format becomes binding everywhere, then removed by the platform")
 
 
 def gardes(schema: Optional[dict]) -> dict:

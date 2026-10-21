@@ -450,22 +450,14 @@ class Row(BaseModel):
 
 
 class WrittenRow(Row):
-    """La ligne écrite, plus le relevé « hors schéma » du geste (#294).
+    """La ligne écrite, plus les relevés du geste.
 
-    Les deux clés n'apparaissent QUE si l'écriture a posé des champs absents du schéma
-    déclaré — leur présence est le signal, leur absence est le cas normal.
+    Un relevé n'apparaît QUE s'il a quelque chose à dire — sa présence est le signal,
+    son absence est le cas normal.
     """
     versions_servies: Optional[list[str]] = Field(default=None, description=(
         "the VERSIONS of each cell this reply carries (`current`, `origine`) — what "
         "`versions` asked for; absent from an error"))
-    hors_schema: Optional[list[str]] = None
-    hors_schema_hint: Optional[str] = None
-    # #319 — valeurs écrites hors des `options` déclarées, sur un tableau qui n'est
-    # PAS en format strict : elles passent (le régime est souple par déclaration),
-    # mais la réponse le dit désormais. `{champ: valeur}`. Absent quand tout est dans
-    # les listes — le cas normal, pas de clé parasite dans la réponse.
-    hors_options: Optional[dict] = None
-    hors_options_hint: Optional[str] = None
     # #733 — colonnes dont la valeur DÉJÀ EN BASE ne respecte plus le type déclaré,
     # rencontrées en écrivant ailleurs sur la même ligne. `{champ: le refus qu'on
     # aurait rendu}`. L'écriture a réussi : ce n'est ni un refus ni le geste de
@@ -509,7 +501,7 @@ class WrittenBatch(BaseModel):
     """Le récapitulatif d'un lot — la MÊME enveloppe que `data_write(rows=…)`.
 
     Pas de ligne rendue : un lot en porte des milliers. Les relevés du geste
-    (`notices`, `hors_schema`, `valeurs_ecartees`…) sont cumulés sur le lot, une
+    (`notices`, `valeurs_ecartees`…) sont cumulés sur le lot, une
     phrase par fait et non une par ligne ; les plus lus sont déclarés, les autres
     passent (`extra="allow"`), comme sur l'écriture d'une ligne."""
     model_config = ConfigDict(extra="allow")
@@ -528,8 +520,6 @@ class WrittenBatch(BaseModel):
         "`rang` the row's rank in the batch (from 1), `dans_rang` the earlier row of "
         "the SAME batch that made the target row (`null`: the row was already in the "
         "table), `id` that row, `cle` `{column: value}`. Absent when nothing merged"))
-    hors_schema: Optional[list[str]] = None
-    hors_schema_hint: Optional[str] = None
     valeurs_ecartees: Optional[list[dict]] = None
     valeurs_ecartees_hint: Optional[str] = None
     notices: Optional[list[str]] = None
@@ -797,8 +787,7 @@ def _conflit_de_revision(e: RevisionConflict) -> AuthzDenied:
                        {"current_revision": e.current_revision})
 
 
-#: oto#124 : le format déclaré fait contrat partout à la date — DÉRIVÉ d'elle, composé
-#: au chargement (avant la date, le préavis ; après, la règle au présent).
+#: oto#124 : le format déclaré fait contrat partout.
 _FORMAT_DECLARE = dsvc.description_ecriture()
 
 _ECRITURE_DETRUIT = (

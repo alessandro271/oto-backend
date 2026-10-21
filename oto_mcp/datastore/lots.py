@@ -82,7 +82,7 @@ class LotsMixin:
 
         `cle_passee` (oto#141) = `key` a été NOMMÉ par l'appel : le lot DÉSIGNE par la
         clé, une valeur en place modifie sa ligne. Sinon il AJOUTE, et une valeur en
-        place n'y fusionne qu'avec `upsert` — sans lui avertie, puis refusée à sa date.
+        place n'y fusionne qu'avec `upsert` — sans lui, refusée.
         Deux lignes du lot à la même clé : refusées sans `upsert`, dans les deux cas. Le
         lot est jugé ENTIER avant sa première ligne.
         `fusions` = le relevé partagé d'un geste découpé en tranches (`import_rows`),
@@ -98,18 +98,17 @@ class LotsMixin:
         # oto#140 : `@keep` et `@clear` sur le chemin des imports aussi — jugés sur le
         # lot ENTIER avant la première ligne : le refus sans moitié de lot déjà écrite.
         mdp.controler(*(r for r in rows if isinstance(r, dict)))
-        # oto#124 : une colonne non déclarée, à partir de sa date — le lot ENTIER est
-        # jugé ici, avant sa première ligne. Avant la date, rien : chaque ligne relève
-        # ses colonnes au passage (`_check_row`), dites en une phrase.
+        # oto#124 : une colonne non déclarée — le lot ENTIER est jugé ici, avant sa
+        # première ligne.
         cnd.juger_le_lot(schema, rows)
         # oto#141 : AJOUTER sur une clé existante ne fusionne plus en silence ; la
         # DÉSIGNER (`key=` nommé, tableau fermé) la modifie. `upsert` sans clé ne
-        # fusionnerait rien ; sans `upsert`, à partir de la date, le lot est jugé ENTIER
-        # ici — doublons internes, et clés en base s'il ajoute —, avant toute écriture.
+        # fusionnerait rien ; sans `upsert`, le lot est jugé ENTIER ici — doublons
+        # internes, et clés en base s'il ajoute —, avant toute écriture.
         upi.refuser_upsert_sans_cle(upsert, key, nom_ns, lot=True)
         designation = upi.designe(schema, cle_passee)
         suivi = fusions if fusions is not None else upi.Fusions()
-        if key and not upsert and not suivi.juge and upi.refus_arme():
+        if key and not upsert and not suivi.juge:
             upi.juger_le_lot(
                 rows, key=key, datastore=nom_ns, designation=designation,
                 decalage=suivi.decalage,
@@ -120,11 +119,11 @@ class LotsMixin:
 
         def _fusion(rang: int, row_id: str, colonne: str, valeur: Any) -> None:
             entree = suivi.fusion(rang, row_id, colonne, valeur)
-            upi.controler_fusion(self.off_notices, designation=designation,
+            upi.controler_fusion(designation=designation,
                                  upsert=upsert, datastore=nom_ns, key=colonne,
                                  kv=valeur, row_id=row_id,
                                  dans_rang=entree["dans_rang"], rang=entree["rang"],
-                                 lot=True, nommer=suivi.nommer)
+                                 nommer=suivi.nommer)
             fusionnees.append(entree)
         total = len(rows)
         for rang, data in enumerate(rows, 1):

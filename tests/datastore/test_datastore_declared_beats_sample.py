@@ -21,7 +21,6 @@ from oto_mcp.datastore import schema as dsv2
 
 
 _SCHEMA = {
-    "unknown_columns": "report",
     "fields": [
         {"key": "raison_sociale", "type": "text"},
         {"key": "notes_verification", "type": "text", "role": "note"},
@@ -212,10 +211,9 @@ def test_a_table_without_columns_is_not_scanned(monkeypatch):
     assert ds.DatastorePg._offending_enum_warning(1, {"fields": []}) is None
 
 
-def test_a_soft_schema_is_scanned_and_the_warning_gives_the_date(monkeypatch):
-    """oto#124 : la liste fera contrat le 21/10/2026 sur TOUS les tableaux — un
-    tableau qui ne faisait pas contrat est donc relevé dès la pose, et la phrase dit
-    QUAND l'écriture hors liste cessera de passer."""
+def test_a_soft_schema_is_scanned_too(monkeypatch):
+    """oto#124 : la liste fait contrat sur TOUS les tableaux — un tableau sans
+    `strict` est relevé à la pose, avec la même phrase."""
     from oto_mcp.datastore import core as ds
     monkeypatch.setattr(ds.db, "datastore_offending_enum_values",
                         lambda ns_id, options, **k: [
@@ -224,7 +222,7 @@ def test_a_soft_schema_is_scanned_and_the_warning_gives_the_date(monkeypatch):
     souple = {"fields": [{"key": "u", "type": "enum", "options": ["a", "b"]}]}
     msg = ds.DatastorePg._offending_enum_warning(1, souple)
     assert "`u` : 2 ligne(s) hors options" in msg
-    assert "À partir du 2026-10-21 (d'ici là, elle passe avec un préavis)" in msg
+    assert "Une écriture future qui pose une valeur hors options la voit écartée" in msg
 
 
 def test_a_strict_schema_without_enum_is_not_scanned(monkeypatch):
@@ -232,7 +230,7 @@ def test_a_strict_schema_without_enum_is_not_scanned(monkeypatch):
     requête."""
     ds = _no_db(monkeypatch)
     assert ds.DatastorePg._offending_enum_warning(
-        1, {"unknown_columns": "report", "fields": [{"key": "x", "type": "text"}]}) is None
+        1, {"fields": [{"key": "x", "type": "text"}]}) is None
 
 
 def test_a_required_field_activates_the_scan(monkeypatch):

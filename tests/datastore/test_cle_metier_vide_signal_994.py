@@ -113,8 +113,12 @@ def course_sans_gagnante(monkeypatch):
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     monkeypatch.setattr(st, "declared_key", lambda ns: "member_id")
     monkeypatch.setattr(dsm.db, "get_datastore_by_id",
-                        lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
+                        lambda ns_id: {"id": ns_id, "schema": {
+                            "key": "member_id", "fields": [{"key": "member_id"}]}})
     monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key", lambda *a: None)
+    # Le lot juge ses doublons de clé sur le texte que la base rend (oto#141) : sans PG, `str`.
+    monkeypatch.setattr(dsm.db, "datastore_textes_de_cle",
+                        lambda valeurs: [str(v) for v in valeurs])
     monkeypatch.setattr(dsm.db, "datastore_insert_row",
                         lambda ns_id, rid, data: (_ for _ in ()).throw(
                             UniqueViolation("duplicate key ds_bkey_7")))

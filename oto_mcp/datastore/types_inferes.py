@@ -1,7 +1,7 @@
 """Déclarer une colonne d'après les valeurs qu'elle PORTE (oto#124).
 
-Une colonne non déclarée est refusée à l'écriture à partir de la date de
-`colonnes_non_declarees` : deux gestes déclarent pour celui qui écrit — le gel des
+Une colonne non déclarée est refusée à l'écriture (`colonnes_non_declarees`) : deux
+gestes déclarent pour celui qui écrit — le gel des
 colonnes existantes (`scripts/figer_colonnes.py`) et l'import NDJSON
 (`upload_tokens.parse_import`, comme l'import CSV déclare ses en-têtes). Les deux
 déduisent le `type` des valeurs, par CETTE règle, une seule.
@@ -22,7 +22,7 @@ même forme JSON :
 
 ⚠️ **Pourquoi pas de type plutôt que `text` quand c'est hétérogène** : un `type` déclaré
 s'arme seul pour `number`, `bool`, `date` (`types_declares.TYPES_ARMES`), et `text`
-refuse un non-texte sous un format qui fait contrat (partout au 21/10/2026, oto#124). Une
+refuse un non-texte sous un format qui fait contrat (partout, oto#124). Une
 colonne sans type n'a aucune forme à tenir (`validation._conformite_scalaire`) : la
 déclarer ne refuse RIEN de plus qu'aujourd'hui. Le type n'est déduit que là où TOUTES
 les valeurs en place le tiennent déjà — aucune ligne existante ne devient hors format.

@@ -22,8 +22,6 @@ from starlette.testclient import TestClient
 
 from oto_mcp.datastore.errors import RowValidationError
 
-# oto#124 : le format déclaré fait contrat partout (ex-`unknown_columns: "report"`).
-pytestmark = pytest.mark.usefixtures("validation_complete_partout")
 
 SUB = "usr_rang_oto22"
 SCHEMA = {"key": "siren", "fields": [

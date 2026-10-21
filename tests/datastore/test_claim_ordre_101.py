@@ -26,6 +26,7 @@ import pytest
 LIBRE = {"fields": [
     {"key": "segment", "type": "text"},
     {"key": "resultat", "type": "text"},
+    {"key": "rang"},
 ]}
 
 

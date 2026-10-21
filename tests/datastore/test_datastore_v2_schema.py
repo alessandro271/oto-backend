@@ -94,14 +94,15 @@ def test_un_lifecycle_seul_est_ACCEPTE_et_designe_sa_colonne():
 
 # ── activation opt-in ─────────────────────────────────────────────────────────
 
-def test_validation_inactive_by_default():
-    assert not dsv2.validation_active({"fields": [{"key": "a", "type": "number"}]})
+def test_validation_inactive_sans_colonne_declaree():
+    """Le format déclaré fait contrat sur tout tableau qui déclare une colonne
+    (oto#124) : seul un tableau sans colonne n'arme rien."""
     assert not dsv2.validation_active(None)
+    assert not dsv2.validation_active({"fields": []})
+    assert dsv2.validation_active({"fields": [{"key": "a", "type": "number"}]})
 
 
 def test_validation_active_via_strict_or_required():
-    assert dsv2.validation_active({"unknown_columns": "report", "fields": []}), \
-        "le réglage STOCKÉ arme encore, jusqu'au 21/10/2026"
     assert dsv2.validation_active(
         {"fields": [{"key": "a", "required": True}]})
     assert dsv2.validation_active(
@@ -117,9 +118,6 @@ def test_max_length_alone_activates_validation():
         {"key": "contacts", "type": "list",
          "of": {"fields": [{"key": "fonction", "type": "text",
                             "max_length": 60}]}}]})
-    # une borne mal formée n'active rien (elle est refusée à la pose)
-    assert not dsv2.validation_active(
-        {"fields": [{"key": "a", "type": "text", "max_length": "60"}]})
 
 
 # ── validation de row ─────────────────────────────────────────────────────────
@@ -135,17 +133,17 @@ def test_soft_schema_ne_valide_plus_RIEN_le_type_declare_s_arme_seul():
     elle ne tournait simplement pas là où on en avait besoin. Un `type` déclaré s'arme
     donc lui-même, comme `required_layers` et le cycle de vie avant lui.
 
-    **Ce qui reste souple le reste** : `required`, `options`, les bornes. Le schéma
-    ci-dessous ne devient pas strict — il fait seulement respecter ce qu'il déclare.
+    Le schéma ci-dessous ne devient pas strict — il fait seulement respecter ce qu'il
+    déclare, `options` de premier niveau comprises (oto#124).
     """
     schema = {"fields": [{"key": "mwh", "type": "number"}]}  # 0016 : soft
     assert dsv2.validate_row(schema, {"mwh": "pas-un-nombre"}) != []
     assert dsv2.validate_row(schema, {"mwh": "42"}) == []
-    # la souplesse d'un schéma sans `strict` : une colonne INCONNUE passe toujours,
-    # et des `options` déclarées ne contraignent toujours pas.
+    # une colonne INCONNUE n'est pas l'affaire de `validate_row` (`colonnes_non_declarees`
+    # la refuse avant) ; des `options` déclarées contraignent.
     assert dsv2.validate_row(schema, {"inconnue": "x"}) == []
     libre = {"fields": [{"key": "s", "type": "enum", "options": ["a"]}]}
-    assert dsv2.validate_row(libre, {"s": "hors-liste"}) == []
+    assert dsv2.validate_row(libre, {"s": "hors-liste"}) != []
 
 
 def test_required_missing():

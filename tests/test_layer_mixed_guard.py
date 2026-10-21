@@ -60,7 +60,13 @@ class _Db:
         return self.rows[row_id]
 
 
-def _monte(monkeypatch, schema=None):
+#: Les colonnes que portent les bancs, déclarées : une colonne non déclarée serait
+#: refusée. `contacts` est une liste sans `of` : ses attributs ne sont pas un sous-record
+#: fermé, et elle s'adresse par rang.
+SCHEMA = {"fields": [{"key": "naf"}, {"key": "email"}, {"key": "contacts", "type": "list"}]}
+
+
+def _monte(monkeypatch, schema=SCHEMA):
     from oto_mcp.datastore import core as ds
     db = _Db()
     s = DatastorePg("u-1")

@@ -130,6 +130,8 @@ def _table(org: int) -> tuple[str, int]:
     from oto_mcp import db
     ns = "file-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("org", str(org), ns)
+    # `statut` déclarée : une colonne non déclarée est refusée à l'écriture (oto#124).
+    db.set_datastore_schema(ns_id, {"fields": [{"key": "statut", "type": "text"}]})
     db.datastore_insert_row(ns_id, "r0", {"statut": "a_faire"})
     return ns, ns_id
 

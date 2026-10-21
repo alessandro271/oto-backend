@@ -25,6 +25,10 @@ import pytest
 from oto_mcp.datastore.core import DatastorePg
 
 
+#: La colonne des bancs, déclarée : une colonne non déclarée serait refusée.
+SCHEMA = {"fields": [{"key": "naf"}]}
+
+
 class _Db:
     def __init__(self):
         self.rows: dict = {}
@@ -47,8 +51,8 @@ def store(monkeypatch):
     db = _Db()
     s = DatastorePg("u-1")
     monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 1)
-    monkeypatch.setattr(s, "_ns_of", lambda ns_id: {"schema": None, "datastore": "t"})
-    monkeypatch.setattr(s, "_schema_of", lambda ns_id: None)
+    monkeypatch.setattr(s, "_ns_of", lambda ns_id: {"schema": SCHEMA, "datastore": "t"})
+    monkeypatch.setattr(s, "_schema_of", lambda ns_id: SCHEMA)
     monkeypatch.setattr(s, "_trace", lambda *a, **k: None)
     for name in ("datastore_get_row", "datastore_merge_row_locked"):
         monkeypatch.setattr(ds.db, name, getattr(db, name))
@@ -197,6 +201,6 @@ def test_the_batch_path_merges_identically(store):
     #322. Les deux chemins sont ici comparés sur le même couple d'écritures."""
     s, db = store
     s.update_row("t", "r1", {"naf": _NAF})
-    s._merge_into_row(1, "r1", {"naf": {"origine": _NAF}}, schema=None)
+    s._merge_into_row(1, "r1", {"naf": {"origine": _NAF}}, schema=SCHEMA)
     assert _lu(db) == _NAF
     assert _couche(db, "origine") == _NAF

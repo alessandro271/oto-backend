@@ -123,14 +123,14 @@ def test_un_bloc_stocke_en_chaine_fait_refuser_la_transition_en_le_nommant(live)
     st.write_rows(ns, [{"ref": "r1", "statut": "neuf"}])
     db.set_datastore_schema(ns_id, _schema({"neuf": "fait"}))   # l'existant d'avant
     with pytest.raises(RowValidationError) as e:
-        st.write_rows(ns, [{"ref": "r1", "statut": "fait"}])
+        st.write_rows(ns, [{"ref": "r1", "statut": "fait"}], key="ref")
     message = str(e.value)
     assert "invalid form" in message and '{"neuf": ["fait"]}' in message, message
     assert "data_patch_schema" in message
     assert "'f'" not in message, "plus jamais parcourue lettre par lettre"
     st.patch_schema(ns, fields=[{"key": "statut",
                                  "lifecycle": {"transitions": {"neuf": ["fait"]}}}])
-    st.write_rows(ns, [{"ref": "r1", "statut": "fait"}])
+    st.write_rows(ns, [{"ref": "r1", "statut": "fait"}], key="ref")
     assert st.list_rows(ns)[0]["statut"] == "fait"
 
 

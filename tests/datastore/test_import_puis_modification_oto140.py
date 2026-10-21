@@ -131,7 +131,8 @@ def test_une_cle_metier_ANNOTEE_designe_la_MEME_ligne(live):
         {"key": "code", "type": "text"}, {"key": "v", "type": "text"}]})
 
     st.append_row(ns, {"code": "A", "v": "1"})
-    st.append_row(ns, {"code": {"valeur": "A", "comment": "fichier source"}, "v": "2"})
+    st.append_row(ns, {"code": {"valeur": "A", "comment": "fichier source"}, "v": "2"},
+                  upsert=True)
 
     lignes = st.list_rows(ns)
     assert len(lignes) == 1, "une annotation ne crée pas une seconde identité"

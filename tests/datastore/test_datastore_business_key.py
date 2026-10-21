@@ -12,6 +12,10 @@ from psycopg.errors import UniqueViolation
 from oto_mcp.datastore import core as dsm
 from oto_mcp.datastore.core import DatastorePg
 
+#: Le tableau des bancs d'écriture : clé métier déclarée, colonnes écrites déclarées.
+SCHEMA = {"key": "member_id",
+          "fields": [{"key": k} for k in ("member_id", "x", "y", "autre")]}
+
 
 def _fake_merge_locked(rows):
     """Stub de `db.datastore_merge_row_locked` (seam verrou de ligne #197) sur un
@@ -99,14 +103,18 @@ def race(monkeypatch):
                             UniqueViolation("duplicate key ds_bkey_7")))
     monkeypatch.setattr(dsm.db, "datastore_merge_row_locked",
                         _fake_merge_locked(state["rows"]))
+    # Le lot juge ses doublons de clé sur le texte que la base rend (oto#141) : sans PG, `str`.
+    monkeypatch.setattr(dsm.db, "datastore_textes_de_cle",
+                        lambda valeurs: [str(v) for v in valeurs])
     monkeypatch.setattr(dsm.db, "get_datastore_by_id",
-                        lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
+                        lambda ns_id: {"id": ns_id, "schema": SCHEMA})
     return st, state
 
 
 def test_lost_race_converges_to_update(race):
     st, state = race
-    out = st._write_rows_to_ns(7, [{"member_id": "A", "y": 2}], key="member_id")
+    out = st._write_rows_to_ns(7, [{"member_id": "A", "y": 2}], key="member_id",
+                               cle_passee=True)
     # oto#141 : la fusion de la course perdue est DITE, rang et clé compris.
     assert out == {"inserted": 0, "updated": 1, "count": 1,
                    "key": "member_id", "ids": ["winner"],
@@ -126,13 +134,14 @@ def test_unexplained_violation_raises(race, monkeypatch):
 # ── append unitaire : même dédup clé-métier que le batch (Sentry ds_bkey_109) ──
 
 def test_append_row_existing_key_merges_not_500(monkeypatch):
-    """Régression Sentry STARLETTE-3B : un append REST unitaire sur une clé métier
-    DÉJÀ présente doit MERGER (comme le batch), pas remonter une UniqueViolation."""
+    """Régression Sentry STARLETTE-3B : un append REST unitaire qui demande la fusion
+    (`upsert=True`) sur une clé métier DÉJÀ présente doit MERGER (comme le batch), pas
+    remonter une UniqueViolation."""
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     monkeypatch.setattr(st, "declared_key", lambda ns: "member_id")
     monkeypatch.setattr(dsm.db, "get_datastore_by_id",
-                        lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
+                        lambda ns_id: {"id": ns_id, "schema": SCHEMA})
     rows = {"r1": {"member_id": "A", "x": 1}}
     monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key",
                         lambda ns_id, key, kv: "r1" if str(kv) == "A" else None)
@@ -141,19 +150,19 @@ def test_append_row_existing_key_merges_not_500(monkeypatch):
     monkeypatch.setattr(dsm.db, "datastore_insert_row",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("insert appelé")))
 
-    out = st.append_row("t", {"member_id": "A", "y": 2})
+    out = st.append_row("t", {"member_id": "A", "y": 2}, upsert=True)
     assert out["_id"] == "r1"
     assert rows["r1"] == {"member_id": "A", "x": 1, "y": 2}  # merge, pas d'écrasement
 
 
 def test_append_row_lost_race_converges(monkeypatch):
     """Course : lookup ne voit rien, l'insert viole l'index, le 2e lookup trouve la
-    gagnante → merge au lieu de 500."""
+    gagnante → merge au lieu de 500 (l'ajout demande la fusion, `upsert=True`)."""
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     monkeypatch.setattr(st, "declared_key", lambda ns: "member_id")
     monkeypatch.setattr(dsm.db, "get_datastore_by_id",
-                        lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
+                        lambda ns_id: {"id": ns_id, "schema": SCHEMA})
     rows = {"winner": {"member_id": "A", "x": 1}}
     state = {"lookups": 0}
     def find(ns_id, key, kv):
@@ -165,7 +174,7 @@ def test_append_row_lost_race_converges(monkeypatch):
                             UniqueViolation("duplicate key ds_bkey_7")))
     monkeypatch.setattr(dsm.db, "datastore_merge_row_locked", _fake_merge_locked(rows))
 
-    out = st.append_row("t", {"member_id": "A", "y": 2})
+    out = st.append_row("t", {"member_id": "A", "y": 2}, upsert=True)
     assert out["_id"] == "winner"
     assert rows["winner"] == {"member_id": "A", "x": 1, "y": 2}
 

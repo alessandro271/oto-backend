@@ -36,6 +36,14 @@ from oto_mcp.datastore.errors import RowValidationError
 from champs_reserves_banc import LIGNE as _LIGNE, SCHEMA as _SCHEMA, banc  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def _textes_de_cle(monkeypatch):
+    """Le lot juge ses doublons de clé sur le texte que la base rend de chaque valeur
+    (oto#141) : sans PG, `str`."""
+    monkeypatch.setattr(dsm.db, "datastore_textes_de_cle",
+                        lambda valeurs: [str(v) for v in valeurs])
+
+
 # ══ #586 — l'origine posée par le système ════════════════════════════════════
 
 def test_une_valeur_INCHANGEE_ne_pose_rien(banc):
@@ -126,11 +134,11 @@ def test_effacer_une_colonne_readonly_est_refuse(banc):
 def test_la_fusion_par_cle_et_le_lot_refusent_aussi(banc):
     st, etat = banc
     with pytest.raises(RowValidationError, match="`adresse`"):
-        st.append_row("viviers", {"siren": "552081317", "adresse": "2 rue B"})
+        st.append_row("viviers", {"siren": "552081317", "adresse": "2 rue B"}, key="siren")
     with pytest.raises(RowValidationError) as exc:
-        st._write_rows_to_ns(7, [{"siren": "552081317", "libre": "ok"},
+        st._write_rows_to_ns(7, [{"siren": "389256712", "libre": "ok"},
                                  {"siren": "552081317", "adresse": "2 rue B"}],
-                             key="siren")
+                             key="siren", cle_passee=True)
     assert "row 2/2" in str(exc.value) and "`adresse`" in str(exc.value)
     assert exc.value.details == {"expected_column": "adresse.comment"}
     assert etat["lignes"]["r1"]["adresse"] == "1 rue A"
