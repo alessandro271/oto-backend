@@ -323,7 +323,10 @@ def _row_errors(fields: list, data: dict, path: str,
         # patch sans rapport (les 23 lignes gelées d'oto-backend#284).
         pose = written is None or key in written
         # Le marqueur du vide assumé (oto#204) est une clé INTERNE, pas un sous-champ.
-        inconnues = [k for k in unknown_layers(data.get(key)) if k not in CLES_INTERNES]
+        # Une colonne déclarée `json` porte un objet métier, pas des couches : une clé
+        # `origine` y est une donnée (#329, la sortie que nomme le garde mixte).
+        inconnues = [] if f.get("type") == "json" else [
+            k for k in unknown_layers(data.get(key)) if k not in CLES_INTERNES]
         if inconnues:
             proches = [cle_la_plus_proche(k, list(LAYER_KEYS)) for k in inconnues]
             dites = [f"`{p}` for {k!r}" for k, p in zip(inconnues, proches) if p]
