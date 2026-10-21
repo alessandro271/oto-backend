@@ -35,8 +35,8 @@ def test_une_seule_tete():
     tetes = _script().get_heads()
     assert len(tetes) == 1, (
         f"{len(tetes)} files de migrations au lieu d'une : {tetes}. "
-        "Deux révisions ont la même précédente — les fusionner (alembic merge) "
-        "avant d'appliquer quoi que ce soit."
+        "Deux révisions ont la même précédente : raccrocher la plus récente à l'autre "
+        "(son `down_revision`), pas `alembic merge` (docs/migrations-versionnees.md §5.5)."
     )
 
 
@@ -77,3 +77,59 @@ def test_aucune_revision_retiree_ne_revient():
             f"révision(s) retirée(s) par le squash du {squash.date} revenue(s) au registre : "
             f"{sorted(vivantes & squash.retirees)} — une base qui les porte est refusée")
         assert squash.reference not in squash.retirees
+
+
+# ── Nommage par date et heure (décision du 21/10/2026) ─────────────────────────────
+#
+# Une révision neuve se nomme `AAAAMMJJ_HHMM_<sujet>` (heure UTC de son écriture) et
+# son fichier porte ce nom. Le numéro pris « d'après main » faisait choisir le même
+# numéro à deux sessions parallèles ; une heure ne se réserve pas. Les révisions
+# numérotées d'avant gardent leur nom, et la liste n'en reçoit plus aucune. Deux
+# révisions écrites en parallèle font deux têtes : `test_une_seule_tete` les arrête, et
+# l'ordre de la file suit l'heure (`test_la_file_suit_l_heure`).
+
+import re
+from datetime import datetime
+
+#: La dernière révision numérotée : aucune autre ne s'ajoute à cette forme.
+DERNIERE_NUMEROTEE = "0072_triggers_hook_sources"
+_NUMEROTEE = re.compile(r"\d{4}_[a-z0-9_]+")
+_DATEE = re.compile(r"(\d{8}_\d{4})_[a-z0-9_]+")
+#: `alembic_version.version_num` est un VARCHAR(32) (`db/_version_alembic.py`).
+_LONGUEUR_MAX = 32
+
+
+def _quand(revision: str) -> "datetime | None":
+    m = _DATEE.fullmatch(revision)
+    return datetime.strptime(m.group(1), "%Y%m%d_%H%M") if m else None
+
+
+def test_une_revision_neuve_se_nomme_par_date_et_heure():
+    revisions = list(_script().walk_revisions())
+    numerotees = sorted(r.revision for r in revisions
+                        if _NUMEROTEE.fullmatch(r.revision) and not _quand(r.revision))
+    assert numerotees[-1] == DERNIERE_NUMEROTEE, (
+        f"révision numérotée neuve : {numerotees[-1]}. Depuis le 21/10/2026, une révision "
+        "se nomme `AAAAMMJJ_HHMM_<sujet>` (heure UTC), pas par numéro.")
+    for r in revisions:
+        if r.revision == REFERENCE or r.revision in numerotees:
+            continue
+        assert _quand(r.revision), (
+            f"`{r.revision}` : une révision neuve se nomme `AAAAMMJJ_HHMM_<sujet>` "
+            "(heure UTC, sujet en [a-z0-9_]).")
+        assert len(r.revision) <= _LONGUEUR_MAX, (
+            f"`{r.revision}` dépasse {_LONGUEUR_MAX} caractères : "
+            "`alembic_version.version_num` est un VARCHAR(32), le sujet s'abrège.")
+        assert Path(r.path).stem == r.revision, (
+            f"le fichier de `{r.revision}` s'appelle `{Path(r.path).name}` : il porte le "
+            "nom de sa révision.")
+
+
+def test_la_file_suit_l_heure():
+    for r in _script().walk_revisions():
+        quand, avant = _quand(r.revision), _quand(r.down_revision or "")
+        if quand and avant:
+            assert quand > avant, (
+                f"`{r.revision}` suit `{r.down_revision}`, écrite après elle : en "
+                "rattrapant une tête parallèle, raccrocher la plus RÉCENTE à l'autre "
+                "(son `down_revision`), pas l'inverse.")

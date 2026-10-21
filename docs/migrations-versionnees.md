@@ -422,7 +422,7 @@ n'aurait de toute façon su qu'ajouter des colonnes, et c'est déjà le travail 
 | `alembic.ini` | l'emplacement des révisions. **Aucun DSN** |
 | `oto_mcp/db/migrations/env.py` | la connexion, lue dans `DATABASE_URL` comme le pool applicatif, et le **verrou consultatif** |
 | `oto_mcp/db/migrations/versions/` | une révision par changement |
-| `tests/test_migrations_registre.py` | la file reste unique : un seul point de départ — la référence (§5.4) —, une seule fin, chaque révision décrite, aucune révision retirée qui revienne |
+| `tests/test_migrations_registre.py` | la file reste unique : un seul point de départ — la référence (§5.4) —, une seule fin, chaque révision décrite, aucune révision retirée qui revienne ; une révision neuve se nomme par date et heure et la file suit l'heure (§5.5) |
 | `oto_mcp/db/_version_alembic.py` | la version d'une base **neuve**, posée par le démarrage (§5.2) ; la référence du registre et le refus nommé d'une base plus ancienne (§5.4) |
 | `tests/test_boot_pose_la_version.py` | les cas du §5.2 et le refus du §5.4, sur vraie base |
 
@@ -439,7 +439,7 @@ base est celle de `DATABASE_URL`, lue par `env.py`.
 ```bash
 oto-mcp migrer upgrade head --sql   # l'essai à blanc : imprime, n'écrit rien
 oto-mcp migrer upgrade head         # applique
-oto-mcp migrer revision -m "ce que ça fait"
+oto-mcp migrer revision --rev-id "$(date -u +%Y%m%d_%H%M)_<sujet>" -m "ce que ça fait"  # §5.5
 oto-mcp migrer current              # où en est CETTE base
 ```
 
@@ -712,6 +712,25 @@ Le premier squash, le 06/10/2026 : quarante révisions retirées (`0001` à `004
 `0041_recherche_valeurs_servies`, dernier tag qui les porte `v1.441.0`. Bancs :
 `tests/test_migrations_registre.py`, `tests/test_boot_pose_la_version.py`,
 `tests/deploy/test_migrations_cible_1163.py`.
+
+### 5.5 Une révision neuve se nomme par date et heure (21/10/2026)
+
+Une révision neuve s'identifie `AAAAMMJJ_HHMM_<sujet>` : l'heure **UTC** de son écriture,
+puis un sujet en `[a-z0-9_]`, **32 caractères au plus** (`alembic_version.version_num` est
+un `VARCHAR(32)`). Son fichier porte le même nom (`file_template = %%(rev)s`), et
+`--rev-id` le donne à la création (§5, la commande). Les révisions numérotées d'avant
+(jusqu'à `0072_triggers_hook_sources`) gardent leur nom ; la liste n'en reçoit plus.
+
+Pourquoi : la règle « le numéro suivant, pris au moment du commit d'après main » faisait
+choisir le même numéro à deux sessions parallèles, et le conflit ne se voyait qu'au
+rebase. Une heure ne se réserve pas.
+
+Deux révisions écrites en parallèle sur la même précédente font **deux têtes** : le
+registre les refuse (`test_une_seule_tete`). Le geste n'est pas `alembic merge` : on
+**raccroche la plus récente à l'autre** (son `down_revision`, et sa ligne « Précédente »),
+pour que la file reste une ligne et suive l'heure (`test_la_file_suit_l_heure`). Si l'une
+est déjà appliquée sur une base vivante, c'est l'autre qu'on raccroche, et on la renomme
+à l'heure du raccrochage si elle était plus ancienne.
 
 ## 6. Références
 
