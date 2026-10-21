@@ -1,4 +1,4 @@
-"""Ce que `whatsapp_chat` (et `telegram_chat`, `instagram_chat`) sert : la page Unipile,
+"""Ce que `whatsapp` (et `telegram`, `instagram`) sert : la page Unipile,
 remise en forme pour qu'un agent la lise telle quelle (signaux WhatsApp du 25/09 au
 05/10/2026 : 1129, 1175, 1176, 1177, 1178, 1214, 1215, 1354, 1357, 1358, 1359).
 
@@ -178,7 +178,7 @@ def _outil(monkeypatch, canal="WHATSAPP"):
     monkeypatch.setattr(U, "unipile_client", lambda *a, **k: client)
     m = FastMCP("t")
     U.register_messaging_tools(m, canal)
-    return asyncio.run(m.get_tool(f"{canal.lower()}_chat")).fn, client
+    return asyncio.run(m.get_tool(canal.lower())).fn, client
 
 
 def test_l_outil_sert_la_page_remise_en_forme(monkeypatch):

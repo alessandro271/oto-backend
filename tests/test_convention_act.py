@@ -12,7 +12,7 @@ règle mécanique, connecteur par connecteur :
 - **ops** : aucune op de `<ns>` ne porte un verbe à effet (hors simulations nommées), et
   `<ns>_act` n'a que des ops à effet ; aucun paramètre qui déclenche (`mode`, `notify`,
   `send_*`) sur `<ns>` ;
-- **retraits** : chaque ancien nom de `outils_retires.RENOMMAGES_ACT` n'est plus servi, et
+- **retraits** : chaque ancien nom de `outils_retires.RENOMMAGES` n'est plus servi, et
   son remplaçant sert bien l'op annoncée.
 
 `A_MIGRER` est la liste FERMÉE des connecteurs pas encore passés à la paire. Elle ne peut
@@ -35,12 +35,12 @@ from _mcp_app import static_mcp
 A_MIGRER = frozenset({
     "affinity", "ahrefs", "aircall", "airtable", "amplitude", "apify", "apollo",
     "ashby", "attio", "bigquery", "bls", "bodacc", "boondmanager", "brevo", "brevoauto",
-    "browser", "calendar", "ccn", "chat", "claap", "clay", "cloro", "cognism",
+    "browser", "calendar", "ccn", "claap", "clay", "cloro", "cognism",
     "crunchbase", "culture", "dataforseo", "drive", "dropcontact", "figma", "finkare",
     "firecrawl", "fireflies", "folk", "foncier", "forager", "fr", "frenchtech",
     "fullenrich", "ga4", "github", "gocardless", "google", "google_ads", "gr", "grain",
     "granola", "greenhouse", "hellostock", "hithorizons", "http", "hubspot", "hunter",
-    "infosec", "inqom", "instagram", "instagram_meta", "jev", "juris", "kaspr",
+    "infosec", "inqom", "instagram_meta", "jev", "juris", "kaspr",
     "klaviyo", "leexi", "lemlist", "lever", "lightfield", "lighton", "linear",
     "linkedin_aiark", "linkedin_unipile", "loi", "lucca", "luma", "lusha", "mailpool",
     "make", "meta_ads", "microsoft", "minari", "modjo", "monid", "n8n", "nextmotion",
@@ -49,9 +49,9 @@ A_MIGRER = frozenset({
     "posthog", "productlane", "promptwatch", "recruitee", "reddit", "resend", "routine",
     "salesforce", "sante", "searchapi", "sellsy", "serpapi", "serper", "sharepoint",
     "sheets", "signwell", "silae", "sivan", "slack", "snitcher", "spott", "stripe",
-    "supabase", "tally", "tasks", "tavily", "teams", "teamtailor", "telegram",
+    "supabase", "tally", "tasks", "tavily", "teamtailor",
     "theirstack", "threecx", "topograph", "transcription", "typeform", "ubersuggest",
-    "unipile", "urba", "waalaxy", "web", "webflow", "whatsapp", "wordpress", "wttj",
+    "unipile", "urba", "waalaxy", "web", "webflow", "wordpress", "wttj",
     "yousign", "zapier", "zerobounce", "zoho", "zohoanalytics", "zohodesk",
 })
 
@@ -150,7 +150,7 @@ def test_l_outil_qui_agit_n_a_que_des_ops_a_effet(par_connecteur):
 
 def test_les_anciens_noms_ne_sont_plus_servis_et_leur_remplacant_sert_l_op(par_connecteur):
     servis = {nom: t for outils in par_connecteur.values() for nom, t in outils.items()}
-    for r in outils_retires.RENOMMAGES_ACT:
+    for r in outils_retires.RENOMMAGES:
         assert r.ancien not in servis, r.ancien
         assert r.outil in servis, r
         assert r.op in _ops(servis[r.outil]), r
@@ -160,12 +160,49 @@ def test_les_anciens_noms_ne_sont_plus_servis_et_leur_remplacant_sert_l_op(par_c
 
 def test_un_ancien_nom_garde_tout_son_sens_dans_les_listes():
     """Ce qu'un ancien outil savait faire, ses remplaçants le savent : une liste
-    d'outils autorisés (ou masqués) réécrite garde exactement son sens."""
+    d'outils MASQUÉS réécrite garde tout son sens (et, au lot 0062, une liste autorisée
+    aussi)."""
     assert outils_retires.remplacants("gmail_compose") == ("gmail", "gmail_act")
     assert outils_retires.remplacants("gmail_message") == ("gmail", "gmail_act")
     assert outils_retires.remplacants("gmail_list_accounts") == ("gmail",)
     assert outils_retires.remplacants("outlook_compose") == ("outlook", "outlook_act")
+    assert outils_retires.remplacants("whatsapp_chat") == ("whatsapp", "whatsapp_act")
     assert outils_retires.remplacants("inconnu") == ()
+
+
+def test_autoriser_un_ancien_lecteur_n_autorise_que_la_lecture():
+    """Décision du 21/10/2026 : autoriser reste étroit. Un ancien outil MIXTE (le lecteur
+    qui envoyait encore en transition) ne donne que le nouveau lecteur ; seul un ancien
+    outil d'envoi dédié donne `<ns>_act`."""
+    r = outils_retires.remplacants_autorises
+    assert r("whatsapp_chat") == ("whatsapp",)
+    assert r("whatsapp_send") == ("whatsapp_act",)
+    assert r("linkedin_unipile_chat") == ("linkedin_unipile",)
+    assert r("linkedin_unipile_send") == ("linkedin_unipile_act",)
+    assert r("teams_message") == ("teams",) and r("teams_spaces") == ("teams",)
+    assert r("teams_send") == ("teams_act",)
+    assert r("chat_message") == ("chat",) and r("chat_send") == ("chat_act",)
+    for ancien in dict.fromkeys(x.ancien for x in outils_retires.RENOMMAGES_MESSAGERIES):
+        nouveaux = r(ancien)
+        assert nouveaux, ancien
+        assert all(n.endswith("_act") for n in nouveaux) or not any(
+            n.endswith("_act") for n in nouveaux), (ancien, nouveaux)
+
+
+def test_le_lot_0062_est_fige():
+    """0062 est jouée : sa table ne reçoit plus aucune ligne (un lot neuf a la sienne)."""
+    assert {r.ancien for r in outils_retires.RENOMMAGES_ACT} == {
+        "gmail_list_accounts", "gmail_message", "gmail_compose", "outlook_message",
+        "outlook_compose"}
+
+
+def test_le_refus_d_un_ancien_nom_dit_son_jour_et_sa_paire():
+    """Le refus nomme le lecteur et l'acteur de la PAIRE, pas un préfixe deviné du nom
+    retiré (`linkedin_unipile_chat` n'est pas `linkedin`), et le jour de son lot."""
+    m = outils_retires.RETIRES["linkedin_unipile_chat"].message
+    assert "(21/10/2026, security)" in m
+    assert "`linkedin_unipile` reads" in m and "`linkedin_unipile_act` acts" in m
+    assert "(17/10/2026, security)" in outils_retires.RETIRES["gmail_compose"].message
 
 
 def test_l_annonce_se_sert_jusqu_a_sa_date_puis_se_tait():
@@ -173,7 +210,7 @@ def test_l_annonce_se_sert_jusqu_a_sa_date_puis_se_tait():
 
     fin = outils_retires.ANNONCE_ACT_JUSQU_AU
     annonce = outils_retires.annonce_act_du_jour(fin)
-    for r in outils_retires.RENOMMAGES_ACT:
+    for r in outils_retires.RENOMMAGES:
         assert f"`{r.ancien}`" in annonce and f"`{r.outil}`" in annonce, r
     assert outils_retires.annonce_act_du_jour(fin + datetime.timedelta(days=1)) is None
 
@@ -197,9 +234,30 @@ def test_la_migration_reecrit_sur_place_sans_doublon():
         m.reecrire([{"name": "gmail_message"}], table)
 
 
+def test_la_revision_des_messageries_autorise_etroit_et_masque_large():
+    import importlib.util
+    from pathlib import Path
+
+    import oto_mcp
+
+    chemin = (Path(oto_mcp.__file__).parent / "db" / "migrations" / "versions"
+              / "20261021_1219_outils_act_msg.py")
+    spec = importlib.util.spec_from_file_location("revision_messageries", chemin)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m.down_revision == "0072_triggers_hook_sources"
+    autorise, masque = m.correspondances(outils_retires.RENOMMAGES_MESSAGERIES)
+    reecrire = m._revision_0062().reecrire
+    assert reecrire(["whatsapp_chat"], autorise) == ["whatsapp"]
+    assert reecrire(["whatsapp_chat", "whatsapp_send", "teams_spaces", "teams_message",
+                     "fr_get"], autorise) == ["whatsapp", "whatsapp_act", "teams", "fr_get"]
+    assert reecrire(["whatsapp_chat"], masque) == ["whatsapp", "whatsapp_act"]
+    assert not set(autorise) & {r.ancien for r in outils_retires.RENOMMAGES_ACT}
+
+
 #: Les connecteurs encore dans `A_MIGRER` dont la PAIRE est déjà née : leurs outils
 #: d'avant restent, mais `<ns>` et `<ns>_act` ont la forme cible dès aujourd'hui.
-PAIRES_NEES = ("http", "slack")
+PAIRES_NEES = ("http", "slack", "linkedin_unipile")
 
 
 @pytest.mark.parametrize("ns", PAIRES_NEES)

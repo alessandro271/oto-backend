@@ -15,9 +15,9 @@ A tool multiplexed by `op` is only declared if ALL its ops read.
 (a message, an invitation, a publication) declares it too. An MCP client authorizes
 TOOLS, not operations: "always allow" on a reader must never allow a send — which is
 why such a send lives in its own tool, never as an `op` of a reader (oto-backend#1189).
-Until `deprecations.RETRAIT_OPS_ENVOI`, a reader that still serves its old send ops is
-itself declared `ENVOI`: it sends (`OpsDepreciees`, `en_transition` below — shared by the
-Unipile readers, #1189, and by `chat_message` / `teams_message`, #1231).
+Until `deprecations.RETRAIT_OPS_ENVOI`, a reader that still serves its old acting ops is
+itself declared `ENVOI`: it acts (`OpsDepreciees`, `en_transition` below — now only the
+LinkedIn posts and network readers; the messaging readers became pairs on 21/10/2026).
 `destructiveHint`/`openWorldHint` are the protocol's defaults for a tool that is not
 read-only; they are WRITTEN here so that the client reads them, not infers them.
 """
@@ -40,7 +40,7 @@ ENVOI = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=
 # the person's own space, so it is not read-only, but it neither reaches a third party nor
 # deletes. `<ns>_act` declares `ACTE`: it sends, deletes or changes — the tool an MCP client
 # asks to confirm. Guarded by `tests/test_convention_act.py`; the old names are refused by
-# `outils_retires.RENOMMAGES_ACT`.
+# `outils_retires.RENOMMAGES`.
 SIMULATION = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
 ACTE = ENVOI
 
@@ -62,7 +62,7 @@ def en_lecture(tool) -> bool:
     return getattr(annotations, "readOnlyHint", None) is True
 
 
-# --- the TRANSITION of a reader's old send ops (oto-backend#1189, #1231) --------------
+# --- the TRANSITION of a reader's old send ops (oto-backend#1189) ----------------------
 # Until `deprecations.RETRAIT_OPS_ENVOI` (10/12/2026 included, Alexis's decisions of
 # 12/10 and 13/10/2026), the old op of a reader still works. It is served BY the
 # writer's own function — same refusals, before any credential — and its response
@@ -70,14 +70,17 @@ def en_lecture(tool) -> bool:
 # never `LECTURE`: a client that took it for a reader would send without asking. At the
 # retirement, the ops leave the readers' schema, the readers become `LECTURE`, and a call
 # that still sends an old op is refused by naming its writer (`op_moved`).
+# Since 21/10/2026, the messaging readers (Unipile channels, LinkedIn messaging, Google
+# Chat, Teams) no longer transition: they became `<ns>` / `<ns>_act` pairs and their old
+# names refuse at once (`outils_retires.RENOMMAGES`). What remains here:
+# `linkedin_unipile_post` and `linkedin_unipile_network`.
 
 
 class OpsDepreciees(NamedTuple):
     """The send ops a reader still serves until the retirement, and their writer."""
     outil: str           # the reader
     cible: str           # the writer that serves them
-    ops: tuple           # the deprecated ops, in the reader's `op`
-    garde_op: bool = True  # the writer takes `op` — `whatsapp_send`, `chat_send` do not
+    ops: tuple           # the deprecated ops, in the reader's `op` — and the writer's
 
     def avis(self) -> str:
         """The ONE line of the reader's description, at its head: a long description is
@@ -85,22 +88,15 @@ class OpsDepreciees(NamedTuple):
         return (f"⚠️ op={'/'.join(self.ops)} est déprécié, utiliser `{self.cible}` ; "
                 f"retrait le {deprecations.date_retrait_ops_envoi()}.")
 
-    def _avec_avis(self, op: str, out: dict) -> dict:
-        appel = (f'`{self.cible}(op="{op}", …)` avec les mêmes arguments' if self.garde_op
-                 else f"`{self.cible}(…)` avec les mêmes arguments, sans `op`")
-        return {**out, "deprecation_warning": (
-            f'Déprécié : `{self.outil}(op="{op}")` est retiré le '
-            f"{deprecations.date_retrait_ops_envoi()}. L'appel a été servi par "
-            f"`{self.cible}` ; appelle désormais {appel}.")}
-
     def servir(self, op: str, ecrivain, /, **arguments) -> dict:
         """`op` served by the writer's function itself — never a copy of it — and SAID
         in the response, with the call to make from now on."""
-        return self._avec_avis(op, ecrivain(**arguments))
-
-    async def servir_async(self, op: str, ecrivain, /, **arguments) -> dict:
-        """`servir`, for a writer that is a coroutine function (`chat_send`)."""
-        return self._avec_avis(op, await ecrivain(**arguments))
+        return {**ecrivain(**arguments), "deprecation_warning": (
+            f'Déprécié : `{self.outil}(op="{op}")` est retiré le '
+            f"{deprecations.date_retrait_ops_envoi()}. L'appel a été servi par "
+            f"`{self.cible}` ; appelle désormais "
+            f'`{self.cible}(op="{op}", …)` avec '
+            "les mêmes arguments.")}
 
 
 def en_transition(mcp, depreciees: OpsDepreciees, description: Optional[str] = None):

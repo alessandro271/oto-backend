@@ -968,7 +968,7 @@ def test_l_axe_account_est_accepte_sur_les_outils(env):
 
     for outil in ("sharepoint_file", "sharepoint_site", "outlook",
                   "outlook_act", "outlook_calendar_calendars", "outlook_calendar_event",
-                  "teams_spaces", "teams_message", "teams_send"):
+                  "teams", "teams_act"):
         assert "_account" in {a.param for a in call_axes.axes_for_call(outil)}, outil
 
 
@@ -1186,7 +1186,7 @@ def test_le_schema_annonce_account_sur_toutes_les_cartes_microsoft():
 
     for outil in ("microsoft_accounts", "sharepoint_file", "sharepoint_site",
                   "outlook", "outlook_act", "outlook_calendar_calendars",
-                  "outlook_calendar_event", "teams_spaces", "teams_message", "teams_send"):
+                  "outlook_calendar_event", "teams", "teams_act"):
         assert "_account" in {a.param for a in call_axes.axes_for(outil)}, outil
     for carte in (PORTEUR, "sharepoint", "outlook", "outlook_calendar", "teams"):
         assert providers.REGISTRY[carte].account_axis_static, carte

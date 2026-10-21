@@ -9,7 +9,7 @@ from __future__ import annotations
 from .unipile import channel
 
 # WhatsApp: the person connects THEIR account through a hosted flow, and the tools
-# `whatsapp_chat(op=list|read)` and `whatsapp_send` act under that identity. Derived from the shared
+# `whatsapp(op=list|read)` and `whatsapp_act(op=send)` act under that identity. Derived from the shared
 # messaging factory (`tools/unipile.register_messaging_tools`) — the provider's `/chats`
 # API is channel-agnostic, it is the operated account's channel that decides the
 # route.

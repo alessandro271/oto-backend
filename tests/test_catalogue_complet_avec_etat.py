@@ -98,7 +98,7 @@ async def test_un_connecteur_non_expose_est_dit_NON_EXPOSE_pas_absent(compte):
     out = await _appelle({"query": "whatsapp"})
     assert out["total"] >= 1, "un outil non exposé doit se TROUVER"
     etats = {e["name"]: e["state"] for e in out["tools"]}
-    assert etats["whatsapp_chat"] == "not_exposed"
+    assert etats["whatsapp"] == "not_exposed"
     assert "oto_connector_activation" in out["legend"]["not_exposed"]
     assert "oto_call" in out["legend"]["installable"]
 

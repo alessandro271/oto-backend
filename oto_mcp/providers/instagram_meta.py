@@ -24,7 +24,7 @@ from ._model import _c
 #
 # ⚠️ The symmetry is imperfect and stays so: the doctrinal pair would be
 # `instagram_unipile` / `instagram_meta`. Renaming the existing one would break a contract
-# consumed OUTSIDE this repo (`instagram_chat` is called by procedures in the database
+# consumed OUTSIDE this repo (`instagram_chat`, now `instagram`, is called by procedures in the database
 # and by guides) — which is the very reason the Unipile split of
 # 2026-08-28 touched no tool name. We add the suffix to the newcomer,
 # we do not retrofit it onto the old one.

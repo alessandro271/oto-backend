@@ -4,13 +4,14 @@ Credential = the PERSON's Microsoft 365 account (carrier `microsoft`, OAuth, del
 permissions) that has authorized THIS service (scopes `TEAMS`); several linked accounts
 are chosen by the generic `_account=` axis.
 
-**Surface**:
-- `teams_spaces` (teams/channels/chats) — where one can read and post;
-- `teams_message` (list/replies) — READS the messages of a channel (`team_id` +
-  `channel_id`) or of a chat (`chat_id`), exactly one of the two;
-- `teams_send` (post/reply) — WRITES one, at the same place. Reading and writing are TWO
-  tools (oto-backend#1231, the shape of #1189): an MCP client authorizes a TOOL, never an
-  op — "always allow" on a reader must never allow a post.
+**Surface** — the connector's PAIR (`tools/lecture.py`): an MCP client authorizes a TOOL,
+never an op, so "always allow" on what reads must never allow a post.
+- `teams` READS: where one can read and post (op=teams/channels/chats), and the
+  messages of a channel (`team_id` + `channel_id`) or of a chat (`chat_id`), exactly one
+  of the two (op=list/replies);
+- `teams_act` WRITES one, at the same place (op=post/reply). The old names
+  (`teams_spaces`, `teams_message`, `teams_send`) refuse, naming the call to make
+  (`outils_retires.RENOMMAGES`).
 
 **Two consent levels** (`oto.tools.microsoft.teams`): the person consents alone to
 teams, channels, posting and chats; READING a channel's messages (`list`/`replies` on a
@@ -21,13 +22,8 @@ never a mute 403. An approval is only seen at a token renewal: when the vault do
 know it yet, or Graph still answers 403 while the vault says it is granted (a token
 cached before the approval), the read renews the token ONCE, then decides.
 
-⚠️ `teams_send` WRITES: a message is visible at once to the channel or chat members;
+⚠️ `teams_act` WRITES: a message is visible at once to the channel or chat members;
 Teams has no draft.
-
-TRANSITION until `deprecations.RETRAIT_OPS_ENVOI` (10/12/2026 included, Alexis's decision
-of 13/10/2026): `teams_message(op="post"|"reply")` is still served — BY `teams_send`'s own
-function, with `deprecation_warning` — and `teams_message` stays declared `ENVOI` while it
-can post (`tools/lecture.OpsDepreciees`).
 """
 from __future__ import annotations
 
@@ -40,17 +36,12 @@ from fastmcp import FastMCP
 from .. import access
 from ._microsoft_graph import (bad, markdown_html, need, raise_refusal, raw, refuse_ignored,
                                run, token)
-from .lecture import ENVOI, OpsDepreciees, en_transition
+from .lecture import ACTE, LECTURE
 
 #: The Microsoft service these tools call: its scopes, its card (`auth/microsoft`).
 _SERVICE = "teams"
 _LABEL = "Teams"
 _BALISE = re.compile(r"<[^>]+>")
-
-#: `teams_message(op="post"|"reply")` is served by `teams_send` until the retirement
-#: (#1231) — same ops, same arguments.
-_OPS_MESSAGE = OpsDepreciees("teams_message", "teams_send", ("post", "reply"))
-
 
 def _equipe(t: dict) -> dict:
     return {k: t.get(k) for k in ("id", "displayName", "description")}
@@ -171,96 +162,74 @@ def register(mcp: FastMCP) -> None:
         c = _client(renew=True)
         return _run(lambda: lire(c))
 
-    @mcp.tool()
-    def teams_spaces(
-        op: Literal["teams", "channels", "chats"] = "teams",
+    @mcp.tool(name="teams", annotations=LECTURE)
+    def teams(
+        op: Literal["teams", "channels", "chats", "list", "replies"] = "teams",
         team_id: Optional[str] = None,
+        channel_id: Optional[str] = None,
+        chat_id: Optional[str] = None,
+        message_id: Optional[str] = None,
         limit: int = 50,
         full: bool = False,
     ) -> dict:
-        """Where the person can read and post in Microsoft Teams.
+        """Reads Microsoft Teams: where the person can read and post, and the messages
+        of a channel or a chat. Posting and replying is `teams_act`.
 
-        `op`:
+        `op` — where:
         - **"teams"** (default): the teams the person is a member of
           ({teams: [{id, displayName, description}]}).
         - **"channels"**: the channels of `team_id` the person can see
           ({channels: [{id, displayName, membershipType, webUrl}]}).
         - **"chats"**: the person's one-on-one, group and meeting chats, at most
           `limit` ({chats: [{id, topic, chatType, lastUpdatedDateTime}]}).
-        A team id + a channel id, or a chat id, is what `teams_message` takes. Ids carry
-        `:` and `@` (`19:…@thread.tacv2`): pass them as returned.
 
-        Args:
-            op: teams (default) | channels | chats.
-            team_id: op="channels" — the team (from op="teams").
-            limit: op="chats" — max chats (default 50).
-            full: return Graph's raw objects instead of the trimmed view.
-        """
-        c = _client()
-        if op == "teams":
-            refuse_ignored(op, team_id=team_id)
-            equipes = _run(c.list_joined_teams)
-            return {"teams": [raw(t) if full else _equipe(t) for t in equipes],
-                    "count": len(equipes)}
-        if op == "channels":
-            equipe = need(team_id, "team_id", op)
-            canaux = _run(lambda: c.list_channels(equipe))
-            return {"team_id": equipe, "channels": [raw(ch) if full else _canal(ch)
-                                                    for ch in canaux],
-                    "count": len(canaux)}
-        if op == "chats":
-            refuse_ignored(op, team_id=team_id)
-            chats = _run(lambda: c.list_chats(limit=limit))
-            return {"chats": [raw(ch) if full else _conversation(ch) for ch in chats],
-                    "count": len(chats)}
-        raise bad("op must be 'teams', 'channels' or 'chats'.")
-
-    @en_transition(mcp, _OPS_MESSAGE)
-    def teams_message(
-        op: Literal["list", "replies", "post", "reply"] = "list",
-        team_id: Optional[str] = None,
-        channel_id: Optional[str] = None,
-        chat_id: Optional[str] = None,
-        message_id: Optional[str] = None,
-        body: Optional[str] = None,
-        limit: int = 50,
-        full: bool = False,
-    ) -> dict:
-        """The messages of a Teams channel or chat — read them, read a thread. Posting
-        and replying is `teams_send`.
-
-        The place is a CHANNEL (`team_id` + `channel_id`, from teams_spaces) OR a CHAT
-        (`chat_id`) — exactly one of the two.
-
-        `op`:
-        - **"list"** (default): the latest messages, at most `limit` — a channel's root
-          messages (without their replies), or a chat's messages.
+        `op` — the messages of a place, a CHANNEL (`team_id` + `channel_id`) OR a CHAT
+        (`chat_id`), exactly one of the two:
+        - **"list"**: the latest messages, at most `limit` — a channel's root messages
+          (without their replies), or a chat's messages.
         - **"replies"**: the replies to the channel message `message_id` (a chat has no
           threads).
+        Ids carry `:` and `@` (`19:…@thread.tacv2`): pass them as returned.
 
         ⚠️ Reading a CHANNEL's messages requires your Microsoft admin's approval, once for
         the whole organization: without it the call is refused and returns the approval
         link to send to the administrator. Chats do not need it.
 
         Args:
-            op: list (default) | replies.
-            team_id: a channel's team (with `channel_id`).
+            op: teams (default) | channels | chats | list | replies.
+            team_id: op="channels" — the team (from op="teams"); op="list"/"replies" —
+                a channel's team (with `channel_id`).
             channel_id: the channel (with `team_id`).
-            chat_id: the chat, instead of a channel.
+            chat_id: the chat, instead of a channel (from op="chats").
             message_id: op="replies" — the channel message (from op="list").
-            body: the deprecated ops' argument — that of `teams_send`.
-            limit: max messages (default 50).
-            full: return Graph's raw messages instead of the trimmed view.
+            limit: op="chats"/"list"/"replies" — max items (default 50).
+            full: return Graph's raw objects instead of the trimmed view.
         """
-        if op in _OPS_MESSAGE.ops:
-            return _OPS_MESSAGE.servir(op, teams_send, op=op, team_id=team_id,
-                                       channel_id=channel_id, chat_id=chat_id,
-                                       message_id=message_id, body=body, full=full)
+        if op in ("teams", "channels", "chats"):
+            # Refused BEFORE any token: an argument this op does not use is an intent
+            # error (a message's place on a discovery op).
+            refuse_ignored(op, channel_id=channel_id, chat_id=chat_id,
+                           message_id=message_id)
+            if op == "channels":
+                equipe = need(team_id, "team_id", op)
+                c = _client()
+                canaux = _run(lambda: c.list_channels(equipe))
+                return {"team_id": equipe, "channels": [raw(ch) if full else _canal(ch)
+                                                        for ch in canaux],
+                        "count": len(canaux)}
+            refuse_ignored(op, team_id=team_id)
+            c = _client()
+            if op == "teams":
+                equipes = _run(c.list_joined_teams)
+                return {"teams": [raw(t) if full else _equipe(t) for t in equipes],
+                        "count": len(equipes)}
+            chats = _run(lambda: c.list_chats(limit=limit))
+            return {"chats": [raw(ch) if full else _conversation(ch) for ch in chats],
+                    "count": len(chats)}
         if op not in ("list", "replies"):
-            raise bad("op must be 'list' or 'replies' — posting and replying is "
-                      "`teams_send`.")
+            raise bad("op must be 'teams', 'channels', 'chats', 'list' or 'replies' — "
+                      "posting and replying is `teams_act`.")
         canal, equipe, fil = _lieu(op, team_id, channel_id, chat_id)
-        refuse_ignored(op, body=body)
         vue = raw if full else _message
 
         def _liste(messages: list) -> dict:
@@ -279,8 +248,8 @@ def register(mcp: FastMCP) -> None:
         return _liste(_lecture_canal(
             lambda c: c.list_replies(equipe, fil, racine, limit=limit)))
 
-    @mcp.tool(annotations=ENVOI)
-    def teams_send(
+    @mcp.tool(name="teams_act", annotations=ACTE)
+    def teams_act(
         op: Literal["post", "reply"] = "post",
         team_id: Optional[str] = None,
         channel_id: Optional[str] = None,
@@ -290,17 +259,16 @@ def register(mcp: FastMCP) -> None:
         full: bool = False,
     ) -> dict:
         """⚠️ WRITES in Microsoft Teams, in the person's name: a message is visible AT
-        ONCE to the channel or chat members — Teams has no draft. Reading is
-        `teams_message`.
+        ONCE to the channel or chat members — Teams has no draft. Reading is `teams`.
 
-        The place is a CHANNEL (`team_id` + `channel_id`, from teams_spaces) OR a CHAT
+        The place is a CHANNEL (`team_id` + `channel_id`, from `teams`) OR a CHAT
         (`chat_id`) — exactly one of the two.
 
         `op`:
         - **"post"** (default): a new message (`body`, markdown): a new thread in the
           channel, or a message in the chat.
         - **"reply"**: a reply (`body`) in the thread of the channel message
-          `message_id` (from `teams_message(op="list")`). In a chat, use op="post".
+          `message_id` (from `teams(op="list")`). In a chat, use op="post".
 
         Posting needs no administrator's approval.
 

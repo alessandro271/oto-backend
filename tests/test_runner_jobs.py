@@ -725,7 +725,7 @@ def test_summary_rend_le_temps_gagne_de_chaque_agent_vu(monkeypatch):
     ], [
         _appel_journal("r1", "data_write", cle="p1"),
         _appel_journal("r1", "data_write", cle="p2"),
-        _appel_journal("r1", "whatsapp_send"),
+        _appel_journal("r1", "whatsapp_act", "send"),
         _appel_journal("r1", "hubspot_object", "update", cle="c1"),   # ne déclare rien
         _appel_journal("r9", "data_write", cle="z"),
     ], surcharges={"record": 5})

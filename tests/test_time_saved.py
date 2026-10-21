@@ -33,8 +33,8 @@ def _registre(monkeypatch, _effets_servis):
 def test_le_registre_reel_porte_les_annotations_attendues():
     """Ce sur quoi le banc s'appuie : si une annotation change, il le dit ici d'abord."""
     e = tool_registry.effet_de
-    assert (e("serper_search"), e("gmail"), e("gmail_act"), e("whatsapp_send")) == (
-        "read", "simulation", "act", "act")
+    assert (e("serper_search"), e("gmail"), e("gmail_act"), e("whatsapp"),
+            e("whatsapp_act")) == ("read", "simulation", "act", "read", "act")
     assert e("hubspot_object") is None and e("http_get") is None   # ne déclarent rien
 
 
@@ -48,7 +48,8 @@ def test_le_registre_reel_porte_les_annotations_attendues():
     ("gmail_act", "archive", None),
     ("gmail_act", "trash", None),
     ("outlook_act", "move", None),
-    ("whatsapp_send", None, "action"),          # ENVOI sans op
+    ("whatsapp", "list", "research"),           # LECTURE : un lecteur de messagerie
+    ("whatsapp_act", "send", "action"),         # ACTE : l'envoi
     ("data_write", None, "record"),             # écriture du tableau, nommée
     ("data_rows", None, None),                  # la tenue du tableau de l'agent
     ("data_claim_next", None, None),
@@ -171,11 +172,11 @@ def test_un_appel_refuse_ne_compte_pas():
 
 def test_chercher_puis_envoyer_est_un_rapport_une_fois_par_run():
     gagne, tally = time_saved.for_agent(
-        [[C("serper_search"), C("serper_search"), C("whatsapp_send")]], M)
+        [[C("serper_search"), C("serper_search"), C("whatsapp_act", "send")]], M)
     assert tally == {"report": {"count": 1, "minutes": M["report"]}}
     assert gagne == M["report"]
 
 
 def test_des_envois_sans_recherche_restent_des_envois():
-    gagne, tally = time_saved.for_agent([[C("whatsapp_send")] * 3], M)
+    gagne, tally = time_saved.for_agent([[C("whatsapp_act", "send")] * 3], M)
     assert tally["action"]["count"] == 3 and "report" not in tally

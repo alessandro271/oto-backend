@@ -89,12 +89,11 @@ SANS_DEBIT = frozenset({
     # unipile — the account and its channels: a paid option and operated accounts
     # govern its platform mode, not a debited quota.
     "unipile_connect_start",
-    "linkedin_unipile_account", "linkedin_unipile_chat", "linkedin_unipile_facets",
-    "linkedin_unipile_invite", "linkedin_unipile_job", "linkedin_unipile_network",
-    "linkedin_unipile_post", "linkedin_unipile_profile", "linkedin_unipile_publish",
-    "linkedin_unipile_search", "linkedin_unipile_send",
-    "whatsapp_chat", "whatsapp_send", "telegram_chat", "telegram_send",
-    "instagram_chat", "instagram_send",
+    "linkedin_unipile", "linkedin_unipile_act", "linkedin_unipile_account",
+    "linkedin_unipile_facets", "linkedin_unipile_invite", "linkedin_unipile_job",
+    "linkedin_unipile_network", "linkedin_unipile_post", "linkedin_unipile_profile",
+    "linkedin_unipile_publish", "linkedin_unipile_search",
+    "whatsapp", "whatsapp_act", "telegram", "telegram_act", "instagram", "instagram_act",
 })
 
 

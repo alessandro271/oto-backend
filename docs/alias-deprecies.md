@@ -203,9 +203,9 @@ séparés).
 
 | Surface | Ancien appel (part le 10/12/2026 au soir) | Nouvel appel | Forme |
 | --- | --- | --- | --- |
-| Op d'outil MCP | `whatsapp_chat(op=send)`, `telegram_chat(op=send)`, `instagram_chat(op=send)` | `whatsapp_send`, `telegram_send`, `instagram_send` (mêmes arguments, sans `op`) | l'ancienne op est servie PAR la fonction du nouvel outil (mêmes refus) ; la réponse porte `deprecation_warning` (outil à appeler + date) ; la description du lecteur commence par « ⚠️ op=send est déprécié, utiliser `<canal>_send` ; retrait le 10/12/2026. » |
-| Op d'outil MCP | `linkedin_unipile_chat(op=send/update/react)` | `linkedin_unipile_send(op=…)` | idem, mêmes `op` et arguments |
-| Op d'outil MCP | `linkedin_unipile_network(op=invite/handle/cancel)` | `linkedin_unipile_invite(op=…)` | idem |
+| ~~Op d'outil MCP~~ | ~~`whatsapp_chat(op=send)`, `telegram_chat(op=send)`, `instagram_chat(op=send)`~~ | retirés le 21/10/2026, sans attendre : §Messageries ci-dessous | — |
+| ~~Op d'outil MCP~~ | ~~`linkedin_unipile_chat(op=send/update/react)`~~ | retiré le 21/10/2026 : §Messageries ci-dessous | — |
+| Op d'outil MCP | `linkedin_unipile_network(op=invite/handle/cancel)` | `linkedin_unipile_invite(op=…)` | l'ancienne op est servie PAR la fonction du nouvel outil (mêmes refus) ; la réponse porte `deprecation_warning` (outil à appeler + date) ; la description du lecteur commence par « ⚠️ op=invite/handle/cancel est déprécié, utiliser `linkedin_unipile_invite` ; retrait le 10/12/2026. » |
 | Op d'outil MCP | `linkedin_unipile_post(op=create/comment/react)` | `linkedin_unipile_publish(op=…)` | idem |
 
 ⚠️ **Pendant la transition, le lecteur reste déclaré `ENVOI`, pas `LECTURE`** : il
@@ -216,6 +216,9 @@ encore est refusé en nommant l'outil d'envoi (`op_moved`). La garde datée
 de ces ops est servie.
 
 ### Des ops d'envoi sorties de `chat_message` et `teams_message` (oto-backend#1231, 13/10/2026)
+
+⚠️ **Remplacé le 21/10/2026** : ces ops et ces noms sont retirés sans attendre le
+10/12/2026 (§Messageries ci-dessous). Ce qui suit est l'histoire.
 
 **La même date que #1189 : servies jusqu'au 10/12/2026 inclus, retirées au premier tag
 posé à partir du 11/12/2026** (`deprecations.RETRAIT_OPS_ENVOI`, décision d'Alexis du
@@ -232,9 +235,9 @@ d'un canal Teams autorisait aussi d'y poster en ton nom.
 `op=` (11/08/2026), retiré sans alias. Il revient pour le même geste, `text` toujours
 requis.
 
-Comme pour #1189, **les lecteurs restent déclarés `ENVOI` pendant la transition** et
-repassent `LECTURE` au retrait. La garde datée `tests/test_chat_teams_transition_envoi_1231.py`
-rougit à partir du 11/12/2026 tant qu'une de ces ops est servie.
+Comme pour #1189, les lecteurs restaient déclarés `ENVOI` pendant la transition. Depuis
+le 21/10/2026, `chat` et `teams` sont `LECTURE` et leurs acteurs `chat_act` / `teams_act`
+(garde : `tests/test_chat_teams_lecture_envoi.py`).
 
 ### Gmail et Outlook : lire ou simuler, agir — deux outils (17/10/2026, retrait IMMÉDIAT)
 
@@ -260,6 +263,31 @@ déplace — le client le fait confirmer), gardée par `tests/test_convention_ac
 | `outlook_message(op=archive/trash/move)` | `outlook_act(op=…)` |
 | `outlook_compose` (brouillon) | `outlook(op="draft")` |
 | `outlook_compose(mode="send")` | `outlook_act(op="send")` : un brouillon par `draft_id`, ou le message complet |
+
+### Messageries : lire, agir — deux outils (21/10/2026, retrait IMMÉDIAT)
+
+**Même exception à l'Art 8.2, décidée par Alexis le 21/10/2026 pour la sécurité**, et
+même convention que Gmail et Outlook. Un agent a envoyé un WhatsApp sans validation :
+`whatsapp_chat`, le lecteur, était en « toujours autoriser » dans un projet et servait
+encore l'ancienne `op="send"` de la transition #1189. Tant qu'un lecteur peut envoyer,
+autoriser la lecture autorise l'envoi : la transition jusqu'au 10/12/2026 est abandonnée
+pour TOUTES les messageries (elle ne vaut plus que pour `linkedin_unipile_network` et
+`linkedin_unipile_post`, hors messagerie). Table du lot : `RENOMMAGES_MESSAGERIES` →
+refus nommé, annonce aux agents jusqu'au 21/12/2026, et la révision
+`20261021_1219_outils_act_msg` des listes d'outils enregistrées. Leur sens : autoriser reste étroit, masquer reste large (décision d'Alexis du 21/10/2026) : une liste qui autorisait un ancien lecteur ne reçoit que le nouveau lecteur, jamais `<ns>_act` — même si l'ancien lecteur envoyait encore en transition ; seul un ancien outil d'envoi dédié donne `<ns>_act` ; une liste qui masquait masque tout ce que l'ancien outil faisait.
+
+| Ancien appel (refusé depuis le 21/10/2026) | Nouvel appel |
+| --- | --- |
+| `whatsapp_chat(op=list/read)` (idem `telegram_chat`, `instagram_chat`) | `whatsapp(op=…)`, mêmes arguments — fils 1-à-1 ET de groupe |
+| `whatsapp_chat(op=send)`, `whatsapp_send` (idem `telegram_*`, `instagram_*`) | `whatsapp_act(op="send")`, mêmes arguments |
+| `linkedin_unipile_chat(op=list/read/attendees/contacts)` | `linkedin_unipile(op=…)` |
+| `linkedin_unipile_chat(op=send/update/react)`, `linkedin_unipile_send(op=…)` | `linkedin_unipile_act(op=…)` |
+| `teams_spaces(op=teams/channels/chats)` | `teams(op=…)` |
+| `teams_message(op=list/replies)` | `teams(op=…)` |
+| `teams_message(op=post/reply)`, `teams_send(op=…)` | `teams_act(op=…)` |
+| `chat_spaces` | `chat(op="spaces")` |
+| `chat_message(op=list)` | `chat(op="list")` |
+| `chat_message(op=send)`, `chat_send` | `chat_act(op="send")`, mêmes arguments |
 
 ### Pourquoi les clés de capacité n'ont pas d'alias
 

@@ -15,18 +15,18 @@ Microsoft lets a person authorize alone everything above, **except reading the m
 
 ## usage — read and post
 
-`teams_spaces(op=teams|channels|chats)` (where you can read and post), `teams_message(op=list|replies)` reads and `teams_send(op=post|reply)` writes — two tools, so that allowing reads never allows posting (`teams_message(op=post|reply)` is deprecated, served until 10/12/2026) — on a channel (`team_id` + `channel_id`) or a chat (`chat_id`), under the account the call names (`_account=`), otherwise the default one.
-- "my teams" → `teams_spaces()`; "the channels of Sales" → `teams_spaces(op="channels", team_id="…")`; "my chats" → `teams_spaces(op="chats")`
-- "the latest messages of my chat with Marc" → `teams_message(chat_id="…")`
-- "what was said in #general" → `teams_message(team_id="…", channel_id="…")` (administrator's approval needed), and a thread → `op="replies"` with `message_id`
-- "post the summary in #general" → `teams_send(team_id="…", channel_id="…", body="…")`; "answer in that thread" → `teams_send(op="reply", …)` with `message_id`; in a chat → `teams_send` with `chat_id`
+`teams` reads — where you can read and post (`op=teams|channels|chats`) and the messages (`op=list|replies`) — and `teams_act(op=post|reply)` writes: two tools, so that allowing reads never allows posting (your client asks you to confirm `teams_act`) — on a channel (`team_id` + `channel_id`) or a chat (`chat_id`), under the account the call names (`_account=`), otherwise the default one.
+- "my teams" → `teams()`; "the channels of Sales" → `teams(op="channels", team_id="…")`; "my chats" → `teams(op="chats")`
+- "the latest messages of my chat with Marc" → `teams(op="list", chat_id="…")`
+- "what was said in #general" → `teams(op="list", team_id="…", channel_id="…")` (administrator's approval needed), and a thread → `op="replies"` with `message_id`
+- "post the summary in #general" → `teams_act(team_id="…", channel_id="…", body="…")`; "answer in that thread" → `teams_act(op="reply", …)` with `message_id`; in a chat → `teams_act` with `chat_id`
 - `body` is written in markdown and posted as formatted text; each message comes back as text (`full=true` for the complete Microsoft Graph object)
 
 ## note — what is misleading
 
 - ⚠️ **a post is visible at once** to the members of the channel or chat: Teams has no draft
 - ⚠️ **reading a channel needs the administrator's approval**, reading a chat does not: a refusal on a channel is not a problem with your account
-- a chat has no threads: reply in it with `teams_send(op="post")`
+- a chat has no threads: reply in it with `teams_act(op="post")`
 - a channel's `list` returns its root messages only; the replies of one are `op="replies"`
 - ids look like `19:…@thread.tacv2`: pass them exactly as returned
 

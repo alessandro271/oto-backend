@@ -197,9 +197,14 @@ paire**, `<ns>` et `<ns>_act`.
 Garde : `tests/test_convention_act.py` — une op à effet hors d'un `*_act` rougit, un
 `*_act` sans son annotation aussi ; les connecteurs pas encore migrés sont dans sa liste
 fermée `A_MIGRER`, qui ne peut que rétrécir. Les anciens noms d'une migration refusent en
-nommant l'appel à faire (`outils_retires.RENOMMAGES_ACT`) ; les listes d'outils
+nommant l'appel à faire (`outils_retires.RENOMMAGES`) ; les listes d'outils
 enregistrées (presets de projet, flottes, déclencheurs, masquages) sont réécrites par
-migration en gardant leur sens. Premier lot : Gmail et Outlook.
+migration : autoriser reste étroit, masquer reste large (décision d'Alexis du 21/10/2026) : une liste qui autorisait un ancien lecteur ne reçoit que le nouveau lecteur, jamais `<ns>_act` — même si l'ancien lecteur envoyait encore en transition ; seul un ancien outil d'envoi dédié donne `<ns>_act` ; une liste qui masquait masque tout ce que l'ancien outil faisait (le premier lot, joué avant cette règle, avait donné tous les
+remplaçants aux deux sens). Premier lot : Gmail et Outlook (17/10/2026). Deuxième lot, les messageries
+(21/10/2026) : `whatsapp`, `telegram`, `instagram`, `teams`, `chat` (Google Chat) et la
+messagerie LinkedIn (`linkedin_unipile` / `linkedin_unipile_act`, le reste du connecteur
+restant à part) ; leurs anciennes ops d'envoi en transition disparaissent avec les anciens
+noms.
 
 ## Méta-tools et `PROTECTED_TOOLS`
 

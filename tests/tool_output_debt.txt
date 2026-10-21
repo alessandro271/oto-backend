@@ -118,7 +118,7 @@ greenhouse_users
 hubspot_list
 hubspot_object
 infosec_domain
-instagram_chat
+instagram
 instagram_meta_get_recent_media
 juris_decision
 leexi_calls
@@ -139,7 +139,7 @@ lever_opportunities
 lever_postings
 lever_users
 lighton_files
-linkedin_unipile_chat
+linkedin_unipile
 linkedin_unipile_facets
 linkedin_unipile_job
 loi_article
@@ -240,14 +240,14 @@ tavily_map
 teamtailor_candidates
 teamtailor_job_applications
 teamtailor_jobs
-telegram_chat
+telegram
 topograph_search
 twitter_chat
 webflow_cms
 webflow_forms
 webflow_pages
 webflow_submissions
-whatsapp_chat
+whatsapp
 zohodesk_contacts
 zohodesk_search_tickets
 zohodesk_tickets

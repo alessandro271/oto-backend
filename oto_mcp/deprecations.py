@@ -383,10 +383,10 @@ def avis_nom_de_tableau(nom: str, ns_id: int) -> str:
 
 # ── Les ops d'envoi des lecteurs de messagerie (oto-backend#1189, 12/10/2026) ─
 #
-# Ce qui agit chez un tiers sort des lecteurs vers un outil d'envoi (`whatsapp_send`,
-# `linkedin_unipile_send`, `…_invite`, `…_publish`) : un client MCP autorise des OUTILS,
+# Ce qui agit chez un tiers sort des lecteurs vers un outil d'envoi
+# (`linkedin_unipile_invite`, `…_publish`) : un client MCP autorise des OUTILS,
 # pas des opérations. Décision d'Alexis du 12/10/2026 : pas de retrait sec, DEUX MOIS de
-# transition. Jusqu'à cette date incluse, l'ancienne op (`whatsapp_chat(op="send")`…)
+# transition. Jusqu'à cette date incluse, l'ancienne op (`linkedin_unipile_post(op="create")`…)
 # est servie PAR l'outil d'envoi (même fonction, mêmes refus) et sa réponse porte
 # `deprecation_warning`. Le lecteur reste déclaré `ENVOI` tant qu'il envoie.
 #
@@ -400,10 +400,13 @@ def avis_nom_de_tableau(nom: str, ns_id: int) -> str:
 # `tests/test_unipile_transition_envoi_1189.py` rougit à partir du 11/12/2026 tant
 # qu'une de ces ops est encore servie.
 #
-# MÊME date pour Google Chat et Teams (oto-backend#1231, décision d'Alexis du
-# 13/10/2026 : même découpage, même transition) : `chat_message(op="send")` → `chat_send`,
-# `teams_message(op="post"|"reply")` → `teams_send` ; garde datée
-# `tests/test_chat_teams_transition_envoi_1231.py`.
+# ⚠️ Les MESSAGERIES ne transitionnent plus depuis le 21/10/2026 (décision d'Alexis, pour
+# la sécurité : un agent a envoyé un WhatsApp par l'ancienne `whatsapp_chat(op="send")`,
+# le lecteur étant en « toujours autoriser ») : WhatsApp, Telegram, Instagram, la
+# messagerie LinkedIn, Google Chat (#1231) et Teams (#1231) sont des paires `<ns>` /
+# `<ns>_act`, leurs anciens noms refusent tout de suite (`outils_retires.RENOMMAGES`).
+# Restent en transition jusqu'à cette date : `linkedin_unipile_post` (create/comment/
+# react) et `linkedin_unipile_network` (invite/handle/cancel).
 RETRAIT_OPS_ENVOI = datetime.date(2026, 12, 10)
 
 

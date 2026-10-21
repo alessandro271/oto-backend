@@ -6,7 +6,7 @@ From this card, click **connect**: Google asks you to authorize **Google Chat on
 
 ## usage — spaces and messages
 
-`chat_spaces` (the spaces), `chat_message(op=list)` reads a space, `chat_send` posts — two tools, so that allowing reads never allows posting (`chat_message(op=send)` is deprecated, served until 10/12/2026). under the chosen account.
+`chat` reads — `op=spaces` the spaces, `op=list` the messages of a space —, `chat_act(op=send)` posts: two tools, so that allowing reads never allows posting (your client asks you to confirm `chat_act`). under the chosen account.
 - "list my Google Chat spaces"
 - "summarize the thread in the `#ventes` space since Monday"
 - "post this message in `#ventes`"

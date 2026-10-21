@@ -1,5 +1,7 @@
 """La transition de #1189 : jusqu'au 10/12/2026 inclus, l'ancienne op d'envoi d'un
-lecteur marche encore (décision d'Alexis du 12/10/2026).
+lecteur marche encore (décision d'Alexis du 12/10/2026) — pour `linkedin_unipile_post` et
+`linkedin_unipile_network` seulement depuis le 21/10/2026 : les messageries sont passées
+à la paire `<ns>` / `<ns>_act`, sans transition (`tests/test_convention_act.py`).
 
 Ce que ce fichier tient — et il part tout entier au retrait :
 
@@ -26,21 +28,15 @@ from oto_mcp import deprecations, error_taxonomy
 from oto_mcp.tools import unipile as U
 from oto_mcp.tools.lecture import ENVOI, en_lecture
 
-from test_unipile_lecture_envoi_1189 import CANAUX, DECOUPAGE
+from test_unipile_lecture_envoi_1189 import DECOUPAGE, EN_TRANSITION
 
 #: Les méthodes du client qu'un envoi peut toucher : chacune rend un dict, comme
 #: l'oto-core réel.
-_METHODES = ("send_message", "patch_chat", "react_message", "create_post",
-             "comment_post", "react_post", "send_invitation", "handle_invitation",
-             "cancel_invitation")
+_METHODES = ("create_post", "comment_post", "react_post", "send_invitation",
+             "handle_invitation", "cancel_invitation")
 
 #: Un appel complet par op dépréciée : (lecteur, op) → arguments de l'ancien appel.
 _ARGS = {
-    "send": {"text": "hello", "chat_id": "c1"},
-    ("linkedin_unipile_chat", "update"): {"chat_id": "c1", "action": "setReadStatus",
-                                          "value": True},
-    ("linkedin_unipile_chat", "react"): {"message_id": "m1", "reaction": "👍",
-                                         "chat_id": "c1"},
     ("linkedin_unipile_post", "create"): {"text": "hello"},
     ("linkedin_unipile_post", "comment"): {"post_id": "urn:li:1", "text": "bravo"},
     ("linkedin_unipile_post", "react"): {"post_id": "urn:li:1", "value": "PRAISE"},
@@ -51,14 +47,12 @@ _ARGS = {
     ("linkedin_unipile_network", "cancel"): {"invitation_id": "i1"},
 }
 
-CAS = [(lecteur, op) for lecteur, (_, ops) in sorted(DECOUPAGE.items()) for op in ops]
+CAS = [(lecteur, op) for lecteur in EN_TRANSITION for op in DECOUPAGE[lecteur][1]]
 
 
 def _monte() -> FastMCP:
     m = FastMCP("t")
     U.register(m)
-    for c in CANAUX:
-        U.register_messaging_tools(m, c.upper())
     return m
 
 
@@ -82,12 +76,7 @@ def _appel(m, nom, args) -> dict:
     return asyncio.run(m.call_tool(nom, args)).structured_content
 
 
-def _args_ecrivain(lecteur: str, op: str, args: dict) -> dict:
-    """Les arguments du nouvel appel : les mêmes, avec `op` sauf pour `{canal}_send`."""
-    return dict(args) if lecteur in {f"{c}_chat" for c in CANAUX} else {"op": op, **args}
-
-
-@pytest.mark.parametrize("lecteur", sorted(DECOUPAGE))
+@pytest.mark.parametrize("lecteur", EN_TRANSITION)
 def test_le_lecteur_reste_declare_envoi_pendant_la_transition(m, lecteur):
     """Il envoie encore : `readOnlyHint` lui ouvrirait les recettes « pull » et
     l'« autoriser toujours » d'un client sans confirmation d'envoi."""
@@ -102,12 +91,12 @@ def test_l_ancienne_op_fait_exactement_ce_que_fait_le_nouvel_outil(
     """Chemin RÉEL (validation FastMCP comprise) : les mêmes appels au client, dans le
     même ordre, et la même réponse — plus l'avertissement."""
     ecrivain = DECOUPAGE[lecteur][0]
-    args = _ARGS.get((lecteur, op), _ARGS.get(op))
+    args = _ARGS[(lecteur, op)]
     ancien = _appel(m, lecteur, {"op": op, **args})
     appels_ancien, compte_ancien = list(client.mock_calls), list(client.appels)
     client.reset_mock()
     client.appels.clear()
-    neuf = _appel(m, ecrivain, _args_ecrivain(lecteur, op, args))
+    neuf = _appel(m, ecrivain, {"op": op, **args})
     assert appels_ancien == client.mock_calls
     assert compte_ancien == client.appels
     avis = ancien.pop("deprecation_warning")
@@ -116,9 +105,6 @@ def test_l_ancienne_op_fait_exactement_ce_que_fait_le_nouvel_outil(
 
 
 @pytest.mark.parametrize("lecteur,args,manque", [
-    ("whatsapp_chat", {"op": "send", "text": "hello"}, "chat_id"),
-    ("whatsapp_chat", {"op": "send", "chat_id": "c1"}, "text"),
-    ("linkedin_unipile_chat", {"op": "send", "text": "hello"}, "chat_id"),
     ("linkedin_unipile_post", {"op": "comment", "text": "bravo"}, "post_id"),
     ("linkedin_unipile_network", {"op": "handle", "invitation_id": "i1"},
      "shared_secret"),
@@ -144,24 +130,15 @@ def test_la_network_refuse_une_action_que_l_ecrivain_refuse(m, client):
 
 
 def test_l_avertissement_servi_a_l_agent(m, client):
-    """Texte exact de la réponse de `whatsapp_chat(op="send")`."""
-    out = _appel(m, "whatsapp_chat", {"op": "send", "text": "hello", "chat_id": "c1"})
-    assert out["deprecation_warning"] == (
-        'Déprécié : `whatsapp_chat(op="send")` est retiré le 10/12/2026. L\'appel a été '
-        "servi par `whatsapp_send` ; appelle désormais `whatsapp_send(…)` avec les "
-        "mêmes arguments, sans `op`.")
+    """Texte exact de la réponse de `linkedin_unipile_network(op="cancel")`."""
     out = _appel(m, "linkedin_unipile_network", {"op": "cancel", "invitation_id": "i1"})
-    assert out["deprecation_warning"].endswith(
-        'appelle désormais `linkedin_unipile_invite(op="cancel", …)` avec les mêmes '
-        "arguments.")
+    assert out["deprecation_warning"] == (
+        'Déprécié : `linkedin_unipile_network(op="cancel")` est retiré le 10/12/2026. '
+        "L'appel a été servi par `linkedin_unipile_invite` ; appelle désormais "
+        '`linkedin_unipile_invite(op="cancel", …)` avec les mêmes arguments.')
 
 
 @pytest.mark.parametrize("lecteur,ligne", [
-    ("whatsapp_chat",
-     "⚠️ op=send est déprécié, utiliser `whatsapp_send` ; retrait le 10/12/2026."),
-    ("linkedin_unipile_chat",
-     "⚠️ op=send/update/react est déprécié, utiliser `linkedin_unipile_send` ; "
-     "retrait le 10/12/2026."),
     ("linkedin_unipile_network",
      "⚠️ op=invite/handle/cancel est déprécié, utiliser `linkedin_unipile_invite` ; "
      "retrait le 10/12/2026."),
@@ -178,7 +155,8 @@ def test_la_description_du_lecteur_le_dit_en_une_ligne_en_tete(m, lecteur, ligne
 def _ops_depreciees_servies(m) -> list:
     """Les anciennes ops d'envoi encore au schéma d'un lecteur MONTÉ."""
     servies = []
-    for lecteur, (_, ops) in sorted(DECOUPAGE.items()):
+    for lecteur in EN_TRANSITION:
+        ops = DECOUPAGE[lecteur][1]
         enum = asyncio.run(m.get_tool(lecteur)).parameters["properties"]["op"]["enum"]
         servies += [f"{lecteur}(op={o})" for o in ops if o in enum]
     return servies
@@ -204,7 +182,7 @@ def test_les_ops_depreciees_ne_survivent_pas_a_leur_date(m):
 
 def test_la_garde_datee_sonne_le_lendemain_du_retrait(m):
     servies = _ops_depreciees_servies(m)
-    assert len(servies) == sum(len(ops) for _, ops in DECOUPAGE.values())
+    assert len(servies) == sum(len(DECOUPAGE[lecteur][1]) for lecteur in EN_TRANSITION)
     assert _verdict(datetime.date(2026, 12, 10), servies) is None
     assert _verdict(datetime.date(2026, 12, 11), servies) is not None
     assert _verdict(datetime.date(2026, 12, 11), []) is None
