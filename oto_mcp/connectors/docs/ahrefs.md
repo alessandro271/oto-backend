@@ -18,7 +18,7 @@ ahrefs covers most of the Ahrefs v3 API, grouped by product:
 - "on-site analytics (visitors, sources, geo, device)" → `ahrefs_web_analytics(report="stats"|"sources"|"countries"|..., project_id=...)` (requires the Ahrefs JS snippet installed on the tracked site)
 - "Google Search Console data" → `ahrefs_gsc(report="keywords"|"pages"|..., date_from=..., project_id=...)` (requires GSC connected to the project on the Ahrefs side)
 - "manage my projects/tracked keywords" → `ahrefs_project`, `ahrefs_project_keywords`, `ahrefs_project_competitors`, `ahrefs_keyword_list`, `ahrefs_locations`
-- "publish on the connected social networks" → `ahrefs_social(op="publish", ...)`
+- "publish on the connected social networks" → `ahrefs_act(op="publish_post", ...)` — its own tool, the one your client asks you to confirm; `ahrefs_social` only reads
 
 ## note — `select`, units, and what is NOT exposed for writing
 

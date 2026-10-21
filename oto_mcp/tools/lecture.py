@@ -15,20 +15,14 @@ A tool multiplexed by `op` is only declared if ALL its ops read.
 (a message, an invitation, a publication) declares it too. An MCP client authorizes
 TOOLS, not operations: "always allow" on a reader must never allow a send — which is
 why such a send lives in its own tool, never as an `op` of a reader (oto-backend#1189).
-Until `deprecations.RETRAIT_OPS_ENVOI`, a reader that still serves its old acting ops is
-itself declared `ENVOI`: it acts (`OpsDepreciees`, `en_transition` below — now only the
-LinkedIn posts and network readers; the messaging readers became pairs on 21/10/2026).
+Since 21/10/2026 no reader serves an acting op any more, even in transition: the old op
+is refused, naming its new call (`outils_retires.OPS_DEPLACEES`).
 `destructiveHint`/`openWorldHint` are the protocol's defaults for a tool that is not
 read-only; they are WRITTEN here so that the client reads them, not infers them.
 """
 from __future__ import annotations
 
-import inspect
-from typing import NamedTuple, Optional
-
 from mcp.types import ToolAnnotations
-
-from .. import deprecations
 
 LECTURE = ToolAnnotations(readOnlyHint=True)
 ENVOI = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
@@ -60,50 +54,3 @@ def en_lecture(tool) -> bool:
     """Has the tool (FastMCP object) declared itself read-only?"""
     annotations = getattr(tool, "annotations", None)
     return getattr(annotations, "readOnlyHint", None) is True
-
-
-# --- the TRANSITION of a reader's old send ops (oto-backend#1189) ----------------------
-# Until `deprecations.RETRAIT_OPS_ENVOI` (10/12/2026 included, Alexis's decisions of
-# 12/10 and 13/10/2026), the old op of a reader still works. It is served BY the
-# writer's own function — same refusals, before any credential — and its response
-# carries `deprecation_warning`. While a reader can send, it stays declared `ENVOI`,
-# never `LECTURE`: a client that took it for a reader would send without asking. At the
-# retirement, the ops leave the readers' schema, the readers become `LECTURE`, and a call
-# that still sends an old op is refused by naming its writer (`op_moved`).
-# Since 21/10/2026, the messaging readers (Unipile channels, LinkedIn messaging, Google
-# Chat, Teams) no longer transition: they became `<ns>` / `<ns>_act` pairs and their old
-# names refuse at once (`outils_retires.RENOMMAGES`). What remains here:
-# `linkedin_unipile_post` and `linkedin_unipile_network`.
-
-
-class OpsDepreciees(NamedTuple):
-    """The send ops a reader still serves until the retirement, and their writer."""
-    outil: str           # the reader
-    cible: str           # the writer that serves them
-    ops: tuple           # the deprecated ops, in the reader's `op` — and the writer's
-
-    def avis(self) -> str:
-        """The ONE line of the reader's description, at its head: a long description is
-        often truncated, and the head is what the model reads to pick its tool."""
-        return (f"⚠️ op={'/'.join(self.ops)} est déprécié, utiliser `{self.cible}` ; "
-                f"retrait le {deprecations.date_retrait_ops_envoi()}.")
-
-    def servir(self, op: str, ecrivain, /, **arguments) -> dict:
-        """`op` served by the writer's function itself — never a copy of it — and SAID
-        in the response, with the call to make from now on."""
-        return {**ecrivain(**arguments), "deprecation_warning": (
-            f'Déprécié : `{self.outil}(op="{op}")` est retiré le '
-            f"{deprecations.date_retrait_ops_envoi()}. L'appel a été servi par "
-            f"`{self.cible}` ; appelle désormais "
-            f'`{self.cible}(op="{op}", …)` avec '
-            "les mêmes arguments.")}
-
-
-def en_transition(mcp, depreciees: OpsDepreciees, description: Optional[str] = None):
-    """Mount a reader that still serves send ops: declared `ENVOI` (it sends), the
-    deprecation line at the head of its description (its docstring when not given)."""
-    def monter(fn):
-        corps = description if description is not None else inspect.getdoc(fn)
-        return mcp.tool(name=depreciees.outil, annotations=ENVOI,
-                        description=f"{depreciees.avis()}\n\n{corps}")(fn)
-    return monter

@@ -61,8 +61,9 @@ def register(mcp: FastMCP) -> None:
         - "set_status" (`quote_id`, `status`): pending | accepted | denied |
           invoiced | expired — for example `accepted` when the customer has signed.
         - "to_invoice" (`quote_id`): creates a customer invoice that takes over the quote
-          (customer, lines), always as a **draft**; finalizing and sending it
-          remain actions of `pennylane_invoice`, after human validation.
+          (customer, lines), always as a **draft**; finalizing it (`pennylane_invoice`)
+          and sending it (`pennylane_act`) remain separate gestures, after human
+          validation.
           Requires the `customer_invoices:all` scope in addition to `quotes:all`.
 
         The lines have the invoices' STRICT schema (any deviation → opaque 400) —

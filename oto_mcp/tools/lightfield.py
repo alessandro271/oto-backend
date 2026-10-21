@@ -25,8 +25,9 @@ relationships are dropped and the response SAYS so (`projection` block). `full=T
 the raw record. A CRM returns fat records: without projection, a
 25-row search drowns the agent's context.
 
-Writes: `dry_run` everywhere, default `False` — EXCEPT email sending, the only action that
-leaves the platform and reaches a real person, dry-run by DEFAULT.
+Writes: `dry_run` everywhere, default `False` — EXCEPT the emails, dry-run by DEFAULT.
+Sending one, the only action that leaves the platform and reaches a real person, is its own
+tool, `lightfield_act` — the one an MCP client asks to confirm.
 
 Calls to the client are written in plain form (`_client().list_accounts(…)`): that is what
 makes them verifiable by the version-skew probe (`test_tools_client_methods_exist`).
@@ -41,6 +42,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
 from ..connectors import verify as connector_verify
+from .lecture import ACTE
 
 # "CRM core" read scopes: a key that has NONE authenticates but cannot do
 # anything useful — the probe must say so rather than return a misleading green.
@@ -556,9 +558,25 @@ def register(mcp: FastMCP) -> None:
 
     # --- emails -------------------------------------------------------------
 
+    def _courriel(op: str, sender, to, cc, bcc, subject, body) -> dict:
+        """The Lightfield payload of a draft or a send — every refusal before any call."""
+        if not sender or not sender.strip():
+            raise _bad(f"op='{op}': `sender` required — the address of a mailbox "
+                       "CONNECTED to Lightfield (Google or Microsoft) belonging to the "
+                       "API key owner. Without it, nothing can go out.")
+        payload: dict = {"from": sender.strip()}
+        for k, v in (("to", to), ("cc", cc), ("bcc", bcc)):
+            if v:
+                payload[k] = list(v)
+        if subject:
+            payload["subject"] = subject
+        if body:
+            payload["messageBody"] = {"content": body}
+        return payload
+
     @mcp.tool()
     def lightfield_emails(
-        op: Literal["search", "get", "send", "draft"] = "search",
+        op: Literal["search", "get", "draft"] = "search",
         record_id: Optional[str] = None,
         sender: Optional[str] = None,
         to: Optional[list[str]] = None,
@@ -572,29 +590,23 @@ def register(mcp: FastMCP) -> None:
         dry_run: bool = True,
         full: bool = False,
     ) -> dict:
-        """Lightfield emails — read the synced mail, or send a new one from a
-        connected mailbox.
+        """Lightfield emails — read the synced mail, or write a draft in a connected
+        mailbox. SENDING is `lightfield_act(op="send_email")`, another tool.
 
         `op`:
         - **"search"** (default): synced emails (search index, may lag).
         - **"get"**: one email by `record_id`.
-        - **"send"**: SENDS A REAL EMAIL from `sender`. ⚠️ `dry_run` defaults to
-          **True** here — the only tool of this connector whose effect leaves the
-          platform and reaches a person. Pass `dry_run=False` deliberately to send.
         - **"draft"**: writes a draft into the mailbox of `sender`; nothing is sent.
+          ⚠️ `dry_run` defaults to **True** here — pass `dry_run=False` to write it.
 
         ⚠️ `sender` must be a mailbox CONNECTED to Lightfield (Google or Microsoft)
-        and owned by the API key's user. Without one the API refuses and nothing
-        leaves.
-
-        ⚠️ Lightfield cannot reply or forward: a send always creates a NEW message,
-        never a reply in an existing thread — quote the context yourself.
+        and owned by the API key's user. Without one the API refuses.
 
         Args:
-            op: "search" | "get" | "send" | "draft".
+            op: "search" | "get" | "draft".
             record_id: op="get" — the email.
-            sender: op="send"/"draft" — the connected mailbox address (required).
-            to: op="send"/"draft" — recipients.
+            sender: op="draft" — the connected mailbox address (required).
+            to: op="draft" — recipients.
             cc: carbon copy.
             bcc: blind carbon copy.
             subject: the subject line.
@@ -602,7 +614,7 @@ def register(mcp: FastMCP) -> None:
             filters: op="search" — `{field_key: value}` filters.
             limit: 1..25 (the API caps at 25); paginate with `offset`.
             offset: start of the page.
-            dry_run: op="send"/"draft" — echo the payload, send nothing.
+            dry_run: op="draft" — echo the payload, write nothing.
                 DEFAULTS TO TRUE on this tool.
             full: raw records instead of projected ones.
         """
@@ -614,29 +626,55 @@ def register(mcp: FastMCP) -> None:
             if not record_id:
                 raise _bad("op='get': `record_id` required.")
             return _project(_run(lambda: _client().get_email(record_id)), full)
-        if op not in ("send", "draft"):
-            raise _bad(f"Invalid `op`: {op!r} (expected: search | get | send | draft).")
-        if not sender or not sender.strip():
-            raise _bad(f"op='{op}': `sender` required — the address of a mailbox "
-                       "CONNECTED to Lightfield (Google or Microsoft) belonging to the "
-                       "API key owner. Without it, nothing can go out.")
-        payload: dict = {"from": sender.strip()}
-        for k, v in (("to", to), ("cc", cc), ("bcc", bcc)):
-            if v:
-                payload[k] = list(v)
-        if subject:
-            payload["subject"] = subject
-        if body:
-            payload["messageBody"] = {"content": body}
-        if op == "send" and not payload.get("to"):
-            raise _bad("op='send': `to` required (at least one recipient).")
+        if op != "draft":
+            raise _bad(f"Invalid `op`: {op!r} (expected: search | get | draft — sending "
+                       "is lightfield_act).")
+        payload = _courriel(op, sender, to, cc, bcc, subject, body)
         if dry_run:
             return {"dry_run": True, "would": op, "payload": payload,
-                    "note": ("Nothing was sent. Call again with dry_run=False to "
-                             + ("send." if op == "send" else "write the draft."))}
-        if op == "send":
-            return _run(lambda: _client().send_email(payload))
+                    "note": ("Nothing was written. Call again with dry_run=False to "
+                             "write the draft.")}
         return _run(lambda: _client().draft_email(payload))
+
+    @mcp.tool(annotations=ACTE)
+    def lightfield_act(
+        op: Literal["send_email"],
+        sender: Optional[str] = None,
+        to: Optional[list[str]] = None,
+        cc: Optional[list[str]] = None,
+        bcc: Optional[list[str]] = None,
+        subject: Optional[str] = None,
+        body: Optional[str] = None,
+        dry_run: bool = True,
+    ) -> dict:
+        """⚠️ ACTS from a mailbox connected to Lightfield: `send_email` SENDS A REAL
+        EMAIL from `sender` — it reaches a person. Reading the mail and writing drafts is
+        `lightfield_emails`.
+
+        ⚠️ `dry_run` defaults to **True**: pass `dry_run=False` deliberately to send.
+        ⚠️ Lightfield cannot reply or forward: a send always creates a NEW message,
+        never a reply in an existing thread — quote the context yourself.
+
+        Args:
+            op: "send_email".
+            sender: the address of a mailbox CONNECTED to Lightfield (Google or
+                Microsoft) owned by the API key's user.
+            to: recipients (at least one).
+            cc: carbon copy.
+            bcc: blind carbon copy.
+            subject: the subject line.
+            body: the message body (text).
+            dry_run: echo the payload, send nothing. DEFAULTS TO TRUE.
+        """
+        if op != "send_email":
+            raise _bad(f"Invalid `op`: {op!r} (expected: send_email).")
+        payload = _courriel(op, sender, to, cc, bcc, subject, body)
+        if not payload.get("to"):
+            raise _bad("op='send_email': `to` required (at least one recipient).")
+        if dry_run:
+            return {"dry_run": True, "would": op, "payload": payload,
+                    "note": "Nothing was sent. Call again with dry_run=False to send."}
+        return _run(lambda: _client().send_email(payload))
 
     # --- object types -------------------------------------------------------
 

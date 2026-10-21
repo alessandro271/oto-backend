@@ -5,8 +5,8 @@ Wraps `oto.tools.signwell.client.SignWellClient` (`X-Api-Key`,
 on behalf of the account that created it, that name is what signs the invitations — a shared
 platform key would send contracts in someone else's name.
 
-26 operations over FIVE tools, verb in `op`: `signwell_document` and
-`signwell_template` here; `signwell_bulk_send`, `signwell_webhook` and
+26 operations over SIX tools, verb in `op`: `signwell_document`, `signwell_act`
+and `signwell_template` here; `signwell_bulk_send`, `signwell_webhook` and
 `signwell_account` in `signwell_envois.py`. The common base (key, refusal, view
 of a document) lives in `signwell_socle.py`.
 
@@ -15,8 +15,9 @@ of a document) lives in `signwell_socle.py`.
 1. **A created document does NOT go out by default.** At SignWell `draft` is
    `false`: creating means sending a contract to real people in the same
    call. Here `op="create"` creates a DRAFT unless `draft=False` is explicit, and
-   sending stays a distinct gesture (`op="send"`). Same rule for a document
-   made from a template.
+   sending stays a distinct gesture — and a distinct TOOL, `signwell_act`
+   (`op="send_document"`, `op="remind_document"`): an MCP client authorizes tools, not
+   ops. Same rule for a document made from a template.
 2. **The document view** (`signwell_socle.vue_document`): one signing
    link per recipient under a single key, an explicit `emailed`, and
    `notes` on what the state does not say (test mode diverted to the holder,
@@ -34,6 +35,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastmcp import FastMCP
 
 from ..connectors import verify as connector_verify
+from .lecture import ACTE
 from .signwell_socle import (
     OU_CREER_LA_CLE, _bad, _client, _hors_op, _need, _run, destinataires_valides,
     fichiers_valides, options_valides, refus, sans_base64, vue_document,
@@ -116,9 +118,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def signwell_document(
-        op: Literal["get", "create", "send", "remind", "update_recipients",
-                    "update_authentication", "completed_pdf", "nom151_certificate",
-                    "delete"] = "get",
+        op: Literal["get", "create", "update_recipients", "update_authentication",
+                    "completed_pdf", "nom151_certificate", "delete"] = "get",
         document_id: Optional[str] = None,
         files: Optional[List[dict]] = None,
         recipients: Optional[List[dict]] = None,
@@ -139,7 +140,8 @@ def register(mcp: FastMCP) -> None:
         full: Optional[bool] = None,
         dry_run: Optional[bool] = None,
     ) -> dict:
-        """SignWell documents sent for signature — create, send, follow, fetch the signed PDF.
+        """SignWell documents sent for signature — create, follow, fetch the signed PDF.
+        SENDING a draft and reminding signers is `signwell_act`, another tool.
 
         There is NO "list documents" endpoint: keep the `id` returned by
         op="create". Reads return a compact view — per recipient ONE
@@ -153,10 +155,6 @@ def register(mcp: FastMCP) -> None:
                   `draft=False` (SignWell's own default sends immediately). Place
                   fields with `fields` or `text_tags=True` (tags written in the
                   file, syntax: `oto_guide op=read slug="signwell-envoi"`).
-                · "send" — send a draft (`document_id`); settings may be updated
-                  in the same call.
-                · "remind" — remind unsigned recipients; `recipients` =
-                  [{email?, name?}] narrows it.
                 · "update_recipients" — [{id, name, email}] on a sent document.
                 · "update_authentication" — [{id, passcode?, passcode_delivery?}].
                 · "completed_pdf" — link to the signed PDF (`audit_page`,
@@ -217,40 +215,8 @@ def register(mcp: FastMCP) -> None:
             out = _vue(doc, full)
             if draft_effectif and not full:
                 out["next_step"] = ("Draft: nothing has gone out. Send it with "
-                                    "signwell_document(op=\"send\", document_id=…).")
+                                    "signwell_act(op=\"send_document\", document_id=…).")
             return out
-
-        if op == "send":
-            _need(op, document_id=document_id)
-            _hors_op(op, files=files, recipients=recipients, draft=draft, text_tags=text_tags,
-                     fields=fields, audit_page=audit_page, file_format=file_format)
-            extra = options_valides(op, options, _OPTIONS_SEND)
-            body = {k: v for k, v in {**explicites, **extra}.items() if v is not None}
-            if dry_run:
-                courant = _run(lambda: _client().get_document(document_id))
-                vue = vue_document(courant) if isinstance(courant, dict) else {}
-                mode_test = body.get("test_mode", vue.get("test_mode"))
-                embarque = body.get("embedded_signing", vue.get("embedded_signing"))
-                return {"dry_run": True, "would_send": document_id,
-                        "current_status": vue.get("status"), "settings": body,
-                        "recipients": _qui_recoit(
-                            (courant or {}).get("recipients") or [],
-                            test_mode=bool(mode_test), embedded=bool(embarque))}
-            return _vue(_run(lambda: _client().send_document(document_id, **body)), full)
-
-        if op == "remind":
-            _need(op, document_id=document_id)
-            _hors_op(op, files=files, draft=draft, text_tags=text_tags, fields=fields,
-                     options=options, audit_page=audit_page, file_format=file_format,
-                     **explicites)
-            cibles = [{k: r.get(k) for k in ("name", "email") if r.get(k)}
-                      for r in recipients or []] or None
-            if dry_run:
-                courant = _run(lambda: _client().get_document(document_id))
-                en_attente = [r for r in (vue_document(courant) or {}).get("recipients", [])
-                              if str(r.get("status") or "").lower() not in ("signed", "completed")]
-                return {"dry_run": True, "would_remind": cibles or en_attente}
-            return _vue(_run(lambda: _client().send_reminder(document_id, cibles)), full)
 
         if op in ("update_recipients", "update_authentication"):
             _need(op, document_id=document_id, recipients=recipients)
@@ -332,6 +298,83 @@ def register(mcp: FastMCP) -> None:
 
         raise _bad(f"unknown op: {op!r}")
 
+    @mcp.tool(annotations=ACTE)
+    def signwell_act(
+        op: Literal["send_document", "remind_document"],
+        document_id: str,
+        recipients: Optional[List[dict]] = None,
+        test_mode: Optional[bool] = None,
+        name: Optional[str] = None,
+        subject: Optional[str] = None,
+        message: Optional[str] = None,
+        apply_signing_order: Optional[bool] = None,
+        embedded_signing: Optional[bool] = None,
+        expires_in: Optional[int] = None,
+        reminders: Optional[bool] = None,
+        options: Optional[dict] = None,
+        full: Optional[bool] = None,
+        dry_run: Optional[bool] = None,
+    ) -> dict:
+        """⚠️ ACTS at SignWell toward the signers, in the key owner's name: sends a
+        draft document for signature, or reminds the signers who have not signed. The
+        documents themselves — create, follow, fetch the signed PDF — are
+        `signwell_document`.
+
+        Args:
+            op: which action.
+                · "send_document" — send the draft `document_id`; settings (test_mode,
+                  name, subject, message, expires_in, reminders, apply_signing_order,
+                  embedded_signing, options) may be updated in the same call.
+                · "remind_document" — remind unsigned recipients; `recipients` =
+                  [{email?, name?}] narrows it.
+            document_id: the document (from `signwell_document(op="create")`).
+            recipients: op="remind_document" — who to remind (default: everyone
+                who has not signed).
+            test_mode: non-binding document; invitations go to the ACCOUNT OWNER,
+                never to the recipients.
+            embedded_signing: return signing links instead of relying on
+                SignWell's email; anyone holding a link can sign.
+            options: op="send_document" — rarer spec settings; an unknown key is
+                refused.
+            full: return SignWell's raw payload.
+            dry_run: validate and preview without sending.
+        """
+        explicites = dict(test_mode=test_mode, name=name, subject=subject, message=message,
+                          expires_in=expires_in, reminders=reminders,
+                          apply_signing_order=apply_signing_order,
+                          embedded_signing=embedded_signing)
+
+        if op == "send_document":
+            _need(op, document_id=document_id)
+            _hors_op(op, recipients=recipients)
+            extra = options_valides(op, options, _OPTIONS_SEND)
+            body = {k: v for k, v in {**explicites, **extra}.items() if v is not None}
+            if dry_run:
+                courant = _run(lambda: _client().get_document(document_id))
+                vue = vue_document(courant) if isinstance(courant, dict) else {}
+                mode_test = body.get("test_mode", vue.get("test_mode"))
+                embarque = body.get("embedded_signing", vue.get("embedded_signing"))
+                return {"dry_run": True, "would_send": document_id,
+                        "current_status": vue.get("status"), "settings": body,
+                        "recipients": _qui_recoit(
+                            (courant or {}).get("recipients") or [],
+                            test_mode=bool(mode_test), embedded=bool(embarque))}
+            return _vue(_run(lambda: _client().send_document(document_id, **body)), full)
+
+        if op == "remind_document":
+            _need(op, document_id=document_id)
+            _hors_op(op, options=options, **explicites)
+            cibles = [{k: r.get(k) for k in ("name", "email") if r.get(k)}
+                      for r in recipients or []] or None
+            if dry_run:
+                courant = _run(lambda: _client().get_document(document_id))
+                en_attente = [r for r in (vue_document(courant) or {}).get("recipients", [])
+                              if str(r.get("status") or "").lower() not in ("signed", "completed")]
+                return {"dry_run": True, "would_remind": cibles or en_attente}
+            return _vue(_run(lambda: _client().send_reminder(document_id, cibles)), full)
+
+        raise _bad(f"unknown op: {op!r}")
+
     @mcp.tool()
     def signwell_template(
         op: Literal["get", "create", "update", "delete", "create_document"] = "get",
@@ -370,7 +413,7 @@ def register(mcp: FastMCP) -> None:
                   `template_ids`): `recipients` [{id, placeholder_name, name,
                   email}], `template_fields` [{api_id, value}] to prefill.
                   ⚠️ Creates a DRAFT unless `draft=False` (SignWell's default
-                  sends); send it with signwell_document(op="send").
+                  sends); send it with signwell_act(op="send_document").
             options: rarer spec settings for this op; an unknown key is refused.
             full: return SignWell's raw payload.
             dry_run: validate and preview without writing.
@@ -460,7 +503,7 @@ def register(mcp: FastMCP) -> None:
             out = _vue(doc, full)
             if draft_effectif and not full:
                 out["next_step"] = ("Draft: nothing has gone out. Send it with "
-                                    "signwell_document(op=\"send\", document_id=…).")
+                                    "signwell_act(op=\"send_document\", document_id=…).")
             return out
 
         raise _bad(f"unknown op: {op!r}")

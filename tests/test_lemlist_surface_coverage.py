@@ -138,7 +138,7 @@ def test_les_tools_nappellent_que_des_methodes_qui_existent():
 
 
 @pytest.mark.parametrize("tool", [
-    "lemlist_campaign_start", "lemlist_launch_lead", "lemlist_inbox_send",
+    "lemlist_campaign_start", "lemlist_launch_lead", "lemlist_act",
     "lemlist_campaign_auto_review",
 ])
 def test_tout_ce_qui_arme_ou_declenche_un_envoi_est_masque_par_defaut(tool):

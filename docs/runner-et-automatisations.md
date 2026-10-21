@@ -2379,8 +2379,9 @@ l'outil porte (`tools/lecture.py`, mise en cache au boot par `tool_registry.effe
 - `SIMULATION` (`gmail`, `outlook`) → ses `op` qui lisent (`time_saved.READ_OPS`) sont
   des recherches ; préparer un brouillon ne compte pas (c'est l'envoi qui compte) ;
 - `ACTE` / `ENVOI` → sans `op`, un message ou une action ; avec une `op`, seule une `op`
-  qui atteint un tiers (`time_saved.SEND_OPS` : send, reply, publish, invite…) est un
-  envoi — archiver, mettre à la corbeille, déplacer ne rapportent rien ;
+  qui atteint un tiers (`time_saved.SEND_OPS` : send, reply, publish, invite…, lu sur le
+  VERBE de l'op : `send_email`, `publish_post`) est un envoi — archiver, mettre à la
+  corbeille, déplacer ne rapportent rien ;
 - un outil qui ne déclare RIEN ne rapporte RIEN : on ne déduit jamais une écriture de
   l'absence d'annotation, ni un type du nom de l'outil. Le chiffre grandit à mesure que
   les connecteurs déclarent ce qu'ils font (`<ns>` / `<ns>_act`) ;

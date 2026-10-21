@@ -13,10 +13,10 @@ Lightfield's field model is specific to EACH workspace: the keys are the ones yo
 - "the up-to-date state of this company" → `lightfield_accounts(op="get", record_id="…")`
 - "create / update this company" → `lightfield_accounts(op="upsert", fields={...})` (add `record_id` to update)
 - custom objects → `lightfield_objects(op="list")` then `op="definitions"` on the returned slug
-- write an email from the connected mailbox → `lightfield_emails(op="send", sender="…", to=[...], dry_run=False)`
+- write an email from the connected mailbox → `lightfield_act(op="send_email", sender="…", to=[...], dry_run=False)` — sending is its own tool, the one your client asks you to confirm; `lightfield_emails` reads and drafts
 
 ## note — three costly pitfalls
 
 - ⚠️ **`op="search"` reads an index that may lag.** After a write, re-read with `op="get"`: search may return the state from BEFORE. This is stated in the vendor docs, and it shows most when chaining write-then-verify
 - ⚠️ **`limit` caps at 25** (imposed by the API): beyond that, paginate with `offset`
-- ⚠️ **sending can neither reply nor forward**: `op="send"` ALWAYS creates a new message, never a reply in an existing thread — if the context matters, quote it yourself in the body. And `op="send"` is **dry-run by default**: you need `dry_run=False` for anything to go out
+- ⚠️ **sending can neither reply nor forward**: `lightfield_act(op="send_email")` ALWAYS creates a new message, never a reply in an existing thread — if the context matters, quote it yourself in the body. And it is **dry-run by default**: you need `dry_run=False` for anything to go out

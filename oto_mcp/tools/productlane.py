@@ -1,7 +1,8 @@
 """Productlane tools — customer feedback, roadmap, changelogs, help center.
 
 Wraps `oto.tools.productlane.client.ProductlaneClient` (API **v2**, Bearer).
-Eight tools, one per upstream API family.
+Eight tools, one per upstream API family, plus `productlane_act` for what reaches
+third parties.
 
 Three things to know before reading a result:
 
@@ -12,11 +13,11 @@ Three things to know before reading a result:
   side and does not surface it. A success therefore does not prove that
   Linear followed.
 
-- ⚠️ **Only one gesture writes to third parties**: `productlane_changelogs
-  op='broadcast'`, which sends an email to subscribed contacts and posts to
-  Slack. It is **dry-run by default**, like `lightfield`'s email send
-  and `origami`'s campaign launch — the only three calls in the repo that
-  leave the organization.
+- ⚠️ **Two gestures write to third parties**, both in their own tool,
+  `productlane_act` — the one an MCP client asks to confirm, since it authorizes
+  tools, not ops: `op='send_message'` writes TO THE CUSTOMER on a feedback thread,
+  and `op='broadcast_changelog'` emails subscribed contacts and posts to Slack (it is
+  **dry-run by default**).
 
 - **Cursor pagination**, never by page number: each list returns
   `{data, page:{cursor, has_more}}`, and `has_more` says whether anything
@@ -36,6 +37,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
 from ..connectors import verify as connector_verify
+from .lecture import ACTE
 
 
 def _bad(msg: str) -> McpError:
@@ -132,7 +134,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def productlane_threads(
         op: Literal["search", "get", "create", "update", "delete",
-                    "messages", "send", "comments", "comment",
+                    "messages", "comments", "comment",
                     "update_comment", "delete_comment", "link"] = "search",
         thread_id: Optional[str] = None,
         comment_id: Optional[str] = None,
@@ -160,11 +162,10 @@ def register(mcp: FastMCP) -> None:
         (messages, all channels merged), internal comments, a pain level
         (`pain_level`) and links to the roadmap.
 
-        ⚠️ **Two planes that must not be confused**: `send` sends a message
-        TO THE CUSTOMER, through the channel the thread came from (email, Slack, live chat,
-        Teams) — it is a real outbound communication. `comment` writes a
-        note visible to the team only. Nothing in the shape of the two calls
-        tells you so: it is the name of the `op` that does.
+        ⚠️ **Two planes that must not be confused**: `comment` writes a note
+        visible to the team only. Writing TO THE CUSTOMER, through the channel the
+        thread came from (email, Slack, live chat, Teams), is a real outbound
+        communication — another tool: `productlane_act(op="send_message")`.
 
         `op`:
         - `search` — list threads (filters: status, tab, pain, origin,
@@ -175,7 +176,6 @@ def register(mcp: FastMCP) -> None:
         - `update` — update (`fields`). ⚠️ `tag_ids` REPLACES the tags.
         - `delete` — soft-delete.
         - `messages` — the thread's conversation, oldest to newest.
-        - `send` — ⚠️ **sends a message to the customer** (`content`).
         - `comments` / `comment` / `update_comment` / `delete_comment` —
           the thread's INTERNAL notes.
         - `link` — link the thread to Linear issues and/or projects
@@ -197,7 +197,7 @@ def register(mcp: FastMCP) -> None:
             issue_ids: op='link' — Linear issues to link.
             project_ids: op='link' — Linear projects to link.
             expand: op='get' — messages and/or comments to inline.
-            content: op='send'/'comment'/'update_comment' — the text.
+            content: op='comment'/'update_comment' — the text.
             fields: op='create'/'update' — the thread body.
             created_after: op='search' — lower bound (ISO 8601).
             created_before: op='search' — upper bound (ISO 8601).
@@ -228,11 +228,6 @@ def register(mcp: FastMCP) -> None:
             _need(thread_id, "thread_id", op)
             return _run(lambda: c.list_messages(thread_id, limit=limit,
                                                 cursor=cursor))
-        if op == "send":
-            _need(thread_id, "thread_id", op)
-            _need(content, "content", op)
-            return _run(lambda: c.send_message(thread_id,
-                                               dict(fields or {}, content=content)))
         if op == "comments":
             _need(thread_id, "thread_id", op)
             return _run(lambda: c.list_comments(thread_id, limit=limit,
@@ -256,8 +251,8 @@ def register(mcp: FastMCP) -> None:
             return _run(lambda: c.link_thread(thread_id, issue_ids=issue_ids,
                                               project_ids=project_ids))
         raise _bad_op(op, "search | get | create | update | delete | messages | "
-                          "send | comments | comment | update_comment | "
-                          "delete_comment | link")
+                          "comments | comment | update_comment | delete_comment | "
+                          "link — writing to the customer is productlane_act")
 
     # --- contacts -------------------------------------------------------------
 
@@ -541,7 +536,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def productlane_changelogs(
-        op: Literal["search", "get", "create", "update", "delete", "broadcast",
+        op: Literal["search", "get", "create", "update", "delete",
                     "tags", "create_tag", "update_tag",
                     "delete_tag"] = "search",
         changelog_id: Optional[str] = None,
@@ -550,30 +545,18 @@ def register(mcp: FastMCP) -> None:
         language: Optional[str] = None,
         title_contains: Optional[str] = None,
         fields: Optional[dict] = None,
-        email: bool = False,
-        slack: bool = False,
-        subject: Optional[str] = None,
-        message: Optional[str] = None,
-        sender_name: Optional[str] = None,
-        from_email: Optional[str] = None,
-        dry_run: bool = True,
         cursor: Optional[str] = None,
         limit: int = 50,
     ) -> Any:
-        """Productlane — release notes, and their broadcast to subscribers.
-
-        ⚠️ **`op='broadcast'` is the only call in this connector that writes to
-        third parties**: email to subscribed contacts and/or a post to the configured
-        Slack channels. It cannot be cancelled or recalled. It is therefore
-        **dry-run by default** — `dry_run=false` to really send.
+        """Productlane — release notes. Broadcasting one to subscribers is
+        `productlane_act(op="broadcast_changelog")`, another tool.
 
         ⚠️ **Publishing and broadcasting are two distinct gestures**, and the vendor is
-        explicit: broadcasting NEVER touches `published`. An unpublished
-        changelog can therefore be broadcast, and recipients would receive a link to
-        an invisible page. Publish = `op='update'` with `{"published": true}`.
+        explicit: broadcasting NEVER touches `published`. Publish = `op='update'` with
+        `{"published": true}`.
 
         `op`: `search` | `get` | `create` | `update` | `delete` (soft) |
-        `broadcast` | `tags` | `create_tag` | `update_tag` | `delete_tag`.
+        `tags` | `create_tag` | `update_tag` | `delete_tag`.
 
         ⚠️ Changelog tags are NOT thread tags
         (`productlane_tags`): two distinct families upstream, and one
@@ -588,13 +571,6 @@ def register(mcp: FastMCP) -> None:
             language: op='search'/'get' — serves the translation row.
             title_contains: op='search' — filter by partial title.
             fields: op='create'/'update'/'update_tag' — the body.
-            email: op='broadcast' — write to subscribed contacts.
-            slack: op='broadcast' — post to the Slack channels.
-            subject: op='broadcast' — email subject.
-            message: op='broadcast' — accompanying text.
-            sender_name: op='broadcast' — displayed sender name.
-            from_email: op='broadcast' — sending address.
-            dry_run: op='broadcast' — True (default) describes the send without doing it.
             cursor: next page.
             limit: rows per page (1-200, default 50).
         """
@@ -616,10 +592,79 @@ def register(mcp: FastMCP) -> None:
         if op == "delete":
             _need(changelog_id, "changelog_id", op)
             return _run(lambda: c.delete_changelog(changelog_id))
-        if op == "broadcast":
+        if op == "tags":
+            return _run(lambda: c.list_changelog_tags())
+        if op == "create_tag":
+            _need(fields, "fields", op)
+            return _run(lambda: c.create_changelog_tag(
+                fields.get("name"), color=fields.get("color"),
+                icon=fields.get("icon")))
+        if op == "update_tag":
+            _need(tag_id, "tag_id", op)
+            _need(fields, "fields", op)
+            return _run(lambda: c.update_changelog_tag(tag_id, fields))
+        if op == "delete_tag":
+            _need(tag_id, "tag_id", op)
+            return _run(lambda: c.delete_changelog_tag(tag_id))
+        raise _bad_op(op, "search | get | create | update | delete | tags | "
+                          "create_tag | update_tag | delete_tag — broadcasting is "
+                          "productlane_act")
+
+    @mcp.tool(annotations=ACTE)
+    def productlane_act(
+        op: Literal["send_message", "broadcast_changelog"],
+        thread_id: Optional[str] = None,
+        content: Optional[str] = None,
+        fields: Optional[dict] = None,
+        changelog_id: Optional[str] = None,
+        email: bool = False,
+        slack: bool = False,
+        subject: Optional[str] = None,
+        message: Optional[str] = None,
+        sender_name: Optional[str] = None,
+        from_email: Optional[str] = None,
+        dry_run: bool = True,
+    ) -> Any:
+        """⚠️ ACTS toward third parties from Productlane — a real outbound
+        communication, which cannot be recalled. Reading and managing threads and
+        changelogs is `productlane_threads` / `productlane_changelogs`.
+
+        `op`:
+        - `send_message` — ⚠️ **sends a message TO THE CUSTOMER** of `thread_id`
+          (`content`), through the channel the thread came from (email, Slack, live
+          chat, Teams). Not an internal note: that is
+          `productlane_threads(op="comment")`.
+        - `broadcast_changelog` — ⚠️ emails subscribed contacts (`email=true`) and/or
+          posts to the configured Slack channels (`slack=true`) about `changelog_id`.
+          **Dry-run by default** — `dry_run=false` to really send. Broadcasting NEVER
+          touches `published`: an unpublished changelog would be broadcast to an
+          invisible page — publish first with `productlane_changelogs(op='update')`.
+
+        Args:
+            op: send_message | broadcast_changelog.
+            thread_id: op='send_message' — the thread.
+            content: op='send_message' — the text.
+            fields: op='send_message' — extra message fields.
+            changelog_id: op='broadcast_changelog' — the changelog.
+            email: op='broadcast_changelog' — write to subscribed contacts.
+            slack: op='broadcast_changelog' — post to the Slack channels.
+            subject: op='broadcast_changelog' — email subject.
+            message: op='broadcast_changelog' — accompanying text.
+            sender_name: op='broadcast_changelog' — displayed sender name.
+            from_email: op='broadcast_changelog' — sending address.
+            dry_run: op='broadcast_changelog' — True (default) describes the send
+                without doing it.
+        """
+        if op == "send_message":
+            _need(thread_id, "thread_id", op)
+            _need(content, "content", op)
+            c = _client()
+            return _run(lambda: c.send_message(thread_id,
+                                               dict(fields or {}, content=content)))
+        if op == "broadcast_changelog":
             _need(changelog_id, "changelog_id", op)
             if not email and not slack:
-                raise _bad("op='broadcast': choose at least one channel — "
+                raise _bad("op='broadcast_changelog': choose at least one channel — "
                            "`email=true` (subscribed contacts) and/or `slack=true`.")
             if dry_run:
                 return {
@@ -635,26 +680,12 @@ def register(mcp: FastMCP) -> None:
                                       "would be broadcast to an invisible page"),
                     "pour_envoyer": "call again with dry_run=false",
                 }
+            c = _client()
             return _run(lambda: c.broadcast_changelog(
                 changelog_id, email=email or None, slack=slack or None,
                 message=message, subject=subject, sender_name=sender_name,
                 from_email=from_email))
-        if op == "tags":
-            return _run(lambda: c.list_changelog_tags())
-        if op == "create_tag":
-            _need(fields, "fields", op)
-            return _run(lambda: c.create_changelog_tag(
-                fields.get("name"), color=fields.get("color"),
-                icon=fields.get("icon")))
-        if op == "update_tag":
-            _need(tag_id, "tag_id", op)
-            _need(fields, "fields", op)
-            return _run(lambda: c.update_changelog_tag(tag_id, fields))
-        if op == "delete_tag":
-            _need(tag_id, "tag_id", op)
-            return _run(lambda: c.delete_changelog_tag(tag_id))
-        raise _bad_op(op, "search | get | create | update | delete | broadcast | "
-                          "tags | create_tag | update_tag | delete_tag")
+        raise _bad_op(op, "send_message | broadcast_changelog")
 
     # --- centre d'aide --------------------------------------------------------
 

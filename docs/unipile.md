@@ -275,8 +275,8 @@ patron Gmail (`gmail` lit ou simule, `gmail_act` agit — depuis le 17/10/2026, 
 |---|---|---|---|
 | ~~`{whatsapp,telegram,instagram}_chat`~~ | list, read | ~~`{canal}_send`~~ | send (sans `op`) — retirés le 21/10/2026, §Une paire par messagerie |
 | ~~`linkedin_unipile_chat`~~ | list, read, attendees, contacts | ~~`linkedin_unipile_send`~~ | send, update, react — retirés le 21/10/2026 |
-| `linkedin_unipile_network` | relations, invitations | `linkedin_unipile_invite` | invite, handle, cancel |
-| `linkedin_unipile_post` | feed, get, engagement | `linkedin_unipile_publish` | create, comment, react |
+| `linkedin_unipile_network` | relations, invitations | ~~`linkedin_unipile_invite`~~ | invite, handle, cancel — retirés le 21/10/2026, §Un seul acteur LinkedIn |
+| `linkedin_unipile_post` | feed, get, engagement | ~~`linkedin_unipile_publish`~~ | create, comment, react — retirés le 21/10/2026 |
 
 Le découpage suit une seule règle : **ce qui agit chez un tiers ou en son nom est un
 outil d'écriture.** `react` (un message, une publication) se voit de l'autre côté ;
@@ -284,41 +284,20 @@ outil d'écriture.** `react` (un message, une publication) se voit de l'autre c�
 l'autre membre voit ; `update` d'un fil peut montrer « lu » à l'interlocuteur
 (`setReadStatus`) et, pour le reste, écrit — un lecteur déclaré `readOnlyHint` ne
 peut porter aucune op qui écrit (`tools/lecture.py`, garde `tests/test_outils_en_lecture.py`).
-Les ops gardent leur nom dans l'écrivain (`linkedin_unipile_publish(op="create")`) :
-seul l'outil change.
+Les ops gardaient leur nom dans l'écrivain ; depuis le 21/10/2026 elles portent leur
+objet dans `linkedin_unipile_act` (§Un seul acteur LinkedIn).
 
-### Transition jusqu'au 10/12/2026 inclus (décision d'Alexis du 12/10/2026)
+### Transition (12/10/2026 → 21/10/2026) : terminée
 
-Pas de retrait sec : des procédures en base et des mémoires d'agent appellent encore
-`whatsapp_chat(op="send")`. Jusqu'au **10/12/2026 inclus**
-(`deprecations.RETRAIT_OPS_ENVOI`), l'ancienne op marche :
+La transition décidée le 12/10/2026 (l'ancienne op servie par l'écrivain jusqu'au
+10/12/2026, avec `deprecation_warning`, le lecteur déclaré `ENVOI`) a pris fin le
+21/10/2026, avant sa date : les messageries ont quitté la transition (§Une paire par
+messagerie), puis la publication et le réseau LinkedIn (§Un seul acteur LinkedIn).
+Plus aucun lecteur ne sert d'op d'envoi ; l'ancienne op refuse en nommant son nouvel appel
+(`outils_retires.OPS_DEPLACEES`, lu par `error_taxonomy.classify`) — jamais un « Input
+should be … » muet, jamais une exécution. Historique : `docs/alias-deprecies.md`.
 
-- elle est servie **par la fonction de l'écrivain**, appelée telle quelle
-  (`OpsDepreciees.servir`, `tools/lecture.py`) : mêmes refus d'arguments, avant toute
-  résolution de clé, même client, même compte opéré — aucun code copié ;
-- sa réponse porte `deprecation_warning`, qui nomme l'appel servi, l'outil à appeler
-  désormais et la date de retrait ;
-- la description du lecteur commence par UNE ligne : « ⚠️ op=create/comment/react est
-  déprécié, utiliser `linkedin_unipile_publish` ; retrait le 10/12/2026. » ;
-- **le lecteur reste déclaré `ENVOI`, pas `LECTURE`**, tant qu'il peut envoyer : un
-  client qui le croirait en lecture seule enverrait sans demander, et une recette
-  « pull » (qui n'appelle que des outils `LECTURE`) l'appellerait. Il retrouvera
-  `readOnlyHint` au retrait, pas avant.
-
-**Le retrait** (premier tag `vX.Y.Z` posé à partir du 11/12/2026) : les ops quittent le
-schéma des lecteurs, qui repassent `LECTURE` ; un appel qui envoie encore une ancienne op
-est refusé AVANT toute résolution de clé, avec un refus nommé `op_moved` qui donne le
-nouvel outil et ses arguments (le `BeforeValidator` `_op_deplacee` du commit d'origine de
-#1189) — jamais un « Input should be 'list' or 'read' » muet, jamais une exécution.
-`tests/test_unipile_transition_envoi_1189.py` rougit à partir du 11/12/2026 tant qu'une
-op dépréciée est encore servie. Entrée datée : `docs/alias-deprecies.md`.
-
-Côté plugin Claude Code, le hook `guard-outbound.mjs` doit couvrir les nouveaux outils
-d'envoi ET, jusqu'au retrait, les anciennes ops.
-
-⚠️ **Depuis le 21/10/2026, cette transition ne vaut plus que pour `linkedin_unipile_post`
-et `linkedin_unipile_network`** : les messageries l'ont quittée (§Une paire par
-messagerie).
+Côté plugin Claude Code, le hook `guard-outbound.mjs` doit couvrir les outils `*_act`.
 
 ## Une paire par messagerie (21/10/2026, retrait IMMÉDIAT)
 
@@ -339,14 +318,37 @@ ops d'envoi disparaissent avec les anciens noms, sans attendre le 10/12/2026.
 
 `{canal}` ∈ whatsapp, telegram, instagram. Les anciens noms refusent en nommant l'appel à
 faire (`outils_retires.RENOMMAGES`) ; les listes d'outils enregistrées sont réécrites
-par la révision `20261021_1219_outils_act_msg` : autoriser reste étroit, masquer reste large (décision d'Alexis du 21/10/2026) : une liste qui autorisait un ancien lecteur ne reçoit que le nouveau lecteur, jamais `<ns>_act` — même si l'ancien lecteur envoyait encore en transition ; seul un ancien outil d'envoi dédié donne `<ns>_act` ; une liste qui masquait masque tout ce que l'ancien outil faisait.
-Pour LinkedIn, la paire `linkedin_unipile` / `linkedin_unipile_act` ne porte que la
-messagerie : les autres outils du connecteur (`_post`, `_network`, `_profile`…) restent à
-part (`tests/test_convention_act.py`, `A_MIGRER`).
+par la révision `20261021_1219_outils_act_msg` : autoriser reste étroit, masquer reste large (décision d'Alexis du 21/10/2026) : une liste qui autorisait un ancien lecteur ne reçoit que le nouveau lecteur, jamais `<ns>_act` — même si l'ancien lecteur envoyait encore en transition ; un ancien outil d'envoi dédié ne donne `<ns>_act` que si celui-ci ne fait rien de plus que lui — sinon RIEN : `linkedin_unipile_send`, `_publish` et `_invite` ne donnent pas `linkedin_unipile_act`, qui publie, invite et envoie ; on l'ajoute explicitement, le refus de l'ancien nom le dit ; une liste qui masquait masque tout ce que l'ancien outil faisait.
+Pour LinkedIn, `linkedin_unipile` ne lit que la messagerie ; les autres lecteurs du
+connecteur (`_post`, `_network`, `_profile`…) gardent leur nom
+(`tests/test_convention_act.py`, `A_MIGRER`), et tout ce qui agit est dans
+`linkedin_unipile_act` (§Un seul acteur LinkedIn).
 
-Reste mélangé, hors de ce lot : `linkedin_unipile_profile` porte `endorse` (une
-recommandation de compétence, visible du membre) et `action` (geste Recruiter sur un
-candidat) — à sortir de la même façon si on l'arbitre.
+## Un seul acteur LinkedIn (21/10/2026, retrait IMMÉDIAT)
+
+Même décision, même jour, pour ce qui agissait encore hors de la messagerie : la
+publication, les invitations et les gestes sur un membre. Les lecteurs gardent leur nom
+et ne font plus que lire (`LECTURE`) ; tout ce qui agit va dans `linkedin_unipile_act`, une
+op par geste et par objet — `react_message` (un emoji sur un message) n'est pas
+`react_post` (une réaction à une publication).
+
+| ancien | nouveau |
+|---|---|
+| `linkedin_unipile_chat`/`_send(op=react)` | `linkedin_unipile_act(op="react_message")` |
+| `linkedin_unipile_post(op=create/comment/react)`, `linkedin_unipile_publish(op=…)` | `linkedin_unipile_act(op="publish_post"/"comment_post"/"react_post")` |
+| `linkedin_unipile_network(op=invite/cancel)`, `linkedin_unipile_invite(op=…)` | `linkedin_unipile_act(op="invite"/"cancel_invitation")` |
+| `…(op=handle, action=accept/decline)` | `linkedin_unipile_act(op="accept_invitation"/"decline_invitation")` |
+| `linkedin_unipile_profile(op=endorse/action)` | `linkedin_unipile_act(op="endorse"/"update_member")` |
+
+Les outils d'envoi dédiés (`linkedin_unipile_publish`, `linkedin_unipile_invite`)
+refusent en nommant l'appel à faire (`outils_retires.RENOMMAGES_ENVOIS`) ; une ancienne op
+d'un lecteur qui reste refuse de même (`outils_retires.OPS_DEPLACEES`). Les listes
+d'outils enregistrées sont réécrites par `20261021_1352_outils_act_envois`, même sens :
+une liste qui autorise un lecteur mixte n'est pas touchée (il ne fait plus que lire),
+un outil d'envoi dédié autorisé ne donne RIEN (`linkedin_unipile_act` fait plus que
+publier ou inviter : l'autorisation se perd, on l'ajoute explicitement), une liste qui
+masque masque aussi `linkedin_unipile_act`. Si le lot des messageries a été joué seul
+avant, `linkedin_unipile_act` autorisé (pour la messagerie) se perd de même.
 
 ## « Mon LinkedIn est-il connecté ? » → `linkedin_unipile_account(op="status")`
 

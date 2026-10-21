@@ -13,13 +13,13 @@ create a key in Luma, on the calendar or on the organization (Settings → Devel
 - "create an event" → `luma_calendar(op="places", query="…")` for the place, then `luma_event_admin(op="create", fields={"name": …, "start_at": …, "timezone": "Europe/Paris", "geo_address_json": {"type": "google", "place_id": …}})`
 - "approve the waitlist" → `luma_guest_admin(event_id=…, op="set_status", guest="<email>", status="approved")` (dry-run first) — Luma emails the guest unless `send_email=false`
 - "register these people" → `luma_guest_admin(op="add", guests=[{"email": …, "name": …}])`; "invite them" → `op="invite"` (dry-run first)
-- "email the attendees" → `luma_blasts(op="send", event_id=…, content_md="…")` (dry-run first)
+- "email the attendees" → `luma_act(op="send_blast", event_id=…, content_md="…")` (dry-run first); `luma_blasts` reads, changes or cancels the blasts
 - "our audience" → `luma_contacts(op="list", sort_column="event_checked_in_count", sort_direction="desc")`; segment with tags (`op="tag"`)
 - "a discount code" → `luma_tickets(op="create_coupon", event_id=…, code="EARLY", discount={"discount_type": "percent", "percent_off": 20})`
 
 ## note — what reaches people outside your organization
 
-nine gestures are **dry-run by default** and need `dry_run=false` to happen: `luma_guest_admin(op="invite")` and `op="set_status"`, `luma_blasts(op="send")`, `luma_event_admin(op="cancel")` and `op="add_host"`, `luma_calendar(op="add_admins")`, `luma_webhooks(op="create")`, `luma_memberships(op="set_status")` and `op="add"`.
+nine gestures are **dry-run by default** and need `dry_run=false` to happen: `luma_guest_admin(op="invite")` and `op="set_status"`, `luma_act(op="send_blast")`, `luma_event_admin(op="cancel")` and `op="add_host"`, `luma_calendar(op="add_admins")`, `luma_webhooks(op="create")`, `luma_memberships(op="set_status")` and `op="add"`.
 - ⚠️ **a calendar admin manages every event, guest list and setting** of the calendar
 - ⚠️ **a webhook sends the calendar's notifications to a URL**, guest names, emails and registrations included; its signing secret is **never** returned by oto — read it in Luma's dashboard
 - ⚠️ **cancelling an event is irreversible**: every guest is notified, the event is **deleted**, and if guests paid you must say `should_refund` explicitly

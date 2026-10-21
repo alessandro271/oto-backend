@@ -281,8 +281,7 @@ def test_laxe_account_survit_sur_les_six_canaux():
     for tool in ("whatsapp", "telegram", "instagram", "linkedin_unipile",
                  # les outils qui agissent : envoyer sous le compte accordé, comme lire
                  "whatsapp_act", "telegram_act", "instagram_act",
-                 "linkedin_unipile_act", "linkedin_unipile_invite",
-                 "linkedin_unipile_publish"):
+                 "linkedin_unipile_act"):
         assert call_axes.accepts_account_axis(tool), tool
         assert call_axes._has_account_axis(tool), tool
 

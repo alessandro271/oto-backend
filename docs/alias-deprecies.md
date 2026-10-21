@@ -194,8 +194,11 @@ données qui gardent un nom se migrent par `scripts/tableaux_par_numero.py`.
 
 ### Des ops d'envoi sorties des lecteurs de messagerie (oto-backend#1189, 12/10/2026)
 
+⚠️ **Remplacé le 21/10/2026** : toutes ces ops et ces outils sont retirés sans attendre le
+10/12/2026 (§Messageries et §Envois ci-dessous). Ce qui suit est l'histoire.
+
 **Sa propre date : servies jusqu'au 10/12/2026 inclus, retirées au premier tag posé à
-partir du 11/12/2026** (`deprecations.RETRAIT_OPS_ENVOI`, décision d'Alexis du
+partir du 11/12/2026** (ancienne `deprecations.RETRAIT_OPS_ENVOI`, décision d'Alexis du
 12/10/2026 : deux mois de transition au lieu d'un retrait sec). Ce n'est pas un
 renommage : un client MCP autorise des outils, pas des opérations, donc ce qui agit chez
 un tiers sort des lecteurs vers un outil d'envoi (`docs/unipile.md` §Lecture et envoi
@@ -205,15 +208,14 @@ séparés).
 | --- | --- | --- | --- |
 | ~~Op d'outil MCP~~ | ~~`whatsapp_chat(op=send)`, `telegram_chat(op=send)`, `instagram_chat(op=send)`~~ | retirés le 21/10/2026, sans attendre : §Messageries ci-dessous | — |
 | ~~Op d'outil MCP~~ | ~~`linkedin_unipile_chat(op=send/update/react)`~~ | retiré le 21/10/2026 : §Messageries ci-dessous | — |
-| Op d'outil MCP | `linkedin_unipile_network(op=invite/handle/cancel)` | `linkedin_unipile_invite(op=…)` | l'ancienne op est servie PAR la fonction du nouvel outil (mêmes refus) ; la réponse porte `deprecation_warning` (outil à appeler + date) ; la description du lecteur commence par « ⚠️ op=invite/handle/cancel est déprécié, utiliser `linkedin_unipile_invite` ; retrait le 10/12/2026. » |
-| Op d'outil MCP | `linkedin_unipile_post(op=create/comment/react)` | `linkedin_unipile_publish(op=…)` | idem |
+| ~~Op d'outil MCP~~ | ~~`linkedin_unipile_network(op=invite/handle/cancel)`~~ | ~~`linkedin_unipile_invite(op=…)`~~ — retirés le 21/10/2026 : §Envois ci-dessous | — |
+| ~~Op d'outil MCP~~ | ~~`linkedin_unipile_post(op=create/comment/react)`~~ | ~~`linkedin_unipile_publish(op=…)`~~ — retirés le 21/10/2026 : §Envois ci-dessous | — |
 
 ⚠️ **Pendant la transition, le lecteur reste déclaré `ENVOI`, pas `LECTURE`** : il
 envoie encore, et un client qui le croirait en lecture seule enverrait sans demander. Au
 retrait, les ops quittent son schéma, il repasse `LECTURE`, et un appel qui les envoie
-encore est refusé en nommant l'outil d'envoi (`op_moved`). La garde datée
-`tests/test_unipile_transition_envoi_1189.py` rougit à partir du 11/12/2026 tant qu'une
-de ces ops est servie.
+encore est refusé en nommant l'outil d'envoi. La transition a pris fin le 21/10/2026 :
+le refus est `outils_retires.OPS_DEPLACEES`, et sa garde datée a disparu avec elle.
 
 ### Des ops d'envoi sorties de `chat_message` et `teams_message` (oto-backend#1231, 13/10/2026)
 
@@ -221,8 +223,8 @@ de ces ops est servie.
 10/12/2026 (§Messageries ci-dessous). Ce qui suit est l'histoire.
 
 **La même date que #1189 : servies jusqu'au 10/12/2026 inclus, retirées au premier tag
-posé à partir du 11/12/2026** (`deprecations.RETRAIT_OPS_ENVOI`, décision d'Alexis du
-13/10/2026 : même découpage, même transition). Même raison : un client MCP autorise des
+posé à partir du 11/12/2026** (ancienne `deprecations.RETRAIT_OPS_ENVOI`, décision
+d'Alexis du 13/10/2026 : même découpage, même transition). Même raison : un client MCP autorise des
 outils, pas des opérations — « toujours autoriser » la lecture d'un espace Google Chat ou
 d'un canal Teams autorisait aussi d'y poster en ton nom.
 
@@ -271,23 +273,61 @@ même convention que Gmail et Outlook. Un agent a envoyé un WhatsApp sans valid
 `whatsapp_chat`, le lecteur, était en « toujours autoriser » dans un projet et servait
 encore l'ancienne `op="send"` de la transition #1189. Tant qu'un lecteur peut envoyer,
 autoriser la lecture autorise l'envoi : la transition jusqu'au 10/12/2026 est abandonnée
-pour TOUTES les messageries (elle ne vaut plus que pour `linkedin_unipile_network` et
-`linkedin_unipile_post`, hors messagerie). Table du lot : `RENOMMAGES_MESSAGERIES` →
+pour TOUTES les messageries (puis, le même jour, pour la publication et le réseau
+LinkedIn : §Envois ci-dessous). Table du lot : `RENOMMAGES_MESSAGERIES` →
 refus nommé, annonce aux agents jusqu'au 21/12/2026, et la révision
-`20261021_1219_outils_act_msg` des listes d'outils enregistrées. Leur sens : autoriser reste étroit, masquer reste large (décision d'Alexis du 21/10/2026) : une liste qui autorisait un ancien lecteur ne reçoit que le nouveau lecteur, jamais `<ns>_act` — même si l'ancien lecteur envoyait encore en transition ; seul un ancien outil d'envoi dédié donne `<ns>_act` ; une liste qui masquait masque tout ce que l'ancien outil faisait.
+`20261021_1219_outils_act_msg` des listes d'outils enregistrées. Leur sens : autoriser reste étroit, masquer reste large (décision d'Alexis du 21/10/2026) : une liste qui autorisait un ancien lecteur ne reçoit que le nouveau lecteur, jamais `<ns>_act` — même si l'ancien lecteur envoyait encore en transition ; un ancien outil d'envoi dédié ne donne `<ns>_act` que si celui-ci ne fait rien de plus que lui — sinon RIEN : `linkedin_unipile_send`, `_publish` et `_invite` ne donnent pas `linkedin_unipile_act`, qui publie, invite et envoie ; on l'ajoute explicitement, le refus de l'ancien nom le dit ; une liste qui masquait masque tout ce que l'ancien outil faisait.
 
 | Ancien appel (refusé depuis le 21/10/2026) | Nouvel appel |
 | --- | --- |
 | `whatsapp_chat(op=list/read)` (idem `telegram_chat`, `instagram_chat`) | `whatsapp(op=…)`, mêmes arguments — fils 1-à-1 ET de groupe |
 | `whatsapp_chat(op=send)`, `whatsapp_send` (idem `telegram_*`, `instagram_*`) | `whatsapp_act(op="send")`, mêmes arguments |
 | `linkedin_unipile_chat(op=list/read/attendees/contacts)` | `linkedin_unipile(op=…)` |
-| `linkedin_unipile_chat(op=send/update/react)`, `linkedin_unipile_send(op=…)` | `linkedin_unipile_act(op=…)` |
+| `linkedin_unipile_chat(op=send/update)`, `linkedin_unipile_send(op=…)` | `linkedin_unipile_act(op=…)` |
+| `linkedin_unipile_chat(op=react)`, `linkedin_unipile_send(op=react)` | `linkedin_unipile_act(op="react_message")` |
 | `teams_spaces(op=teams/channels/chats)` | `teams(op=…)` |
 | `teams_message(op=list/replies)` | `teams(op=…)` |
 | `teams_message(op=post/reply)`, `teams_send(op=…)` | `teams_act(op=…)` |
 | `chat_spaces` | `chat(op="spaces")` |
 | `chat_message(op=list)` | `chat(op="list")` |
 | `chat_message(op=send)`, `chat_send` | `chat_act(op="send")`, mêmes arguments |
+
+### Envois : ce qui atteint un tiers passe à `<ns>_act` (21/10/2026, retrait IMMÉDIAT)
+
+**Même exception, même jour, même décision**, pour les lecteurs qui envoyaient encore à
+un tiers hors messageries. Deux formes, deux tables de `outils_retires` :
+
+- l'outil d'envoi DÉDIÉ est retiré dans `<ns>_act` et refuse en nommant l'appel à faire
+  (`RENOMMAGES_ENVOIS`) ;
+- le lecteur MIXTE reste servi sous son nom et perd ses ops d'envoi : l'ancienne op
+  refuse, en nommant le nouvel appel (`OPS_DEPLACEES`, lu par `error_taxonomy.classify`).
+
+Révision des listes d'outils enregistrées : `20261021_1352_outils_act_envois`, même sens
+— une liste qui autorise un lecteur mixte n'est pas touchée (il ne fait plus que lire),
+un outil d'envoi dédié autorisé devient `<ns>_act` seulement si celui-ci ne fait rien de
+plus que lui (`lemlist_inbox_send` → `lemlist_act`), sinon RIEN (`linkedin_unipile_publish`,
+`linkedin_unipile_invite` : `linkedin_unipile_act` envoie aussi des messages — le refus de
+l'ancien nom dit de l'ajouter explicitement) ; `linkedin_unipile_act` déjà autorisé par le
+lot des messageries joué seul se perd de même ; une liste qui masque masque aussi
+`<ns>_act`.
+
+| Ancien appel (refusé depuis le 21/10/2026) | Nouvel appel |
+| --- | --- |
+| `linkedin_unipile_publish(op=create/comment/react)`, `linkedin_unipile_post(op=…)` | `linkedin_unipile_act(op="publish_post"/"comment_post"/"react_post")` |
+| `linkedin_unipile_invite(op=invite/cancel)`, `linkedin_unipile_network(op=…)` | `linkedin_unipile_act(op="invite"/"cancel_invitation")` |
+| `…(op=handle, action=accept/decline)` | `linkedin_unipile_act(op="accept_invitation"/"decline_invitation")` |
+| `linkedin_unipile_profile(op=endorse/action)` | `linkedin_unipile_act(op="endorse"/"update_member")` |
+| `lemlist_inbox_send(op=email/linkedin/whatsapp)` | `lemlist_act(op="send_email"/"send_linkedin"/"send_whatsapp")` |
+| `apollo_email(op=send)` | `apollo_act(op="send_email")` |
+| `lightfield_emails(op=send)` | `lightfield_act(op="send_email")` |
+| `luma_blasts(op=send)` | `luma_act(op="send_blast")` |
+| `pennylane_invoice(op=send)` | `pennylane_act(op="send_invoice")` |
+| `signwell_document(op=send/remind)` | `signwell_act(op="send_document"/"remind_document")` |
+| `productlane_threads(op=send)` | `productlane_act(op="send_message")` |
+| `productlane_changelogs(op=broadcast)` | `productlane_act(op="broadcast_changelog")` |
+| `ahrefs_social(op=publish)` | `ahrefs_act(op="publish_post")` |
+
+`lemlist_inbox` n'envoyait rien (brouillons et labels seulement) : il ne change pas.
 
 ### Pourquoi les clés de capacité n'ont pas d'alias
 

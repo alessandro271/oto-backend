@@ -13,7 +13,7 @@ from ._model import _c
 # **BYOK** (byo user/org): it is the customer's data, there cannot be
 # a shared oto key. 29 granular scopes on the vendor side, chosen at key CREATION
 # — the connection probe reads them and refuses a key without CRM read.
-# ⚠️ Writes AND sends: `lightfield_emails(op="send")` goes out from a mailbox that the
+# ⚠️ Writes AND sends: `lightfield_act(op="send_email")` goes out from a mailbox that the
 # key owner has connected themselves, and is dry-run BY DEFAULT.
 CONNECTOR = _c(
     "lightfield", ["lightfield"], auth_modes={"byo_user", "byo_org"}, keyed=True,

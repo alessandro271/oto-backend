@@ -14,8 +14,10 @@ la table de ce lot, sans la recopier.
   runner pas encore terminé) reçoit `outils_retires.remplacants_autorises` : un ancien
   outil MIXTE ne donne que le nouveau lecteur — `whatsapp_chat` devient `whatsapp`, JAMAIS
   `whatsapp_act`, bien que l'ancien lecteur envoyât encore en transition (c'est la faille
-  corrigée) ; seul un ancien outil d'envoi dédié (`whatsapp_send`, `teams_send`…) donne
-  `<ns>_act`.
+  corrigée) ; un ancien outil d'envoi dédié (`whatsapp_send`, `teams_send`…) donne
+  `<ns>_act` seulement si celui-ci ne fait rien de plus que lui — depuis le lot des
+  envois, `linkedin_unipile_send` ne donne rien (`linkedin_unipile_act` publie et
+  invite aussi).
 - Une liste qui MASQUE (`user_disabled_tools`, `org_disabled_tools`,
   `group_disabled_tools`) reçoit `outils_retires.remplacants` : tout ce que l'ancien outil
   faisait reste caché — `whatsapp_chat` masqué masque `whatsapp` ET `whatsapp_act`.
@@ -79,7 +81,9 @@ _LIGNES_QUI_AUTORISENT = frozenset({"user_enabled_tools"})
 
 def reecrire_les_listes(conn, autorise: dict, masque: dict, etiquette: str) -> None:
     """Réécrit les listes enregistrées : `autorise` pour celles qui autorisent, `masque`
-    pour celles qui masquent (mêmes anciens noms dans les deux)."""
+    pour celles qui masquent (mêmes anciens noms dans les deux). Un nom qui figure parmi
+    ses propres remplaçants est un outil qui RESTE servi (lot des envois : il perd ses
+    ops d'envoi) — il garde sa place, on n'ajoute que les autres."""
     m = _revision_0062()
     anciens = sorted(autorise)
     for nom_table, cle, colonne, genre in m._LISTES:
@@ -90,6 +94,8 @@ def reecrire_les_listes(conn, autorise: dict, masque: dict, etiquette: str) -> N
             {"anciens": anciens}).all()
         for pk, outils in lignes:
             nouveaux = m.reecrire(list(outils), autorise)
+            if nouveaux == list(outils):
+                continue
             valeur = nouveaux if genre == "text[]" else json.dumps(nouveaux)
             conn.exec_driver_sql(
                 f"UPDATE {nom_table} SET {colonne} = %(v)s::{genre} WHERE {cle} = %(pk)s",
@@ -102,6 +108,8 @@ def reecrire_les_listes(conn, autorise: dict, masque: dict, etiquette: str) -> N
         "AND payload->'tools' ?| %(anciens)s::text[]",
         {"vivants": list(m._TRAVAUX_VIVANTS), "anciens": anciens}).all()
     for pk, outils in travaux:
+        if m.reecrire(list(outils), autorise) == list(outils):
+            continue
         conn.exec_driver_sql(
             "UPDATE runner_jobs SET payload = jsonb_set(payload, '{tools}', %(v)s::jsonb) "
             "WHERE id = %(pk)s",
@@ -114,13 +122,16 @@ def reecrire_les_listes(conn, autorise: dict, masque: dict, etiquette: str) -> N
         n = 0
         for ancien in anciens:
             for nouveau in sens[ancien]:
+                if nouveau == ancien:
+                    continue
                 n += conn.exec_driver_sql(
                     f"INSERT INTO {nom_table} (tool_name, {autres}) "
                     f"SELECT %(nouveau)s, {autres} FROM {nom_table} "
                     f"WHERE tool_name = %(ancien)s ON CONFLICT DO NOTHING",
                     {"ancien": ancien, "nouveau": nouveau}).rowcount
-            conn.exec_driver_sql(f"DELETE FROM {nom_table} WHERE tool_name = %(ancien)s",
-                                 {"ancien": ancien})
+            if ancien not in sens[ancien]:
+                conn.exec_driver_sql(f"DELETE FROM {nom_table} WHERE tool_name = %(ancien)s",
+                                     {"ancien": ancien})
         logger.info("%s : %s — %d ligne(s) posée(s) sous les nouveaux noms", etiquette,
                     nom_table, n)
 

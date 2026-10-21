@@ -25,9 +25,8 @@ _ECRIT = re.compile(r"(^|_)(send|post|push|compose|create|update|delete|write|se
 
 
 #: Noms où le mot d'écriture est un NOM, pas un verbe : `linkedin_unipile_post` désigne
-#: LA publication (#1189 : publier vit dans `linkedin_unipile_publish` ; l'outil repasse
-#: `LECTURE` au retrait de ses ops d'envoi dépréciées, le 10/12/2026 — d'ici là il est
-#: déclaré `ENVOI` et ses ops restent jugées une à une ci-dessous). Liste fermée.
+#: LA publication (publier vit dans `linkedin_unipile_act` depuis le 21/10/2026 ; l'outil
+#: est `LECTURE`, et ses ops restent jugées une à une ci-dessous). Liste fermée.
 _NOM_PAS_VERBE = frozenset({"linkedin_unipile_post"})
 
 
@@ -72,7 +71,10 @@ async def test_les_lecteurs_de_messagerie_sont_declares_en_lecture():
     """Depuis le 21/10/2026, un lecteur de messagerie n'envoie plus rien (paire `<ns>` /
     `<ns>_act`) : il se déclare `LECTURE`, et une recette « pull » peut le lire."""
     servis = {t.name: t for t in await _outils()}
-    for nom in ("whatsapp", "telegram", "instagram", "linkedin_unipile", "teams", "chat"):
+    for nom in ("whatsapp", "telegram", "instagram", "linkedin_unipile", "teams", "chat",
+                # et, depuis le lot des envois, les lecteurs LinkedIn qui envoyaient
+                "linkedin_unipile_post", "linkedin_unipile_network",
+                "linkedin_unipile_profile"):
         assert en_lecture(servis[nom]), nom
 
 
@@ -83,7 +85,8 @@ async def test_aucun_outil_de_plateforme_ni_ecrivain_connu_n_est_declare():
                 "outlook_act", "http_post",
                 "lemlist_push_rows", "hubspot_push_rows", "routine_fire", "oto_call",
                 "data_write", "whatsapp_act", "telegram_act", "instagram_act",
-                "linkedin_unipile_act", "linkedin_unipile_invite",
-                "linkedin_unipile_publish", "chat_act", "teams_act"):
+                "linkedin_unipile_act", "chat_act", "teams_act", "apollo_act",
+                "lightfield_act", "luma_act", "pennylane_act", "signwell_act",
+                "productlane_act", "ahrefs_act", "lemlist_act"):
         if nom in servis:
             assert not en_lecture(servis[nom]), nom

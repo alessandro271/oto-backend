@@ -14,7 +14,7 @@ Every tool takes it, and ignores it when absent.
 
 **What reaches people outside the organization, or hands them access or
 money, is dry-run by default**: inviting people (`luma_guest_admin
-op="invite"`), emailing guests (`luma_blasts op="send"`), cancelling an event
+op="invite"`), emailing guests (`luma_act op="send_blast"`), cancelling an event
 (`luma_event_admin op="cancel"`), making someone a calendar admin
 (`luma_calendar op="add_admins"`), sending the calendar's notifications to a
 URL (`luma_webhooks op="create"`), changing a member's status, which

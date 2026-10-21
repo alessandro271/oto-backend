@@ -50,6 +50,10 @@ def test_le_registre_reel_porte_les_annotations_attendues():
     ("outlook_act", "move", None),
     ("whatsapp", "list", "research"),           # LECTURE : un lecteur de messagerie
     ("whatsapp_act", "send", "action"),         # ACTE : l'envoi
+    ("apollo_act", "send_email", "action"),     # l'op porte son objet : le verbe compte
+    ("linkedin_unipile_act", "publish_post", "action"),
+    ("linkedin_unipile_act", "comment_post", "action"),
+    ("linkedin_unipile_act", "cancel_invitation", None),
     ("data_write", None, "record"),             # écriture du tableau, nommée
     ("data_rows", None, None),                  # la tenue du tableau de l'agent
     ("data_claim_next", None, None),

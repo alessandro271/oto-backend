@@ -2,7 +2,7 @@
 
 Ce que ce fichier verrouille — les tripwires génériques couvrent déjà registre,
 éditeur, logo, dérivation des modules, prose servie et jointure au client :
-- la SURFACE (10 tools sur deux modules) et ce qui est déclaré LECTURE : seuls
+- la SURFACE (11 tools sur deux modules, dont `luma_act`, qui envoie un blast) et ce qui est déclaré LECTURE : seuls
   `luma_events` et `luma_guests`, dont TOUTES les ops lisent ;
 - la clé passée telle quelle, et `calendar_id` (clé d'ORGANISATION) transmis
   au client ;
@@ -77,7 +77,7 @@ def _upstream(status, body=None):
 def test_surface():
     assert set(_tools()) == {
         "luma_events", "luma_event_admin", "luma_guests", "luma_guest_admin",
-        "luma_blasts", "luma_tickets", "luma_contacts", "luma_calendar",
+        "luma_blasts", "luma_act", "luma_tickets", "luma_contacts", "luma_calendar",
         "luma_memberships", "luma_webhooks"}
 
 
@@ -219,11 +219,11 @@ def test_invitation_en_dry_run_par_defaut(client):
 
 
 def test_blast_en_dry_run_par_defaut(client):
-    out = _tool("luma_blasts")(op="send", event_id="evt-1", content_md="Hi")
+    out = _tool("luma_act")(op="send_blast", event_id="evt-1", content_md="Hi")
     assert out["dry_run"] is True
     assert out["recipient_groups"] == [{"status": "approved"}]
     client.create_blast.assert_not_called()
-    _tool("luma_blasts")(op="send", event_id="evt-1", content_md="Hi", dry_run=False)
+    _tool("luma_act")(op="send_blast", event_id="evt-1", content_md="Hi", dry_run=False)
     client.create_blast.assert_called_once()
 
 

@@ -118,9 +118,11 @@ minutes later. the immediate response only carries a `request_id`.
 
 ## usage — one-off emails (outside a sequence)
 
-- `apollo_email` (`op=draft|send|status|search|content|stats`) — `draft` prepares,
-  `send` sends (always two distinct calls). `search`/`content` return YOUR sent
-  emails (body included), not a shared database
+- `apollo_email` (`op=draft|status|search|content|stats`) — `draft` prepares,
+  nothing goes out. `search`/`content` return YOUR sent emails (body included), not a
+  shared database
+- `apollo_act` (`op=send_email`, the draft's `message_id`) — SENDS it: its own tool,
+  the one your client asks you to confirm
 
 ## usage — conversations (recorded calls/video meetings)
 

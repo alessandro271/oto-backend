@@ -98,8 +98,8 @@ défaut** : ils restent appelables, mais il faut les activer
 - `lemlist_campaign_start` — déroule la séquence pour tous les leads lancés.
 - `lemlist_launch_lead` — sort UN lead de la revue manuelle. C'est le geste d'envoi le
   plus courant.
-- `lemlist_inbox_send` — email / LinkedIn / WhatsApp **directs** : ni campagne, ni
-  séquence, ni revue devant eux. Le message part.
+- `lemlist_act` (`op=send_email|send_linkedin|send_whatsapp`) — email / LinkedIn /
+  WhatsApp **directs** : ni campagne, ni séquence, ni revue devant eux. Le message part.
 - `lemlist_campaign_auto_review` — n'envoie rien lui-même, mais fait partir tout lead
   **ajouté ensuite**. Avec lui, `lemlist_create_lead` devient un envoi.
 

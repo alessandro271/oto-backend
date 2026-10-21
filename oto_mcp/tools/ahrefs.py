@@ -31,7 +31,8 @@ delete_keyword_list_keywords, delete_brand_radar_prompts,
 update_brand_radar_report), but NO tool here reaches them — deleting
 a Rank Tracker project or republishing a Brand Radar report is a deliberate
 act, not a side effect of client coverage. Same for Social Media:
-`ahrefs_social(op="publish")` publishes, but `delete_social_post`/
+`ahrefs_act(op="publish_post")` publishes (its own tool, the one an MCP client asks to
+confirm — `ahrefs_social` only reads), but `delete_social_post`/
 `update_social_post` stay client-only.
 
 **Provenance of the ground truth (2026-08-20, no API key in hand):**
@@ -68,6 +69,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
 from ..connectors import verify as connector_verify
+from .lecture import ACTE
 
 # --- default select, only for the reports whose columns were
 # verified in the docs (docs.ahrefs.com, 2026-08-20) — elsewhere `select` stays
@@ -1014,40 +1016,29 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def ahrefs_social(
         op: Literal["channels", "channel_metrics", "authors", "activity_history",
-                     "posts", "post_metrics", "publish"] = "channels",
+                     "posts", "post_metrics"] = "channels",
         channel_id: Optional[str] = None,
         post_id: Optional[int] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         status: Optional[Literal["published", "scheduled", "draft", "failed", "deleted"]] = None,
         external_post_id: Optional[str] = None,
-        channel_ids: Optional[List[str]] = None,
-        text_content: Optional[str] = None,
-        timing: Optional[Literal["publish_now", "scheduled", "draft"]] = None,
-        scheduled_at: Optional[str] = None,
-        auto_comment: Optional[str] = None,
         extra: Optional[dict] = None,
     ) -> object:
-        """Ahrefs Social Media — connected channels, posts, engagement, and
-        publishing. Editing/deleting an existing post stays out of this tool
-        (client-only) — publishing a NEW one is the one write exposed here.
+        """Ahrefs Social Media — connected channels, posts, engagement. Publishing a
+        new post is `ahrefs_act(op="publish_post")`, another tool.
 
         Args:
             op: "channels" (default, connected channels) | "channel_metrics"
                 (follower history) | "authors" | "activity_history" (a post's
                 change log) | "posts" (list by status) | "post_metrics"
-                (engagement of one published post) | "publish" (send a new post).
+                (engagement of one published post).
             channel_id: required by "channel_metrics".
             post_id: required by "activity_history".
             date_from: required by "channel_metrics"/"post_metrics".
             date_to: optional end of range on the same two ops.
             status: required by "posts".
             external_post_id: required by "post_metrics" (with channel_id).
-            channel_ids: required by "publish" — destination channel ids.
-            text_content: required by "publish" — the message body.
-            timing: required by "publish" — 'publish_now'|'scheduled'|'draft'.
-            scheduled_at: required by "publish" when timing='scheduled' (ISO 8601).
-            auto_comment: "publish" — a follow-up comment posted after publishing.
             extra: op="posts" only — `channel_ids`, `author_ids`, `search_query`,
                 `order_by`, `order_direction`, `limit`, `offset`, merged last.
         """
@@ -1079,15 +1070,40 @@ def register(mcp: FastMCP) -> None:
             kwargs = {"date_to": date_to} if date_to is not None else {}
             return _run(lambda: client.social_post_metrics(
                 external_post_id, channel_id, date_from, **kwargs))
-        if op == "publish":
-            if not channel_ids or not text_content or not timing:
-                raise _bad("op='publish' requires `channel_ids`, `text_content`, `timing`")
-            if timing == "scheduled" and not scheduled_at:
-                raise _bad("timing='scheduled' requires `scheduled_at`")
-            body = {k: v for k, v in dict(scheduled_at=scheduled_at,
-                                           auto_comment=auto_comment).items() if v is not None}
-            return _run(lambda: client.create_social_post(channel_ids, text_content, timing, **body))
-        raise _bad("unknown op")
+        raise _bad("unknown op — publishing is ahrefs_act")
+
+    @mcp.tool(annotations=ACTE)
+    def ahrefs_act(
+        op: Literal["publish_post"],
+        channel_ids: List[str],
+        text_content: str,
+        timing: Literal["publish_now", "scheduled", "draft"],
+        scheduled_at: Optional[str] = None,
+        auto_comment: Optional[str] = None,
+    ) -> dict:
+        """⚠️ ACTS on the connected social channels, publicly: `publish_post` publishes
+        a NEW post through Ahrefs Social Media (now, scheduled, or as a draft).
+        Editing/deleting an existing post stays out of oto (client-only). Reading
+        channels, posts and engagement is `ahrefs_social`.
+
+        Args:
+            op: "publish_post".
+            channel_ids: destination channel ids (`ahrefs_social(op="channels")`).
+            text_content: the message body.
+            timing: 'publish_now' | 'scheduled' | 'draft'.
+            scheduled_at: required when timing='scheduled' (ISO 8601).
+            auto_comment: a follow-up comment posted after publishing.
+        """
+        if op != "publish_post":
+            raise _bad("unknown op — expected: publish_post")
+        if not channel_ids or not text_content or not timing:
+            raise _bad("op='publish_post' requires `channel_ids`, `text_content`, `timing`")
+        if timing == "scheduled" and not scheduled_at:
+            raise _bad("timing='scheduled' requires `scheduled_at`")
+        body = {k: v for k, v in dict(scheduled_at=scheduled_at,
+                                       auto_comment=auto_comment).items() if v is not None}
+        client = _client()
+        return _run(lambda: client.create_social_post(channel_ids, text_content, timing, **body))
 
     # ================================================================
     # Public — no-auth crawler IPs + free-tier Domain Rating.
