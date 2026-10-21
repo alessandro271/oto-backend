@@ -119,3 +119,19 @@ def test_capability_registered():
     from oto_mcp.capabilities.registry import CAPABILITIES
     cap = next((c for c in CAPABILITIES if c.key == "me.project_files"), None)
     assert cap is not None and cap.mcp == "oto_project_files" and cap.rest is None
+
+
+def test_la_description_nomme_les_vrais_chemins_d_ajout():
+    """oto-backend#1301 : le texte servi disait l'ajout réservé au tableau de bord, alors
+    que deux outils déposent un fichier de projet. Il nomme ces outils, et chacun accepte
+    bien `target=project_file` — le texte ne promet que ce qui est servi."""
+    from typing import get_args
+
+    from oto_mcp.capabilities import uploads as U
+    from oto_mcp.capabilities.registry import caps_with_mcp
+    caps = {c.mcp: c for c in caps_with_mcp()}
+    texte = caps["oto_project_files"].description
+    assert "dashboard-only" not in texte
+    for outil in ("oto_import", "oto_upload_url"):
+        assert f"`{outil} target=project_file`" in texte
+        assert "project_file" in get_args(caps[outil].Input.model_fields["target"].annotation)
