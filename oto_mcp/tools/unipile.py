@@ -992,15 +992,18 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
                                                  attendee_id=recipient_id)
 
     @en_transition(mcp, depreciees, description=(
-        f"{channel} messaging (DM) via Unipile.\n\n"
+        f"{channel} messaging via Unipile: 1-to-1 AND group conversations.\n\n"
         "`op`:\n"
         "- **\"list\"** (default): the conversations, newest first, in `items` "
         f"(`limit` 1-{unipile_messagerie.LISTE_MAX}). A `cursor` is returned only when "
         "Unipile paginates the channel (WhatsApp does not: a full page carries "
-        "`truncated`). Each 1-to-1 thread is enriched with the counterpart's name "
-        "(`attendee_name`); `with_names=False` turns this enrichment off (one API call "
-        "fewer).\n"
-        "- **\"read\"**: the messages of a thread (`chat_id` from op=\"list\"). A message "
+        "`truncated`). Group threads are listed alongside the 1-to-1 ones (`is_group`, "
+        "named by the group's `name`) and read the same way. Each 1-to-1 thread is "
+        "enriched with the "
+        "counterpart's name (`attendee_name`); `with_names=False` turns this enrichment "
+        "off (one API call fewer).\n"
+        "- **\"read\"**: the messages of a thread, 1-to-1 or group (`chat_id` from "
+        "op=\"list\"). A message "
         "Unipile passed on without text nor attachment carries `content_unavailable`. "
         "Each attachment carries a `source`: pass it to `oto_import` (target="
         "\"project_file\") to file it, or to any tool taking a `source` — the server "
