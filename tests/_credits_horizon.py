@@ -1,6 +1,6 @@
 """Lire les mouvements du budget d'unités comme les lit le curseur : sous l'horizon.
 
-`db_credits.mouvements_apres` ne rend un mouvement qu'une fois validé SOUS
+`db_credits.page_de_mouvements` ne rend un mouvement qu'une fois validé SOUS
 `pg_snapshot_xmin(pg_current_snapshot())`, l'horizon du cluster entier : toute
 transaction en cours qui porte un xid le retient, y compris celle d'un autre worker
 xdist sur une autre base du même PostgreSQL. Lu juste après l'écriture, un mouvement
@@ -27,7 +27,8 @@ def mouvements_sous_l_horizon(garder, attendus: int) -> list[dict]:
     de connexion d'un banc, typiquement), et le dire vaut mieux qu'une liste vide."""
     fin = time.monotonic() + _DELAI_S
     while True:
-        lus = [m for m in db_credits.mouvements_apres(0, 0, 1000) if garder(m)]
+        lus = [m for m in db_credits.page_de_mouvements(0, 0, 1000)["mouvements"]
+               if garder(m)]
         if len(lus) >= attendus:
             return lus
         if time.monotonic() > fin:

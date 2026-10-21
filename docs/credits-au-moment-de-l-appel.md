@@ -79,7 +79,7 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
 | `PUT /api/service/orgs/{id}/credits/payer-mode` | qui paie dans l'org : `org` (défaut) ou `person` |
 | `POST /api/service/credits/movements` | verse un montant signé à un payeur, une fois par `(payeur, idempotency_key)` ; même clé, autre contenu : 409 `idempotency_conflict` |
 | `GET /api/service/credits/balance?payer=` | `balance` (versé − réglé), `holds_open` (réservé, pas encore réglé), `available` |
-| `GET /api/service/credits/movements?after=&limit=` | les mouvements de tous les payeurs, 500 par défaut, 1 000 au plus |
+| `GET /api/service/credits/movements?after=&limit=` | les mouvements de tous les payeurs, 500 par défaut, 1 000 au plus ; `as_of` sur chaque page |
 
 - **Une ligne de barème** : `(connector, function, unit)` → `budget` unités par paquet de
   `per_n` unités de la fonction. Réservation et règlement s'arrondissent au paquet
@@ -110,6 +110,45 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   d'un curseur servi. Relu jusqu'à `next_cursor == after`, il n'en manque aucun.
   L'horizon est celui de TOUT le serveur PostgreSQL : une transaction longue, dans
   n'importe quelle base de l'instance, retarde le curseur — un retard, jamais une perte.
+- **`as_of`** (#1290), sur chaque page, vide comprise : l'instant sous lequel aucun
+  mouvement ne peut plus apparaître. Tout mouvement qui n'est pas DÉJÀ sous l'horizon
+  du curseur sera daté (`created_at`) d'au moins `as_of` ; une période qui s'achève à
+  `as_of` ou avant est donc complète une fois le flux lu jusqu'au bout (une page plus
+  courte que `limit`). Une page pleine laisse derrière elle des mouvements déjà
+  visibles, plus anciens que `as_of` : il faut lire la suite.
+  - **Le calcul** (`db/credits.page_de_mouvements`) : le plus ancien de trois instants.
+    (1) L'instant de lecture, moins une seconde. (2) Le début de toute transaction
+    ouverte de la base courante dont le rôle peut insérer dans `credit_movements`, lu
+    dans `pg_stat_activity` AVANT l'instantané de la page. `created_at` vaut `NOW()`,
+    le DÉBUT de la transaction qui écrit : une transaction qui n'a encore que lu (sans
+    xid, donc invisible au curseur) peut valider plus tard un mouvement daté de son
+    début — elle compte, xid ou non. (3) Le plus ancien mouvement déjà validé que
+    l'horizon retient encore (`xid >= pg_snapshot_xmin`), lu DANS l'instantané de la
+    page.
+  - **Pourquoi cet ordre** : lue après l'instantané, `pg_stat_activity` raterait une
+    transaction validée entre les deux, invisible à la page et retenue par l'horizon.
+    Lue avant, toute transaction en cours à l'instantané y figure déjà, ou a commencé
+    après la lecture. La seconde de marge couvre la fenêtre où une transaction qui
+    démarre a déjà pris son horodatage sans l'avoir publié.
+  - **Les autres bases** ne peuvent pas écrire ici : elles ne retiennent `as_of` qu'à
+    travers le curseur, au plus ancien mouvement de cette base qu'il retient. Une
+    transaction qui ne fait que lire, ailleurs, ne retient rien (sans xid, elle ne
+    retient même pas l'horizon).
+  - **Ce que cela coûte** : une transaction ouverte de la base courante, même de
+    lecture, même inactive (`idle in transaction`), retient `as_of` à son début tant
+    qu'elle court — celles du pool sont coupées à 60 s
+    (`idle_in_transaction_session_timeout`), une session manuelle n'a pas de borne. Le
+    rôle d'une session qui ne peut pas insérer dans la table ne retient rien. Deux
+    requêtes par page au lieu d'une ; `pg_stat_activity` se lit sans verrou.
+  - **Monotone**, quel que soit le curseur et l'appelant : chaque terme n'avance
+    jamais d'une lecture à l'autre (une transaction absente de la lecture précédente a
+    commencé après elle, un mouvement retenu maintenant l'était déjà ou vient d'une
+    transaction qui courait alors).
+  - **`null`** quand une transaction de la base a un début illisible : une session
+    d'un autre rôle quand le rôle du cœur n'a pas `pg_read_all_stats` (elle n'expose
+    alors ni son état ni son début), ou une transaction préparée. Le cœur ne promet
+    rien plutôt qu'un horizon faux, et le journalise. **Prérequis de production** : le
+    rôle applicatif porte `pg_read_all_stats` (ou `pg_monitor`).
 - Le curseur porte les règlements (échéances comprises), les versements et les transferts.
   Les réservations en cours se lisent dans le solde (`holds_open`).
 - **Rapprocher un règlement de ce qui a consommé** : le `call_uid` d'un mouvement `settle`
