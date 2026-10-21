@@ -10,8 +10,10 @@ can see.
 - `threecx_call` (list/export) — one page of the call log over a period,
   or the whole period as a CSV file (a day's "call traces"),
   optionally reduced to the recorded segments;
-- `threecx_recording` — the audio of a recording, rendered by
-  `file_content.render_for_agent` (signed URL to private storage).
+- `threecx_recording` — the audio of a recording, put in transit
+  (`transit.deposer`): a short `source` `{kind: "transit", ref}` that
+  `transcription_create` (any `file_source` consumer) reads server-side;
+  a signed URL only on request (`link=true`), to listen to it.
 
 `base_url` is a destination chosen by the user: every client construction goes
 through `egress.check_url` (tool AND probe).
@@ -26,7 +28,7 @@ from typing import Literal, Optional
 from fastmcp import FastMCP
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, egress, output_projection
+from .. import access, egress, output_projection, transit
 from ..csv_formules import cellule
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
@@ -240,17 +242,18 @@ def register(mcp: FastMCP) -> None:
                 **({"projection": notice} if notice else {})}
 
     @mcp.tool()
-    def threecx_recording(rec_id: int) -> dict:
-        """The audio of a call recording (WAV), as a short-lived signed URL.
+    def threecx_recording(rec_id: int, link: bool = False) -> dict:
+        """The audio of a call recording (WAV), kept one day for you. To transcribe
+        it, pass the returned `source` as is:
+        `transcription_create(source={"kind":"transit","ref":…})` — never a URL.
 
         Args:
             rec_id: the `SrcRecId` or `DstRecId` of a `threecx_call` row.
+            link: also return a short-lived signed URL, to listen to it.
         """
         audio = _run(lambda: _client().download_recording(rec_id))
-        sub = access.current_user_sub_or_raise()
         try:
-            return file_content.render_for_agent(
-                audio["content"], audio["filename"], audio["content_type"],
-                sub=sub, prefix="threecx-files")
-        except file_content.MediaUnavailable as e:
+            return transit.deposer("threecx-recordings", audio["content"],
+                                   audio["content_type"], audio["filename"], lien=link)
+        except transit.TransitError as e:
             raise _bad(str(e)) from None

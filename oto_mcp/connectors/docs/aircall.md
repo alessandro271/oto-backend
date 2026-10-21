@@ -10,14 +10,15 @@ an aircall admin creates a key in the Aircall Dashboard (Company Settings → AP
 
 - "yesterday's calls" → `aircall_calls(date_from="…", date_to="…", order="desc")`
 - "the calls with this customer" → `aircall_calls(op="search", phone_number="+33…")`; "the calls of a given agent" → `op="search", user_id=…`, the id coming from `aircall_users`
-- "the recording of this call" → `aircall_calls(op="get", call_id=…)`: `recording` (or `voicemail`) is an mp3 link
+- "the recording of this call" → `aircall_calls(op="recording", call_id=…)` (or `op="voicemail"`): the audio, kept one day, as a short `source` (`{"kind":"transit","ref":…}`)
+- "transcribe this call" → `transcription_create(source=<that source, as is>, _project=…)` — never the mp3 link of `op="get"`, which breaks when copied
 - "what did we talk about?" → `aircall_call_ai(call_id=…, op="summary")`, then `op="transcription"` for the word-for-word, `op="action_items"` for the follow-ups
 - "who is this number?" → `aircall_contacts(op="search", phone_number="+33…")`
 - the connector **never writes** to Aircall
 
 ## note — what can mislead
 
-- ⚠️ **recording and voicemail links expire**: 1 hour for `recording`/`voicemail`, 3 hours for their short versions (`short_urls=true`). Request them again right before use, never store them
+- ⚠️ **recording and voicemail links expire**: 1 hour for `recording`/`voicemail`, 3 hours for their short versions (`short_urls=true`). Request them again right before use, never store them; to hand the audio to another tool, use `op="recording"` / `op="voicemail"`
 - ⚠️ **only six months of call history**, and at most 10,000 calls or contacts per pagination: narrow with `date_from` to go further
 - `duration` includes ringing: the talk time is `ended_at - answered_at`. The API's dates are in UNIX seconds, UTC
 - contacts synced from a third-party integration (CRM…) are **not** served by the API, even if they show up in Aircall

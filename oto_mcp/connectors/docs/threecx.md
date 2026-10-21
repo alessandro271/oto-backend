@@ -10,5 +10,6 @@ fill in `base_url`, `auth_mode` and the matching pair in your oto connector keys
 
 - `threecx_call(date_from=…, date_to=…)` one page of the call log; `recorded_only=true` keeps the recorded segments; continue with `skip=next_skip` as long as `next_skip` is not null
 - `threecx_call(op="export", date_from=…, date_to=…)` the whole period as a csv file (`;` separator, durations in seconds): the call traces of a day or a week, instead of a daily export
-- `threecx_recording(rec_id=…)` the audio of a recording, using the `SrcRecId` or `DstRecId` of a call log row; returned as a short-lived signed link
+- `threecx_recording(rec_id=…)` the audio of a recording, using the `SrcRecId` or `DstRecId` of a call log row; kept one day and returned as a short `source` (`{"kind":"transit","ref":…}`)
+- to transcribe it: `transcription_create(source=<that source, as is>, _project=…)` — never a copied url; `link=true` adds a short-lived signed link, to listen to it
 - the connector **never writes** to 3cx

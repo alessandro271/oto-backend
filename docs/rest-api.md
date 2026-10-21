@@ -128,8 +128,8 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   `true|false` facultatifs), est écrit à la main (`api/transcription.py`, `NATURE`). Les
   deux dépôts rendent **`202 {job_id, status:"pending"}`** sans appeler Mistral : le
   worker s'en charge. `create` prend une RÉFÉRENCE `source` (`file_source` :
-  `{"kind":"project_file","file_id":N}`, le projet de l'URL par défaut ; `url`, `drive`,
-  `gmail`). La relecture rend `status` (`pending|running|done|failed`), `project_id`,
+  `{"kind":"project_file","file_id":N}`, le projet de l'URL par défaut ; `transit`, `url`,
+  `drive`, `gmail`). La relecture rend `status` (`pending|running|done|failed`), `project_id`,
   `filename`, et sur `done` la page (`page{id,project_id,title,url}`), `words`,
   `duration_s`, `speakers`, `turns` (le nombre) et **`transcript`**, les tours
   `[{speaker, start, end, text}]` en secondes — que la face MCP (`transcription_status`)

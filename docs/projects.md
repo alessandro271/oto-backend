@@ -218,6 +218,25 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > clé. `file_source` la résout avec le client du compte OPÉRÉ du canal et refuse une URL
 > hors de `https://<dsn>/v2/<ce compte>/…` (une clé partagée lirait sinon la pièce d'un
 > autre compte) ; redirection refusée, flux borné par `max_bytes`, budget de 90 s.
+> **Le transit — une référence courte au lieu d'une URL signée (21/10/2026).** Un agent qui
+> recopiait l'URL présignée d'un enregistrement d'appel (600 à 1 000 caractères, jeton de
+> session compris) dans `transcription_create(source={kind:"url"})` l'altérait parfois :
+> refus 403 ou 400 de l'hébergeur, sans rien qui dise pourquoi. Un outil qui sert un fichier
+> qu'un autre consommera le dépose désormais EN TRANSIT (`oto_mcp/transit.py`, seul
+> fabricant : `transit.deposer` → `media_store.upload_transit`, sous
+> `tmp/<préfixe>/<sub>/<empreinte>`, purgé en un jour) et rend une `source`
+> `{"kind":"transit","ref":"<préfixe>/<32 hex>"}` — `threecx_recording`, `aircall_calls`
+> `op="recording"|"voicemail"` (l'URL signée seulement sur demande, `link=true`, pour
+> écouter). `file_source` la relit dans le stockage (`transit.lire` →
+> `media_store.lire_objet`), donc tout consommateur d'une `source` en hérite. Garde :
+> **l'owner est l'appelant par construction** — la référence ne le porte pas, la clé se
+> recompose avec le `sub` de l'appel, celui du dépôt ; une référence d'un autre utilisateur
+> désigne une clé absente et reçoit le refus d'une référence expirée (les distinguer dirait
+> qu'un fichier existe) ; forme stricte (`<préfixe>/<32 hex>`, préfixe de la liste fermée
+> `media_store.PREFIXES_TRANSIT`) — ni `..`, ni `/` de tête, ni préfixe arbitraire. Et une URL
+> refusée en 400/403 le dit : « link altered or expired — re-read / re-fetch ». Les noms de
+> fichier ne sont plus `quote`-és dans une clé (boto ré-encodait le `%` : `%255B`) mais
+> réduits à des caractères sûrs (`media_store.nom_sur`).
 
 > **Livraison d'un projet COMPLET vers l'org d'un client (otomata-private#52).**
 > `oto_resource` : share/unshare acceptent un principal **org** (`org_id`, sans exigence

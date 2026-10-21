@@ -296,7 +296,8 @@ class ImportInput(BaseModel):
         "file_id}` (your Google account; a native Sheet exports its first tab as CSV), "
         "`{kind:\"project_file\", project_id, file_id}`, `{kind:\"gmail\", "
         "message_id, filename}`, a messaging attachment's `source` as read (`{kind:"
-        "\"unipile\", channel, url}`), or a file YOU produced: `{kind:\"content\", "
+        "\"unipile\", channel, url}`), a recording's `source` as read (`{kind:"
+        "\"transit\", ref}`), or a file YOU produced: `{kind:\"content\", "
         f"filename, base64}}` (or `text` instead of `base64`), {_EN_LIGNE_KO} KB at most. With "
         "`target=\"project_file\"`, the file is filed in the project as is."))
     target: Literal["datastore", "project_file"] = "datastore"

@@ -1335,8 +1335,9 @@ def register(mcp: FastMCP) -> None:
         - `upload_audio`: `lead_id` + `step_id` + `audio` — the audio of a
           `linkedinVoiceNote` step. `audio` is a source dict:
           `{"kind": "url", "url": …}`, `{"kind": "drive", "file_id": …}`,
-          `{"kind": "gmail", "message_id": …, "filename": …}` or
-          `{"kind": "project_file", "project_id": …, "file_id": …}`. The server
+          `{"kind": "gmail", "message_id": …, "filename": …}`,
+          `{"kind": "project_file", "project_id": …, "file_id": …}` or a
+          recording's `source` as read (`{"kind": "transit", "ref": …}`). The server
           fetches it (≤ 20 MB) and forwards the bytes.
         """
         client, is_platform = _client()
@@ -1414,7 +1415,7 @@ def register(mcp: FastMCP) -> None:
             if not (lead_id and step_id and audio):
                 raise _bad(
                     "`lead_id`, `step_id` AND `audio` required — `audio` is a "
-                    'source: {"kind": "url"|"drive"|"gmail"|"project_file", …}')
+                    'source: {"kind": "url"|"drive"|"gmail"|"project_file"|"transit", …}')
             data, filename = _fetch_audio(audio)
             result = client.upload_lead_audio(
                 lead_id, step_id, data, filename=filename)

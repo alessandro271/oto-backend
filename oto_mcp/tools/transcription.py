@@ -53,7 +53,9 @@ def register(mcp: FastMCP) -> None:
         Args:
             source: the file, never its bytes. Project file:
                 `{"kind":"project_file","project_id":<id>,"file_id":<id>}` (ids from
-                oto_project_files op=list); also `drive`, `gmail`, `url`.
+                oto_project_files op=list); a call recording: the `source` its tool
+                returned, as is (`{"kind":"transit","ref":…}`); also `drive`,
+                `gmail`, `url`.
             vocabulary: optional extra words to spell right for THIS recording
                 (names, materials), separated by commas or newlines. Added to the
                 connector's vocabulary; 100 words at most overall, the surplus is

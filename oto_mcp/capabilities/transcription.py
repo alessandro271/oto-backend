@@ -174,8 +174,9 @@ def position_en_file(file: dict) -> dict:
 class TranscriptionCreateInput(BaseModel):
     project_id: int
     # La RÉFÉRENCE du fichier, jamais ses octets (`file_source`) : `project_file`
-    # (`{"kind":"project_file","file_id":N}`, le projet de l'URL par défaut), `url`,
-    # `drive`, `gmail`. Un fichier à envoyer tel quel passe par `…/transcriptions/upload`.
+    # (`{"kind":"project_file","file_id":N}`, le projet de l'URL par défaut), `transit`
+    # (l'enregistrement qu'un outil a déposé pour l'appelant), `url`, `drive`, `gmail`.
+    # Un fichier à envoyer tel quel passe par `…/transcriptions/upload`.
     source: dict
     vocabulary: Optional[str] = None
     vocabulary_replace: bool = False

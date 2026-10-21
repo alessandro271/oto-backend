@@ -5,8 +5,11 @@ credential resolved per call via `access.resolve_credential_fields("aircall")`
 (ADR 0011). No writes, no webhooks.
 
 **Surface**:
-- `aircall_calls` (list/search/get) — the call log, and a call with its
-  recording and voicemail URLs;
+- `aircall_calls` (list/search/get/recording/voicemail) — the call log, a
+  call with its recording and voicemail URLs, and that audio itself, put in
+  transit (`transit.deposer`): a short `source` `{kind: "transit", ref}` read
+  server-side by `transcription_create` — never the upstream URL, which an
+  agent alters when copying it;
 - `aircall_call_ai` — a call's conversational AI (transcription, summary,
   topics, sentiment, action items), served by upstream only to companies
   subscribed to its AI offer;
@@ -24,12 +27,13 @@ makes them verifiable by the version-skew probe
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Literal, Optional, Union
 
 from fastmcp import FastMCP
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, file_source, transit
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 
@@ -47,6 +51,11 @@ _DROP_DIRECTORY = frozenset({"direct_link", "messages", "is_ivr"})
 _HINT = "full=true returns the raw records."
 
 _AI_KINDS = ("transcription", "summary", "topics", "sentiments", "action_items")
+
+#: The audio of a call, downloaded from the upstream link: bounded in size and in
+#: time AT THIS LEVEL (a link that drips must not hold a threadpool thread).
+_AUDIO_MAX_BYTES = 100 * 1024 * 1024
+_AUDIO_BUDGET_S = 90.0
 
 Bound = Union[int, str, None]
 
@@ -140,6 +149,22 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
         raise connector_verify.NonAutorise(str(e))
 
 
+def _audio(call: Any, which: str, call_id: int) -> dict:
+    """The `recording` or `voicemail` of a call (`get_call`), downloaded and put in
+    transit under the caller."""
+    url = (call.get("call") or {}).get(which) if isinstance(call, dict) else None
+    if not url:
+        raise _bad(f"Aircall: call {call_id} has no {which}.")
+    try:
+        f = file_source.resolve({"kind": "url", "url": url}, max_bytes=_AUDIO_MAX_BYTES,
+                                deadline=time.monotonic() + _AUDIO_BUDGET_S)
+        return transit.deposer("aircall-recordings", f.data,
+                               f.mime if f.mime.startswith("audio/") else "audio/mpeg",
+                               f"aircall-{call_id}-{which}.mp3")
+    except (file_source.FileSourceError, transit.TransitError) as e:
+        raise _bad(f"Aircall {which}: {e}") from None
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.aircall import AircallClient
     from oto.tools.common.errors import UpstreamHTTPError
@@ -161,7 +186,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def aircall_calls(
-        op: Literal["list", "search", "get"] = "list",
+        op: Literal["list", "search", "get", "recording", "voicemail"] = "list",
         call_id: Optional[int] = None,
         date_from: Bound = None,
         date_to: Bound = None,
@@ -185,6 +210,8 @@ def register(mcp: FastMCP) -> None:
           `aircall_users`) or `phone_number` (the external number, E.164). A
           call transferred from line A to line B is found by B only.
         - `get` — one call (`call_id`), raw.
+        - `recording` / `voicemail` — the call's audio, kept a day: pass the
+          returned `source` as is to `transcription_create`, never the mp3 URL.
 
         Six months of history only, and at most 10,000 calls through pagination:
         narrow with `date_from` to reach further. Pagination: `page` from 1,
@@ -203,8 +230,8 @@ def register(mcp: FastMCP) -> None:
         records.
 
         Args:
-            op: list | search | get.
-            call_id: op='get' — the call id.
+            op: list | search | get | recording | voicemail.
+            call_id: op='get' / 'recording' / 'voicemail' — the call id.
             date_from: lower bound on creation date — UNIX seconds, ISO date
                 (2026-09-01 = midnight UTC) or ISO date-time with offset.
             date_to: upper bound on creation date, same formats.
@@ -220,12 +247,16 @@ def register(mcp: FastMCP) -> None:
         """
         flags = dict(fetch_contact=fetch_contact or None,
                      fetch_short_urls=short_urls or None)
-        if op == "get":
+        if op in ("get", "recording", "voicemail"):
             _need(call_id, "call_id", op)
             _refuse_ignored(op, date_from=date_from, date_to=date_to, order=order,
                             direction=direction, user_id=user_id,
                             phone_number=phone_number, page=page,
                             per_page=per_page)
+            if op != "get":
+                _refuse_ignored(op, fetch_contact=fetch_contact, short_urls=short_urls,
+                                full=full)
+                return _audio(_run(lambda: _client().get_call(call_id)), op, call_id)
             return _run(lambda: _client().get_call(call_id, **flags))
         _refuse_ignored(op, call_id=call_id)
         if op == "list":
@@ -239,7 +270,8 @@ def register(mcp: FastMCP) -> None:
                 date_from=date_from, date_to=date_to, order=order,
                 direction=direction, user_id=user_id, phone_number=phone_number,
                 page=page, per_page=per_page, **flags)), full, _DROP_CALLS)
-        raise _bad(f"invalid `op`: {op!r} (expected: list | search | get).")
+        raise _bad(f"invalid `op`: {op!r} (expected: list | search | get | recording "
+                   "| voicemail).")
 
     @mcp.tool()
     def aircall_call_ai(

@@ -8,6 +8,8 @@ Ce que ce fichier verrouille — les tripwires génériques couvrent déjà regi
   intact, `projection` qui NOMME ce qui manque) et `full=True` qui rend le brut ;
 - les refus d'intention (argument d'un autre `op`, argument requis absent) ;
 - la traduction des refus amont, dont le 404 de l'IA conversationnelle ;
+- l'audio d'un appel (`op="recording"|"voicemail"`) : téléchargé par le lien amont
+  borné en taille ET en temps à ce niveau, déposé en transit, rendu en `source` courte ;
 - la sonde : `probe()`, 401/403 → `NonAutorise`, autre code → non classé.
 """
 import asyncio
@@ -141,7 +143,64 @@ def test_get_rend_l_appel_brut(client):
                                             fetch_short_urls=None)
 
 
+@pytest.fixture
+def audio(monkeypatch):
+    """Le téléchargement du lien amont et le dépôt en transit, observés."""
+    from oto_mcp import file_source
+
+    vu = {"resolve": [], "deposer": []}
+
+    def resolve(source, *, max_bytes, deadline=None, **kw):
+        vu["resolve"].append((source, max_bytes, deadline))
+        return file_source.ResolvedFile(b"ID3audio", "x.mp3", "binary/octet-stream")
+
+    def deposer(prefix, data, mime, filename, *, lien=False):
+        vu["deposer"].append((prefix, data, mime, filename))
+        return {"source": {"kind": "transit", "ref": prefix + "/" + "0" * 32}}
+
+    monkeypatch.setattr("oto_mcp.file_source.resolve", resolve)
+    monkeypatch.setattr("oto_mcp.transit.deposer", deposer)
+    return vu
+
+
+@pytest.mark.parametrize("op", ["recording", "voicemail"])
+def test_l_audio_d_un_appel_part_en_transit(client, audio, op):
+    import time
+    client.get_call.return_value = {"call": {"id": 812, op: "https://rec.test/a.mp3"}}
+    out = _tool("aircall_calls")(op=op, call_id=812)
+    client.get_call.assert_called_once_with(812)
+    [(source, max_bytes, deadline)] = audio["resolve"]
+    assert source == {"kind": "url", "url": "https://rec.test/a.mp3"}
+    assert max_bytes == 100 * 1024 * 1024
+    assert deadline is not None and 0 < deadline - time.monotonic() <= 90
+    assert audio["deposer"] == [("aircall-recordings", b"ID3audio", "audio/mpeg",
+                                 f"aircall-812-{op}.mp3")]
+    assert out == {"source": {"kind": "transit", "ref": "aircall-recordings/" + "0" * 32}}
+
+
+def test_un_appel_sans_audio_le_dit(client, audio):
+    client.get_call.return_value = {"call": {"id": 812, "voicemail": None}}
+    with pytest.raises(McpError, match="has no voicemail"):
+        _tool("aircall_calls")(op="voicemail", call_id=812)
+    assert audio["resolve"] == []
+
+
+def test_un_lien_amont_refuse_est_nomme(client, monkeypatch):
+    from oto_mcp import file_source
+
+    def resolve(*a, **kw):
+        raise file_source.FileSourceError("source url: link altered or expired")
+
+    monkeypatch.setattr("oto_mcp.file_source.resolve", resolve)
+    client.get_call.return_value = {"call": {"id": 812, "recording": "https://rec.test/a"}}
+    with pytest.raises(McpError, match="Aircall recording: .*altered or expired"):
+        _tool("aircall_calls")(op="recording", call_id=812)
+
+
 @pytest.mark.parametrize("kw", [
+    {"op": "recording"},                              # call_id manquant
+    {"op": "recording", "call_id": 1, "full": True},  # vue sur un audio
+    {"op": "voicemail", "call_id": 1, "short_urls": True},
     {"op": "get"},                                    # call_id manquant
     {"op": "get", "call_id": 1, "per_page": 10},      # pagination sur un get
     {"op": "list", "user_id": 456},                   # filtre de search sur list
