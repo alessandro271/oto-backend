@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import secrets
 from dataclasses import dataclass
 from urllib.parse import quote, unquote, urlsplit
 
@@ -426,12 +427,18 @@ def delete_by_url(url: str) -> None:
 # persiste la CLÉ (pas une URL signée qui expire) et on signe à la demande.
 
 def upload_object(prefix: str, owner_id: str, data: bytes, content_type: str,
-                  filename: str | None = None, *, max_bytes: int | None = None) -> str:
+                  filename: str | None = None, *, max_bytes: int | None = None,
+                  propre_au_depot: bool = False) -> str:
     """Stocke un blob DURABLE (hors `tmp/`, pas d'ACL public) et renvoie sa **clé**
     S3 (à persister). L'URL d'accès se génère à la lecture via `presign_get`. Clé
     par hash de contenu → ré-upload identique idempotent. `max_bytes` (optionnel)
     surcharge le plafond image par défaut (2 Mo) — un document brut peut être plus
     gros (upload out-of-bande d'un agent, issue #105).
+
+    `propre_au_depot=True` : la clé porte en plus un aléa, deux dépôts du même contenu
+    ne partagent pas l'objet. Pour un objet que son dépôt PURGE à sa fin (l'audio d'un
+    travail de transcription) : avec la clé par contenu, la purge d'un travail
+    supprimait l'audio d'un autre travail sur le même fichier (oto-backend#1301).
 
     ⚠️ `content_type` est un type DÉCLARÉ : l'objet est écrit sous `type_servi`
     (#562), décidé sur le contenu — neutre et en téléchargement s'il est actif ou
@@ -444,6 +451,8 @@ def upload_object(prefix: str, owner_id: str, data: bytes, content_type: str,
     if len(data) > limit:
         raise MediaError(413, "file_too_large", f"Fichier > {limit} octets.")
     digest = hashlib.sha256(data).hexdigest()[:32]
+    if propre_au_depot:
+        digest = f"{digest}-{secrets.token_hex(8)}"
     key = f"{prefix}/{quote(owner_id, safe='')}/{digest}/{nom_sur(filename)}"
     # Le nom ENCODÉ va dans l'en-tête (RFC 5987, c'est sa place), jamais dans la clé.
     entetes = _entetes_durables(data, content_type, quote(filename or "file", safe=""))

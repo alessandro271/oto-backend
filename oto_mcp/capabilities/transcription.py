@@ -100,11 +100,11 @@ def deposer(sub: str, pid: int, lire: Callable[[], file_source.ResolvedFile], *,
     try:
         audio_key = media_store.upload_object(
             "transcription-jobs", str(pid), fichier.data, fichier.mime,
-            filename=fichier.filename, max_bytes=MAX_AUDIO_BYTES)
+            filename=fichier.filename, max_bytes=MAX_AUDIO_BYTES, propre_au_depot=True)
     except media_store.MediaError as e:
         raise AuthzDenied(e.status, e.code, str(e)) from None
-    # AAD = `audio_key` (déjà unique, déjà colonne de LA ligne créée juste en
-    # dessous) : lie le chiffré à sa ligne sans un aller-retour pour connaître
+    # AAD = `audio_key` (unique par travail — `propre_au_depot` —, déjà colonne de LA
+    # ligne créée juste en dessous) : lie le chiffré à sa ligne sans un aller-retour pour connaître
     # l'id serial d'abord (même intention que le coffre, forme plus simple).
     job_id = db.create_transcription_job(
         project_id=pid, sub=sub, audio_key=audio_key, filename=fichier.filename,
