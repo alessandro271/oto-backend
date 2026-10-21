@@ -536,8 +536,9 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
         store = ds.make_store(sub)
         # Le schéma n'entre en jeu que pour un CSV, seul format qui porte des
         # EN-TÊTES : une colonne déclarée rend `site_web.comment` lisible comme une
-        # annotation (le store la rangera), et une cible de traduction déjà déclarée
-        # est une collision. Le NDJSON porte des clés — il n'a rien à traduire.
+        # annotation (le store la rangera), et une cible de traduction déclarée est la
+        # colonne que vise chaque rechargement. Le NDJSON porte des clés — il n'a rien
+        # à traduire.
         fmt = target.get("format") or "ndjson"
         parsed = parse_import(
             data, fmt,

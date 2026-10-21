@@ -310,6 +310,9 @@ def test_un_CSV_a_en_tetes_ordinaires_est_traduit_ET_ANNONCE(table):
     écriture, rouvert côté import."""
     from oto_mcp import upload_tokens as ut
     st, ns, ns_id = table
+    # L'upload signé ne déclare rien : la colonne traduite est déclarée d'abord.
+    st.set_schema(ns, {**SCHEMA, "fields": [*SCHEMA["fields"],
+                                            {"key": "N_SIREN", "type": "text"}]})
     res = ut.materialize("sub-points",
                          {"kind": "datastore", "ns_id": ns_id, "datastore": ns,
                           "format": "csv", "key": "siren"},
