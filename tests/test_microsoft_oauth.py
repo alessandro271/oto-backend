@@ -758,10 +758,17 @@ def test_le_compte_ko_se_lit_sur_sa_ligne_et_le_message_dit_le_bouton(env):
     from oto_mcp.connectors import identities
 
     _deux_comptes(env)
-    env.coeur.auth.refresh.side_effect = env.coeur.MicrosoftGrantExpired("expiré")
+    env.coeur.auth.refresh.side_effect = env.coeur.MicrosoftGrantExpired(
+        "Entra refused the token request (HTTP 400): AADSTS50173: The provided grant has "
+        "expired due to it being revoked.", code="AADSTS50173")
     with pytest.raises(env.auth.MicrosoftReauthRequired, match="« Reconnect »") as e:
         env.sous_compte("john@fabrikam.example")(env.auth.access_token_for, SUB, SERVICE)
     assert "default setting and its loans are kept" in str(e.value)
+    # La cause d'Entra est gardée, sur la marque comme dans le refus : sans elle, nul ne
+    # sait après coup pourquoi un compte a été coupé.
+    assert "(Entra: AADSTS50173: The provided grant has expired due to it being revoked.)" \
+        in str(e.value)
+    assert "AADSTS50173" in env.coffre.meta("john@fabrikam.example")["health_reason"]
     for carte in (PORTEUR, SERVICE):
         assert [(i["id"], i["status"]) for i in identities.list_identities(SUB, carte)] == [
             ("jane@contoso.example", "ok"), ("john@fabrikam.example", "reauth_required")]
@@ -1386,3 +1393,16 @@ def test_preter_outlook_a_toute_l_org_est_servi_donc_accepte_et_journalise(pret_
         "entity_id": CHEZ_PRETEUSE, "account": "jane@contoso.example"}]
     assert pret_org.sous_compte("jane@contoso.example")(
         pret_org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+
+
+@pytest.mark.parametrize("texte, code, attendu", [
+    ("Entra refused the token request (HTTP 400): AADSTS700082: The refresh token has "
+     "expired due to inactivity.", "AADSTS700082",
+     "AADSTS700082: The refresh token has expired due to inactivity."),
+    ("Entra refused the token request (HTTP 400): invalid_grant", "AADSTS50173",
+     "AADSTS50173: invalid_grant"),
+    ("", None, "expired, revoked, or the password changed"),
+])
+def test_la_cause_d_entra_est_lue_et_bornee(env, texte, code, attendu):
+    assert env.auth._cause_entra(env.coeur.MicrosoftGrantExpired(texte, code=code)) == attendu
+    assert len(env.auth._cause_entra(env.coeur.MicrosoftGrantExpired("x" * 900))) == 300

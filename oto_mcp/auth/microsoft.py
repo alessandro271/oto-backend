@@ -581,6 +581,16 @@ def _scope(org_id: int, sub: str, scope: str = "member",
     return credentials_store.entity_for_scope(scope, org_id, sub, group)
 
 
+def _cause_entra(e: Exception) -> str:
+    """Entra's reason for a refused refresh, as the lib reads it (`AADSTS…: <first line>`),
+    bounded: `code` alone when the text says nothing more, a generic phrase without either."""
+    texte = str(e).split("): ", 1)[-1].strip()
+    code = getattr(e, "code", None)
+    if code and code not in texte:
+        texte = f"{code}: {texte}" if texte else code
+    return texte[:300] or "expired, revoked, or the password changed"
+
+
 def _cle(ligne: tuple, refresh_token: str) -> str:
     """Cache key: the row (entity AND account) and its refresh token, hashed
     (never a clear-text secret as a key). A reconnection changes the refresh token,
@@ -817,8 +827,13 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
                                    refresh_token, scopes=tuple(coeur.scopes.REFRESH),
                                    tenant=annuaire(meta.get("tenant")))
     except coeur.MicrosoftGrantExpired as e:
-        message = (f"Microsoft no longer accepts the sign-in of `{rc.account}` (expired, "
-                   "revoked, or the password changed). Reconnect it with the « Reconnect » "
+        # Entra's own words name the cause (AADSTS50173 password changed or sessions
+        # revoked, AADSTS700082 inactivity…): without them, nobody can say afterwards
+        # why an account was cut. First line only (the lib drops Trace ID and timestamp).
+        cause = _cause_entra(e)
+        logger.warning("microsoft: refresh refused for %s (%s)", rc.account, cause)
+        message = (f"Microsoft no longer accepts the sign-in of `{rc.account}` "
+                   f"(Entra: {cause}). Reconnect it with the « Reconnect » "
                    f"button on its line, card « {label} » of the connectors page: its "
                    "default setting and its loans are kept.")
         connector_health.mark_rejected(rc.entity_type, rc.entity_id, CONNECTOR,
