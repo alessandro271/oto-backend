@@ -1849,7 +1849,9 @@ qu'on oublie).
 fournisseur annonce l'usage à CHAQUE exécution, pas seulement au refus — deux fenêtres,
 cinq heures et sept jours. La personne est mise en attente dès qu'une fenêtre atteint
 son **plafond de consommation** (`_abonnement.seuil`, ci-dessous), **avant** qu'un
-travail soit refusé ; deux fenêtres saturées attendent la plus lointaine. Un rapport mal
+travail soit refusé ; deux fenêtres saturées attendent la plus lointaine. ⚠️ Un
+`allowed_warning` du fournisseur n'est PAS un refus (`_abonnement.ETATS_SERVABLES`) :
+lu comme tel, il mettait en pause pour sept jours un forfait à quelques %. Un rapport mal
 formé s'ignore et se journalise : il ne fait jamais échouer une conclusion. Seul un
 worker de plateforme est écouté.
 

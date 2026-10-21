@@ -510,6 +510,29 @@ class TestRapport:
         assert statut == US.PLAFOND
         assert int(k["limit_reset_at"].timestamp()) == 1790029800
 
+    def test_un_avertissement_n_est_PAS_un_refus(self, _ecrits):
+        """`allowed_warning` à 6 % sur sept jours mettait en pause jusqu'à l'échéance
+        de sept jours : seul le seuil juge la jauge."""
+        _abonnement.noter_rapport(self._conclu(), True, {
+            "abonnement": {"etat": "allowed_warning",
+                           "fenetres": self._fenetres(cinq_h=0.38, sept_j=0.06)}})
+        assert [st for _, st, _ in _ecrits] == [US.CONNECTE]
+
+    def test_un_avertissement_au_dela_du_seuil_attend_SA_fenetre(self, _ecrits):
+        _abonnement.noter_rapport(self._conclu(), True, {
+            "abonnement": {"etat": "allowed_warning",
+                           "fenetres": self._fenetres(cinq_h=0.9, sept_j=0.06)}})
+        (_, statut, k), = _ecrits
+        assert statut == US.PLAFOND and k["epuise"] is False
+        assert int(k["limit_reset_at"].timestamp()) == 1790029800
+
+    def test_un_etat_inconnu_reste_un_refus(self, _ecrits):
+        _abonnement.noter_rapport(self._conclu(), True, {
+            "abonnement": {"etat": "quelque_chose_de_neuf",
+                           "fenetres": self._fenetres()}})
+        (_, statut, k), = _ecrits
+        assert statut == US.PLAFOND and k["epuise"] is True
+
     def test_deux_fenetres_saturees_attendent_la_plus_LOINTAINE(self, _ecrits):
         _abonnement.noter_rapport(self._conclu(), False, {
             "abonnement": {"etat": "rejected",
