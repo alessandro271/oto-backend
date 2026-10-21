@@ -164,7 +164,7 @@ class LotsMixin:
                 # oto#182 : un `null` qui n'efface rien ne s'écrit pas (cf. `append_row`).
                 user_data = sans_les_nulls_sans_effet(
                     user_data, lambda: self._donnees_de_la_ligne_visee(
-                        ns_id, schema, user_data, key), schema)
+                        ns_id, schema, user_data, key))
                 # oto#165 : un `{}` sur une case vide est écarté, et dit.
                 user_data, objets_vides = sans_les_objets_vides(
                     user_data, lambda: self._donnees_de_la_ligne_visee(

@@ -491,8 +491,7 @@ def _porte_un_null(neuf: Any) -> bool:
 
 
 def sans_les_nulls_sans_effet(user_data: Optional[dict],
-                              en_place: Callable[[], Optional[dict]],
-                              schema: Optional[dict]) -> Optional[dict]:
+                              en_place: Callable[[], Optional[dict]]) -> Optional[dict]:
     """Retire d'une écriture les `null` qui n'effacent RIEN (oto#182).
 
     La lecture sert à `null` toute colonne déclarée sans valeur en place. Un agent qui
@@ -504,10 +503,10 @@ def sans_les_nulls_sans_effet(user_data: Optional[dict],
     écrit. Sur une valeur EN PLACE, il reste l'effacement nommé, inchangé : ce filtre ne décide rien de ce qu'efface un `null`, il retire seulement
     ceux qui n'ont rien à effacer.
 
-    ⚠️ **Colonnes DÉCLARÉES seulement.** La lecture ne sert à `null` que le déclaré : un
-    écho ne peut viser que lui. Une colonne HORS schéma écrite à `null` garde son
-    comportement (`colonnes_non_declarees` : un `null` efface, il ne crée rien), sinon
-    une faute de frappe écrite à `null` disparaîtrait sans un mot.
+    ⚠️ **Colonne non déclarée comprise** (oto-backend#1292). Un `null` n'y est pas
+    refusé, parce qu'il efface (`colonnes_non_declarees`) ; sans valeur en place, il
+    n'efface rien, et l'écrire ferait NAÎTRE la colonne à `null` en base, hors schéma
+    (la forme relevée en production le 31/08, `test_hors_schema_tous_chemins.py`).
 
     ⚠️ **Un vide ASSUMÉ (`@empty`) est une valeur en place** (oto#140, J2) : sa valeur
     est `""`, mais son marqueur dit « cherché, rien ». Un `null` dessus l'efface, marqueur
@@ -519,9 +518,8 @@ def sans_les_nulls_sans_effet(user_data: Optional[dict],
     Une écriture en couches garde ce qui accompagne sa valeur nulle
     (`{"valeur": null, "comment": …}` → `{"comment": …}`).
     """
-    declarees = set(dsv2.cles_declarees(schema))
     candidats = [cle for cle, neuf in (user_data or {}).items()
-                 if cle in declarees and cle not in _META_COLS and _porte_un_null(neuf)]
+                 if cle not in _META_COLS and _porte_un_null(neuf)]
     if not candidats:
         return user_data
     donnees = en_place() or {}

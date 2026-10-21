@@ -128,8 +128,7 @@ class EcritureMixin:
                 ns_id, schema, user_data))
         # oto#182 : un `null` qui n'efface rien (l'écho d'une ligne lue) ne s'écrit pas.
         user_data = sans_les_nulls_sans_effet(
-            user_data, lambda: self._donnees_de_la_ligne_visee(ns_id, schema, user_data),
-            schema)
+            user_data, lambda: self._donnees_de_la_ligne_visee(ns_id, schema, user_data))
         # oto#165 : un `{}` sur une case vide n'est pas une valeur — écarté, et dit.
         user_data, objets_vides = sans_les_objets_vides(
             user_data, lambda: self._donnees_de_la_ligne_visee(ns_id, schema, user_data))

@@ -106,7 +106,7 @@ class EcritureParIdMixin:
             corps = ranger_les_couches(schema, patch, colonnes_en_place=lambda: set(data))
             # oto#182 : un `null` qui n'efface rien ne s'écrit pas — jugé ICI sous le
             # verrou, contre la ligne exacte, c'est la porte de la réémission.
-            corps = sans_les_nulls_sans_effet(corps, lambda: data, schema)
+            corps = sans_les_nulls_sans_effet(corps, lambda: data)
             # oto#165 : MÊME porte pour un `{}` sur une case vide — écarté, et dit.
             corps, objets_vides = sans_les_objets_vides(corps, lambda: data)
             self.off_rejected.extend(objets_vides)

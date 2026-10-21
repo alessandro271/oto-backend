@@ -17,7 +17,6 @@ from oto_mcp.datastore import couches as dsl
 from oto_mcp.datastore.columns import sans_les_nulls_sans_effet
 
 MARQUEE = {"valeur": "", dsl.VIDE_ASSUME: True}
-_SCHEMA = {"fields": [{"key": k, "type": "text"} for k in ("raison", "fonction")]}
 
 
 # ── le texte, sans base ──────────────────────────────────────────────────────
@@ -42,12 +41,12 @@ def test_le_module_du_preavis_est_retire():
                          ids=["nu", "commente"])
 def test_un_null_sur_un_vide_assume_est_ecrit(en_place):
     corps = {"raison": "ACME", "fonction": None}
-    assert sans_les_nulls_sans_effet(corps, lambda: {"fonction": en_place}, _SCHEMA) == corps
+    assert sans_les_nulls_sans_effet(corps, lambda: {"fonction": en_place}) == corps
 
 
 def test_un_null_sur_un_vide_ordinaire_reste_sans_effet():
     sortie = sans_les_nulls_sans_effet({"raison": "ACME", "fonction": None},
-                                       lambda: {"fonction": ""}, _SCHEMA)
+                                       lambda: {"fonction": ""})
     assert sortie == {"raison": "ACME"}
 
 
