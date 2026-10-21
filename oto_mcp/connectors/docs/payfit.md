@@ -1,10 +1,10 @@
 ## prerequisite — your payfit api key
 
-log in to PayFit **as a company admin**, then **Integrations → API** ([app.payfit.com/integrations/hub/api](https://app.payfit.com/integrations/hub/api)) → "Create a key": give it an explicit label and tick **read scopes only**, then copy it — it is not shown again afterwards. paste it into your oto connector keys under `payfit`.
-- **the connector only reads**: no write is wired to PayFit.
-- **the key decides what you will see**: oto serves everything the API exposes for reading, but a field that a missing scope does not return does not exist for anyone. for full HR and finance steering: `collaborators:read`, `collaborators:management:read`, `collaborators:contracts:read`, `collaborators:personal:read`, `collaborators:legal-identity:read`, `contracts:read`, `contracts:payslips:read`, `time:read`, `accounting:read`, `health-insurance:read`, `collaborators:meal-vouchers:read`
+log in to PayFit **as a company admin**, then **Integrations → API** ([app.payfit.com/integrations/hub/api](https://app.payfit.com/integrations/hub/api)) → "Create a key": give it an explicit label and tick the scopes you need (below), then copy it — it is not shown again afterwards. paste it into your oto connector keys under `payfit`.
+- **the key decides what you will see and do**: oto serves everything the API exposes for reading, but a field that a missing scope does not return does not exist for anyone. for full HR and finance steering: `collaborators:read`, `collaborators:management:read`, `collaborators:contracts:read`, `collaborators:personal:read`, `collaborators:legal-identity:read`, `contracts:read`, `contracts:payslips:read`, `time:read`, `accounting:read`, `health-insurance:read`, `collaborators:meal-vouchers:read`
 - **sensitive** scopes, to be ticked only if you need them: `collaborators:social-security:read` (NIR), `collaborators:bank-info:read` (IBAN), `payment-files:read` (payment file)
-- **do not tick any write scope** (`collaborators:write`, `collaborators:contracts:write`, `time:write`, `health-insurance:write`): the connector does not use them. on an existing key that carries some, they are useless and can be removed on the PayFit side
+- **write scopes, only for what the agent must do in PayFit**: `time:write` (record or cancel an absence, sick leave included), `collaborators:write` (create a collaborator), `collaborators:contracts:write` (create their contract), `health-insurance:write` (mutuelle and prévoyance affiliation, regularization). a key without them stays read-only, whatever oto allows
+- **reading only, on oto's side**: an org administrator (or a team lead, for their team) sets the `read` access level — `oto_connector_access_level(op="set", name="payfit", level="read")` (`scope="group"` for a team) — and `payfit_act` is no longer served, whatever the key carries
 - the key opens **only your company**; oto finds its identifier on its own (by introspection), you have no identifier to enter
 - whether API access is included or paid depending on the PayFit plan is not publicly documented; partner access (OAuth) is another route, by application
 - BYO only: no shared oto key
@@ -29,14 +29,15 @@ start with `payfit_company()`: its `country` says whether the French variants ap
 - "health insurance and provident cover" → `payfit_insurance()` for the company's contracts, `kind="provident"` for provident cover
 - **the month is written `YYYYMM`** (`202601`), never `2026-01`: it is the only form PayFit accepts
 
-## note — no writes in payfit
+## note — writing to payfit
 
-the connector **never writes** to PayFit, whatever the argument. the write ops still exist in their tools, but each returns the named refusal `payfit_write_not_wired`, which says what the call would have done — nothing is sent:
-- `payfit_collaborator(op="create")`, `payfit_contract(op="create")`
-- `payfit_absence(op="create")` and `op="cancel"`
-- `payfit_insurance(op="affiliate")` and `op="regularize"`
-
-there is neither an org switch nor an activation by an administrator: the capability does not exist in the connector. a hire, a contract, an absence or an affiliation is done in PayFit itself.
+every write goes through **one tool, `payfit_act`**, that your MCP client asks you to confirm — the reading tools never write (their old `create`/`cancel`/`affiliate`/`regularize` ops answer `op_moved`, naming the `payfit_act` op). it does **what the Partner API allows, nothing more**:
+- `payfit_act(op="create_collaborator", first_name=…, last_name=…, personal_email=…)` → `{collaboratorId}`. the collaborator has no contract yet. ⚠️ `invite_collaborator=true` sends them PayFit's invitation email
+- `payfit_act(op="create_contract", collaborator_id=…, job_title=…, start_date=…)`: puts them on payroll; nature, hours and pay are completed in PayFit (the API takes nothing more)
+- `payfit_act(op="create_absence", contract_id=…, absence_type=…, begin_date=…, end_date=…)` → `{id}`. ⚠️ **created already approved, straight into payroll**: there is no request or approval step. sick leave = `fr_maladie_ordinaire`. **no work accident, no maternity or paternity leave** in the API's creation list: those are entered in PayFit. `op="cancel_absence"` (`absence_id`, optional `comment`) cancels one
+- `payfit_act(op="set_affiliation", contract_id=…, insurance_contract_ids=[…])` (`kind="provident"` for prévoyance): ⚠️ **replaces** the affiliation — a contract left out is unaffiliated. `op="request_regularization"` (mutuelle only, `effective_date`) recomputes contributions already paid
+- the NIR and the absence type passed to a write are masked in oto's call log
+- never exercised with a real write: PayFit's side effects (a notification to the employee, the daily-allowance flow of a sick leave) are to be checked on a first real case
 
 ## note — what the payfit api does not have
 
@@ -46,7 +47,8 @@ these questions come up often and have **no endpoint** — oto will not fabricat
 - **the DSN**: FR contracts carry fields *coded according to* the DSN standard (nature, status, IDCC, termination reason), but there is no DSN filing or retrieval
 - **schedules and clock-ins**: only a monthly aggregate per contract exists (`payfit_worked_time`)
 - **leave balances and counters** (paid leave accrued/taken, RTT remaining): nothing. do not deduce them from a list of absences
-- **the history of amendments** and any change to an existing contract: a contract is read as it is today
+- **variable pay items** (overtime, bonuses, commissions, one-off amounts): no endpoint, neither to read the month's entries before closing nor to write them. they are entered or imported in PayFit itself; after closing, overtime reads from the payslip (`op="overtime"`) and every amount from the accounting entries
+- **the history of amendments** and any change to an existing contract or collaborator: a contract is read as it is today, and nothing in the API updates one
 - **expense reports**, benefits in kind as an object
 - **tax documents**: those that exist (`payfit_document`) are **British**; on a French company the list is empty, and that is the right answer
 

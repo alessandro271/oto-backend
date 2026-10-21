@@ -5,8 +5,7 @@ Ce que ce fichier verrouille :
   méthode du client ;
 - un argument requis manquant nommé, un argument non pertinent REFUSÉ — « fourni » se
   lit `is not None`, donc `limit=0` et `include_in_progress=False` comptent ;
-- **aucune écriture n'est câblée** : éprouvé à part, op par op, dans
-  `test_payfit_ecritures_non_cablees.py` ;
+- les ÉCRITURES : éprouvées à part, op par op, dans `test_payfit_ecritures.py` ;
 - la seule clé renommée (`absence_type` + `absence_category`), et le fait que tout le
   reste sort tel que l'amont l'envoie — le connecteur ne retire plus rien en dur ;
 - les documents (PDF, export, virement) : leur VERROU est éprouvé à part, dans

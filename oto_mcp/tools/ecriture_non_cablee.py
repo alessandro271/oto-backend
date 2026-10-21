@@ -1,8 +1,8 @@
 """The named refusal of a write that a connector does not wire: `<connector>_write_not_wired`.
 
 A READ-ONLY connector keeps its write tools visible, but none of them calls
-upstream: each returns this refusal, which tells the agent what the call WOULD have done. PayFit
-(24/09/2026) then Inqom (30/09/2026) — same shape, a single home.
+upstream: each returns this refusal, which tells the agent what the call WOULD have done. Inqom
+(30/09/2026); PayFit used it from 24/09 until its writes were wired on 21/10/2026.
 
 An ERROR, not a result: a `{"sent": false}` is too easily read as a success, and
 an agent that believes it put someone on payroll or posted an accounting entry is worse

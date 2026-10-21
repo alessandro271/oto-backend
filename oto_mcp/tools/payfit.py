@@ -1,5 +1,5 @@
 """PayFit — payroll and HR software. **Everything the Partner API documents for
-reading**. No write is wired (decision of 24/09/2026).
+reading**; the writes live in `payfit_act` (wired on 21/10/2026).
 
 Wraps `oto.tools.payfit.PayfitClient` (Bearer, "Partner API" v1). keyed
 `api_key`, BYO (member or org): a PayFit API key is created by a company admin
@@ -15,12 +15,10 @@ nature, collective agreement, day-based package, termination reason, executive
 officer status), absences, payslips (metadata and PDF), payroll accounting entries and
 their export, the payment file, the payroll cycle status, actual worked time,
 meal vouchers, health insurance (mutuelle) and death and disability cover
-(prévoyance), documents. And
-**no write**: creating a collaborator, a contract, an absence, cancelling it,
-affiliating a contract to a health insurance or requesting a regularization return
-the named refusal `payfit_write_not_wired`, which says what the call would have done —
-nothing is sent to PayFit, whatever the argument. These ops stay in their enum so
-that the agent receives this named refusal and not "unknown op".
+(prévoyance), documents. The **writes** — creating a collaborator, a contract, an
+absence, cancelling it, affiliating a contract, requesting a regularization — are
+`payfit_act`'s (`payfit_act.py`): the old write ops of these readers stay in their
+enum and answer the named refusal `op_moved`, which names the `payfit_act` op.
 
 There was no choice to make between "serving payroll" and "protecting
 people": they are two different mechanisms.
@@ -49,16 +47,17 @@ when the type is masked. The full why: `payfit_socle`.
 
 This module:
 - `payfit_company` — the key's company; `fr=True` adds SIREN/SIRET.
-- `payfit_collaborator` — list | get; create not wired.
-- `payfit_contract` — list | get; `fr=True` → FR variant; create not wired.
-- `payfit_absence` — list; create and cancel not wired.
+- `payfit_collaborator` — list | get; create → `op_moved`.
+- `payfit_contract` — list | get; `fr=True` → FR variant; create → `op_moved`.
+- `payfit_absence` — list; create and cancel → `op_moved`.
 
 Sibling modules (same key, same client, mounted by `Connector.modules`):
 `payfit_paie` (payslips, accounting and payments, cycle status, worked
-time, meal vouchers), `payfit_social` (mutuelle, prévoyance, documents).
+time, meal vouchers), `payfit_social` (mutuelle, prévoyance, documents), `payfit_act`
+(every write).
 
 **No argument is silently dropped** (`is not None`) → `payfit_garde`.
-**No write is wired**: `payfit_garde.not_wired`, with neither key nor client.
+**A write op of a reader**: `payfit_garde.moved`, with neither key nor client.
 
 Derived from the public documentation and OpenAPI spec (read on 2026-09-17).
 **No real call**: no key available — neither the exact shape of the responses nor
@@ -72,9 +71,8 @@ from typing import Literal, Optional
 from fastmcp import FastMCP
 
 from . import payfit_socle as S
-from .payfit_garde import (_client, limit_or_default, need, not_wired,
-                           redaction_notice, refuse_ignored, refuse_unknown_op,
-                           register_probe, run)
+from .payfit_garde import (_client, limit_or_default, moved, need, redaction_notice,
+                           refuse_ignored, refuse_unknown_op, register_probe, run)
 
 
 def register(mcp: FastMCP) -> None:
@@ -116,8 +114,8 @@ def register(mcp: FastMCP) -> None:
         cursor: Optional[str] = None,
         fields: Optional[list] = None,
     ) -> dict:
-        """The PayFit employee directory — read only: this connector does not write
-        to PayFit.
+        """The PayFit employee directory — read only: creating a collaborator is
+        `payfit_act(op="create_collaborator")`.
 
         A collaborator carries what the API key's scopes allow: names, matricule,
         professional and personal emails, phones, addresses, manager, team,
@@ -129,9 +127,8 @@ def register(mcp: FastMCP) -> None:
         - **"list"** (default): the collaborators, optionally the one whose contract
           carries `email`. Paginated: pass back `next_cursor` as `cursor`.
         - **"get"**: one collaborator (`collaborator_id`).
-        - **"create"**: NOT WIRED — never writes. It answers the named refusal
-          `payfit_write_not_wired`, saying what it would have done; nothing is sent
-          to PayFit. Hiring is done in PayFit itself.
+        - **"create"**: MOVED — answers the named refusal `op_moved`; nothing is
+          sent. Call `payfit_act(op="create_collaborator")`.
 
         Args:
             op: list (default) | get | create.
@@ -140,7 +137,7 @@ def register(mcp: FastMCP) -> None:
             first_name / last_name / personal_email / other_name /
                 social_security_number / personal_address / birth_information /
                 personal_phone_number / number_of_children / gender /
-                invite_collaborator: op="create" only — not wired, nothing is sent.
+                invite_collaborator: ignored — op="create" is refused (`op_moved`).
             limit: op="list" — 1..50 (default 50).
             cursor: op="list" — `next_cursor` of the previous page.
             fields: op="list" — keep only these keys per row (`id` always kept);
@@ -167,11 +164,7 @@ def register(mcp: FastMCP) -> None:
             return S.one(run(lambda: c.get_collaborator(collaborator_id)),
                          "collaborator", redaction=redaction_notice())
         if op == "create":
-            # Neither the NIR nor the address is included: they would end up in the log.
-            autres = sorted(k for k, v in creation.items()
-                            if v is not None and k not in ("first_name", "last_name"))
-            raise not_wired(op, "created the collaborator", first_name=first_name,
-                            last_name=last_name, champs_fournis=autres)
+            raise moved(op, "create_collaborator")
         raise refuse_unknown_op(op, "list", "get", "create")
 
     @mcp.tool()
@@ -206,15 +199,14 @@ def register(mcp: FastMCP) -> None:
         `op`:
         - **"list"** (default): paginated; pass back `next_cursor` as `cursor`.
         - **"get"**: one contract (`contract_id`).
-        - **"create"**: NOT WIRED — never writes. It answers the named refusal
-          `payfit_write_not_wired`, saying what it would have done; nothing is sent
-          to PayFit.
+        - **"create"**: MOVED — answers the named refusal `op_moved`; nothing is
+          sent. Call `payfit_act(op="create_contract")`.
 
         Args:
             op: list (default) | get | create.
             contract_id: op="get".
-            collaborator_id / job_title / start_date: op="create" only — not wired,
-                nothing is sent.
+            collaborator_id / job_title / start_date: ignored — op="create" is
+                refused (`op_moved`).
             fr: op="list"/"get" — French variant (default False).
             include_in_progress: op="list" — also contracts still being created.
             limit: op="list" — 1..50 (default 50).
@@ -239,9 +231,7 @@ def register(mcp: FastMCP) -> None:
             return S.one(run(lambda: c.get_contract(contract_id, fr=bool(fr))),
                          "contract", redaction=redaction_notice())
         if op == "create":
-            raise not_wired(op, "created an employment contract (put on payroll)",
-                            collaborator_id=collaborator_id, job_title=job_title,
-                            start_date=start_date)
+            raise moved(op, "create_contract")
         raise refuse_unknown_op(op, "list", "get", "create")
 
     @mcp.tool()
@@ -279,9 +269,10 @@ def register(mcp: FastMCP) -> None:
         `op`:
         - **"list"** (default): paginated; pass back `next_cursor` as `cursor`.
           There is no single-absence read upstream.
-        - **"create"** and **"cancel"**: NOT WIRED — never write. They answer the
-          named refusal `payfit_write_not_wired`, saying what they would have done;
-          nothing is sent to PayFit.
+        - **"create"** and **"cancel"**: MOVED — they answer the named refusal
+          `op_moved`; nothing is sent. Recording an absence (sick leave included)
+          or cancelling one is `payfit_act(op="create_absence")` /
+          `payfit_act(op="cancel_absence")`.
 
         Args:
             op: list (default) | create | cancel.
@@ -289,7 +280,7 @@ def register(mcp: FastMCP) -> None:
             begin_date / end_date: op="list" — YYYY-MM-DD, absences overlapping the
                 window.
             absence_id / absence_type / start_moment / end_moment / comment:
-                op="create"/"cancel" only — not wired, nothing is sent.
+                ignored — op="create"/"cancel" are refused (`op_moved`).
             status: op="list" — approved (PayFit's default) | pending_approval |
                 declined | cancelled | pending_cancellation | all.
             limit: op="list" — 1..50 (default 50).
@@ -308,12 +299,7 @@ def register(mcp: FastMCP) -> None:
                 "absences", "id", fields=fields, shape=S.absence,
                 redaction=redaction_notice())
         if op == "create":
-            # The reason (`absence_type`) is not included: health data, masked
-            # by default, which would end up in the log.
-            raise not_wired(op, "recorded an approved absence (goes into payroll)",
-                            contract_id=contract_id, begin_date=begin_date,
-                            end_date=end_date, start_moment=start_moment,
-                            end_moment=end_moment)
+            raise moved(op, "create_absence")
         if op == "cancel":
-            raise not_wired(op, "cancelled the absence", absence_id=absence_id)
+            raise moved(op, "cancel_absence")
         raise refuse_unknown_op(op, "list", "create", "cancel")

@@ -108,6 +108,13 @@ SECRET_TOOL_ARGS: dict[str, frozenset] = {
     # A signed download link carries its credential in the query string. (Every
     # `{kind: "url"}` source is masked anyway, whatever the tool: `masquer_urls_des_valeurs`.)
     "oto_import": frozenset({"url"}),
+    # Masked by default in PayFit's OUTPUT (NIR, health data): the same values passed
+    # as a write's arguments must not reach the log in clear either. `payfit_act`
+    # carries the writes; the readers still take the arguments of their old write ops
+    # (refused `op_moved`, but logged all the same).
+    "payfit_act": frozenset({"social_security_number", "absence_type"}),
+    "payfit_collaborator": frozenset({"social_security_number"}),
+    "payfit_absence": frozenset({"absence_type"}),
 }
 
 _UUID_RE = re.compile(
