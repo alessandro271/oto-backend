@@ -73,7 +73,8 @@ def insert_tool_call(row: dict) -> None:
     d'erreur amont recopie parfois une URL avec sa clé (F-049 : Playwright et la
     `connectUrl` Browserbase `?apiKey=…`), et `tool_calls.error` est lu par les
     admins d'org. `args`, pareil, chaîne par chaîne (`masquer_urls_des_valeurs`) : une
-    adresse pré-signée passée à un outil y écrivait sa signature en clair."""
+    adresse pré-signée passée à un outil y écrivait sa signature en clair, et l'adresse
+    d'une source de fichier (`{kind: "url", url}`) tombe entière, quel que soit l'outil."""
     error = row.get("error")
     if error:
         error = masquer_urls(str(error))

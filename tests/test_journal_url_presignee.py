@@ -122,3 +122,71 @@ def test_les_parametres_de_signature_sont_des_cles_secretes(cle):
                                  "X-Amz-Algorithm", "X-Amz-SignedHeaders", "limit", "q"])
 def test_les_parametres_ordinaires_restent_lisibles(cle):
     assert not js.cle_de_requete_secrete(cle)
+
+
+# --- L'adresse d'une SOURCE de fichier tombe entière, quel que soit l'outil (#1301) ---
+#
+# La reconnaissance par la forme (clés de signature) ne voit pas un accès porté par le
+# chemin ni par une clé de requête au nom ordinaire. Une source `{kind: "url", url}`
+# désigne un fichier par le lien qui y donne accès : c'est la propriété qui masque.
+
+PAR_LE_CHEMIN = "https://fichiers.example.com/s/JETONDANSLECHEMIN/rapport.pdf"
+CLE_ORDINAIRE = "https://fichiers.example.com/files-pri/a.m4a?t=JETONORDINAIRE"
+
+
+@pytest.mark.parametrize("tool", ["transcription_create", "pennylane_upload_file"])
+@pytest.mark.parametrize("url, secret", [(PAR_LE_CHEMIN, "JETONDANSLECHEMIN"),
+                                         (CLE_ORDINAIRE, "JETONORDINAIRE"),
+                                         (S3, "deadbeefSIGNATURE")])
+def test_l_adresse_d_une_source_tombe_entiere_sur_deux_outils(monkeypatch, tool, url,
+                                                              secret):
+    out = _ecrit(monkeypatch, {"source": {"kind": "url", "url": url}, "project_id": 4},
+                 tool=tool)
+    ecrit = json.dumps(out, ensure_ascii=False)
+    assert secret not in ecrit and "rapport.pdf" not in ecrit and "a.m4a" not in ecrit
+    assert "fichiers.example.com/…#" in ecrit or "scw.cloud/…#" in ecrit  # l'hôte reste
+    assert out["project_id"] == 4
+
+
+def test_la_meme_adresse_donne_le_meme_masque():
+    a = js.masquer_urls_des_valeurs({"source": {"kind": "url", "url": PAR_LE_CHEMIN}})
+    b = js.masquer_urls_des_valeurs({"x": [{"kind": "url", "url": PAR_LE_CHEMIN}]})
+    assert a["source"]["url"] == b["x"][0]["url"]
+    assert a["source"]["url"].startswith("https://fichiers.example.com/…#")
+
+
+def test_une_source_sans_kind_et_une_source_imbriquee_aussi(monkeypatch):
+    out = _ecrit(monkeypatch, {"html_source": {"url": PAR_LE_CHEMIN}}, tool="outlook_act")
+    assert "JETONDANSLECHEMIN" not in json.dumps(out)
+    out = _ecrit(monkeypatch, {"name": "wordpress_media", "arguments": {
+        "attachments": [{"kind": "url", "url": CLE_ORDINAIRE}]}}, tool="oto_call")
+    assert "JETONORDINAIRE" not in json.dumps(out)
+
+
+def test_un_ecrivain_sans_truncated_args_masque_la_source(monkeypatch):
+    from oto_mcp.db import usage
+    captured = {}
+
+    class _Conn:
+        def execute(self, sql, params=None):
+            captured["params"] = params
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(usage, "_connect", lambda: _Conn())
+    usage.insert_tool_call({"tool": "lemlist_x", "ok": True,
+                            "args": {"source": {"kind": "url", "url": PAR_LE_CHEMIN}}})
+    assert "JETONDANSLECHEMIN" not in captured["params"][5]
+
+
+def test_une_adresse_qui_n_est_pas_une_source_reste_lisible(monkeypatch):
+    """Seule la SOURCE tombe : l'adresse d'une page à lire (`url` d'un outil web), une
+    source désignée autrement (fichier de projet) restent lisibles."""
+    out = _ecrit(monkeypatch, {"url": PAR_LE_CHEMIN}, tool="serper_scrape")
+    assert out["url"] == PAR_LE_CHEMIN
+    pf = {"source": {"kind": "project_file", "project_id": 3, "file_id": 9}}
+    assert "'file_id': 9" in _ecrit(monkeypatch, pf, tool="transcription_create")["source"]

@@ -38,7 +38,12 @@ point d'écriture) : identité d'URL et valeur des clés de query secrètes masq
 message amont recopie parfois une URL à clé (F-049, `connectUrl` Browserbase). `args`
 aussi, chaîne par chaîne (`journal_secrets.masquer_urls_des_valeurs`, 15/10/2026) : une
 URL pré-signée passée à un outil y écrivait sa signature (`X-Amz-Signature`,
-`X-Amz-Credential`, `X-Amz-Security-Token`, `sig` d'un SAS…). Sentry
+`X-Amz-Credential`, `X-Amz-Security-Token`, `sig` d'un SAS…). L'adresse d'une
+**source de fichier** (`{kind: "url", url}`, quel que soit l'outil) tombe entière :
+seule l'origine reste, suivie du masque (`https://hote/…#3f7a…`) — un accès porté
+par le chemin ou par une clé de requête ordinaire échappe à la reconnaissance par la
+forme (oto-backend#1301). `calllog.truncated_args` l'applique avant de mettre les
+arguments en texte, la structure étant ce qui reconnaît une source. Sentry
 applique le même masque aux messages d'exception (`_before_send`). `error_kind` porte le `.code` que rend `error_taxonomy.classify(exc)` sur
 l'exception CAPTURÉE (ex. `not_authorized` sur un 401/403 amont, `upstream_timeout`,
 `internal`…) — écrit par `calllog._record` (via `calllog._error_kind`) sur un échec,
