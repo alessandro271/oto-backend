@@ -3,7 +3,7 @@ permissions).
 
 The ACCOUNT carrier `microsoft` (`providers/microsoft.py`) holds the vault, the
 callback and the application's coordinates; each SERVICE (`SERVICE_SCOPES`: `sharepoint`,
-`outlook`, `outlook_calendar`, `teams`, `onenote`) is a connector that borrows
+`outlook`, `outlook_calendar`, `teams`, `onenote`, `entra`) is a connector that borrows
 it (`credential_of="microsoft"`) and asks for ITS scopes only — the Google pattern
 (`auth/google.py`), written for Entra.
 
@@ -117,11 +117,17 @@ SERVICE_SCOPES: dict[str, str] = {
     "outlook_calendar": "CALENDAR",
     "teams": "TEAMS",
     "onenote": "NOTES",
+    "entra": "DIRECTORY",
 }
 SERVICES: tuple[str, ...] = tuple(SERVICE_SCOPES)
 SERVICE_LABELS = {"sharepoint": "SharePoint & OneDrive", "outlook": "Outlook",
                   "outlook_calendar": "Outlook Calendar", "teams": "Teams",
-                  "onenote": "OneNote"}
+                  "onenote": "OneNote", "entra": "Microsoft 365 directory"}
+#: The services whose OWN scopes need a tenant administrator (the organization's
+#: directory): an approval link covers them only when asked for by name, or from their
+#: card — never in the default « approve oto for the whole organization », which would
+#: otherwise open the directory to every member who connects a card.
+ADMIN_ONLY_SERVICES: frozenset[str] = frozenset({"entra"})
 #: A service's ADMINISTRATOR tier: the lib's scopes that no card requests at connection
 #: (only a tenant administrator can grant them, `admin_consent_url`), what they open,
 #: checked at use by the service's tools (`has_scopes`). Teams: reading channel messages.
@@ -491,11 +497,13 @@ def admin_approval(sub: str, services: Optional[list[str]] = None,
                    tenant: Optional[str] = None, return_app: str = "",
                    connector: str = "sharepoint") -> dict:
     """The administrator's approval link, as the card serves it: `{url, services,
-    tenant, expires_at}`. `services` defaults to ALL the Microsoft cards; `tenant` is
+    tenant, expires_at}`. `services` defaults to the Microsoft cards — those of
+    `ADMIN_ONLY_SERVICES` only when the link is asked from their own card; `tenant` is
     what the person typed (domain, directory ID, SharePoint address — `normalize_tenant`),
     `organizations` when empty. Raises `ValueError` (unknown service, card or directory),
     `RuntimeError` (application not configured)."""
-    choisis = tuple(services) if services else SERVICES
+    choisis = tuple(services) if services else tuple(
+        s for s in SERVICES if s not in ADMIN_ONLY_SERVICES or s == connector)
     annuaire_choisi = normalize_tenant(tenant)
     url = admin_consent_url(sub, choisis, annuaire_choisi, return_app, connector)
     expire = datetime.fromtimestamp(time.time() + ADMIN_LINK_TTL, tz=timezone.utc)

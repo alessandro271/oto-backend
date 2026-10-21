@@ -67,9 +67,9 @@ def test_le_perimetre_est_celui_quon_croit():
     # service — chacun lit SON lien (les comptes qui ont autorisé le service).
     # `outlook`, `outlook_calendar`, `teams` (2026-10-08) : services suivants, même lecture.
     # `ubersuggest` (2026-10-08) : connexion Ubersuggest par personne, même patron.
-    # `onenote` (2026-10-21) : service Microsoft suivant, même lecture.
+    # `onenote`, `entra` (2026-10-21) : services Microsoft suivants, même lecture.
     assert _federated() == {"google", "instagram_meta", "meta_ads", "microsoft", "sharepoint",
-                            "outlook", "outlook_calendar", "teams", "onenote", "ubersuggest",
+                            "outlook", "outlook_calendar", "teams", "onenote", "entra", "ubersuggest",
                             "gmail", "drive", "sheets", "calendar", "tasks", "chat",
                             "bigquery", "google_ads"}
 

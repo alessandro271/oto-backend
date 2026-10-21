@@ -60,10 +60,12 @@ def _faux_scopes():
     s.CALENDAR = (G + "Calendars.ReadWrite",)
     s.TEAMS = (G + "Team.ReadBasic.All", G + "Chat.ReadWrite")
     s.NOTES = (G + "Notes.ReadWrite.All",)
+    s.DIRECTORY = (G + "Directory.Read.All", G + "AuditLog.Read.All", G + "Sites.Read.All")
     s.TEAMS_ADMIN = (G + "ChannelMessage.Read.All",)
     s.REFRESH = (G + ".default", "offline_access")
     canon = {n.removeprefix(G).lower(): n.removeprefix(G)
-             for t in (s.IDENTITY, s.FILES, s.MAIL, s.CALENDAR, s.TEAMS, s.NOTES, s.TEAMS_ADMIN)
+             for t in (s.IDENTITY, s.FILES, s.MAIL, s.CALENDAR, s.TEAMS, s.NOTES, s.DIRECTORY,
+                       s.TEAMS_ADMIN)
              for n in t}
 
     def _court(n):
@@ -283,6 +285,7 @@ def test_scopes_par_carte(env):
     assert env.auth.scopes_for("outlook_calendar") == s.IDENTITY + s.CALENDAR
     assert env.auth.scopes_for("teams") == s.IDENTITY + s.TEAMS
     assert env.auth.scopes_for("onenote") == s.IDENTITY + s.NOTES
+    assert env.auth.scopes_for("entra") == s.IDENTITY + s.DIRECTORY
     with pytest.raises(RuntimeError, match="not a known Microsoft service"):
         env.auth.scopes_for("planner")
 
@@ -970,7 +973,7 @@ def test_l_axe_account_est_accepte_sur_les_outils(env):
 
     for outil in ("sharepoint_file", "sharepoint_site", "outlook",
                   "outlook_act", "outlook_calendar_calendars", "outlook_calendar_event",
-                  "teams", "teams_act", "onenote", "onenote_act"):
+                  "teams", "teams_act", "onenote", "onenote_act", "entra"):
         assert "_account" in {a.param for a in call_axes.axes_for_call(outil)}, outil
 
 
@@ -1188,9 +1191,11 @@ def test_le_schema_annonce_account_sur_toutes_les_cartes_microsoft():
 
     for outil in ("microsoft_accounts", "sharepoint_file", "sharepoint_site",
                   "outlook", "outlook_act", "outlook_calendar_calendars",
-                  "outlook_calendar_event", "teams", "teams_act", "onenote", "onenote_act"):
+                  "outlook_calendar_event", "teams", "teams_act", "onenote", "onenote_act",
+                  "entra"):
         assert "_account" in {a.param for a in call_axes.axes_for(outil)}, outil
-    for carte in (PORTEUR, "sharepoint", "outlook", "outlook_calendar", "teams", "onenote"):
+    for carte in (PORTEUR, "sharepoint", "outlook", "outlook_calendar", "teams", "onenote",
+                  "entra"):
         assert providers.REGISTRY[carte].account_axis_static, carte
 
 

@@ -66,7 +66,8 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
 > **Troisième porteur depuis le 2026-10-08 : `microsoft`** (le compte Microsoft 365,
 > OAuth délégué par personne, ou au nom de l'org ou d'une équipe : `docs/partage-de-compte.md`
 > lot 5). `sharepoint` en devient le premier service
-> (`credential_of="microsoft"`), `outlook`, `outlook_calendar`, `teams` et `onenote` les suivants,
+> (`credential_of="microsoft"`), `outlook`, `outlook_calendar`, `teams`, `onenote` et l'annuaire `entra` (lecture,
+> approuvé par un administrateur depuis sa seule carte : `ADMIN_ONLY_SERVICES`) les suivants,
 > chacun né avec ses outils (une carte sans outil se présenterait comme un connecteur
 > sans en avoir les effets) — flux, lien, indice et identités se DÉRIVENT du registre
 > (`credential_of="microsoft"`). Un service peut avoir un PALIER ADMIN que nulle carte

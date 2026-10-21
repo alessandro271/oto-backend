@@ -184,11 +184,11 @@ def test_seuls_deux_connecteurs_se_declarent_MULTI_et_on_sait_pourquoi():
     # microsoft (2026-10-08) : le porteur du compte Microsoft 365 reprend la raison ;
     # sharepoint la garde, en service qui l'emprunte (comme les services Google).
     # outlook, outlook_calendar, teams (2026-10-08) : services suivants, même forme ;
-    # onenote (2026-10-21) aussi.
+    # onenote, entra (2026-10-21) aussi.
     assert sorted(c.name for c in providers._REGISTRY_LIST
                   if c.cardinality == "multi") == [
-        "bigquery", "browser", "calendar", "chat", "drive", "gmail", "google", "google_ads",
-        "microsoft", "onenote", "outlook", "outlook_calendar", "sharepoint", "sheets", "tasks",
+        "bigquery", "browser", "calendar", "chat", "drive", "entra", "gmail", "google",
+        "google_ads", "microsoft", "onenote", "outlook", "outlook_calendar", "sharepoint", "sheets", "tasks",
         "teams"]
     for nom in ("zoho", "folk"):
         con = providers.REGISTRY[nom]
@@ -230,7 +230,7 @@ def test_l_annonce_STATIQUE_de_l_axe_compte_n_est_plus_la_cardinalite():
     statiques = sorted(c.name for c in providers._REGISTRY_LIST if c.account_axis_static)
     # + microsoft et ses services (15/10/2026) : un compte prêté ne sert que nommé par
     # `_account`, que l'annonce dynamique ne montrait jamais à l'emprunteuse.
-    assert statiques == ["bigquery", "browser", "calendar", "chat", "drive", "folk", "gmail",
+    assert statiques == ["bigquery", "browser", "calendar", "chat", "drive", "entra", "folk", "gmail",
                          "google", "google_ads", "microsoft", "onenote", "outlook",
                          "outlook_calendar", "sharepoint", "sheets", "tasks", "teams", "zoho"]
     multi = [c.name for c in providers._REGISTRY_LIST if c.auth_multi_account]
