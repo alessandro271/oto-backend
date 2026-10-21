@@ -28,7 +28,7 @@ from starlette.routing import Route
 
 from ..auth import flow as oauth_flow
 from ..auth import zoho as zoho_oauth
-from .. import config, roles
+from .. import roles
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +43,6 @@ def make_routes(
     options_handler: Callable[[Request], Awaitable[Response]],
 ) -> list[Route]:
 
-    def _app_url() -> str:
-        return config.dashboard_url()
-
     def _retour(etat: str, return_app: str = "", org_id: "int | None" = None,
                connector: str = "zoho", extra: "dict | None" = None) -> str:
         """Where to send the browser back after the Zoho consent.
@@ -56,25 +53,26 @@ def make_routes(
         oto-dashboard, a user of a partner front ended their consent
         on another product.
 
-        The default stays `/console/connectors` BYTE FOR BYTE: it is a path specific
-        to the dashboard, which the generic `return_url` pattern does not know — falling
-        back to it would send the historical caller to `/connectors`.
+        The default goes through the same maker as every other connector
+        (`oauth_flow.return_url`, path `/connectors`). It used to compose
+        `/console/connectors` by hand — a path no dashboard route serves: a consent
+        that came back there landed on a catch-all page that read nothing of the
+        return (`connect=`, `warning=`, `consented_org*`).
 
         Single OAuth return convention (oto-backend#670): the suffix comes
         from the shared maker `oauth_flow.connector_return_suffix`. The old
         form `?<connector>=connected` / `?zoho=error`, duplicated for the length of a
         notice period, was removed on 17/09/2026 — no reader measured any more (the
-        dashboard has read `connect=` since 04/09, and no Zoho connection exists
-        at the only partner concerned, Tulina)."""
+        dashboard has read `connect=` since 04/09, and no Zoho connection existed
+        at the only partner concerned)."""
         suffix = oauth_flow.connector_return_suffix(connector, etat)
         if extra:
             # What the dashboard SAYS on return (`warning=`, `consented_org=`,
             # `consented_org_id=`): named codes and the member's own Zoho organization,
             # never an upstream message. A list value repeats its parameter (`doseq`).
             suffix += "&" + urllib.parse.urlencode(extra, doseq=True)
-        if oauth_flow.resolve_return_app(return_app):
-            return oauth_flow.return_url(return_app, suffix, org=org_id)
-        return f"{_app_url()}/console/connectors{suffix}"
+        return oauth_flow.return_url(oauth_flow.resolve_return_app(return_app), suffix,
+                                     org=org_id)
 
     def _avertissement(verdict: "zoho_oauth.OrgCheck") -> "dict | None":
         """The warning of a stored consent, and — `zoho_org_unverified` — the Zoho

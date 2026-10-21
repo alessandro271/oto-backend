@@ -636,7 +636,7 @@ un : un champ toujours présent devient du bruit qu'on cesse de lire.
 2. **Clé** ? il pose sa clé Unipile (BYO) **ou** un admin lui **grant la clé plateforme** (fiche user → « grant key »).
 3. **Option débloquée** ? l'org est **abonnée** à un plan qui l'inclut, **ou** un admin
    **accorde l'option** (comp, fiche user ou org), **ou** l'entité est en BYO.
-4. Puis **lui** connecte son LinkedIn/WhatsApp (hosted-auth, `/console/connectors`).
+4. Puis **lui** connecte son LinkedIn/WhatsApp (hosted-auth, `/connectors`).
 
 ## Trous connus (à combler)
 

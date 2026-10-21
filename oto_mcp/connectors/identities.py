@@ -232,7 +232,7 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
             f"The {provider.title()} account that was granted to you is no longer operable "
             "(authorization revoked or account disconnected by its owner). "
             "Reselect your identity (oto_identity(op='set') or "
-            f"{_tableau_de_bord(sub)}/console/connectors).")
+            f"{_tableau_de_bord(sub)}/connectors).")
     return _own_unipile_account_id(sub, provider)
 
 
