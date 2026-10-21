@@ -296,8 +296,7 @@ def _tenant_primaire_declare() -> Iterator[None]:
 # plupart des bancs décrivent. Un banc qui veut l'APRÈS déplace la date par son réglage
 # (`OTO_UPSERT_IMPLICITE_REFUSE_LE`, `OTO_COLONNE_NON_DECLAREE_REFUSEE_LE`,
 # `OTO_VALIDATION_COMPLETE_LE`), jamais l'horloge.
-@pytest.fixture(autouse=True)
-def _bascules_datees_a_la_veille(monkeypatch: pytest.MonkeyPatch) -> None:
+def _figer_a_la_veille(monkeypatch: pytest.MonkeyPatch) -> None:
     from datetime import timedelta
 
     from oto_mcp.datastore import colonnes_non_declarees as cnd
@@ -311,6 +310,12 @@ def _bascules_datees_a_la_veille(monkeypatch: pytest.MonkeyPatch) -> None:
                         lambda: cnd.COLONNE_NON_DECLAREE_REFUSEE_LE - veille)
     monkeypatch.setattr(vc, "_aujourdhui",
                         lambda: vc.VALIDATION_COMPLETE_LE - veille)
+
+
+@pytest.fixture(autouse=True)
+def _bascules_datees_a_la_veille(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Par test aussi : un banc qui déplace `_aujourdhui` est remis à la veille au suivant.
+    _figer_a_la_veille(monkeypatch)
 
 
 @pytest.fixture
@@ -469,7 +474,20 @@ def pytest_collect_file(file_path, parent):
     return collectes
 
 
+#: Le gréement des bascules datées posé pour TOUT le processus (`pytest_configure`) : la
+#: collecte (un texte servi construit à l'import d'un module de tests) et les fixtures de
+#: portée module (un tableau semé une fois pour tout un fichier) passent AVANT les fixtures
+#: de test, donc avant `_bascules_datees_a_la_veille` — sans ceci, elles jugent au VRAI
+#: jour, et la suite change de verdict à la date d'une bascule.
+_VEILLE_DU_PROCESSUS = pytest.MonkeyPatch()
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    _VEILLE_DU_PROCESSUS.undo()
+
+
 def pytest_configure(config: pytest.Config) -> None:
+    _figer_a_la_veille(_VEILLE_DU_PROCESSUS)
     config.addinivalue_line(
         "markers",
         f"{MARQUEUR}: ce test n'a de SENS que face à l'oto-core épinglé — il est "
