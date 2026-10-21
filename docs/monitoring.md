@@ -355,7 +355,7 @@ une par limiteur, sous le même interrupteur que la limite de débit (`OTO_DEBIT
 
 | limiteur | borne (réglage, défaut) | classe | clé hachée | en `enforce` |
 | --- | --- | --- | --- | --- |
-| `corps` | `OTO_BORNE_CORPS_OCTETS` 4 Mo, `OTO_BORNE_CORPS_UPLOAD_OCTETS` 30 Mo | `defaut` \| `upload` | jeton porté, sinon adresse | `413 payload_too_large` |
+| `corps` | `OTO_BORNE_CORPS_OCTETS` 4 Mo, `OTO_BORNE_CORPS_UPLOAD_OCTETS` 110 Mo | `defaut` \| `upload` | jeton porté, sinon adresse | `413 payload_too_large` |
 | `outil` | `OTO_BORNE_OUTIL_S` 120 s | le nom de l'outil | `user:<sub>` | erreur MCP `tool_timeout` |
 | `sql` | `OTO_MCP_DB_STATEMENT_TIMEOUT_MS` 30 s | la fonction appelante (`module:fonction`) | le texte SQL (jamais ses paramètres) | `statement_timeout` posé sur le pool |
 | `session` | `OTO_BORNE_SESSION_INACTIVE_S` 30 min | `mcp` | jeton porté, sinon adresse | `session_idle_timeout` de l'SDK `mcp` |

@@ -493,7 +493,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "HTTP hors routes d'upload. Mesurée en `report`, `413` en `enforce` "
              "(`OTO_DEBIT_MODE`) ; `0` désarme ; une valeur illisible empêche le démarrage.",
              ("oto_mcp/bornes_processus.py:110",)),
-    Variable("OTO_BORNE_CORPS_UPLOAD_OCTETS", Classe.REGLAGE, "31457280",
+    Variable("OTO_BORNE_CORPS_UPLOAD_OCTETS", Classe.REGLAGE, "115343360",
              "Borne du processus (#1232) : taille max (octets) du corps sur une route "
              "d'upload (reconnue à son contrat : corps déclaré non JSON). Mesurée en "
              "`report`, `413` en `enforce` ; `0` désarme ; illisible : refus de démarrer.",

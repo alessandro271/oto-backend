@@ -57,7 +57,7 @@ def test_les_defauts_sont_ceux_decides_et_le_mode_est_celui_du_debit(monkeypatch
         monkeypatch.delenv(nom, raising=False)
     r = bp.lire()
     assert r == bp.Reglages(mode="report", corps_octets=4 * 1024 * 1024,
-                            corps_upload_octets=30 * 1024 * 1024, outil_s=120,
+                            corps_upload_octets=110 * 1024 * 1024, outil_s=120,
                             sql_ms=30_000, session_inactive_s=1800)
     assert not r.applique and r.actif
     monkeypatch.setenv("OTO_DEBIT_MODE", "enforce")

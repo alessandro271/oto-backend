@@ -4,7 +4,7 @@
 ne se plafonne pas, on l'allège. Ce qui reste, ce sont quatre bornes qui valent pour
 TOUT ce que sert le processus :
 
-- `corps` — la taille du corps d'une requête HTTP (`borne_corps`) : 4 Mo, 30 Mo sur les
+- `corps` — la taille du corps d'une requête HTTP (`borne_corps`) : 4 Mo, 110 Mo sur les
   routes d'upload, reconnues à leur DÉCLARATION (`ContratDeRoute.corps` d'un type autre
   que JSON). En application : `413 payload_too_large` ;
 - `outil` — la durée d'un appel d'outil MCP (`middleware/delai_outil`) : 120 s. En
@@ -47,7 +47,7 @@ ENFORCE, REPORT, OFF = limite_debit.ENFORCE, limite_debit.REPORT, limite_debit.O
 
 #: Les défauts, tels que décidés le 13/10/2026 (#1232).
 CORPS_OCTETS = 4 * 1024 * 1024
-CORPS_UPLOAD_OCTETS = 30 * 1024 * 1024
+CORPS_UPLOAD_OCTETS = 110 * 1024 * 1024
 OUTIL_S = 120
 SQL_MS = 30_000
 SESSION_INACTIVE_S = 30 * 60

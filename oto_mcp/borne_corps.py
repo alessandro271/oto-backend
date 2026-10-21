@@ -1,7 +1,7 @@
 """Garde ASGI : la TAILLE DU CORPS de toute requête HTTP (#1232, lot 4).
 
 Une borne GLOBALE du processus (`bornes_processus`) : `OTO_BORNE_CORPS_OCTETS` (4 Mo) pour
-tout ce que sert le processus, `OTO_BORNE_CORPS_UPLOAD_OCTETS` (30 Mo) sur les routes
+tout ce que sert le processus, `OTO_BORNE_CORPS_UPLOAD_OCTETS` (110 Mo) sur les routes
 d'upload. Une route d'upload se reconnaît à sa DÉCLARATION, jamais à une liste de
 chemins : son handler porte un `ContratDeRoute` dont le corps, pour ce verbe, déclare un
 type de média autre que JSON (multipart, octets bruts). La table de routes vivante est
