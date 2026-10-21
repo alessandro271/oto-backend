@@ -283,13 +283,15 @@ def test_les_predicats_ne_sont_lus_que_par_la_garde_centrale():
 def test_la_garde_centrale_est_traversee_par_les_quatre_portes():
     """REST (jetons `oto_` et JWT : `api/base.py`, deux branches), MCP (le middleware sur
     `on_request`), lien d'upload signé, relais d'upload vers la GED Pennylane (cabinet,
-    `/api/relay/{token}` : son jeton scelle un compte, rejoué à la réception) — et le
+    `/api/relay/{token}` : son jeton scelle un compte, rejoué à la réception), lien
+    durable vers le CV d'un candidat WTTJ (`/api/wttj/resume/{token}`, même régime à
+    chaque ouverture) — et le
     worker de `jev_rows(background=true)`,
     qui rejoue chaque tranche sous l'identité de l'appelant SANS requête : la garde y
     est relue avant chaque tranche. Une porte d'identité neuve doit s'ajouter ICI —
     c'est l'endroit où elle se déclare."""
     assert _appels("garde_identite", "refus") == {
         "api/base.py", "middleware/account_suspended.py", "api/uploads.py",
-        "api/pennylane_firm.py", "jev_jobs_worker.py"}
+        "api/pennylane_firm.py", "api/wttj.py", "jev_jobs_worker.py"}
     base_src = (RACINE / "api" / "base.py").read_text()
     assert base_src.count("garde_identite.refus") == 2

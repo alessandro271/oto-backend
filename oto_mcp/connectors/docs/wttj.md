@@ -12,6 +12,7 @@ drive your wttj ats: everything starts from an **organization**, a job offer is 
 - "which organizations can i see?" → `wttj_organization` (gives the `organization_reference`s)
 - "which jobs are published?" → `wttj_job(op="list", status="published")`; a job's stages → `wttj_job(op="get")`
 - "who is interviewing for this role?" → `wttj_candidate(op="list")` with `job_reference` and `job_stage_id`; details → `wttj_candidate(op="get")`
+- "send me their cv" → `wttj_candidate(op="get")` (or `op="list"`) gives `resume_link`: the link to hand a person. it lasts 30 days and asks wttj for a fresh copy at each click (nothing is stored by oto). `resume_url` is wttj's own link and expires after 30 minutes: only for downloading right away
 - "add this candidate" → `wttj_candidate(op="create")`; "move them to the next stage" → `wttj_candidate(op="update", job_stage_id=…)`; archive → `archived=true`
 - "log yesterday's conversation" → `wttj_comment` (write-only: the api does not read comments back)
 - "what did we write to this candidate?" → `wttj_emails` (read only, per candidate; `fields=["*"]` for the bodies)

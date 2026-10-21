@@ -18,6 +18,7 @@ Les handlers vivent par DOMAINE, chacun une fonction de module appelable seule :
 | `api/projects.py`   | fichiers bruts d'un projet, export ZIP                |
 | `api/uploads.py`    | réception d'un upload signé (`/api/upload/{token}`)   |
 | `api/pennylane_firm.py` | relais d'upload vers la GED Pennylane (`/api/relay/{token}`, manifeste d'un lot `/api/relay/batch/{token}`) |
+| `api/wttj.py` | lien DURABLE vers le CV d'un candidat WTTJ (`/api/wttj/resume/{token}`, 302 vers une URL fraîchement signée) |
 
 Les modules ANTÉRIEURS à la découpe gardent leur forme : datastore, sirene,
 accords, zoho, salesforce, billing — ils exposent un
@@ -88,6 +89,7 @@ from . import projects
 from . import transcription as api_transcription
 from . import uploads
 from . import pennylane_firm as api_pennylane_firm
+from . import wttj as api_wttj
 
 logger = logging.getLogger(__name__)
 
@@ -886,6 +888,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         # Le manifeste d'un lot de liens de relais (TSV), jeton `typ="relay_batch"`.
         # Aucune collision avec la ligne au-dessus : `{token}` n'avale pas de `/`.
         Route("/api/relay/batch/{token}", api_pennylane_firm.relay_manifest, methods=["GET"]),
+        # Lien DURABLE vers le CV d'un candidat WTTJ, jeton `typ="wttj_resume"` (30 jours,
+        # réutilisable) : rejoue compte / org / équipe scellés, redemande le candidat à
+        # WTTJ et redirige (302) vers son `resume_url` signé à l'instant (`api/wttj.py`).
+        Route("/api/wttj/resume/{token}", api_wttj.resume_open, methods=["GET"]),
         # Page de partage publique server-rendered (lisible par un agent, ADR gap
         # « pages SPA non lisibles »). Servie sous dashboard.oto.ninja via Caddy.
         Route("/p/d/{token}", public.public_doc_view, methods=["GET"]),

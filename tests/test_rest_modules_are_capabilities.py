@@ -190,6 +190,10 @@ _KNOWN: dict[str, str] = {
     # dans l'URL, aucun JWT, lu par le `curl` d'un script), et une réponse TSV, pas du
     # JSON — ce n'est pas la forme d'une capacité.
     "/api/relay/batch/{token}": NATURE,
+    # Le lien DURABLE vers le CV d'un candidat WTTJ : un NAVIGATEUR le suit (un humain
+    # à qui l'agent l'a donné), sans en-tête d'auth, et reçoit une redirection 302 vers
+    # le CDN de WTTJ — pas du JSON. Le jeton signé `typ="wttj_resume"` EST l'autorisation.
+    "/api/wttj/resume/{token}": NATURE,
     # Icône de marque servie au NAVIGATEUR (l'endpoint MCP n'a pas de page racine) :
     # du SVG, pas du JSON, pas d'autz à tenir. Ce n'est pas une opération d'API.
     "/favicon.svg": NATURE,
