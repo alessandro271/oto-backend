@@ -78,16 +78,19 @@ def non_declarees_du_lot(schema: Optional[dict], rows: Iterable[Any]) -> list[st
     Une clé pointée ou par rang (`site_web.comment`, `contacts[0].email`) vise la
     colonne de sa BASE : elle compte comme non déclarée si sa base l'est. Les clés
     techniques (`_id`, `_revision`…) ne sont pas des colonnes ; leurs refus propres
-    viennent ensuite, ligne par ligne. Un `null` sur une colonne non déclarée l'EFFACE,
-    il n'en crée pas, et un `{}` n'est pas une valeur (oto#165, écarté avant d'écrire) :
-    ni l'un ni l'autre n'est compté (même règle que `non_declarees`)."""
+    viennent ensuite, ligne par ligne, comme celui d'un nom vide ou blanc, qui n'est pas
+    un nom de colonne (#231, `points._refuse_dotted_names`) : le déclarer serait
+    impossible. Un `null` sur une colonne non déclarée l'EFFACE, il n'en crée pas, et un
+    `{}` n'est pas une valeur (oto#165, écarté avant d'écrire) : ni l'un ni l'autre
+    n'est compté (même règle que `non_declarees`)."""
     connues = declarees(schema)
     out: set = set()
     for data in rows:
         if not isinstance(data, dict):
             continue
         for cle, valeur in data.items():
-            if not isinstance(cle, str) or cle.startswith("_") or cle in connues:
+            if (not isinstance(cle, str) or not cle.strip() or cle.startswith("_")
+                    or cle in connues):
                 continue
             base = _BASE.split(cle, 1)[0]
             if base in connues or valeur is None or valeur == {}:
