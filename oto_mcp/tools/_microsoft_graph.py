@@ -1,5 +1,5 @@
 """What the Microsoft 365 SERVICE tools share — SharePoint & OneDrive, Outlook, Outlook
-Calendar, Teams: the caller's token for ONE service, Graph's 4xx turned
+Calendar, Teams, OneNote: the caller's token for ONE service, Graph's 4xx turned
 into a named refusal, the argument checks, the markdown body.
 
 A helper, not a connector: no `register()` (`tests/test_capabilities_drift.py`). Each

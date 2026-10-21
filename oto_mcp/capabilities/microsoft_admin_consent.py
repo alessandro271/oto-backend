@@ -26,7 +26,7 @@ from .registry import CAPABILITIES
 class AdminConsentInput(BaseModel):
     services: Optional[list[str]] = Field(
         default=None, description="Microsoft services to approve (sharepoint, outlook, "
-                                  "outlook_calendar, teams) — default: all of them.")
+                                  "outlook_calendar, teams, onenote) — default: all of them.")
     tenant: Optional[str] = Field(
         default=None, description="The organization's directory: its Microsoft domain "
                                   "(contoso.onmicrosoft.com, contoso.com), its directory "

@@ -149,6 +149,7 @@ _DECLARATIONS: tuple[str, ...] = (
     "outlook",
     "outlook_calendar",
     "teams",
+    "onenote",
     "promptwatch",
     # --- per-user sessions (outside resolve_api_key, dedicated storage) ------
     "crunchbase",

@@ -3,7 +3,7 @@ permissions).
 
 The ACCOUNT carrier `microsoft` (`providers/microsoft.py`) holds the vault, the
 callback and the application's coordinates; each SERVICE (`SERVICE_SCOPES`: `sharepoint`,
-`outlook`, `outlook_calendar`, `teams`) is a connector that borrows
+`outlook`, `outlook_calendar`, `teams`, `onenote`) is a connector that borrows
 it (`credential_of="microsoft"`) and asks for ITS scopes only — the Google pattern
 (`auth/google.py`), written for Entra.
 
@@ -116,10 +116,12 @@ SERVICE_SCOPES: dict[str, str] = {
     "outlook": "MAIL",
     "outlook_calendar": "CALENDAR",
     "teams": "TEAMS",
+    "onenote": "NOTES",
 }
 SERVICES: tuple[str, ...] = tuple(SERVICE_SCOPES)
 SERVICE_LABELS = {"sharepoint": "SharePoint & OneDrive", "outlook": "Outlook",
-                  "outlook_calendar": "Outlook Calendar", "teams": "Teams"}
+                  "outlook_calendar": "Outlook Calendar", "teams": "Teams",
+                  "onenote": "OneNote"}
 #: A service's ADMINISTRATOR tier: the lib's scopes that no card requests at connection
 #: (only a tenant administrator can grant them, `admin_consent_url`), what they open,
 #: checked at use by the service's tools (`has_scopes`). Teams: reading channel messages.

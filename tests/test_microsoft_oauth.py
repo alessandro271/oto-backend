@@ -59,10 +59,11 @@ def _faux_scopes():
     s.MAIL = (G + "Mail.ReadWrite", G + "Mail.Send")
     s.CALENDAR = (G + "Calendars.ReadWrite",)
     s.TEAMS = (G + "Team.ReadBasic.All", G + "Chat.ReadWrite")
+    s.NOTES = (G + "Notes.ReadWrite.All",)
     s.TEAMS_ADMIN = (G + "ChannelMessage.Read.All",)
     s.REFRESH = (G + ".default", "offline_access")
     canon = {n.removeprefix(G).lower(): n.removeprefix(G)
-             for t in (s.IDENTITY, s.FILES, s.MAIL, s.CALENDAR, s.TEAMS, s.TEAMS_ADMIN)
+             for t in (s.IDENTITY, s.FILES, s.MAIL, s.CALENDAR, s.TEAMS, s.NOTES, s.TEAMS_ADMIN)
              for n in t}
 
     def _court(n):
@@ -281,8 +282,9 @@ def test_scopes_par_carte(env):
     assert env.auth.scopes_for("outlook") == s.IDENTITY + s.MAIL
     assert env.auth.scopes_for("outlook_calendar") == s.IDENTITY + s.CALENDAR
     assert env.auth.scopes_for("teams") == s.IDENTITY + s.TEAMS
+    assert env.auth.scopes_for("onenote") == s.IDENTITY + s.NOTES
     with pytest.raises(RuntimeError, match="not a known Microsoft service"):
-        env.auth.scopes_for("onenote")
+        env.auth.scopes_for("planner")
 
 
 def test_les_scopes_d_avant_le_porteur_donnent_sharepoint_sans_reconnexion(env):
@@ -834,7 +836,7 @@ def test_lien_d_approbation_demande_l_union_des_services(env):
     assert appel.kwargs["tenant"] == "organizations"
     assert not set(s.TEAMS_ADMIN) & set(appel.kwargs["scopes"]), "TEAMS_ADMIN pour Teams seul"
     with pytest.raises(ValueError, match="Unknown Microsoft service"):
-        env.auth.admin_consent_url(SUB, ("onenote",))
+        env.auth.admin_consent_url(SUB, ("planner",))
 
 
 def test_le_lien_d_approbation_vit_sept_jours(env, monkeypatch):
@@ -879,7 +881,7 @@ def test_le_lien_d_approbation_servi_par_la_carte(env):
     ctx = types.SimpleNamespace(sub=SUB)
     out = cap.handler(ctx, cap.Input())
     assert out["url"] == "https://login.example/adminconsent?x=1"
-    assert out["services"] == ["sharepoint", "outlook", "outlook_calendar", "teams"]
+    assert out["services"] == ["sharepoint", "outlook", "outlook_calendar", "teams", "onenote"]
     assert out["tenant"] == "organizations"
     assert out["expires_at"].endswith("Z")
     etat = env.auth.verify_admin_state(env.coeur.auth.admin_consent_url.call_args.args[2])
@@ -892,7 +894,7 @@ def test_le_lien_d_approbation_servi_par_la_carte(env):
 
 
 @pytest.mark.parametrize("entree,motif", [
-    ({"services": ["onenote"]}, "Unknown Microsoft service"),
+    ({"services": ["planner"]}, "Unknown Microsoft service"),
     ({"connector": "gmail"}, "not a Microsoft card"),
     ({"tenant": "consumers"}, "Client directory"),
 ])
@@ -968,7 +970,7 @@ def test_l_axe_account_est_accepte_sur_les_outils(env):
 
     for outil in ("sharepoint_file", "sharepoint_site", "outlook",
                   "outlook_act", "outlook_calendar_calendars", "outlook_calendar_event",
-                  "teams", "teams_act"):
+                  "teams", "teams_act", "onenote", "onenote_act"):
         assert "_account" in {a.param for a in call_axes.axes_for_call(outil)}, outil
 
 
@@ -1186,9 +1188,9 @@ def test_le_schema_annonce_account_sur_toutes_les_cartes_microsoft():
 
     for outil in ("microsoft_accounts", "sharepoint_file", "sharepoint_site",
                   "outlook", "outlook_act", "outlook_calendar_calendars",
-                  "outlook_calendar_event", "teams", "teams_act"):
+                  "outlook_calendar_event", "teams", "teams_act", "onenote", "onenote_act"):
         assert "_account" in {a.param for a in call_axes.axes_for(outil)}, outil
-    for carte in (PORTEUR, "sharepoint", "outlook", "outlook_calendar", "teams"):
+    for carte in (PORTEUR, "sharepoint", "outlook", "outlook_calendar", "teams", "onenote"):
         assert providers.REGISTRY[carte].account_axis_static, carte
 
 
