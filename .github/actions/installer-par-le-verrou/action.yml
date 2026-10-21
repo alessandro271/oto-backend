@@ -9,7 +9,8 @@ description: >-
 # jeu que celui qui sert (fastmcp 3.4.7 + mcp 1.30.0 en CI, 3.4.2 + 1.27.2 en
 # production, mesuré le 11/09). Une CI verte ne disait rien de ce qui tourne. La CI
 # installe désormais PAR LE VERROU, comme le déploiement : une coordonnée = un jeu.
-# La version d'uv est celle de la box ; elle vit ici et nulle part ailleurs.
+# La version d'uv est celle de la box ; elle vit ici, et l'image (`Dockerfile`) la reprend
+# sous la garde de tests/test_image_par_le_verrou.py.
 #
 # `au-plus-recent` sert le SEUL job qui doit résoudre à neuf (`verrou-hebdo.yml`) :
 # l'alerte précoce que l'ancienne CI donnait par accident, rendue délibérée.
