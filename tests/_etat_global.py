@@ -16,6 +16,13 @@ une ERREUR qui nomme le test et le réglage, et l'état est remis pour ne pas pr
 fuite au test suivant. Les outils qui restaurent d'eux-mêmes (`monkeypatch.chdir`,
 `monkeypatch.syspath_prepend`, `monkeypatch.setattr`) sont démontés avant la comparaison.
 
+Et un réglage qui n'est pas de la bibliothèque standard : le LECTEUR D'IDENTITÉ
+(`auth.hooks.current_user_sub_from_token`), que des modules lient à leur import (`from
+..auth.hooks import current_user_sub_from_token`). Un module importé PENDANT qu'un test
+patche `auth.hooks` lie le faux lecteur, et `monkeypatch` ne le rend pas : il croit que
+c'est sa valeur d'origine. Vécu le 21/10/2026 : l'identité d'un banc a suivi tout le
+worker, et un relevé `tools/list` censé anonyme a lu la base au nom de ce sub.
+
 Hors du relevé, délibérément : les filtres `warnings` (pytest les isole déjà test par test),
 l'état de `random` (il bouge dès qu'un test tire un nombre — un relevé crierait à chaque
 test sans rien prouver).
@@ -53,8 +60,28 @@ def _decimal() -> tuple:
             tuple(sorted(t.__name__ for t, actif in c.traps.items() if actif)))
 
 
+_LECTEUR = "current_user_sub_from_token"
+
+
+def _lecteur_d_origine():
+    from oto_mcp.auth import hooks
+    return hooks.__dict__[_LECTEUR]
+
+
+def _lecteurs_lies() -> tuple:
+    """Les modules d'`oto_mcp` dont le lecteur d'identité n'est plus l'original de
+    `auth.hooks` — vide quand rien ne fuit. Un test qui patche par `monkeypatch` est
+    démonté avant la comparaison : ce qui reste est une fuite."""
+    origine = _lecteur_d_origine()
+    return tuple(sorted(
+        nom for nom, mod in list(sys.modules.items())
+        if nom.startswith("oto_mcp") and mod is not None
+        and getattr(mod, "__dict__", {}).get(_LECTEUR, origine) is not origine))
+
+
 def releve() -> dict:
     return {
+        "lecteur d'identité lié": _lecteurs_lies(),
         "csv.field_size_limit": csv.field_size_limit(),
         "sys.getrecursionlimit": sys.getrecursionlimit(),
         "socket.getdefaulttimeout": socket.getdefaulttimeout(),
@@ -89,6 +116,10 @@ def _remettre(nom: str, valeur, contexte_decimal) -> None:
         time.tzset()
     elif nom == "sys.path":
         sys.path[:] = list(valeur)
+    elif nom == "lecteur d'identité lié":
+        origine = _lecteur_d_origine()
+        for module in _lecteurs_lies():
+            setattr(sys.modules[module], _LECTEUR, origine)
 
 
 def contexte_decimal():

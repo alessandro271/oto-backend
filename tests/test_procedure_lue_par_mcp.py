@@ -80,6 +80,13 @@ def porteur(monde, monkeypatch):
     `data_*` tenus par cet acteur, comme `test_org_du_run_639.py`."""
     from oto_mcp.datastore.core import make_store
     from oto_mcp.tools import datastore as T
+    # ⚠️ Le serveur — donc tout module qui LIE `current_user_sub_from_token` à son import
+    # (adaptateur, middleware, outils) — est monté AVANT de patcher `auth.hooks` : importé
+    # pendant le patch, un module lierait le faux lecteur, que monkeypatch prendrait pour
+    # sa valeur d'origine et « restaurerait » — l'identité du porteur fuyait alors dans
+    # tous les bancs suivants du worker.
+    import oto_mcp.call_axes  # noqa: F401
+    _serveur()
     for cible in ("oto_mcp.auth.hooks.current_user_sub_from_token",
                   "oto_mcp.capabilities._mcp_adapter.current_user_sub_from_token",
                   "oto_mcp.middleware.call_context.current_user_sub_from_token",
