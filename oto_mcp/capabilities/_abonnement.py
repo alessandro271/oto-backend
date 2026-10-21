@@ -327,7 +327,8 @@ def seuil(sub: str, org_id: Optional[int], famille: str) -> float:
 
 
 def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
-                         famille: Optional[str], etat_runner: dict) -> str:
+                         famille: Optional[str], etat_runner: dict,
+                         modele: Optional[str] = None) -> str:
     """La raison SERVIE quand le tick périme une occurrence non prise DANS SON
     CYCLE (27/09/2026) — nommant la VRAIE cause plutôt que le texte générique
     d'avant, qui disait toujours « aucun agent ne dessert cette organisation »
@@ -342,6 +343,9 @@ def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
     état a pu changer une seconde avant ou après (une reconnexion qui gagne de
     justesse contre le tick, par exemple) — la RÈGLE d'expiration (occurrence
     superседée) ne change pas d'un mot, seul le TEXTE qui l'accompagne s'affine.
+
+    `modele` = le modèle déclaré : il nomme le dépôt d'un repli sur la clé d'org
+    (`runner_models.repli_api`), que le diagnostic d'un pool au plafond lit.
     """
     base = "occurrence non prise dans son cycle : le déclencheur a enfilé la suivante."
     aucun_agent = f"{base} Aucun agent ne dessert cette organisation."
@@ -376,9 +380,7 @@ def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
                 return (f"{base} Les membres qui prêtent leur abonnement `{famille}` "
                         "au pool de l'organisation doivent le reconnecter (Réglages › "
                         "Fournisseurs de modèles) — il repartira tout seul.")
-            return (f"{base} Le pool `{famille}` de l'organisation était en pause "
-                    "(plafond de consommation atteint) au moment où la suivante est "
-                    "arrivée.")
+            return _pool_au_plafond(base, org_id, famille, modele)
         # Un prêteur EST servable maintenant : la vraie cause a déjà cédé.
         return aucun_agent
     # ⚠️ `servable()` répond FAIT EXPRÈS `True` pour un `paused_limit`, quelle que
@@ -392,11 +394,7 @@ def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
                 "reconnecter (Réglages › Fournisseurs de modèles) — il repartira "
                 "tout seul.")
     if statut == user_subscriptions.PLAFOND:
-        reset = ligne.get("limit_reset_at")
-        if isinstance(reset, str):
-            reset = datetime.fromisoformat(reset)
-        if reset and reset.tzinfo is None:
-            reset = reset.replace(tzinfo=timezone.utc)
+        reset = _echeance_utc(ligne.get("limit_reset_at"))
         if reset and reset > datetime.now(timezone.utc):
             return (f"{base} L'abonnement `{famille}` de son propriétaire avait "
                     "atteint son plafond de consommation.")
@@ -405,6 +403,38 @@ def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
         # honnête qu'on puisse écrire.
         return aucun_agent
     return aucun_agent
+
+
+def _echeance_utc(v) -> Optional[datetime]:
+    """Une échéance lue en base — texte « AAAA-MM-JJ HH:MM:SS » (le `row_factory` du
+    pool), ou `datetime` — en `datetime` UTC ; None si absente."""
+    if isinstance(v, str):
+        v = datetime.fromisoformat(v)
+    if v and v.tzinfo is None:
+        v = v.replace(tzinfo=timezone.utc)
+    return v or None
+
+
+def _pool_au_plafond(base: str, org_id: int, famille: str, modele: Optional[str]) -> str:
+    """Un pool AU PLAFOND, et pourquoi le repli sur la clé d'org ne l'a pas pris
+    (21/10/2026) : fermé, ou ouvert sans clé déposée. Sans ce détail, l'expiration ne
+    disait ni jusqu'à quand attendre, ni quel réglage aurait servi le travail. Les
+    autres cas gardent le texte d'avant. UNE lecture (`pool_au_plafond`)."""
+    depot = runner_models.famille(runner_models.repli_api(modele))
+    pause = org_subscription_pool.pool_au_plafond(org_id, famille, depot)
+    repli = (org_subscription_pool.repli_api_par_defaut() if pause["repli_api"] is None
+             else bool(pause["repli_api"]))
+    reprise = _echeance_utc(pause["reprise"])
+    au_plafond = (f"{base} Le pool `{famille}` de l'organisation est en pause : "
+                  "abonnements au plafond"
+                  + (f" jusqu'au {reprise:%d/%m/%Y %H:%M} UTC" if reprise else ""))
+    if not repli:
+        return f"{au_plafond}, repli sur la clé d'org fermé."
+    if depot and not pause["cle_org"]:
+        return (f"{au_plafond}, repli sur la clé d'org ouvert mais aucune clé `{depot}` "
+                "déposée par l'organisation.")
+    return (f"{base} Le pool `{famille}` de l'organisation était en pause "
+            "(plafond de consommation atteint) au moment où la suivante est arrivée.")
 
 
 def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:

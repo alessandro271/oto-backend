@@ -224,3 +224,61 @@ def test_pool_de_preteurs_a_reconnecter_n_est_pas_un_plafond(live):
     r = _raison("r7b-dem", oid, _F, _servie(_F))
     assert "plafond" not in r
     assert "reconnect" in r
+
+
+# ── pool AU PLAFOND : jusqu'à quand, et pourquoi le repli ne l'a pas pris (21/10/2026)
+
+def _pool_au_plafond(nom):
+    """Deux prêteurs au plafond, l'un repart dans 2 h, l'autre dans 5 h : la reprise la
+    plus PROCHE est celle de 2 h."""
+    oid = _org(nom, f"{nom}-dem", f"{nom}-a", f"{nom}-b", mode="pool")
+    proche = _futur(2)
+    _abonne(f"{nom}-a", statut="paused_limit", reset=proche, pret_a=[oid])
+    _abonne(f"{nom}-b", statut="paused_limit", reset=_futur(5), pret_a=[oid])
+    return oid, f"{proche:%d/%m/%Y %H:%M} UTC"
+
+
+def test_pool_au_plafond_repli_ferme_dit_jusqu_a_quand(live):
+    oid, reprise = _pool_au_plafond("r9")
+    r = _raison("r9-dem", oid, _F, _servie(_F), modele="sub:sonnet")
+    assert f"abonnements au plafond jusqu'au {reprise}" in r, r
+    assert r.endswith("repli sur la clé d'org fermé."), r
+
+
+def test_pool_au_plafond_repli_ouvert_sans_cle_d_org(live):
+    from oto_mcp.db import org_subscription_pool as P
+    oid, reprise = _pool_au_plafond("r10")
+    P.set_repli_api(oid, _F, True, "banc")
+    r = _raison("r10-dem", oid, _F, _servie(_F), modele="sub:sonnet")
+    assert f"jusqu'au {reprise}" in r, r
+    assert "repli sur la clé d'org ouvert mais aucune clé `anthropic` déposée" in r, r
+
+
+def test_pool_au_plafond_repli_ouvert_avec_cle_garde_le_texte_d_avant(live):
+    from oto_mcp import org_store
+    from oto_mcp.db import org_subscription_pool as P
+    oid, _ = _pool_au_plafond("r11")
+    P.set_repli_api(oid, _F, True, "banc")
+    org_store.set_org_secret(oid, "anthropic", "sk-ant-api03-banc", set_by="banc")
+    r = _raison("r11-dem", oid, _F, _servie(_F), modele="sub:sonnet")
+    assert r.endswith("était en pause (plafond de consommation atteint) au moment où "
+                      "la suivante est arrivée."), r
+
+
+def test_la_raison_d_une_peremption_atterrit_aussi_dans_attempt_errors(live):
+    """Le MÊME texte dans `last_error` et dans `attempt_errors` : `oto_trigger` (ses
+    livraisons) et l'écran lisent les tentatives, et y trouvaient `[]`."""
+    from oto_mcp import db
+    from oto_mcp.db._conn import _connect
+    oid, _ = _pool_au_plafond("r12")
+    job = db.enqueue_job(oid, "start", sub="r12-dem",
+                         payload={"procedure": "p", "model": "sub:sonnet",
+                                  "model_family": _F, "trigger_id": 998})
+    raison = _raison("r12-dem", oid, _F, _servie(_F), modele="sub:sonnet")
+    assert db.perimer_travaux_du_declencheur(998, oid, raison=raison) == 1
+    with _connect() as conn:
+        row = conn.execute("SELECT status, last_error, attempt_errors FROM runner_jobs "
+                           "WHERE id = %s", (job["id"],)).fetchone()
+    assert row["status"] == "expired" and row["last_error"] == raison
+    (t,) = row["attempt_errors"]
+    assert t["error"] == raison and t["attempt"] == 0 and t["at"], t

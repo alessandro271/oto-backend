@@ -175,7 +175,7 @@ def _tick() -> int:
         try:
             raison_kw["raison"] = _abonnement.raison_de_peremption(
                 t.get("sub"), t["org_id"], runner_models.famille(t.get("model")),
-                db.runner_arme(t["org_id"]))
+                db.runner_arme(t["org_id"]), modele=t.get("model"))
         except Exception as e:  # noqa: BLE001 — un diagnostic manqué garde le texte générique
             log.warning("déclencheur %s : diagnostic de péremption illisible (%s) — "
                         "texte générique conservé", t["id"], e)

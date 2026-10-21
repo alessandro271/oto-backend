@@ -242,3 +242,22 @@ def test_une_livraison_REFUSEE_ne_porte_ni_corps_ni_tentative(live):
     (livraison,) = d.livraisons(t["id"], org, avec_corps=True)
     assert livraison["job_input"] is None
     assert livraison["job_attempt_errors"] is None
+
+
+# ── ⑦ un arrêt DÉFINITIF inscrit aussi sa tentative ───────────────────────────
+
+def test_un_arret_definitif_inscrit_sa_raison_comme_une_tentative(live):
+    """Un travail arrêté à la réservation (clé de modèle absente, identité perdue) se
+    lisait `failed` avec `attempt_errors=[]` : partout où l'on lit les tentatives
+    (`oto_trigger`, l'écran), un échec sans un motif."""
+    from oto_mcp import db as d
+    org = 9309
+    job_id = _job_claime(org)
+    assert d.arreter_definitivement(job_id, WORKER, "clé de modèle absente")
+    (t,) = _tentatives(job_id)
+    assert t["attempt"] == 1 and t["error"] == "clé de modèle absente" and t["at"], t
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        row = conn.execute("SELECT status, last_error FROM runner_jobs WHERE id = %s",
+                           (job_id,)).fetchone()
+    assert (row["status"], row["last_error"]) == ("failed", "clé de modèle absente")

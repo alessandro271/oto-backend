@@ -817,12 +817,31 @@ def _guard_choices(c, provided: dict) -> None:
                 f"({' | '.join(f.choices)}).")
 
 
+def _guard_prefixes(c, provided: dict) -> None:
+    """Refuse une valeur qui ne commence par aucun préfixe ADMIS du champ
+    (`CredentialField.prefixes`) — la forme d'une clé dit ce qu'elle est.
+
+    Sans cette garde, un jeton de session posé comme clé Anthropic s'écrit `ok: true`
+    et n'échoue qu'à la réservation, chez le worker. ⚠️ Le message nomme la forme
+    attendue, JAMAIS la valeur : le champ est un secret."""
+    for f in (c.secret_fields if c is not None else ()):
+        if not f.prefixes:
+            continue
+        val = str(clean_field_value(f, provided.get(f.name)) or "")
+        if val and not val.startswith(f.prefixes):
+            raise CredentialFieldsInvalid(
+                "invalid_field_value",
+                f"{f.label or f.name} : forme inattendue — attendue : "
+                f"{', '.join(p + '…' for p in f.prefixes)}.")
+
+
 def validate_fields(connector: str, provided: dict) -> dict:
     """Les champs RETENUS d'une saisie multi-champs, ou un refus nommé.
 
     SOURCE UNIQUE des trois set-paths (membre, équipe, org) : jeu fermé d'abord
-    (`choices`), puis les seuls champs que le discriminant rend PERTINENTS
-    (`Connector.fields_for`), et parmi eux les `required` doivent être non vides.
+    (`choices`) et préfixes admis (`prefixes`), puis les seuls champs que le
+    discriminant rend PERTINENTS (`Connector.fields_for`), et parmi eux les
+    `required` doivent être non vides.
 
     ⚠️ **Les champs non pertinents sont ÉCARTÉS, pas stockés** : repasser un
     connecteur d'`oauth2` à `bearer` ne laisse pas traîner un `client_secret` mort
@@ -830,6 +849,7 @@ def validate_fields(connector: str, provided: dict) -> dict:
     à un changement de mode."""
     c = providers.REGISTRY.get(connector)
     _guard_choices(c, provided)
+    _guard_prefixes(c, provided)
     relevant = c.fields_for(provided) if c is not None else ()
     kept: dict[str, str] = {}
     missing: list[str] = []
@@ -910,7 +930,7 @@ def secret_from_input(
     Lève `CredentialFieldsInvalid` (une `ValueError`) actionnable : `empty_api_key`
     (mono vide), `conflicting_api_key` (deux valeurs différentes pour la même clé),
     `missing_credentials` (champ requis absent/vide, ou aucun champ) ou
-    `invalid_field_value` (valeur hors jeu fermé)."""
+    `invalid_field_value` (valeur hors jeu fermé, ou hors des préfixes admis)."""
     c = providers.REGISTRY.get(connector)
     sfields = c.secret_fields if c is not None else ()
     if len(sfields) >= 2:

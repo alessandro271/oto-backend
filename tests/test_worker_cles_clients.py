@@ -97,6 +97,22 @@ def test_un_worker_ORDINAIRE_sans_cle_deposee_garde_le_comportement_d_avant(monk
     assert rendu["delegated_token"] == "otd_x"
 
 
+def test_cle_DEPOSEE_mais_illisible_n_est_pas_lue_comme_absente(monkeypatch, arret):
+    """La ligne du coffre existe, sa lecture ne rend rien : le refus disait « elle n'en
+    a pas déposé » — faux, et il arrêtait le travail pour de bon. C'est un doute sur le
+    coffre : ni servi, ni arrêté, avec une raison qui dit que la clé EST déposée."""
+    rendu_a_la_file = {}
+    monkeypatch.setattr(RJ, "_cle_de_modele", lambda org, depot: (None, None))
+    monkeypatch.setattr(RJ, "_depot_pose", lambda org_id, depot: True)
+    monkeypatch.setattr(RJ.db, "rendre_a_la_file",
+                        lambda job_id, sub, raison: rendu_a_la_file.update(raison=raison))
+    assert _remise(org_key_only=True) is None, "rien n'est servi sur un doute"
+    assert not arret, "rien n'est arrêté sur un doute"
+    assert rendu_a_la_file["raison"] == RJ._CLE_DEPOSEE_ILLISIBLE.format(depot="anthropic")
+    assert "déposée" in rendu_a_la_file["raison"]
+    assert "n'en a pas déposé" not in rendu_a_la_file["raison"]
+
+
 def test_un_MEMBRE_qui_reserve_n_est_jamais_arrete(monkeypatch, arret):
     """La garde vise le worker de plateforme : un membre ne reçoit jamais de clé,
     il n'y a donc rien à attendre ni à refuser."""

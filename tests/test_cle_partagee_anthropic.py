@@ -92,6 +92,8 @@ def test_sans_demandeur_la_cascade_de_l_org_seule(monkeypatch):
 
 
 def test_une_cle_partagee_accordee_n_est_pas_manquante(monkeypatch):
+    # Hors ferme : une org routée vers elle exige SA clé (`test_cle_de_modele_exigee.py`).
+    monkeypatch.setattr(CE, "org_routee_ferme", lambda org_id: False)
     monkeypatch.setattr(CE, "cle_exigee", lambda org, f: True)
     monkeypatch.setattr(CE, "cle_deposee", lambda org, f: False)
     monkeypatch.setattr(CE, "cle_partagee", lambda org, f, sub=None: _RC("platform"))

@@ -51,6 +51,9 @@ def _refus(status: int, code: str, appel) -> str:
 def _socle(monkeypatch):
     monkeypatch.setattr("oto_mcp.db.connector_settings.get_connector_setting",
                         lambda *a, **k: None)
+    # Ni routée vers la ferme : sa garde de pose a son banc (`test_cle_de_modele_exigee`).
+    monkeypatch.setattr("oto_mcp.capabilities._cle_exigee.org_routee_ferme",
+                        lambda org_id: False)
     monkeypatch.setattr(RF.db, "runner_arme", lambda org: {
         "armed": True, "workers": 1, "last_seen": "2026-09-23 08:00:00",
         "families": ["anthropic"]})

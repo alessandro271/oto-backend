@@ -838,7 +838,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # elle, le travail serait arrêté à la réservation. Le dire ICI, au moment où
         # l'on peut encore la déposer, plutôt qu'à la première occurrence. Seule la
         # famille DE CE MODÈLE compte (14/09/2026) — pas toutes celles exigées.
-        _cle_exigee.exiger_a_la_pose(ctx.org_id, famille)
+        _cle_exigee.exiger_a_la_pose(ctx.org_id, famille, etat)
         # Un modèle d'ABONNEMENT (OTO-130) ne se pose que sur SON propre agent, et
         # que si la connexion est ouverte : posé sans elle, l'agent aurait l'air
         # programmé sans jamais tourner. À la création, le propriétaire EST
@@ -1254,7 +1254,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Un agent posé sans modèle avant le 24/09/2026 ne se rallume pas sans en
         # déclarer un : il tournerait sur le modèle du worker, donc sur notre clé.
         _modele.exige_un_modele(famille_pose)
-        _cle_exigee.exiger_a_la_pose(ctx.org_id, famille_pose)
+        _cle_exigee.exiger_a_la_pose(ctx.org_id, famille_pose, etat)
         # Même garde qu'à la création, sur le propriétaire STOCKÉ : rallumer
         # l'agent d'un collègue posé sur un abonnement ferait payer son forfait
         # pour le travail d'un autre — sauf s'il l'a prêté (`_pose_pour`).

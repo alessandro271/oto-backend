@@ -38,7 +38,12 @@ CONNECTOR = _c(
     # read back identically. The worker receives it at claim, next to the key.
     secret_kind="fields", label="Anthropic",
     credential_fields=(
-        CredentialField("key", "API key", secret=True),
+        # The three Console API-key shapes, all sent as `x-api-key`: `api` (historical),
+        # `usr` (personal or workspace key, the Console's shape since 2026), `svc`
+        # (service account). A session token (`sk-ant-oat…`) or an admin key
+        # (`sk-ant-admin…`) is not a model key: refused at deposit, not at the claim.
+        CredentialField("key", "API key", secret=True,
+                        prefixes=("sk-ant-api", "sk-ant-usr", "sk-ant-svc")),
         CredentialField(
             "workspace_id", "Workspace", secret=False, required=False, in_meta=True,
             help="Only for an ORGANIZATION key (created outside a workspace): "

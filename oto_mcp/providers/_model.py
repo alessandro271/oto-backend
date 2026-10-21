@@ -70,6 +70,12 @@ class CredentialField:
     # breaks things: a value outside the list is refused at WRITE time, with the expected
     # set in the message.
     choices: tuple[str, ...] = ()
+    # ACCEPTED PREFIXES of the value (a key whose shape tells what it is). Empty = free.
+    # A value that starts with none of them is refused at WRITE time, with the expected
+    # prefixes in the message — never the value: the field may be secret. E.g. the
+    # Anthropic key, where a session token or an admin key would be accepted, then
+    # refused by every worker.
+    prefixes: tuple[str, ...] = ()
     # True = the value lives in `connector_credentials.meta`, IN CLEAR, and not in the
     # encrypted blob (14/09/2026). For a NON-secret field added to a connector whose
     # credentials are already set: the shape of the encrypted blob depends only on the fields that

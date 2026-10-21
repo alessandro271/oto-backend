@@ -36,6 +36,18 @@ def _vider(*orgs):
             pass
 
 
+def _deposer_cle_d_org(org, monkeypatch):
+    """La clé `anthropic` de l'ORG (compte vide), déposée dans le vrai coffre."""
+    from oto_mcp import credentials_store as CR
+    monkeypatch.setenv("OTO_MCP_MASTER_KEY", "5" * 64)
+    CR.set_credential("org", str(org), "anthropic", "sk-ant-api03-banc")
+
+
+def _retirer_cle_d_org(org):
+    from oto_mcp import credentials_store as CR
+    CR.clear_credential("org", str(org), "anthropic")
+
+
 def _effacer_presences():
     from oto_mcp.db._conn import _connect
     with _connect() as conn:
@@ -129,13 +141,67 @@ def test_sans_worker_de_ferme_la_famille_n_est_pas_servie_pour_l_org_routee(live
     _router(9408, on=False)
 
 
-def test_la_presence_de_ferme_se_lit_comme_sa_famille_pour_les_autres(live):
-    """Une présence marquée `#ferme` compte comme `anthropic` pour une org non routée
-    qu'elle sert : jamais une famille « anthropic#ferme » inventée."""
+def test_la_presence_de_ferme_ne_sert_pas_une_org_non_routee(live):
+    """Une présence marquée `#ferme` ne rend pas `anthropic` servi à une org non routée
+    (21/10/2026) : la ferme ne réserve plus ses travaux, et l'agent posé attendrait sans
+    fin. Pour une org routée, elle se lit `anthropic` — jamais une famille
+    « anthropic#ferme » inventée."""
     from oto_mcp import db
     _effacer_presences()
     db.claim_next_job(None, "w-ferme-seule", lease_seconds=60, depot="anthropic",
                       ferme=True)
-    familles = db.runner_arme(9409)["families"]
-    assert familles == ["anthropic"]
+    assert db.runner_arme(9409)["families"] == []
+    _router(9409)
+    assert db.runner_arme(9409)["families"] == ["anthropic"]
+    _effacer_presences()
+    _router(9409, on=False)
+
+
+def test_le_worker_de_ferme_ne_prend_pas_le_travail_d_une_org_non_routee(live):
+    """La ferme ne sert que les orgs routées vers elle : le travail `anthropic` d'une org
+    non routée prise par elle était arrêté faute de clé d'org — un échec définitif pour
+    un travail que la boucle sert. Il ATTEND, sans brûler de tentative."""
+    from oto_mcp import db
+    from oto_mcp.db._conn import _connect
+    job = _enfiler(9410, "anthropic")
+    assert db.claim_next_job(None, "w-ferme", lease_seconds=60, depot="anthropic",
+                             org_ids=[9410], ferme=True) is None, (
+        "un worker de ferme a pris le travail d'une org qui n'est pas routée vers lui")
+    with _connect() as conn:
+        row = conn.execute("SELECT status, attempts FROM runner_jobs WHERE id = %s",
+                           (job,)).fetchone()
+    assert (row["status"], row["attempts"]) == ("pending", 0)
+    pris = db.claim_next_job(None, "w-boucle", lease_seconds=60, depot="anthropic",
+                             org_ids=[9410])
+    assert pris and pris["id"] == job
+    _vider(9410)
+
+
+def test_le_worker_de_ferme_prend_le_travail_d_une_org_non_routee_qui_a_sa_cle(
+        live, monkeypatch):
+    """Une org non routée qui a déposé SA clé d'org `anthropic` est servie par la ferme
+    sur cette clé (21/10/2026) : sans worker de la boucle, c'est le seul qui la sert."""
+    from oto_mcp import db
+    _deposer_cle_d_org(9411, monkeypatch)
+    job = _enfiler(9411, "anthropic")
+    pris = db.claim_next_job(None, "w-ferme", lease_seconds=60, depot="anthropic",
+                             org_ids=[9411], ferme=True)
+    assert pris and pris["id"] == job, (
+        "la ferme a laissé le travail d'une org qui a déposé sa clé d'org")
+    _vider(9411)
+    _retirer_cle_d_org(9411)
+
+
+def test_la_presence_de_ferme_sert_une_org_non_routee_qui_a_sa_cle(live, monkeypatch):
+    """La présence de la ferme rend `anthropic` servi à une org non routée qui a sa clé
+    d'org : la ferme prendra son travail. Retirée, la clé ne la rend plus servie."""
+    from oto_mcp import db
+    _effacer_presences()
+    db.claim_next_job(None, "w-ferme-seule", lease_seconds=60, depot="anthropic",
+                      ferme=True)
+    assert db.runner_arme(9412)["families"] == []
+    _deposer_cle_d_org(9412, monkeypatch)
+    assert db.runner_arme(9412)["families"] == ["anthropic"]
+    _retirer_cle_d_org(9412)
+    assert db.runner_arme(9412)["families"] == []
     _effacer_presences()

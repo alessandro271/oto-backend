@@ -175,6 +175,35 @@ def taille_totale_du_pool(org_id: int, famille: str) -> int:
     return int(row["n"]) if row else 0
 
 
+def pool_au_plafond(org_id: int, famille: str, depot: Optional[str]) -> dict:
+    """Ce qui retient un pool AU PLAFOND, en UNE lecture bornée à l'org — le diagnostic
+    d'une péremption (`capabilities._abonnement.raison_de_peremption`, 21/10/2026),
+    jamais une garde :
+
+    - `reprise` : la PLUS PROCHE échéance d'un prêteur au plafond (`limit_reset_at`
+      futur), ou None ;
+    - `repli_api` : l'interrupteur de repli de l'org, None si elle ne l'a jamais réglé
+      (l'appelant lit alors `repli_api_par_defaut`, comme `repli_api_actif`) ;
+    - `cle_org` : l'org a-t-elle déposé une clé `depot` — la présence, la même lecture
+      que les candidats au repli (`runner_jobs.candidats_repli_abonnement`)."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT (SELECT MIN(ab.limit_reset_at)
+                      FROM user_model_subscription_loans l {PRET_VIVANT}
+                     WHERE l.org_id = %s AND l.famille = %s
+                       AND ab.statut = 'paused_limit' AND ab.limit_reset_at > NOW())
+                       AS reprise,
+                   (SELECT m.repli_api FROM org_model_subscription_modes m
+                     WHERE m.org_id = %s AND m.famille = %s) AS repli_api,
+                   EXISTS (SELECT 1 FROM connector_credentials c
+                            WHERE c.entity_type = 'org' AND c.entity_id = %s::text
+                              AND c.connector = %s) AS cle_org
+            """,
+            (org_id, famille, org_id, famille, org_id, depot or "")).fetchone()
+    return dict(row)
+
+
 def preteurs(org_id: int, famille: str) -> list[dict]:
     """QUI prête un abonnement au pool de cette org — une ligne par prêteur, et
     `servable` : la même clause que la réservation (`PRETEUR_SERVABLE`). Les prêts

@@ -342,6 +342,17 @@ def enqueue_job(org_id: int, kind: str, payload: Optional[dict] = None,
     return dict(row) if row is not None else None
 
 
+#: L'ajout d'UNE tentative à `attempt_errors` (`[{attempt, at, error}]`), son motif en
+#: paramètre — partagé par l'échec conclu par le worker (`complete_job`, qui dit
+#: pourquoi il s'ajoute), l'arrêt définitif (`arreter_definitivement`) et la
+#: péremption d'un cycle (`perimer_travaux_du_declencheur`).
+_AJOUT_A_ATTEMPT_ERRORS = """attempt_errors = COALESCE(attempt_errors, '[]'::jsonb)
+                       || jsonb_build_array(jsonb_build_object(
+                              'attempt', attempts,
+                              'at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'),
+                              'error', %s::text))"""
+
+
 _RAISON_CYCLE = ("occurrence non prise dans son cycle : le déclencheur a enfilé "
                  "la suivante. Aucun agent ne dessert cette organisation.")
 
@@ -373,17 +384,22 @@ def perimer_travaux_du_declencheur(trigger_id: int, org_id: int,
     d'un agent déclenché **pendant qu'il est en pause**, c'est même le moment le
     plus naturel pour le faire. Les oublier laisserait le seul geste de purge sans
     effet exactement là où on s'en sert.
+
+    ⚠️ La raison s'écrit dans `last_error` ET s'ajoute à `attempt_errors`
+    (21/10/2026) : le MÊME texte partout où l'on lit pourquoi un travail a fini.
+    `attempt` y vaut `attempts` — 0 pour une occurrence que personne n'a prise.
     """
     with _connect() as conn:
         cur = conn.execute(
-            """
+            f"""
             UPDATE runner_jobs
                SET status = 'expired', finished_at = NOW(),
-                   last_error = %s
+                   last_error = %s,
+                   {_AJOUT_A_ATTEMPT_ERRORS}
              WHERE org_id = %s AND status IN ('pending', 'held')
                AND payload->>'trigger_id' = %s
             """,
-            (raison, org_id, str(trigger_id)),
+            (raison, raison, org_id, str(trigger_id)),
         )
         return cur.rowcount or 0
 
@@ -510,6 +526,34 @@ def _org_routee_ferme(alias: str) -> str:
             f"AND (oc.expires_at IS NULL OR oc.expires_at > NOW()))")
 
 
+def _cle_d_org_deposee(alias: str) -> str:
+    """Le prédicat SQL « l'org de `alias` a déposé sa clé `FAMILLE_FERME` » : la ligne du
+    coffre existe, au mono-compte (`account = ''`) — la lecture même de
+    `credentials_store.has_credential("org", org_id, depot, account="")`, celle de la
+    remise (`capabilities/runner_jobs._depot_pose`). Une clé retirée n'a plus de ligne
+    (`credentials_store._delete`). Aucune valeur chiffrée n'est lue."""
+    return (f"EXISTS (SELECT 1 FROM connector_credentials cc WHERE cc.entity_type = 'org' "
+            f"AND cc.entity_id = {alias}.org_id::text AND cc.connector = '{FAMILLE_FERME}' "
+            f"AND cc.account = '')")
+
+
+def _servi_par_ce_worker(alias: str, famille_ferme: str) -> str:
+    """Le prédicat SQL de la PRISE selon le moteur, le booléen « worker de ferme » en
+    paramètre. `famille_ferme` = le booléen SQL « ce travail est de la famille
+    `FAMILLE_FERME` ».
+
+    - **La boucle** prend tout, sauf la famille ferme d'une org routée vers la ferme.
+    - **La ferme** ne prend que ce qu'elle PEUT servir (21/10/2026) : la famille ferme
+      d'une org routée vers elle, ou d'une org qui a déposé SA clé — elle ne tourne
+      que sur la clé de l'org. Un travail d'une org non routée sans clé, qu'elle
+      prenait pour l'arrêter aussitôt (un échec définitif pour un travail que la
+      boucle aurait servi), ATTEND, sans brûler de tentative ; et `runner_arme` ne le
+      promet pas servi."""
+    routee = _org_routee_ferme(alias)
+    return (f"(CASE WHEN %s THEN ({famille_ferme} AND ({routee} OR "
+            f"{_cle_d_org_deposee(alias)})) ELSE NOT ({famille_ferme} AND {routee}) END)")
+
+
 def _touch_platform_worker_presence(worker_sub: str, depot: Optional[str],
                                     org_ids: Optional[list] = None,
                                     ferme: bool = False) -> None:
@@ -625,7 +669,9 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
     `ferme` (29/09/2026) : le worker est un exécutant de la FERME Claude Code. Un
     travail de la famille `FAMILLE_FERME` d'une org routée vers la ferme
     (`OPTION_FERME`) n'est réservé QUE par lui : tout autre worker ne le voit plus,
-    et il attend plutôt que de retomber sur la boucle.
+    et il attend plutôt que de retomber sur la boucle. Lui ne réserve que ce qu'il peut
+    servir : ceux-là, et la famille ferme d'une org qui a déposé SA clé (21/10/2026,
+    `_servi_par_ce_worker`).
 
     `porteur` (10/10/2026) : ne réserver QUE les travaux de ce porteur (`runner_jobs.sub`).
     C'est la garde d'un claim par un MEMBRE d'org (jeton d'API, pas un secret de
@@ -714,6 +760,7 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
             # entière déferait aussi les écritures. Seule la prise se défait.
             conn.execute("SAVEPOINT prise_abonnement")
         frag = _fragments_abonnement(abonnement)
+        de_la_famille_ferme = f"rj.payload->>'model_family' IS NOT DISTINCT FROM '{FAMILLE_FERME}'"
         row = conn.execute(
             f"""
             WITH pris AS (
@@ -748,10 +795,10 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                    -- aussi dans les commentaires SQL.)
                    AND (payload->>'model_family' = %s
                         OR (payload->>'model_family' IS NULL AND NOT %s))
-                   -- Une org routée vers la ferme : sa famille ferme n'est prise
-                   -- que par un worker de ferme (le booléen en tête).
-                   AND (%s OR rj.payload->>'model_family' IS DISTINCT FROM '{FAMILLE_FERME}'
-                        OR NOT {_org_routee_ferme("rj")})
+                   -- La famille ferme d'une org routée vers la ferme : à un worker
+                   -- de ferme, qui ne prend que ce qu'il peut servir
+                   -- (`_servi_par_ce_worker`).
+                   AND {_servi_par_ce_worker("rj", de_la_famille_ferme)}
                    {frag['clause_abonnement']}
                  ORDER BY due_at
                    FOR UPDATE {frag['verrou_de']}SKIP LOCKED
@@ -1070,11 +1117,12 @@ def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
 
     ⚠️ Un repli vers `FAMILLE_FERME` pour une org routée vers la ferme n'est ouvert
     qu'à un worker de ferme (`ferme`) : sinon, le repli ferait passer par la boucle
-    un travail que l'org a réservé à la ferme."""
+    un travail que l'org a réservé à la ferme. Et un worker de ferme ne replie que
+    ce qu'il peut servir (`_servi_par_ce_worker`)."""
     from .org_subscription_pool import repli_api_par_defaut
     if not familles:
         return []
-    hors_ferme_ok = bool(ferme) or depot != FAMILLE_FERME
+    vers_ferme = "TRUE" if depot == FAMILLE_FERME else "FALSE"
     with _connect() as conn:
         rows = conn.execute(
             f"""
@@ -1099,12 +1147,12 @@ def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
                               AND c.connector = %s)
                AND NOT EXISTS ({_REPLI_EN_VOL.format(
                    forfait=_forfait_de_repli("rj", "modep"))})
-               AND (%s OR NOT {_org_routee_ferme("rj")})
+               AND {_servi_par_ce_worker("rj", vers_ferme)}
              ORDER BY rj.due_at
              LIMIT %s
             """,
             (org_id, org_id, org_ids, org_ids, list(familles),
-             repli_api_par_defaut(), depot, hors_ferme_ok, limit),
+             repli_api_par_defaut(), depot, bool(ferme), limit),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -1375,15 +1423,21 @@ def arreter_definitivement(job_id: int, worker_sub: str, raison: str) -> bool:
     Extrait de `refuser_pour_identite` le 12/09/2026, quand un second motif est
     apparu : un travail dont l'org n'a pas déposé la clé de modèle qu'on exige
     (`capabilities/_cle_exigee.py`). Deux fonctions portant le même UPDATE auraient
-    fini par diverger ; deux NOMS sur un seul geste disent chacun leur motif."""
+    fini par diverger ; deux NOMS sur un seul geste disent chacun leur motif.
+
+    ⚠️ La raison s'AJOUTE aussi à `attempt_errors`, comme un échec conclu par le
+    worker (`complete_job`) : sans elle, un travail arrêté ici se lisait `failed`
+    avec `attempt_errors=[]` partout où l'on lit les tentatives (`oto_trigger`,
+    l'écran) — un échec définitif sans un motif."""
     with _connect() as conn:
         cur = conn.execute(
-            """
+            f"""
             UPDATE runner_jobs
-               SET status = 'failed', finished_at = NOW(), last_error = %s
+               SET status = 'failed', finished_at = NOW(), last_error = %s,
+                   {_AJOUT_A_ATTEMPT_ERRORS}
              WHERE id = %s AND claimed_by = %s AND status = 'claimed'
             """,
-            (raison, job_id, worker_sub),
+            (raison, raison, job_id, worker_sub),
         )
         return bool(cur.rowcount)
 
@@ -1532,7 +1586,7 @@ def complete_job(job_id: int, worker_sub: str, ok: bool,
             # réservation) — donc il nomme bien la tentative qu'on conclut.
             motif = (error or 'échec non détaillé')[:500]
             row = conn.execute(
-                """
+                f"""
                 UPDATE runner_jobs
                    SET status   = CASE WHEN attempts >= max_attempts
                                        THEN 'failed' ELSE 'pending' END,
@@ -1541,12 +1595,7 @@ def complete_job(job_id: int, worker_sub: str, ok: bool,
                        due_at   = NOW() + make_interval(secs => %s * attempts),
                        lease_until = NULL, claimed_by = NULL,
                        last_error = %s,
-                       attempt_errors = COALESCE(attempt_errors, '[]'::jsonb)
-                                        || jsonb_build_array(jsonb_build_object(
-                                               'attempt', attempts,
-                                               'at', to_char(NOW() AT TIME ZONE 'UTC',
-                                                             'YYYY-MM-DD"T"HH24:MI:SSZ'),
-                                               'error', %s::text)),
+                       {_AJOUT_A_ATTEMPT_ERRORS},
                        result = COALESCE(%s::jsonb, result)
                  WHERE id = %s AND claimed_by = %s AND status = 'claimed'
                 RETURNING status, run_id, org_id, sub, attempts,
@@ -1722,12 +1771,16 @@ def runner_arme(org_id: int) -> dict:
 
     `farm_routed` (29/09/2026) : l'org est routée vers la ferme (`OPTION_FERME`).
     Sa famille `FAMILLE_FERME` n'est alors servie que si un worker de FERME vivant
-    la sert pour elle — un worker de la boucle ne la prendra jamais."""
+    la sert pour elle — un worker de la boucle ne la prendra jamais. Pour une org NON
+    routée, un worker de ferme ne la sert que si l'org a déposé SA clé (21/10/2026,
+    `_servi_par_ce_worker`) : sans clé, seule la boucle la sert."""
     with _connect() as conn:
-        routee = conn.execute(
-            f"SELECT {_org_routee_ferme('o')} AS r FROM (SELECT %s::bigint AS org_id) o",
+        org = conn.execute(
+            f"SELECT {_org_routee_ferme('o')} AS r, {_cle_d_org_deposee('o')} AS c "
+            f"FROM (SELECT %s::bigint AS org_id) o",
             (int(org_id),),
-        ).fetchone()["r"]
+        ).fetchone()
+        routee, cle_d_org = org["r"], org["c"]
         familles = conn.execute(
             """
             SELECT COALESCE(array_agg(DISTINCT famille ORDER BY famille), '{}') AS f
@@ -1737,11 +1790,11 @@ def runner_arme(org_id: int) -> dict:
                      WHERE last_seen_at > NOW() - make_interval(secs => %s)
                        AND (position(%s in depot) = 0
                             OR depot = split_part(depot, %s, 1) || %s || %s)) t
-             WHERE NOT %s OR de_ferme OR famille <> %s
+             WHERE famille <> %s OR (CASE WHEN de_ferme THEN %s ELSE NOT %s END)
             """,
             (_PORTEE_ORG, _MARQUE_FERME[0], _MARQUE_FERME, ARME_FENETRE_S,
              _PORTEE_ORG, _PORTEE_ORG, _PORTEE_ORG, str(int(org_id)),
-             bool(routee), FAMILLE_FERME),
+             FAMILLE_FERME, bool(routee or cle_d_org), bool(routee)),
         ).fetchone()
         row = conn.execute(
             """
