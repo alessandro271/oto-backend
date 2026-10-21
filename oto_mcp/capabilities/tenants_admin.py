@@ -107,6 +107,13 @@ class TenantRow(BaseModel):
         default=False,
         description="Ce process peut administrer l'annuaire de ce tenant : accès "
                     "DÉCLARÉ **et** credential présent dans son environnement.")
+    refresh_tokens_effectif: bool = Field(
+        default=False,
+        description="Toujours `false` : l'opt-in aux jetons de rafraîchissement ne "
+                    "s'appliquait qu'à l'autorisation RELAYÉE par la façade, retirée "
+                    "(les clients MCP s'inscrivent chez Logto par CIMD). Gardé pour le "
+                    "contrat de la console d'administration, qui l'épingle ; à retirer "
+                    "quand elle ne le lit plus.")
     tool_prefix_effectif: Optional[str] = Field(
         default=None, description="Préfixe d'outils réellement APPLIQUÉ par ce process "
                                   "— null alors que `tool_prefix` est posé signifie "
