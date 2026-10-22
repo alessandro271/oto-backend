@@ -90,6 +90,12 @@ class _Coffre:
             "secret": secret, "meta": dict(meta or {}), "set_by": set_by,
             "set_at": "2026-10-22T01:00:00Z", "conn": conn}
 
+    def list_credentials(self, entity_type, entity_id):
+        return [{"connector": CONNECTEUR, "account": a, "secret_kind": "oauth",
+                 "set_by": l["set_by"], "set_at": l["set_at"], "meta": dict(l["meta"])}
+                for (et, eid, a), l in sorted(self.lignes.items())
+                if (et, eid) == (entity_type, entity_id)]
+
     def list_accounts(self, entity_type, entity_id, connector):
         return [{"account": a, "meta": dict(l["meta"]), "set_at": l["set_at"]}
                 for (et, eid, a), l in sorted(self.lignes.items())
@@ -122,6 +128,7 @@ def env(monkeypatch):
     monkeypatch.setattr(credentials_store, "get_credential", coffre.get)
     monkeypatch.setattr(credentials_store, "set_credential", coffre.set)
     monkeypatch.setattr(credentials_store, "list_accounts", coffre.list_accounts)
+    monkeypatch.setattr(credentials_store, "list_credentials", coffre.list_credentials)
     monkeypatch.setattr(credentials_store, "update_meta", coffre.update_meta)
     monkeypatch.setattr(db, "member_instance_suspended", lambda *a, **k: False)
     monkeypatch.setattr(db, "insert_tool_call", lambda *a, **k: None)
@@ -478,3 +485,34 @@ def test_les_arguments_de_chaque_op_sont_ceux_de_la_methode():
         sans_defaut = {n for n, p in params.items()
                        if n != "self" and p.default is inspect.Parameter.empty}
         assert sans_defaut == set(requis), op
+
+
+def test_les_listes_resserrent_par_defaut_et_full_rend_le_brut(outil):
+    """Une liste rend par défaut l'index (numéro, dates, statuts, montants, tiers) et
+    laisse le volumineux qu'une autre op sert ; `full=True` rend la page telle quelle,
+    l'enveloppe est intacte dans les deux cas (`tests/test_sorties_listes_projetees.py`)."""
+    doc = {"id": _DOC, "folder": "SALES", "category": "INVOICE",
+           "status": {"document": "VALIDATED", "pay": "UNPAID"},
+           "metadata": {"documentNumber": "F-12", "issueDate": "2026-10-01",
+                        "customer": {"name": "Client"},
+                        "documentTotals": {"payableAmount": 120, "openBalance": 120}},
+           "connections": [{"id": "c", "addresses": [{"street": "…"}]}],
+           "balanceOffsets": [{"paymentId": "p"}]}
+    page = {"documents": [doc], "totalElements": 1, "currentPage": 0, "pageSize": 20}
+    outil.client.list_documents.return_value = page
+    out = outil.fn(op="list_documents", space_id=_ESPACE)
+    assert out == {**page, "documents": [{k: v for k, v in doc.items()
+                                          if k not in ("connections", "balanceOffsets")}]}
+    assert outil.fn(op="list_documents", space_id=_ESPACE, full=True) == page
+
+    outil.client.list_connections.return_value = {"connections": [
+        {"id": "c", "displayName": "Fournisseur", "globalIdentifiers": ["FR:SIREN:1"],
+         "addresses": [{"street": "…"}], "metadata": {"createdAt": "…"}}]}
+    assert outil.fn(op="list_connections", space_id=_ESPACE) == {"connections": [
+        {"id": "c", "displayName": "Fournisseur", "globalIdentifiers": ["FR:SIREN:1"]}]}
+
+
+def test_full_refuse_sur_une_op_qui_rend_entier(outil):
+    with pytest.raises(McpError, match="does not take `full`"):
+        outil.fn(op="get_document", space_id=_ESPACE, document_id=_DOC, full=True)
+    outil.client.get_document.assert_not_called()

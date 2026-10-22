@@ -53,6 +53,22 @@ _ARGS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 }
 _OPS = tuple(_ARGS)
 
+#: The DEFAULT view of a list (ADR 0047): op → (key of its items, blocks removed from
+#: each item). What leaves is what another op serves, one item at a time: a document's
+#: included counterparts (its supplier and customer stay in `metadata`, with its
+#: number, dates, statuses and totals) and its matched payments (`list_balance_offsets`,
+#: `list_reconciliations`); a customer's or supplier's addresses and metadata
+#: (`get_connection`); an account's available operations, which a read-only connector
+#: never performs; a movement's running balances (the account's balances are in
+#: `list_payment_accounts`). `full=True` returns the page as jefacture.com sends it.
+#: Ops not named here answer whole: `full` is refused on them, never ignored.
+_SLIM: dict[str, tuple[str, tuple[str, ...]]] = {
+    "list_documents": ("documents", ("connections", "balanceOffsets")),
+    "list_connections": ("connections", ("addresses", "metadata")),
+    "list_payment_accounts": ("paymentAccounts", ("availableOperations",)),
+    "list_account_movements": ("movements", ("balancesAfterOperation",)),
+}
+
 
 def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
@@ -72,6 +88,22 @@ def _check(op: str, given: dict) -> None:
         raise _bad(f"op='{op}' requires {', '.join(f'`{k}`' for k in missing)}"
                    + (" (from op='list_spaces')" if "space_id" in missing else "")
                    + ". Nothing was done.")
+
+
+def _shape(op: str, payload: Any, full: bool) -> Any:
+    """Tightened page of a list op (`_SLIM`), the raw one with `full=True`.
+
+    The envelope (`totalElements`, `currentPage`, `pageSize`…) is intact: without it
+    the agent thinks it has seen everything. A page without its item list (an empty
+    body) has nothing to tighten and comes back as sent."""
+    if full or op not in _SLIM or not isinstance(payload, dict):
+        return payload
+    cle, retires = _SLIM[op]
+    items = payload.get(cle)
+    if not isinstance(items, list):
+        return payload
+    return {**payload, cle: [{k: v for k, v in item.items() if k not in retires}
+                             if isinstance(item, dict) else item for item in items]}
 
 
 def _upstream_message(e) -> str:
@@ -156,6 +188,7 @@ def register(mcp: FastMCP) -> None:
         date_to: Optional[str] = None,
         page: Optional[int] = None,
         page_size: Optional[int] = None,
+        full: bool = False,
     ) -> Any:
         """jefacture.com e-invoicing, read-only, with the person's own sign-in: invoices
         and credit notes issued and received, their statuses, what remains due, the
@@ -178,6 +211,11 @@ def register(mcp: FastMCP) -> None:
 
         What remains due is `openBalance` (`metadata.documentTotals`). Lists are paged
         from 0 (`page=0` is the first). An argument the op does not read is refused.
+
+        By default `list_documents`, `list_connections`, `list_payment_accounts` and
+        `list_account_movements` drop the bulky blocks another op serves (see `full`);
+        ids, numbers, dates, amounts, statuses and counterparts stay.
+
         Not here: bookkeeping entries, the balance sheet, sales to private customers
         without an invoice.
 
@@ -213,6 +251,13 @@ def register(mcp: FastMCP) -> None:
             date_to: list_account_movements — up to this date, YYYY-MM-DD.
             page: lists — page number, from 0.
             page_size: lists — items per page (at most 200; 100 for movements).
+            full: list_documents / list_connections / list_payment_accounts /
+                list_account_movements — True returns each item as jefacture.com sends
+                it. The default removes a document's included `connections` (its
+                supplier and customer stay in `metadata`) and `balanceOffsets`
+                (op='list_balance_offsets'), a connection's `addresses` and `metadata`
+                (op='get_connection'), an account's `availableOperations`, a movement's
+                `balancesAfterOperation`.
         """
         _check(op, {
             "space_id": space_id, "document_id": document_id, "payment_id": payment_id,
@@ -226,17 +271,20 @@ def register(mcp: FastMCP) -> None:
             "booking_type": booking_type, "date_from": date_from, "date_to": date_to,
             "page": page, "page_size": page_size,
         })
+        if full and op not in _SLIM:
+            raise _bad(f"op='{op}' does not take `full`: its answer already comes whole. "
+                       "Nothing was done.")
         if op == "get_me":
             return _run(lambda: _client().get_me())
         if op == "list_spaces":
             return _run(lambda: _client().list_spaces(page, page_size))
         if op == "list_documents":
-            return _run(lambda: _client().list_documents(
+            return _shape(op, _run(lambda: _client().list_documents(
                 space_id, folder=folder, category=category, status_query=status_query,
                 issued_from=issued_from, issued_to=issued_to, due_from=due_from,
                 due_to=due_to, updated_since=updated_since,
                 document_number=document_number, counterpart=counterpart,
-                sort_by=sort_by, page=page, page_size=page_size))
+                sort_by=sort_by, page=page, page_size=page_size)), full)
         if op == "get_document":
             return _run(lambda: _client().get_document(space_id, document_id))
         if op == "list_balance_offsets":
@@ -248,13 +296,14 @@ def register(mcp: FastMCP) -> None:
                 space_id, matching_status=matching_status, page=page,
                 page_size=page_size))
         if op == "list_connections":
-            return _run(lambda: _client().list_connections(
+            return _shape(op, _run(lambda: _client().list_connections(
                 space_id, relation_type=relation_type, search=search,
-                identifier=identifier, page=page, page_size=page_size))
+                identifier=identifier, page=page, page_size=page_size)), full)
         if op == "get_connection":
             return _run(lambda: _client().get_connection(space_id, connection_id))
         if op == "list_payment_accounts":
-            return _run(lambda: _client().list_payment_accounts(space_id))
-        return _run(lambda: _client().list_account_movements(
+            return _shape(op, _run(lambda: _client().list_payment_accounts(space_id)),
+                          full)
+        return _shape(op, _run(lambda: _client().list_account_movements(
             space_id, payment_account_id, booking_type=booking_type,
-            date_from=date_from, date_to=date_to, page=page, page_size=page_size))
+            date_from=date_from, date_to=date_to, page=page, page_size=page_size)), full)

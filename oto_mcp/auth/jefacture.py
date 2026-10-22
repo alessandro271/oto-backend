@@ -363,8 +363,13 @@ def oublier_jeton(sub: str) -> None:
 # --- what the card displays --------------------------------------------------
 
 def _row(org_id: int, sub: str) -> Optional[dict]:
+    """The person's row, WITHOUT its secret, read in the member's inventory
+    (`list_credentials`): the very read the presence probe of `status_for` makes,
+    memoized per call (`lecture_d_appel`) — the card costs no query of its own on the
+    connector list (budget of `tests/test_connecteurs_me_rapide_1148.py`)."""
     entity_type, entity_id = _scope(org_id, sub)
-    return credentials_store.get_credential_with_meta(entity_type, entity_id, CONNECTOR)
+    return next((r for r in credentials_store.list_credentials(entity_type, entity_id)
+                 if r["connector"] == CONNECTOR and r["account"] == ""), None)
 
 
 def _link_state(sub: str) -> connector_link.LinkState:

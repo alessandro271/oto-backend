@@ -32,6 +32,8 @@ until they are set, the card stays visible and « connect » refuses **naming th
 
 lists are paged from 0. An argument an op does not read is refused, never dropped.
 
+by default the lists are tightened — ids, numbers, dates, amounts, statuses and counterparts stay, the bulky blocks another read serves leave: a document's included `connections` (its supplier and customer stay in `metadata`) and `balanceOffsets` (`list_balance_offsets`), a customer's or supplier's `addresses` and `metadata` (`get_connection`), an account's `availableOperations`, a movement's `balancesAfterOperation`. `full=True` returns them as jefacture.com sends them.
+
 ## note — what is not in jefacture.com
 
 no bookkeeping entries, no balance sheet, no sales to private customers that never become an invoice: ask the accounting software for those.
