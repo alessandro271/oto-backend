@@ -119,6 +119,46 @@ def _refus(code: str, message: str, **data) -> McpError:
                               data={"code": code, "retryable": False, **data}))
 
 
+def _texte(v) -> Optional[str]:
+    """A value as lemlist takes a lead variable: a string (its OpenAPI types the
+    extra keys of `POST /campaigns/{id}/leads/` `additionalProperties: string`).
+    A list of scalars is joined; an object is not guessed at (None)."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (str, int, float)):
+        return str(v)
+    if isinstance(v, list) and all(isinstance(x, (str, int, float)) for x in v):
+        return ", ".join(str(x) for x in v)
+    return None
+
+
+def _variables_du_lead(custom_variables: dict, declarees) -> dict:
+    """`custom_variables` as lemlist takes them, or a named refusal: a key that is
+    a field of the lead (`email`, `firstName`…) would overwrite its argument in the
+    same body, and a value that is not a text has no form lemlist documents."""
+    collisions = sorted(set(custom_variables) & set(declarees))
+    if collisions:
+        raise _refus(
+            "lemlist_custom_variable_collision",
+            f"`custom_variables` names lead fields {collisions}: pass them through "
+            "their own argument (`email`, `first_name`…). Nothing was sent.",
+            keys=collisions)
+    variables, illisibles = {}, []
+    for cle, valeur in custom_variables.items():
+        texte = _texte(valeur)
+        if texte is None:
+            illisibles.append(cle)
+        else:
+            variables[cle] = texte
+    if illisibles:
+        raise _refus(
+            "lemlist_custom_variable_value",
+            f"`custom_variables` {sorted(illisibles)}: a lead variable is a text "
+            "(a number, a boolean or a list of them is written as text); an "
+            "object or null is not. Nothing was sent.", keys=sorted(illisibles))
+    return variables
+
+
 def _campagne_introuvable(exc) -> bool:
     """Le 404 « Campaign not found » de `POST /campaigns/{id}/leads/` (doc API)."""
     body = getattr(exc, "body", None)
@@ -482,7 +522,11 @@ def register(mcp: FastMCP) -> None:
         All lead fields are optional (lemlist accepts phone/LinkedIn-only
         leads), but you'll usually pass at least `email` or `linkedin_url`.
         `custom_variables` merges extra key-value pairs into the lead, used for
-        campaign personalization (e.g. `{{variableName}}` in a template).
+        campaign personalization (e.g. `{{variableName}}` in a template). Each
+        value goes as text (a number or boolean written out, a list joined); an
+        object or null is refused (`lemlist_custom_variable_value`), and so is a
+        key that is a lead field such as `email` or `firstName`
+        (`lemlist_custom_variable_collision`) — pass it through its argument.
 
         Enrichment flags (all default False, each may cost lemlist credits):
         `deduplicate` skips the insert if the email already exists in another
@@ -512,23 +556,22 @@ def register(mcp: FastMCP) -> None:
         `already_in_other_campaign` or `already_in_campaign` — nothing was
         created; count the contact as already taken and move on.
         """
-        lead = {
-            k: v for k, v in {
-                "email": email,
-                "firstName": first_name,
-                "lastName": last_name,
-                "companyName": company_name,
-                "jobTitle": job_title,
-                "linkedinUrl": linkedin_url,
-                "phone": phone,
-                "companyDomain": company_domain,
-                "icebreaker": icebreaker,
-                "timezone": timezone,
-                "contactOwner": contact_owner,
-            }.items() if v is not None
+        champs = {
+            "email": email,
+            "firstName": first_name,
+            "lastName": last_name,
+            "companyName": company_name,
+            "jobTitle": job_title,
+            "linkedinUrl": linkedin_url,
+            "phone": phone,
+            "companyDomain": company_domain,
+            "icebreaker": icebreaker,
+            "timezone": timezone,
+            "contactOwner": contact_owner,
         }
+        lead = {k: v for k, v in champs.items() if v is not None}
         if custom_variables:
-            lead.update(custom_variables)
+            lead.update(_variables_du_lead(custom_variables, champs))
         from oto.tools.common.errors import UpstreamHTTPError
 
         if not campaign_id.startswith("cam_"):
