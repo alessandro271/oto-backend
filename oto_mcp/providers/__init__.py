@@ -90,6 +90,9 @@ _DECLARATIONS: tuple[str, ...] = (
     # Neighbour of `pennylane`: same Finance category, and the order governs
     # the catalog display.
     "finkare",
+    # Neighbour of `pennylane`/`finkare` (Finance): e-invoicing, read-only — wired
+    # 2026-10-22. The person signs in with jefacture.com (OAuth, platform application).
+    "jefacture",
     "slack",
     "fullenrich",
     "waterfall_email",

@@ -64,6 +64,7 @@ from . import (accords as api_routes_accords,
                meta_ads as api_routes_meta_ads,
                microsoft as api_routes_microsoft,
                ubersuggest as api_routes_ubersuggest,
+               jefacture as api_routes_jefacture,
                receveurs as api_routes_receveurs,
                salesforce as api_routes_salesforce,
                sirene as api_routes_sirene,
@@ -810,6 +811,16 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         options_handler=options_handler,
     )
 
+    # Retour de connexion jefacture.com (code d'autorisation, application plateforme)
+    # — même forme.
+    jefacture_routes = api_routes_jefacture.make_routes(
+        verifier=verifier,
+        authenticate=_authenticate,
+        json_response=_json,
+        json_error=_json_error,
+        options_handler=options_handler,
+    )
+
     # Retour de l'écran d'autorisation WordPress (mot de passe d'application) — le
     # `/start` passe par le seam commun (`connectors/flow`), seul le retour est une route.
     wordpress_routes = api_routes_wordpress.make_routes(
@@ -933,6 +944,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         *meta_ads_routes,
         *microsoft_routes,
         *ubersuggest_routes,
+        *jefacture_routes,
         *wordpress_routes,
         *capability_routes,
         *billing_webhook_routes,

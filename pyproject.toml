@@ -51,6 +51,10 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.193.0 = jefacture (nouveau client `oto.tools.jefacture`, lecture seule, OAuth
+    # code d'autorisation, servi par `tools/jefacture.py`). v1.192.0 = payfit : les
+    # scopes de la clé, lus à l'introspection (`get_key_scopes`, méthode ajoutée).
+    # Englobe v1.191.0 :
     # v1.191.0 = aircall 1.1.0 : aucune adresse d'enregistrement ne sort d'un appel
     # (`fetch_short_urls` retiré de `list_calls`/`search_calls`/`get_call`), l'audio se
     # rend en fichier (`get_call_recording`/`get_call_voicemail`, `FileOut` de
@@ -460,7 +464,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.191.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.193.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome
