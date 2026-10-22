@@ -1300,7 +1300,7 @@ def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
     return job
 
 
-def _charge_et_modele(ctx: ResolvedCtx, inp: JobsInput) -> Optional[dict]:
+def charge_et_modele(ctx: ResolvedCtx, inp: JobsInput) -> Optional[dict]:
     """La charge d'un travail enfilé à la main, son modèle mis en règle.
 
     ⚠️ **La famille se DÉDUIT, elle ne se déclare pas.** C'est elle qui route le
@@ -1488,7 +1488,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         # d'appartenance, pas par la confiance faite au corps de la requête.
         if inp.fleet_id is None:
             res = db.enqueue_job(ctx.org_id, inp.kind,
-                                 payload=_charge_et_modele(ctx, inp),
+                                 payload=charge_et_modele(ctx, inp),
                                  run_id=inp.run_id, max_attempts=inp.max_attempts,
                                  sub=ctx.sub)
         else:
@@ -1501,7 +1501,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
                 _exige_flotte_servie(db.verrouiller_la_flotte(
                     conn, inp.fleet_id, ctx.org_id))
                 res = db.enqueue_job(ctx.org_id, inp.kind,
-                                     payload=_charge_et_modele(ctx, inp),
+                                     payload=charge_et_modele(ctx, inp),
                                      run_id=inp.run_id, max_attempts=inp.max_attempts,
                                      fleet_id=inp.fleet_id, sub=ctx.sub, conn=conn)
         return {"id": res["id"], "status": res["status"], "due_at": str(res["due_at"]),

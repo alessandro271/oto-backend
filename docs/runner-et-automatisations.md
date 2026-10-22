@@ -889,6 +889,7 @@ puisqu'elle ne juge que la famille déclarée. Deux verrous, comme la clé exig�
               launch d'un passage déclaré sans modèle   → 400 model_required, rien n'est écrit
 au DÉCLENCHEMENT (tick, webhook) d'un agent sans modèle → rien n'est enfilé, livraison
               `refused_no_model` sur la page de l'agent (webhook : 409 `trigger_no_model`)
+au LANCEMENT à la main (`run_now`)                       → 409 `trigger_no_model`, même motif
 à la RÉSERVATION (worker de plateforme)                  → travail `failed` pour de bon,
               raison écrite, rendu en `delegation_refusee`, jeton retiré
 ```
@@ -1556,6 +1557,20 @@ terminés depuis des heures passaient pour des événements en attente. D'où la
 jointe plutôt qu'une réécriture de la livraison : garder `outcome` figé préserve le
 journal de la porte, et l'état du travail n'a qu'une source.
 
+**`run_now` lance UN run tout de suite**, sans toucher à l'horloge (21/10/2026). C'est
+le bouton « Exécuter maintenant » de l'écran, servi aussi au MCP (`oto_trigger
+op=run_now trigger_id=…`). La charge est celle de l'horloge — une seule définition,
+`runner_tick.charge_du_declencheur` — datée de maintenant, puis elle passe par
+l'enfilage à la main (`runner_jobs.charge_et_modele`). Le run tourne au nom de
+l'APPELANT, se range sous l'agent (`trigger_id`), et marche agent en pause. Refusé
+comme `create` quand rien ne sert le modèle de l'agent (`no_runner_armed`,
+`model_not_served`, `model_key_required`), et quand la procédure est archivée. Un
+agent sans modèle, ou au modèle sorti du catalogue, est refusé comme au tick, sur le
+même motif (`runner_models.motif_sans_famille`) : 409 `trigger_no_model`, pas
+`model_required`, qui enverrait déclarer un modèle à qui en a déjà un. Et un travail
+de cet agent qui attend déjà un worker (`pending`) refuse le second : 409
+`run_already_queued` — il ne partirait pas plus tôt, il doublerait le run.
+
 `queue_pending`/`queue_held` comptent **exactement le prédicat de `clear_queue`**
 (`status IN ('pending','held')` pour ce déclencheur, dans cette org) — le nombre
 posé à côté du bouton est ce que le bouton périme. `op=list` lit ces comptes, les
@@ -1726,7 +1741,7 @@ ses connexions. Seuls les agents d'abonnement et la porte du webhook étaient ga
 les admins de l'org, et ceux avec qui il est partagé ; les autres membres ne le voient
 pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
 
-| niveau | `get`/`list`/`shares` | corps de livraison (`with_input`) | `update`, allumer/éteindre, `clear_queue` | `delete`, `share`/`unshare`, porte du webhook |
+| niveau | `get`/`list`/`shares` | corps de livraison (`with_input`) | `update`, allumer/éteindre, `clear_queue`, `run_now` | `delete`, `share`/`unshare`, porte du webhook |
 |---|---|---|---|---|
 | `owner`, `admin` | ✓ | ✓ | ✓ | ✓ |
 | `editor` | ✓ | ✓ | ✓ | — |
