@@ -163,6 +163,17 @@ jusqu'au 01/09/2026 : c'est faux et constaté sur la machine), gaté par le cran
   une dépense qui continue est pire que croire qu'on a lancé un passage qui ne
   tourne pas**. L'écart entre les deux EST le diagnostic : un `stopping` qui ne
   devient jamais `stopped` désigne un ordonnanceur mort.
+  ⚠️ **La fin naturelle se constate au sondage, comme l'arrêt** (22/10/2026) : une
+  campagne `running` qui a produit ses `max_rows` travaux, et dont aucun n'est plus
+  `pending` ni `claimed`, passe `done` (`stop_reason = 'max_rows'`,
+  `db.clore_campagnes_terminees`). Sans ce geste elle restait `running` pour
+  toujours, et un agent qui attend qu'aucune campagne ne tourne avant d'en relancer
+  une ne relançait plus rien. Sans `max_rows`, aucune fin n'est déclarée : la
+  campagne n'est jamais close d'elle-même. `beat` rend `stop_requested` sur `done`
+  comme sur un arrêt. Et `launch` refuse en 409 `max_rows_reached` une campagne
+  qui a déjà produit ses `max_rows` travaux : le compte ne repart pas de zéro au
+  réarmement, elle resterait `armed` sans que rien ne lui soit produit. Sortie :
+  relever `max_rows` (`op=update`) ou déclarer une autre automatisation.
   ⚠️ **Deux planchers, parce que la garde suit ce que le geste ENGAGE** :
   `launch` est réservé aux **admins** de l'org (il engage une dépense et des
   écritures chez un tiers, irréversibles) ; `stop` est ouvert à **tout membre**

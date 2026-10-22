@@ -119,7 +119,10 @@ def geste(org_id: int, op: str, fleet_id: int, taken_by: Optional[str],
                 409, "not_the_holder",
                 "tu ne tiens pas cette automatisation (un autre ordonnanceur la tient, ou "
                 "elle a été réarmée depuis que tu l'as prise) : arrête de la conduire.")
-        return {"fleet": f, "stop_requested": f["status"] in ("stopping", "stopped"),
+        # `done` aussi : une campagne close à sa borne (`max_rows`, constatée au
+        # sondage par `clore_campagnes_terminees`) n'a plus rien à conduire.
+        return {"fleet": f,
+                "stop_requested": f["status"] in ("stopping", "stopped", "done"),
                 "beat_taken": vivant}
 
     # ack_stop — ⚠️ le SEUL geste qui pose `stopped`, et c'est celui qui la tient qui

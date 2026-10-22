@@ -65,3 +65,16 @@ def test_beat_ne_leve_pas_si_le_controle_echoue(monkeypatch, caplog):
     ORD._deja_journalise.clear()
     rendu = ORD.geste(226, "beat", 1, "box-a/oto-fleet", None)
     assert rendu["beat_taken"] is True
+
+
+def test_beat_dit_de_s_arreter_a_une_campagne_close_a_sa_borne(monkeypatch):
+    """`done` (`max_rows` atteint, constaté au sondage) n'a plus rien à conduire :
+    l'ordonnanceur qui la tient l'apprend au battement, comme un arrêt."""
+    monkeypatch.setattr(ORD.db, "battre", lambda *a, **k: False)
+    monkeypatch.setattr(ORD.db, "get_fleet", lambda fid, org: {
+        "id": fid, "org_id": org, "sub": "pilote", "tools": [],
+        "status": "done", "stop_reason": "max_rows", "taken_by": "box-a/oto-fleet"})
+    monkeypatch.setattr(ORD._outils_manquants, "manquants", lambda *a: [])
+
+    rendu = ORD.geste(226, "beat", 1, "box-a/oto-fleet", None)
+    assert rendu["stop_requested"] is True

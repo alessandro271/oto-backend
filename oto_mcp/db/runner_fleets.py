@@ -275,6 +275,71 @@ def accuser_arrets_effectifs(org_id: Optional[int]) -> list[int]:
     return [int(r["id"]) for r in lignes]
 
 
+def clore_campagnes_terminees(org_id: Optional[int]) -> list[int]:
+    """`running` → `done` pour les campagnes qui ont produit leurs `max_rows`
+    travaux et dont plus AUCUN ne tourne.
+
+    ⚠️ Même trou que `accuser_arrets_effectifs`, de l'autre côté : c'était
+    l'ordonnanceur qui disait « fini », et il n'existe plus. Une campagne arrivée
+    à sa borne n'est plus servie (`_ELIGIBLE` l'écarte), mais personne ne la
+    ferme : elle reste `running` pour toujours. Mesuré le 22/10/2026 : une
+    campagne aux travaux tous faits, lue `running` le lendemain — et l'agent
+    quotidien qui la relance, qui attend qu'aucune campagne ne tourne avant
+    d'en armer une, n'a rien lancé.
+
+    `done` reste un FAIT CONSTATÉ, vérifiable sans juger du travail : la borne
+    est atteinte (aucun autre travail ne sera jamais produit) et aucun travail
+    `pending` ni `claimed` ne subsiste. Une campagne sans `max_rows` n'a pas de
+    fin déclarée — une file vide aujourd'hui peut se remplir demain — et n'est
+    jamais close ici.
+
+    ⚠️ Lu dans l'INSTANTANÉ de l'instruction, comme `accuser_arrets_effectifs` :
+    même faille. En READ COMMITTED, le « plus aucun travail en vol » se lit dans
+    l'instantané pris au DÉBUT de l'UPDATE, et rien ne force à le relire. Ici, le
+    concurrent est `runner.jobs op=enqueue fleet_id=` : il accepte une campagne
+    `running` sans regarder `max_rows`, sous le `FOR SHARE` de
+    `verrouiller_la_flotte`. Ce verrou ne couvre PAS ce geste : l'UPDATE attend
+    bien la fin de l'enfilement, mais la ligne de flotte, seulement verrouillée et
+    non modifiée, n'est pas réévaluée, et la sous-requête sur `runner_jobs` garde
+    son instantané. La campagne passe `done` à côté d'un travail `pending` qu'elle
+    n'a pas vu, et ce travail part quand même. Chez `accuser_arrets_effectifs`, le
+    concurrent est la production (`enqueue_job(seulement_si_servable=True)`), dont
+    l'INSERT … SELECT lit `armed`/`running` sans verrouiller la flotte : un travail
+    posé juste avant `stopping`, validé juste après l'instantané, échappe à
+    l'accusé. Fenêtre d'une instruction ; non fermée ici, elle se ferme aux deux
+    endroits à la fois.
+
+    Rend les ids clos, pour que l'appelant puisse le journaliser."""
+    with _connect() as conn:
+        lignes = conn.execute(
+            """
+            UPDATE runner_fleets f
+               SET status = 'done', stopped_at = NOW(),
+                   stop_reason = 'max_rows'
+             WHERE (%s::bigint IS NULL OR f.org_id = %s) AND f.status = 'running'
+               AND f.max_rows IS NOT NULL
+               AND (SELECT COUNT(*) FROM runner_jobs j
+                     WHERE j.fleet_id = f.id) >= f.max_rows
+               AND NOT EXISTS (SELECT 1 FROM runner_jobs j
+                                WHERE j.fleet_id = f.id
+                                  AND j.status IN ('pending', 'claimed'))
+            RETURNING f.id
+            """,
+            (org_id, org_id)).fetchall()
+    return [int(r["id"]) for r in lignes]
+
+
+def travaux_produits(fleet_id: int, org_id: int) -> int:
+    """Le nombre de travaux DÉJÀ produits pour la campagne, tous statuts : le
+    compte que `_ELIGIBLE` confronte à `max_rows`. Un réarmement ne le remet pas
+    à zéro."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM runner_jobs WHERE fleet_id = %s AND org_id = %s",
+            (fleet_id, org_id)).fetchone()
+    return int(row["n"])
+
+
 def arreter_campagnes_epuisees(org_id: Optional[int]) -> list[int]:
     """Arrête les campagnes dont les N derniers travaux ont TOUS échoué.
 

@@ -571,6 +571,20 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # n'importe quel worker le sert.
         if famille:
             _modele.exige_servi(etat, famille)
+        # ⚠️ La borne `max_rows` se vérifie ICI aussi, sur la flotte EN BASE, avant
+        # toute écriture. Une campagne close à sa borne (`done`, `max_rows`) se
+        # réarmerait sans erreur, mais `campagne_a_servir` ne lui produirait plus
+        # rien : elle resterait `armed` en silence. Le compte ne repart pas de
+        # zéro au réarmement, le refus nomme donc les deux sorties.
+        if avant and avant.get("max_rows"):
+            produits = db.travaux_produits(inp.fleet_id, ctx.org_id)
+            if produits >= int(avant["max_rows"]):
+                raise AuthzDenied(
+                    409, "max_rows_reached",
+                    f"cette automatisation a déjà produit {produits} exécutions pour "
+                    f"`max_rows`={avant['max_rows']} : armée, elle n'en produirait plus "
+                    "aucune. Relève `max_rows` par `op=update`, ou déclare une autre "
+                    "automatisation.")
         # Une automatisation d'avant #1067 garde le NOM de son tableau : on pose son
         # identifiant avant d'armer, là où un refus n'a encore rien engagé.
         if avant:
@@ -586,10 +600,6 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # `row_filter`, pas le périmètre déclaré du tableau, et annonçait du travail
         # qu'aucune réservation ne servait. La plateforme ne compte pas à la place de
         # l'agent, qui découvre une file vide en réservant.
-        # ⚠️ La borne se vérifie ICI aussi, et sur la flotte EN BASE — pas sur
-        # l'entrée. Une campagne déclarée avant cette garde, ou modifiée depuis,
-        # n'a rien qui l'arrête ; et c'est l'armement qui engage la dépense, pas
-        # la déclaration. Le refus nomme sa destination : `op=update`.
         f = db.armer(inp.fleet_id, ctx.org_id)
         if not f:
             actuelle = db.get_fleet(inp.fleet_id, ctx.org_id)
@@ -793,6 +803,10 @@ CAPABILITIES += [
                           "automatisation inconnue dans l'org du porteur"),
             DeclaredError(409, "not_launchable",
                           "`launch` d'une automatisation déjà armée ou en cours"),
+            DeclaredError(409, "max_rows_reached",
+                          "`launch` d'une automatisation qui a déjà produit ses "
+                          "`max_rows` exécutions : armée, elle n'en produirait plus "
+                          "aucune"),
             DeclaredError(409, "not_stoppable",
                           "`stop` d'une automatisation ni armée ni en cours"),
             DeclaredError(409, "not_takeable",

@@ -436,6 +436,41 @@ def test_sans_borne_le_pire_cas_est_NULL_et_non_un_nombre(monkeypatch):
     assert _appel(_ctx(), op="launch", fleet_id=1)["budget_max_tokens"] is None
 
 
+def _armable_a_borne(monkeypatch, produits):
+    from oto_mcp import db, roles
+    monkeypatch.setattr(roles, "is_org_admin", lambda *a, **k: True)
+    monkeypatch.setattr(RF, "_run_courant", lambda: None)
+    monkeypatch.setattr(db, "get_fleet", lambda *a, **k: {
+        "id": 1, "status": "done", "procedure": "p", "input": "x", "model": MODELE,
+        "max_rows": 2, "stop_reason": "max_rows"})
+    monkeypatch.setattr(db, "travaux_produits", lambda fid, org: produits)
+    arme = {}
+    monkeypatch.setattr(db, "armer", lambda *a, **k: arme.setdefault("f", {
+        "id": 1, "max_rows": 2, "max_tokens_per_row": None}))
+    return arme
+
+
+def test_une_campagne_a_sa_borne_ne_se_rearme_pas_en_silence(monkeypatch):
+    """Close `done` à sa borne, réarmée telle quelle, elle resterait `armed` sans
+    que rien ne lui soit jamais produit : le compte ne repart pas de zéro. Le
+    refus nomme les deux sorties, et n'écrit rien."""
+    arme = _armable_a_borne(monkeypatch, produits=2)
+
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="launch", fleet_id=1)
+    assert (e.value.status, e.value.code) == (409, "max_rows_reached")
+    assert "op=update" in e.value.message
+    assert "déclare une autre automatisation" in e.value.message
+    assert arme == {}, "un refus n'arme rien"
+
+
+def test_sous_sa_borne_la_campagne_se_rearme(monkeypatch):
+    arme = _armable_a_borne(monkeypatch, produits=1)
+
+    assert _appel(_ctx(), op="launch", fleet_id=1)["fleet"]["id"] == 1
+    assert arme
+
+
 # ── La température : déclarée par PASSAGE, jamais posée dans l'environnement ──
 # Mesuré le 06/09/2026 : le même texte sur le même banc donnait 11 à 18 sur 18 au
 # défaut du fournisseur, contre 14 à 16 à zéro. Une journée d'itérations a comparé
