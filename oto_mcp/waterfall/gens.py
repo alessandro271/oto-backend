@@ -4,10 +4,11 @@ asked, decision-makers first, and only people whose CURRENT company is the one a
 from __future__ import annotations
 
 import re
-from typing import Callable, Optional
+from typing import Optional
 
 from .etape import Step
-from .fournisseurs import _APIFY_EMPLOYEES_TIMEOUT_S, _apify_items
+from .fournisseurs import (_APIFY_EMPLOYEES_TIMEOUT_S, _LEMLIST_EXCLUDES, _apify_items,
+                           _lemlist_lead)
 from .valeurs import _get, _norm_name, _pick, _refused
 
 def _matches_roles(title, roles) -> bool:
@@ -122,14 +123,6 @@ def _lemlist_page(url: Optional[str]) -> str:
     return f"https://www.linkedin.com/{m.group(1).lower()}/{m.group(2).lower()}"
 
 
-#: What lemlist drops from each record when asked (`excludes`): parts no step reads — never
-#: a nested path. ⚠️ Never `experiences` (~90 % of a record): it is not dropped but
-#: TRUNCATED (16 of 26 positions served, measured — the current one missing), and the
-#: title is read from it.
-_LEMLIST_EXCLUDES = ["education", "skills", "languages", "interests", "summary",
-                     "shorthand_name_list", "lead_logo_url"]
-
-
 def _lemlist_args(i: dict) -> dict:
     """lemlist's people database, by the company's website (else its LinkedIn page) and
     the roles asked. `country` is left out: an autocomplete filter, a form it does not
@@ -156,20 +149,9 @@ def _lemlist_here(exp: dict, domain: str, slug: Optional[str]) -> bool:
     return bool(domain and where and (where == domain or where.endswith("." + domain)))
 
 
-def _lemlist_position(rec: dict, at: Callable[[dict], bool]) -> Optional[dict]:
-    """A record's CURRENT position (no end date) where `at` says — the first of the
-    profile when there are several: `order_in_profile` 0 is the first, not « no order »."""
-    current = [e for e in rec.get("experiences") or []
-               if isinstance(e, dict) and not e.get("date_to") and at(e)]
-    if not current:
-        return None
-    return min(current, key=lambda e: (99 if e.get("order_in_profile") is None
-                                       else e["order_in_profile"]))
-
-
-def _lemlist_current(records, inputs: dict) -> list[tuple[dict, dict]]:
-    """Each record with its current position at the company asked — a record with none
-    is left out."""
+def _lemlist_current(records, inputs: dict) -> list[tuple[dict, dict, dict]]:
+    """Each record with its current position at the company asked and its email
+    (`fournisseurs._lemlist_lead`) — a record with no such position is left out."""
     domain = (inputs.get("domain") or "").lower()
     slug = _company_slug(inputs.get("company_linkedin_url"))
 
@@ -178,9 +160,11 @@ def _lemlist_current(records, inputs: dict) -> list[tuple[dict, dict]]:
 
     out = []
     for rec in records or []:
-        exp = _lemlist_position(rec, here) if isinstance(rec, dict) else None
+        if not isinstance(rec, dict):
+            continue
+        exp, contact = _lemlist_lead(rec, here)
         if exp is not None:
-            out.append((rec, exp))
+            out.append((rec, exp, contact))
     return out
 
 
@@ -197,7 +181,7 @@ def _lemlist_slim(records: list, inputs: dict) -> list:
     record (its whole career, `experiences`) down to a few hundred bytes."""
     return [{**{k: rec.get(k) for k in _LEMLIST_READS},
              "experiences": [{k: exp.get(k) for k in _LEMLIST_POSITION_READS}]}
-            for rec, exp in _lemlist_current(records, inputs)]
+            for rec, exp, _contact in _lemlist_current(records, inputs)]
 
 
 def _lemlist_people(res, inputs):
@@ -209,14 +193,13 @@ def _lemlist_people(res, inputs):
     not matched again here: the stricter match drops those, measured. Its email is a
     pattern guess: returned as `guessed` (Apollo's word for it)."""
     rows = []
-    for rec, exp in _lemlist_current(_get(res, "results"), inputs):
-        email = rec.get("potential_email")
+    for rec, exp, contact in _lemlist_current(_get(res, "results"), inputs):
         rows.append({
             "full_name": rec.get("full_name"),
             "title": exp.get("title") or rec.get("headline"),
             "linkedin_url": rec.get("lead_linkedin_url"),
             "location": rec.get("location"), "seniority": rec.get("seniority"),
-            "email": email, "email_status": "guessed" if email else None,
+            **contact,
         })
     return _people_find(rows, {**inputs, "roles": None})
 
