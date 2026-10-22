@@ -71,8 +71,9 @@ from typing import Literal, Optional
 from fastmcp import FastMCP
 
 from . import payfit_socle as S
-from .payfit_garde import (_client, limit_or_default, moved, need, redaction_notice,
-                           refuse_ignored, refuse_unknown_op, register_probe, run)
+from .payfit_garde import (_client, ecritures_permises, limit_or_default, moved, need,
+                           redaction_notice, refuse_ignored, refuse_unknown_op,
+                           register_probe, run)
 
 
 def register(mcp: FastMCP) -> None:
@@ -81,7 +82,13 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def payfit_company(fr: Optional[bool] = None) -> dict:
         """The PayFit company the API key belongs to — name, country, registration
-        number, address, number of active contracts.
+        number, address, number of active contracts — and what the KEY may do.
+
+        `key_scopes` are the scopes the key was created with in PayFit (read at
+        its introspection), and `writable_ops` the `payfit_act` ops they allow
+        (`create_absence` needs `time:write`…). Read them BEFORE a write: an op
+        missing here would come back as PayFit's 403. A new scope means a new key,
+        created by a company admin in PayFit.
 
         Its `country` tells whether the French variants apply: `payfit_contract(
         fr=True)`, the meal vouchers, the worked time and the insurance tools are
@@ -92,7 +99,11 @@ def register(mcp: FastMCP) -> None:
                 health-insurance proration method. France only.
         """
         c = _client()
-        return S.one(run(lambda: c.get_company(fr=bool(fr))), "company")
+        out = S.one(run(lambda: c.get_company(fr=bool(fr))), "company")
+        scopes = run(c.get_key_scopes)
+        out["key_scopes"] = scopes
+        out["writable_ops"] = ecritures_permises(scopes)
+        return out
 
     @mcp.tool()
     def payfit_collaborator(

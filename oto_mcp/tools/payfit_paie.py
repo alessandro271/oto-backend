@@ -31,8 +31,10 @@ from typing import Literal, Optional
 from fastmcp import FastMCP
 
 from .. import file_extract
+from . import payfit_brut as B
 from . import payfit_bulletin
 from . import payfit_socle as S
+from .lecture import LECTURE
 from .payfit_garde import (OVERTIME_LINE_LOCKED, _bad, _client, documents_unlocked,
                            limit_or_default, need, refuse_ignored, refuse_unknown_op,
                            run, serve_document)
@@ -87,6 +89,37 @@ def _overtime(c, collaborator_id: str, date: Optional[str]) -> dict:
         out["truncated"] = (f"{len(slips)} payslips, {OVERTIME_MAX_PAYSLIPS} read (the "
                             "most recent): pass `date` to target one month.")
     return out
+
+
+# 50 contracts a page: beyond this, the company is not one this op was sized for.
+_MAX_CONTRACT_PAGES = 40
+
+
+def _gross_by_contract(date: str, date_to: Optional[str]) -> dict:
+    """Fetches the months' entries and the FR contracts, and lets `payfit_brut` add
+    them up: only the compact result leaves the server."""
+    mois = run(lambda: B.months(date, date_to))
+    c = _client()
+    company = (run(lambda: c.get_company(fr=True)) or {})
+    pas_clos = [m for m in mois
+                if (run(lambda m=m: c.get_payroll_status(m)) or {}).get("status")
+                != "completed"]
+    entries = {m: run(lambda m=m: c.list_accounting_entries(m)) or [] for m in mois}
+    contracts, cursor = [], None
+    for _ in range(_MAX_CONTRACT_PAGES):
+        env = run(lambda: c.list_contracts(limit=50, cursor=cursor, fr=True)) or {}
+        contracts.extend(r for r in env.get("contracts") or () if isinstance(r, dict))
+        cursor = (env.get("meta") or {}).get("nextPageToken")
+        if not cursor:
+            break
+    else:
+        raise _bad(f"PayFit: more than {_MAX_CONTRACT_PAGES * 50} contracts — "
+                   "op=\"gross_by_contract\" is not sized for this company.")
+    out = run(lambda: B.gross_by_contract(entries, contracts))
+    return {"company": {"name": company.get("name"), "siren": company.get("siren"),
+                        "siret": company.get("siret")},
+            "period": {"from": mois[0], "to": mois[-1]},
+            "months_not_completed": pas_clos, **out}
 
 
 def register(mcp: FastMCP) -> None:
@@ -174,11 +207,12 @@ def register(mcp: FastMCP) -> None:
         return serve_document(lambda: c.get_payslip(
             collaborator_id, contract_id, payslip_id))
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def payfit_payroll(
-        op: Literal["status", "accounting", "accounting_export",
+        op: Literal["status", "accounting", "gross_by_contract", "accounting_export",
                     "payment_file"] = "status",
         date: Optional[str] = None,
+        date_to: Optional[str] = None,
         fields: Optional[list] = None,
     ) -> dict:
         """One month of PayFit payroll for the whole company: whether it is closed,
@@ -197,6 +231,21 @@ def register(mcp: FastMCP) -> None:
           where the employer cost and the contributions are** (641x wages, 645x
           contributions, 6417x benefits in kind); PayFit has no other structured
           figures and no aggregate of them. Not paginated: the whole month arrives.
+        - **"gross_by_contract"**: ONE ROW PER ACTIVE CONTRACT — name, job, DSN
+          contract nature, `college` (`cadre` | `non_cadre` | null, from the DSN
+          conventional status: 01-02 cadre, 03-05 non-cadre), `gross` and its
+          `by_account` split — instead of ~30 accounting lines per employee.
+          `gross` = debit − credit on the 641x accounts (wages, paid leave,
+          bonuses, allowances, benefits in kind) over `date` → `date_to` (12
+          months at most; `months_paid` says over how many months it was paid):
+          what payroll BOOKED as remuneration, not the payslip's "salaire brut"
+          line. `null` = no 641x entry over the period, never a zero. ⚠️ An
+          "assimilé cadre" (article 36) is NOT distinguishable: the API does not
+          serve the supplementary-pension category. `others` sums the gross of
+          contracts that are no longer active. `months_not_completed` lists the
+          months whose payroll is not closed yet. Scopes `accounting:read` and
+          `contracts:read`. For a group of companies: one call per account
+          (`_account=`).
         - **"accounting_export"**: the same journal as the FILE an accountant
           imports (CSV).
         - **"payment_file"**: the bank transfer file of the month — it carries every
@@ -213,15 +262,24 @@ def register(mcp: FastMCP) -> None:
         them field by field, so they are never locked.
 
         Args:
-            op: status (default) | accounting | accounting_export | payment_file.
-            date: the month, `YYYYMM` — required by all four ops.
+            op: status (default) | accounting | gross_by_contract |
+                accounting_export | payment_file.
+            date: the month, `YYYYMM` — required by every op; the FIRST month
+                for op="gross_by_contract".
+            date_to: op="gross_by_contract" — the last month, `YYYYMM`
+                (default `date`, 12 months at most).
             fields: op="accounting" — keep only these keys per row (`accountId`
                 always kept); omitted or `["*"]` = the full view.
         """
-        if op not in ("status", "accounting", "accounting_export", "payment_file"):
-            raise refuse_unknown_op(op, "status", "accounting", "accounting_export",
-                                    "payment_file")
+        if op not in ("status", "accounting", "gross_by_contract", "accounting_export",
+                      "payment_file"):
+            raise refuse_unknown_op(op, "status", "accounting", "gross_by_contract",
+                                    "accounting_export", "payment_file")
         need(op, date=date)
+        if op == "gross_by_contract":
+            refuse_ignored(op, fields=fields)
+            return _gross_by_contract(date, date_to)
+        refuse_ignored(op, date_to=date_to)
         c = _client()
         if op == "status":
             refuse_ignored(op, fields=fields)

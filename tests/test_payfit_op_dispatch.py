@@ -124,6 +124,20 @@ def test_get_contract_forwards_the_french_variant(client):
     client.get_contract.assert_called_once_with(K, fr=True)
 
 
+def test_the_company_says_what_the_key_may_write(client):
+    """Les scopes de la clé et les ops de `payfit_act` qu'ils permettent, lus AVANT
+    d'écrire — dérivés de la déclaration des niveaux, la seule qui dit quel scope
+    exige chaque op."""
+    client.get_company.return_value = {"id": K}
+    client.get_key_scopes.return_value = ["collaborators:read", "time:read",
+                                          "time:write"]
+    out = _tool("payfit_company")()
+    assert out["key_scopes"] == ["collaborators:read", "time:read", "time:write"]
+    assert out["writable_ops"] == ["create_absence", "cancel_absence"]
+    client.get_key_scopes.return_value = ["time:read"]
+    assert _tool("payfit_company")()["writable_ops"] == []
+
+
 def test_the_french_company_is_asked_for_explicitly(client):
     _tool("payfit_company")(fr=True)
     client.get_company.assert_called_once_with(fr=True)

@@ -97,6 +97,17 @@ def refuse_unknown_op(op: str, *allowed: str) -> McpError:
 ACT_TOOL = "payfit_act"
 
 
+def ecritures_permises(scopes: list) -> list:
+    """The `payfit_act` ops a key's scopes allow — read from the connector's
+    access-level declaration (`providers/payfit.ACCESS_LEVELS`), the single place
+    that says which scope each op requires."""
+    from ..providers import payfit as declaration
+
+    portes = set(scopes)
+    return [op for op, exige in declaration.ACCESS_LEVELS["tools"][ACT_TOOL].items()
+            if set(exige) <= portes]
+
+
 def moved(op: str, act_op: str) -> McpError:
     """The refusal of a reader's old write op: the write exists, in `payfit_act`.
     Nothing is sent and neither the key nor the client is touched — the agent

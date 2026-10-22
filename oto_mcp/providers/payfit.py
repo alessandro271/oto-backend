@@ -88,6 +88,7 @@ ACCESS_LEVELS = {
                            "download": ("contracts:payslips:read",),
                            "overtime": ("contracts:payslips:read",)},
         "payfit_payroll": {"status": (), "accounting": ("accounting:read",),
+                           "gross_by_contract": ("accounting:read", "contracts:read"),
                            "accounting_export": ("accounting:read",),
                            "payment_file": ("payment-files:read",)},
         "payfit_worked_time": ("time:read",),
