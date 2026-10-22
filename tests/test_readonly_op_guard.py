@@ -92,7 +92,7 @@ ECRITURES = {
     # oto#106 : frapper un lien de dépôt prépare une ÉCRITURE (la cible est scellée).
     "me.upload_url": {"create", "update"},
     "me.project": {"create", "update", "archive", "unarchive", "copy", "link", "unlink",
-                   "publish_mcp", "unpublish_mcp"},
+                   "rank_link", "publish_mcp", "unpublish_mcp"},
     "platform.connector.setting": {"reload", "clear", "set"},
     "platform.runner.worker": {"create", "revoke"},
     "resources.govern": {"share", "unshare", "transfer"},

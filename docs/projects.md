@@ -463,6 +463,30 @@ projet. Posé SEUL, le rang ne touche ni `updated_at` ni le fil d'activité : ra
 sidebar n'est pas modifier le projet, et « récemment modifié » le remonterait à chaque
 glisser.
 
+## Rang d'affichage d'un lien — `rank_link` (2026-10-21)
+
+**Le besoin.** Le même que pour les projets, un cran plus bas : les tableaux d'un projet se
+listent dans l'ordre des liens (`label`, puis `target_ref` comparé en TEXTE — « 10 » avant
+« 9 »), qui n'est ni l'ordre des noms affichés ni celui que l'équipe veut lire.
+
+**La forme.** Colonne `project_links.position` (DOUBLE PRECISION, NULL = non rangé), posée
+par `oto_project op=rank_link target_type=… target_ref=… position=<nombre>` (`target_ref`
+tel que `op=get` le rend ; `identity_ref` pour un binding de connecteur précis), retirée par
+`clear_position=true` — l'un des deux, fini (`invalid_position` sinon, rien d'écrit) ; un
+lien introuvable est refusé (`link_not_found`, 404). Servie dans les liens d'`op=get` et
+d'`op=list include=["links"]`. Les liens d'un même type se listent rangés d'abord, par
+rang, puis comme avant : tant qu'aucun rang n'est posé, l'ordre ne change pas.
+
+**Pourquoi une op, et pas `position` sur `op=link`.** `op=link` est un upsert qui contrôle
+que la cible est dans la portée du projet et lisible par l'appelant, remonte
+`projects.updated_at` et écrit `project.link` au fil. Ranger un lien n'est rien de tout
+cela : `rank_link` n'écrit que le rang. À l'inverse, reposer un lien (`op=link`, un
+dossier de procédure par exemple) ne touche pas son rang.
+
+**Ce que ce n'est pas.** Aucune règle d'accès : `write` sur le projet, partagé par tous ceux
+qui voient le projet. Vaut pour tout type de lien ; une liste de tableaux est le premier
+usage. `op=copy` ne reporte pas les rangs (la copie repart dans l'ordre par défaut).
+
 ## Périmètre d'URL d'un projet — `excluded_url_prefixes` (#605, 2026-08-29)
 
 **Le besoin.** Un contrat client peut exclure la CONSULTATION de certaines pages — le cas

@@ -31,6 +31,7 @@ label TEXT,
 role TEXT,
 slot TEXT,
 config JSONB NOT NULL DEFAULT '{}',
+position DOUBLE PRECISION,
 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 UNIQUE(project_id, target_type, target_ref)
 );

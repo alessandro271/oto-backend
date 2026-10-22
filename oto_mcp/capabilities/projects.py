@@ -42,7 +42,7 @@ _LINK_TYPES = ("tableau", "procedure", "connecteur")
 
 class ProjectInput(BaseModel):
     op: Literal["create", "list", "list_templates", "get", "update", "archive",
-                "unarchive", "copy", "handoff", "link", "unlink", "activity", "runs", "inventory",
+                "unarchive", "copy", "handoff", "link", "unlink", "rank_link", "activity", "runs", "inventory",
                 "lint", "publish_mcp", "unpublish_mcp"] = Field(description=(
         "To CHANGE THE OWNER of an existing project (e.g. personal → org) WITHOUT "
         "duplicating it or losing its history (docs, activity, runs stay on the SAME "
@@ -70,10 +70,11 @@ class ProjectInput(BaseModel):
         "update: the project's rank among the projects of its folder in lists — lower "
         "first, fractions allowed (place a project between two others with the midpoint). "
         "Unranked projects come after the ranked ones. Display only; setting it alone "
-        "does not change `updated_at`."))
+        "does not change `updated_at`. rank_link: the same, for ONE link among the "
+        "project's links of its type."))
     clear_position: Optional[bool] = Field(default=None, description=(
-        "update: `true` takes the project out of the ranking — `position` back to null, "
-        "after the ranked ones. Not together with `position`."))
+        "update / rank_link: `true` takes the project (the link) out of the ranking — "
+        "`position` back to null, after the ranked ones. Not together with `position`."))
     brief_md: Optional[str] = None
     is_template: Optional[bool] = None   # update : publier/retirer le projet comme MODÈLE (ADR 0032 §7 B5a)
     # publish_mcp : publier le projet en endpoint MCP dédié `<mcp_slug>.mcp.oto.cx` (ADR 0032, amende #44).
@@ -167,6 +168,27 @@ _CHAMPS_DE_PUBLICATION = ("mcp_slug", "mcp_access", "mcp_tools", "mcp_expose_dat
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
     if not cond:
         raise AuthzDenied(status, code, msg)
+
+
+def _rang_valide(position: Optional[float], clear_position: Optional[bool], *,
+                 requis: bool = False) -> None:
+    """Le contrôle commun du rang d'affichage — d'un projet (`op=update`) comme d'un lien
+    (`op=rank_link`) : un nombre fini, jamais avec son retrait ; `requis`, l'un des deux
+    doit être là. Avant toute écriture : « rien n'a été modifié » reste vrai."""
+    _require(position is None or math.isfinite(position), "invalid_position",
+             "`position` est un nombre fini, et rien n'a été modifié.")
+    _require(not (clear_position and position is not None), "invalid_position",
+             "`position` et `clear_position` s'excluent : poser un rang ou le retirer, "
+             "et rien n'a été modifié.")
+    _require(not requis or position is not None or clear_position, "invalid_position",
+             "pose un rang (`position`) ou retire-le (`clear_position=true`) — l'un des "
+             "deux. Rien n'a été modifié.")
+
+
+# Ce que `op=rank_link` lit. Tout autre champ posé est refusé plutôt qu'ignoré : un
+# appelant qui croirait renommer ou reconfigurer le lien en le rangeant doit l'apprendre.
+_CHAMPS_DU_RANG = frozenset({"op", "project_id", "target_type", "target_ref", "identity_ref",
+                             "position", "clear_position"})
 
 
 def _handoff_md(row: dict) -> str:
@@ -1098,11 +1120,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         # Avant toute écriture, comme les refus au-dessus : le périmètre d'URL plus bas
         # s'écrit seul, et « rien n'a été modifié » doit rester vrai.
         folder = dossier_valide(inp.folder)
-        _require(inp.position is None or math.isfinite(inp.position), "invalid_position",
-                 "`position` est un nombre fini, et rien n'a été modifié.")
-        _require(not (inp.clear_position and inp.position is not None), "invalid_position",
-                 "`position` et `clear_position` s'excluent : poser un rang ou le retirer, "
-                 "et rien n'a été modifié.")
+        _rang_valide(inp.position, inp.clear_position)
         # Ranger la sidebar n'est pas modifier le projet : le rang seul ne s'inscrit pas
         # au fil d'activité (un glisser en écrirait une ligne à chaque fois). « Seul » se
         # dérive du modèle, pas d'une liste tenue à la main : un champ ajouté demain à
@@ -1179,6 +1197,33 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         return {**_view(db.get_project_by_id(new_id), sub),
                 "links": db.list_project_links(new_id), "copied_from": inp.project_id,
                 "warnings": warnings}
+
+    if inp.op == "rank_link":
+        # Ranger un lien — l'ordre des tableaux d'un projet dans ses listes — n'est pas le
+        # reposer : `op=link` contrôle la portée de la cible, remonte `updated_at` du
+        # projet et écrit une ligne au fil, trois effets qu'un glisser ne doit pas avoir.
+        # Ici : `write` sur le projet, le rang du lien, rien d'autre. `target_ref` tel que
+        # stocké (op=get le rend), sans normalisation : on range un lien qui existe.
+        _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
+        _require(inp.target_type and inp.target_ref, "missing_target",
+                 "`target_type` et `target_ref` requis.")
+        # Par la valeur, pas par `model_fields_set` : sur la face MCP, fastmcp remplit
+        # les défauts et tous les champs arrivent « fournis » (même discriminant que le
+        # rang seul d'`op=update`).
+        muets = sorted(nom for nom, champ in ProjectInput.model_fields.items()
+                       if nom not in _CHAMPS_DU_RANG and getattr(inp, nom) != champ.default)
+        _require(not muets, "param_not_read_by_op",
+                 f"op=rank_link ne lit que le lien et son rang, pas "
+                 f"{', '.join('`' + m + '`' for m in muets)} : rien n'a été modifié. Un "
+                 "libellé, un rôle ou une config se reposent par `op=link`.")
+        _rang_valide(inp.position, inp.clear_position, requis=True)
+        ranges = db.rank_project_link(int(inp.project_id), inp.target_type, inp.target_ref,
+                                      identity_ref=inp.identity_ref, position=inp.position)
+        _require(ranges, "link_not_found",
+                 f"Aucun lien `{inp.target_type}:{inp.target_ref}` dans ce projet — donne "
+                 "`target_ref` tel que op=get le rend. Rien n'a été modifié.", 404)
+        return {"ok": True, "id": inp.project_id, "target_type": inp.target_type,
+                "target_ref": inp.target_ref, "position": inp.position}
 
     if inp.op in ("link", "unlink"):
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
@@ -1803,13 +1848,18 @@ CAPABILITIES += [
             "`link_status` — not `ok` — to know whether it actually acted. "
             "unlink returns `removed` = how many bindings it actually took "
             "out, and REFUSES (`link_not_found`) when it matched none — it never answers ok "
-            "on a link it did not find. Give the `target_ref` as op=get renders it: an older "
+            "on a link it did not find. rank_link (target_type + target_ref as op=get renders "
+            "it, + optional identity_ref) sets ONE link's rank among the project's links of its "
+            "type in lists — `position` (lower first, fractions allowed) or "
+            "`clear_position=true`; it changes nothing else: no `updated_at`, no activity "
+            "line, label/role/slot/config untouched; `link_not_found` when no such link. "
+            "Give the `target_ref` as op=get renders it: an older "
             "link may still carry the NAME of its tableau (or the SLUG of its procedure) "
             "instead of the id. link and unlink both recognize either spelling: link "
             "rewrites that older link to the id (`rewritten_from` = the old spelling) "
             "instead of adding a second one, unlink takes back every spelling. "
-            "get/link return each link's role + slot + config + a derived "
-            "`cross_project` flag (the same entity is linked by another project → avoid brutal "
+            "get/link return each link's role + slot + config + `position` (its rank, "
+            "set by rank_link; null = unranked) + a derived `cross_project` flag (the same entity is linked by another project → avoid brutal "
             "edits / ask); a tableau link also returns its resolved `datastore` (the NAME, a "
             "label) and `datastore_id` (the IDENTIFIER, resolved server-side in the PROJECT "
             "OWNER's scope) — address THIS project's table with `datastore_id` in the data_* "
