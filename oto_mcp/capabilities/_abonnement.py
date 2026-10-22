@@ -445,6 +445,14 @@ def _pool_au_plafond(base: str, org_id: int, famille: str, modele: Optional[str]
             "(plafond de consommation atteint) au moment où la suivante est arrivée.")
 
 
+#: Les `rate_limit_info.status` qui SERVENT encore. `allowed_warning` n'est pas un
+#: refus : le fournisseur prévient seulement qu'une fenêtre approche de sa limite. Lu
+#: comme un refus, il mettait la personne en pause jusqu'à l'échéance la plus
+#: lointaine (sept jours) avec quelques % d'usage — seul le seuil juge la jauge. Un
+#: état inconnu reste un refus : dans le doute, on attend.
+ETATS_SERVABLES = (None, "allowed", "allowed_warning")
+
+
 def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
     """Ce que le worker a VU du forfait en exécutant ce travail, porté sur la
     connexion qui l'a SERVI (`conclu["abonnement"]` : le demandeur en mode personnel,
@@ -453,7 +461,7 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
 
     Le rapport voyage dans le résultat déclaré, clé `abonnement` :
 
-        {"etat": "allowed" | <autre>,            # `rate_limit_info.status`
+        {"etat": "allowed" | "allowed_warning" | <autre>,   # `rate_limit_info.status`
          "deconnecte": true,                     # le programme n'a plus de session
          "fenetres": {"five_hour": {"utilization": 0.07, "resetsAt": 1790029800},
                       "seven_day": {"utilization": 0.49, "resetsAt": 1790053200}}}
@@ -496,7 +504,7 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
             and isinstance(f.get("resetsAt"), (int, float))
             and isinstance(f.get("utilization"), (int, float))
             and f["utilization"] >= plafond]
-        refuse = rapport.get("etat") not in (None, "allowed")
+        refuse = rapport.get("etat") not in ETATS_SERVABLES
         if refuse and not echeances:
             # Refusé sans fenêtre saturée lisible : toutes les échéances connues
             # comptent, faute de savoir laquelle a mordu.
@@ -516,6 +524,13 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
             charges = [f["utilization"] for f in fenetres.values()
                        if isinstance(f, dict)
                        and isinstance(f.get("utilization"), (int, float))]
+            # Le rapport BRUT au journal : la ligne ne garde que la cause résumée
+            # (`limit_epuise`, `limit_utilisation`), qui ne dit ni l'état exact du
+            # fournisseur ni la fenêtre qui a mordu — sans lui, une pause douteuse ne
+            # se prouve pas.
+            logger.info("forfait en pause (famille %s, porteur %s) : etat=%r seuil=%s "
+                        "fenetres=%s → jusqu'à %s", famille, porteur, rapport.get("etat"),
+                        plafond, fenetres, quand)
             user_subscriptions.marquer_statut(
                 porteur, famille, user_subscriptions.PLAFOND, limit_reset_at=quand,
                 epuise=refuse, utilisation=max(charges) if charges else None,
