@@ -4,11 +4,11 @@ asked, decision-makers first, and only people whose CURRENT company is the one a
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Callable, Optional
 
 from .etape import Step
 from .fournisseurs import _APIFY_EMPLOYEES_TIMEOUT_S, _apify_items
-from .valeurs import _get, _norm_name, _pick
+from .valeurs import _get, _norm_name, _pick, _refused
 
 def _matches_roles(title, roles) -> bool:
     if not roles:
@@ -22,10 +22,13 @@ _SENIORITY_WORDS = (
      "geschaftsfuhrer", "general manager", "c suite", "cto", "cfo", "coo", "cmo", "cro",
      # French and German titles (a French retailer's head office reads in French).
      "fondateur", "fondatrice", "pdg", "directeur general", "directrice generale",
-     "gerant", "gerante", "inhaber", "vorstand"),
+     "gerant", "gerante", "inhaber", "vorstand",
+     # lemlist's seniority levels.
+     "executive leadership", "firm leadership"),
     ("vp", "vice president", "head", "director", "partner", "directeur", "directrice",
-     "leiter", "leiterin", "bereichsleiter"),
-    ("manager", "lead", "leader", "senior", "responsable", "chef", "manageur"),
+     "leiter", "leiterin", "bereichsleiter", "department leadership"),
+    ("manager", "lead", "leader", "senior", "responsable", "chef", "manageur",
+     "people management"),
 )
 
 
@@ -98,9 +101,124 @@ def _aiark_people(res, inputs):
     return _people_find(rows, inputs)
 
 
+#: A LinkedIn company page: its kind (`company`, `school`, `showcase`) and its slug.
+_COMPANY_PAGE = re.compile(r"linkedin\.com/(company|school|showcase)/([^/?#\s]+)", re.I)
+
+
 def _company_slug(url: Optional[str]) -> Optional[str]:
-    m = re.search(r"linkedin\.com/(?:company|school|showcase)/([^/?#\s]+)", url or "", re.I)
-    return m.group(1).lower() if m else None
+    m = _COMPANY_PAGE.search(url or "")
+    return m.group(2).lower() if m else None
+
+
+def _lemlist_page(url: Optional[str]) -> str:
+    """The company page lemlist filters on, as LinkedIn names it — a `school` or a
+    `showcase` page stays one, never rewritten as a `/company/`. A page without a slug is
+    refused by name: `…/company/None` would search for nobody, silently."""
+    m = _COMPANY_PAGE.search(url or "")
+    if not m:
+        raise _refused("linkedin_page_without_slug",
+                       f"`company_linkedin_url` must name a LinkedIn company page "
+                       f"(linkedin.com/company/<slug>) — got `{url}`.")
+    return f"https://www.linkedin.com/{m.group(1).lower()}/{m.group(2).lower()}"
+
+
+#: What lemlist drops from each record when asked (`excludes`): parts no step reads — never
+#: a nested path. ⚠️ Never `experiences` (~90 % of a record): it is not dropped but
+#: TRUNCATED (16 of 26 positions served, measured — the current one missing), and the
+#: title is read from it.
+_LEMLIST_EXCLUDES = ["education", "skills", "languages", "interests", "summary",
+                     "shorthand_name_list", "lead_logo_url"]
+
+
+def _lemlist_args(i: dict) -> dict:
+    """lemlist's people database, by the company's website (else its LinkedIn page) and
+    the roles asked. `country` is left out: an autocomplete filter, a form it does not
+    know (`FR`) silently empties the search."""
+    if i.get("domain"):
+        company = {"filterId": "currentCompanyWebsiteUrl", "in": [i["domain"]], "out": []}
+    else:
+        company = {"filterId": "currentCompanyLinkedInUrl",
+                   "in": [_lemlist_page(i["company_linkedin_url"])], "out": []}
+    filters = [company]
+    if i.get("roles"):
+        filters.append({"filterId": "currentTitle", "in": list(i["roles"]), "out": []})
+    # A free search: under `qualify`, whole pages — the pool Jev judges on titles. Each
+    # call is one of the key's search quota, whatever its size.
+    return {"op": "people", "filters": filters, "excludes": _LEMLIST_EXCLUDES, "page": 1,
+            "size": 100 if i.get("_pool") else min(100, i["limit"] * 2)}
+
+
+def _lemlist_here(exp: dict, domain: str, slug: Optional[str]) -> bool:
+    """A position at the company asked: its LinkedIn page, else its website."""
+    if slug and _company_slug(exp.get("company_linkedin_url")) == slug:
+        return True
+    where = str(exp.get("company_domain") or "").lower()
+    return bool(domain and where and (where == domain or where.endswith("." + domain)))
+
+
+def _lemlist_position(rec: dict, at: Callable[[dict], bool]) -> Optional[dict]:
+    """A record's CURRENT position (no end date) where `at` says — the first of the
+    profile when there are several: `order_in_profile` 0 is the first, not « no order »."""
+    current = [e for e in rec.get("experiences") or []
+               if isinstance(e, dict) and not e.get("date_to") and at(e)]
+    if not current:
+        return None
+    return min(current, key=lambda e: (99 if e.get("order_in_profile") is None
+                                       else e["order_in_profile"]))
+
+
+def _lemlist_current(records, inputs: dict) -> list[tuple[dict, dict]]:
+    """Each record with its current position at the company asked — a record with none
+    is left out."""
+    domain = (inputs.get("domain") or "").lower()
+    slug = _company_slug(inputs.get("company_linkedin_url"))
+
+    def here(exp: dict) -> bool:
+        return _lemlist_here(exp, domain, slug)
+
+    out = []
+    for rec in records or []:
+        exp = _lemlist_position(rec, here) if isinstance(rec, dict) else None
+        if exp is not None:
+            out.append((rec, exp))
+    return out
+
+
+#: What `_lemlist_people` reads of a record, and of its current position.
+_LEMLIST_READS = ("full_name", "headline", "lead_linkedin_url", "location", "seniority",
+                  "potential_email")
+_LEMLIST_POSITION_READS = ("title", "order_in_profile", "company_domain",
+                           "company_linkedin_url")
+
+
+def _lemlist_slim(records: list, inputs: dict) -> list:
+    """A page of lemlist records as the pool keeps them (`Step.slim`): only the people in
+    post at the company asked, each reduced to what `_lemlist_people` reads — ~60 KB a
+    record (its whole career, `experiences`) down to a few hundred bytes."""
+    return [{**{k: rec.get(k) for k in _LEMLIST_READS},
+             "experiences": [{k: exp.get(k) for k in _LEMLIST_POSITION_READS}]}
+            for rec, exp in _lemlist_current(records, inputs)]
+
+
+def _lemlist_people(res, inputs):
+    """lemlist's people database. A person counts only through a CURRENT position (no
+    end date) at the company asked — their title is that position's, not the headline
+    (« … @ Other Corp » on someone still in post, measured). The roles are lemlist's own
+    filter (`currentTitle`: words in any order, normalized titles — « Head of Enterprise
+    Sales » for « Head of Sales », « Directeur des ressources humaines » for « director »),
+    not matched again here: the stricter match drops those, measured. Its email is a
+    pattern guess: returned as `guessed` (Apollo's word for it)."""
+    rows = []
+    for rec, exp in _lemlist_current(_get(res, "results"), inputs):
+        email = rec.get("potential_email")
+        rows.append({
+            "full_name": rec.get("full_name"),
+            "title": exp.get("title") or rec.get("headline"),
+            "linkedin_url": rec.get("lead_linkedin_url"),
+            "location": rec.get("location"), "seniority": rec.get("seniority"),
+            "email": email, "email_status": "guessed" if email else None,
+        })
+    return _people_find(rows, {**inputs, "roles": None})
 
 
 def _employees(res, inputs):
@@ -183,6 +301,13 @@ PEOPLE_STEPS: tuple[Step, ...] = (
          explains=(
              "Apollo's free people search — titles for everyone, names masked; only the "
              "ones you keep are revealed (paid).")),
+    Step("lemlist", "lemlist_database", (("domain",), ("company_linkedin_url",)),
+         _lemlist_args, _lemlist_people,
+         "free search (no lemlist credits; each page is one call of the key's search quota)",
+         label="lemlist database", pages=("page", 1), quota_only=True, slim=_lemlist_slim,
+         explains=(
+             "lemlist's shared people database — full names, current titles and LinkedIn "
+             "URLs, with a pattern-guessed email; spends no credits.")),
     # Then full names, by provider cost: google (a search, names + LinkedIn URLs, low
     # recall) → aiark (per profile) → the page's LinkedIn employees (an Apify run).
     Step("google", "serper_search", (("company_name",), ("domain",)),

@@ -21,15 +21,21 @@ _PAGES_RESERVE_S = _QUALIFY_MIN_S + 8.0
 
 async def _every_free_page(mcp: FastMCP, sub, step: Step, args: dict, first: dict,
                            inputs: dict, deadline: float, attempt: dict) -> dict:
-    """EVERY page of a FREE search (Apollo's people search: names masked, nothing billed)
-    — the whole pool goes to Jev, not its first page. Stops at the last page, at
-    `_pool`, or when the time Jev and the reveals need is all that is left; the receipt
-    says which (`pages`, `total`, `pool_truncated`)."""
-    people = list(first.get("people") or [])
-    total = first.get("total_entries") or _get(first, "pagination.total_entries") or 0
-    per = int(args.get("per_page") or len(people) or 1)
-    page, why = 1, None
-    while total and page * per < total:
+    """EVERY page of a FREE search (Apollo's people search: names masked, nothing billed;
+    lemlist's database) — the whole pool goes to Jev, not its first page. Each page is
+    reduced by `step.slim` (when it has one) BEFORE it joins the pool. Stops at the last
+    page, at `_pool`, or when the time Jev and the reveals need is all that is left; the
+    receipt says which (`pages`, `total`, `pool_truncated`)."""
+    rows = _rows_key(first)
+    raw = list(first.get(rows) or [])
+    total = (first.get("total_entries") or _get(first, "pagination.total_entries")
+             or first.get("total") or 0)
+    param, page = step.pages or ("page", 1)
+    per = int(args.get("per_page") or args.get("size") or len(raw) or 1)
+    people = _slimmed(step, raw, inputs)
+    why = None
+    read = 1
+    while total and read * per < total:
         if len(people) >= inputs["_pool"]:
             why = "pool_max"
             break
@@ -38,18 +44,30 @@ async def _every_free_page(mcp: FastMCP, sub, step: Step, args: dict, first: dic
             break
         page += 1
         part: dict = {}
-        issue = await appel._call(mcp, sub, step.tool, {**args, "page": page}, part)
+        issue = await appel._call(mcp, sub, step.tool, {**args, param: page}, part)
         if issue is None or not appel._judge(issue, part):
             why = part.get("code") or "page_refused"
             break
-        more = _get(_payload(issue), "people") or []
+        read += 1
+        more = _get(_payload(issue), rows) or []
         if not more:
             break
-        people += more
-    attempt.update(pages=page, total=total)
+        people += _slimmed(step, more, inputs)
+    attempt.update(pages=read, total=total)
     if why:
         attempt["pool_truncated"] = why
-    return {**first, "people": people}
+    return {**first, rows: people}
+
+
+def _slimmed(step: Step, rows: list, inputs: dict) -> list:
+    """One page's rows as the pool keeps them: reduced by the step's `slim`, if any."""
+    return step.slim(rows, inputs) if step.slim else list(rows)
+
+
+def _rows_key(payload: dict) -> str:
+    """Where a free search puts its rows: `people` (Apollo), `results` (lemlist)."""
+    return next((k for k in ("people", "results") if isinstance(payload.get(k), list)),
+                "people")
 
 
 async def _fill_from_pages(mcp: FastMCP, sub, step: Step, got: dict, inputs: dict,

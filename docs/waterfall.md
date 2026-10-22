@@ -87,12 +87,13 @@ Trois couches, la plus spécifique gagne :
    nommée (`ignored_steps`) : celui qui appelle ne l'a pas écrite ;
 3. la table par défaut.
 
-Sur l'ordre PAR DÉFAUT seulement, **les fournisseurs pour lesquels l'appelant détient SA
-clé passent devant**, avec les étapes GRATUITES (`Step.free` : registre français, session
-LinkedIn de l'appelant — que `credential_mode_for` dit `platform` et qu'un tri par clé
-aurait placées derrière une clé payante)
-(utilisateur, équipe, org — `access.credential_mode_for`, lu une fois par
-porteur et par appel, AVANT toute dépense), les clés partagées ensuite — celle du tenant
+Sur l'ordre PAR DÉFAUT seulement, quatre groupes, dans cet ordre : les étapes GRATUITES
+(`Step.free` : registre français, session LinkedIn de l'appelant — que
+`credential_mode_for` dit `platform` et qu'un tri par clé aurait placées derrière une clé
+payante) ; une étape `quota_only` (la base de lemlist : aucun crédit, un appel du quota de
+la clé) sur la clé de l'APPELANT ; **les autres fournisseurs pour lesquels l'appelant
+détient SA clé** (utilisateur, équipe, org — `access.credential_mode_for`, lu une fois par
+porteur et par appel, AVANT toute dépense) ; les clés partagées ensuite — celle du tenant
 comprise : du point de vue de l'org, c'est une clé payée par l'opérateur de l'instance, et
 refacturée sur le tenant primaire, pas la sienne,
 chaque groupe dans l'ordre de la table (tri stable). Un ordre ÉCRIT — celui de l'appel ou
@@ -253,7 +254,9 @@ Une société en entrée (domaine, nom, page LinkedIn), des `roles` facultatifs,
 `limit` (≤ 25) ; la première source qui rend au moins une personne gagne. Une personne
 n'est gardée que si elle a un nom et si son titre correspond à l'un des `roles` (quand il
 y en a) : apollo (recherche gratuite ; les noms y sont masqués — on révèle par
-`apollo_id`, JAMAIS par nom + société, qui facturerait une fiche vide) → aiark (domaine ;
+`apollo_id`, JAMAIS par nom + société, qui facturerait une fiche vide) → lemlist
+(`lemlist_database op="people"`, la base partagée de lemlist, par `currentCompanyWebsiteUrl`
+sinon `currentCompanyLinkedInUrl`, et `currentTitle` = les `roles` ; voir ci-dessous) → aiark (domaine ;
 pas de filtre de titre côté AI Ark : il est appliqué ici) → `linkedin_employees`
 (`harvestapi/linkedin-company-employees`, les employés de la page LinkedIn — titres
 actuels, souvent plus frais que les fournisseurs ; ⚠️ une page tire des gens dont le
@@ -261,6 +264,49 @@ poste ACTUEL est ailleurs, et des faux profils : gardés seulement si
 `currentPosition[0].companyUniversalName` est la page demandée) → google (`serper_search`
 sur `linkedin.com/in`, un titre « Nom – Poste – Société | LinkedIn », gardé seulement s'il
 nomme la société).
+
+### La base de personnes de lemlist (21/10/2026)
+
+Mesuré sur une vraie société (~360 personnes en base) :
+
+- **Gratuite en crédits** (solde inchangé après une dizaine de recherches) mais **chaque appel
+  décompte un quota d'appels de la clé** (`limitation`, −1 par appel quelle que soit la
+  `size`) : l'étape est `quota_only` — elle ne compte pas dans `max_paid_steps` et ses
+  pages se lisent comme une recherche gratuite, mais elle GARDE sa place dans l'ordre (un
+  `free` passerait devant l'Apollo de la clé partagée : un quota partagé n'est pas rien) —
+  et des pages de 100 sous `qualify` (moins d'appels). **Sur la clé de l'appelant** (perso,
+  équipe ou org), l'ordre par défaut la met **en tête** des clés de l'appelant (derrière
+  les seules étapes gratuites, aucune chez les gens), devant Apollo même sur sa propre
+  clé : des noms complets qui ne facturent rien, sur un quota qui est le sien (décision
+  produit du 21/10/2026). Un ordre écrit n'est pas retrié.
+- **Pagination à partir de 1** (`page=0` est servi comme la page 1). Sur un résultat étroit
+  (7 personnes, `size=3`), les pages 1 → 2 → 3 rendent les 7, sans doublon. ⚠️ Sur un résultat
+  large aux scores proches, **deux appels identiques ne rendent pas le même ordre** : des
+  pages successives peuvent se recouvrir ou sauter quelqu'un — le dédoublonnage par URL
+  LinkedIn absorbe les doublons, un saut est une perte de rappel. Sous `qualify`, toutes
+  les pages sont lues dans le vivier (`vivier._every_free_page`, `total` lu au premier
+  appel).
+- **Une fiche pèse ~60 Ko** : `experiences` (descriptions et technos de chaque société) en
+  fait ~90 %. `excludes` retire des champs de premier niveau (`education`, `skills`,
+  `languages`, `interests`, `summary`…), jamais un chemin imbriqué. ⚠️ **Ne jamais y mettre
+  `experiences`** : la liste n'est pas retirée mais TRONQUÉE (16 postes servis sur 26,
+  mesuré le 22/10/2026 — le poste actuel d'un dirigeant manquait), et c'est d'elle que se
+  lit le titre. Sous `qualify`, chaque page est donc **réduite avant d'être cumulée**
+  (`Step.slim`, `gens._lemlist_slim`) : seules les personnes en poste dans la société
+  demandée, et de chacune ce que l'extraction lit (quelques centaines d'octets) — sinon
+  le vivier tiendrait jusqu'à `POOL_MAX` fiches entières par ligne d'une table.
+- **Une page LinkedIn sans slug est refusée** (`linkedin_page_without_slug`), jamais
+  cherchée comme `…/company/None` ; une page `school` ou `showcase` est passée telle
+  quelle, jamais réécrite en `/company/`.
+- **Le titre se lit sur le poste ACTUEL** (sans `date_to`) dans la société demandée, pas sur
+  le `headline` (un « … @ Autre Société » chez quelqu'un toujours en poste, mesuré). Les
+  `roles` sont le filtre `currentTitle` de lemlist (mots dans le désordre, titre normalisé :
+  « Head of Enterprise Sales » pour « Head of Sales », « Directeur des ressources humaines »
+  pour « director ») et ne sont PAS re-filtrés ici : la correspondance stricte des autres
+  étapes les perdait (1 sur 7 sur l'essai).
+- `potential_email` est un email deviné par motif : rendu avec `email_status="guessed"` (le mot d'Apollo pour la même chose).
+- `country` n'est pas envoyé : filtre à autocomplétion, une forme qu'il ne connaît pas
+  (`FR`) vide la recherche sans erreur.
 
 ## Essai réel (19/10/2026, exposants d'un salon professionnel)
 
