@@ -90,7 +90,10 @@ def test_linear_tools_all_have_descriptions(all_tools):
 
 
 def test_verify_probe_registered():
-    _fn_with_mock_client()
+    # The patcher is stopped: left running, it handed a mocked `LinearClient`
+    # to every later test of the same worker.
+    _, _, patcher = _fn_with_mock_client()
+    patcher.stop()
     assert connector_verify.supports("linear")
 
 

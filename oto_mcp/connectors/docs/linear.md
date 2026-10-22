@@ -9,6 +9,8 @@ create a personal API key in Linear (Settings → Security & access → Personal
 linear manages the team's ticket/project tracking, in 8 tools:
 - "list my in-progress issues on the Product team" → `linear_issue(op="list", team_id="...", state_id="...")`
 - "search for issues about billing" → `linear_issue(op="search", query="billing")`
+- "who asked for this issue, and when did it ship?" → `linear_issue(op="get", issue_id="...", include=["needs", "relations", "history"])` — `needs` = customer needs (customer name and domains, the request, its source link), `relations` = related/blocking/duplicate issues both ways, `history` = `state_history`, every status change with its date, oldest first
+- "which customers asked for this project?" → `linear_project(op="get", project_id="...", include=["needs"])`
 - "create a bug ticket for X" → `linear_issue(op="create", title="...", team_id="...", description="...")`
 - "assign this issue to Jane and set it to in progress" → `linear_issue(op="update", issue_id="...", assignee_id="...", state_id="...")`
 - "what statuses are possible on the Product team?" → `linear_team(op="states", team_id="...")` (do this before an `update` that changes the status — you need the `state_id`)
