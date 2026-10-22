@@ -196,3 +196,27 @@ def register(mcp: FastMCP) -> None:
         """
         return _run(lambda: _client().list_timesheets(
             start, end, salaries_ids=salaries_ids))
+
+    @mcp.tool()
+    def sivan_timesheets_summary(
+        start: str,
+        end: str,
+        salaries_ids: Optional[List[int]] = None,
+    ) -> Any:
+        """Sivan — WEEKLY worked-time totals per employee and contract (no per-day detail).
+
+        Same window and data as `sivan_timesheets`, but each week's day-by-day
+        breakdown is dropped — only the weekly totals remain (contract, worked and
+        accounted hours, overtime). Far smaller: the shape payroll needs when
+        reading many contracts at once.
+
+        ⚠️ The window (`start`..`end`) must be at most 31 days. Durations are in
+        seconds.
+
+        Args:
+            start: window start (ISO date/datetime).
+            end: window end (ISO date/datetime). At most 31 days after `start`.
+            salaries_ids: restrict to these employee ids (default: the whole group).
+        """
+        return _run(lambda: _client().list_timesheets_summary(
+            start, end, salaries_ids=salaries_ids))
