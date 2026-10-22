@@ -761,7 +761,8 @@ def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> N
 
 
 def list_project_links(project_id: int) -> list[dict]:
-    """Liens du projet, avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
+    """Liens du projet, rangés d'abord par `position` (leur rang, posé par
+    `rank_link` ; NULL après), avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
     le même (target_type, target_ref) est lié par un AUTRE projet → l'agent sait qu'une
     modif de l'entité retombe ailleurs (s'abstenir d'un changement brutal / demander).
     Les liens `tableau` sont enrichis du **nom** de leur tableau, sous `datastore`

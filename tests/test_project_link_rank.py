@@ -58,6 +58,23 @@ def test_rang_mal_dit(banc, champs):
     assert banc["rank"] == []
 
 
+def test_champ_non_lu_refuse(banc):
+    """Ranger n'est pas reposer : un libellé passé à rank_link est refusé, pas ignoré."""
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="rank_link", project_id=7, target_type="tableau",
+                                       target_ref="912", position=1.0, label="Pipeline"))
+    assert (e.value.status, e.value.code) == (400, "param_not_read_by_op")
+    assert banc["rank"] == []
+
+
+def test_rang_seul_face_mcp(banc):
+    """Sur la face MCP, chaque champ arrive à son défaut : ce n'est pas un champ posé."""
+    tous = {n: c.default for n, c in P.ProjectInput.model_fields.items() if n != "op"}
+    P._project(CTX, P.ProjectInput(**dict(tous, op="rank_link", project_id=7,
+                                          target_type="tableau", target_ref="912", position=3.0)))
+    assert banc["rank"] == [(7, "tableau", "912", None, 3.0)]
+
+
 def test_lien_introuvable(banc):
     banc["matches"] = 0
     with pytest.raises(AuthzDenied) as e:
