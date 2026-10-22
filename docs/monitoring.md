@@ -5,7 +5,7 @@ description: >-
   Référence du journal d'appels d'oto-backend : ToolCallLogger (oto_mcp/calllog.py)
   via hook on_call_tool, table tool_calls (kind mcp|rest|connector, corrélation
   session_id/run_id/org_id/client_id/sentry_event_id), rétention portée par le timer
-  d'archivage (OTO_JOURNAL_RETENTION_DAYS, défaut 90 j) et non plus par un prune au
+  d'archivage (OTO_JOURNAL_RETENTION_DAYS, défaut 30 j) et non plus par un prune au
   boot — ADR 0065 lot 0. Décrit les surfaces d'investigation —
   console MCP oto_admin_monitoring + /platform/monitoring (plateforme),
   oto_org_monitoring + /org/monitoring (org_admin, mêmes lentilles bornées à SON org),
@@ -385,7 +385,8 @@ Une ligne en erreur sans event id est donc normale — et informative : c'est un
 un bug.
 
 Volumétrie bornée par le timer `oto-journal-archive` : il EXPORTE au froid S3 les mois
-entiers au-delà de `OTO_JOURNAL_RETENTION_DAYS` (défaut **90 j**), puis les supprime.
+entiers au-delà de `OTO_JOURNAL_RETENTION_DAYS` (défaut **30 j**, 90 jusqu'au
+22/10/2026), puis les supprime.
 
 ⚠️ **Corrigé le 2026-08-28 (ADR 0065 lot 0, oto-backend#426), et il faut le savoir pour
 lire un chiffre ancien** : jusque-là le boot purgeait `tool_calls` à **30 jours sans
@@ -606,7 +607,9 @@ plusieurs fois le même coût : c'est au consommateur de le compter une fois, et
 déjà journalisée ne porte : les jours consolidés ne se recalculent pas d'eux-mêmes.
 
 **Bornes, servies et nommées** : une fenêtre d'au plus `RELEVE_FENETRE_MAX_JOURS`
-(92 j, la rétention du journal plus une marge) — sans `since`, la fenêtre maximale
+(92 j, posée quand le journal gardait 90 j en ligne ; depuis le 22/10/2026 il en garde
+30, et une fenêtre plus ancienne rend moins de lignes, sans erreur — le reste est dans
+l'archive S3) — sans `since`, la fenêtre maximale
 s'applique et `since_effectif` la rend ; au-delà, `400 window_too_large`, jamais une
 fenêtre rognée. Une page d'au plus `RELEVE_LIMITE_MAX` (5 000) lignes — au-delà,
 `400 limit_too_large`, là où la valeur était écrêtée en silence. Les deux lectures
@@ -751,24 +754,29 @@ aggregate_incomplete`**, motif et geste compris, et le journalisent en erreur ;
 
 **Fenêtres inchangées** : 92 j pour `usage/tools` (elle est partagée avec `usage/calls`,
 qui lit le journal ; l'élargir romprait l'égalité « somme des `calls` = `total` de
-`usage/calls` » au-delà de la rétention), 7 j pour le résumé plateforme sans périmètre
-(la vue part vers Grafana), 90 j pour un résumé d'org ou de compte.
+`usage/calls` » au-delà de la rétention — ⚠️ avec 30 j en ligne, cette égalité ne tient
+plus que sur la part de la fenêtre encore au journal : `usage/tools` lit les totaux, qui
+restent, `usage/calls` les lignes, qui partent à l'archive), 7 j pour le résumé
+plateforme sans périmètre (la vue part vers Grafana), 90 j pour un résumé d'org ou de
+compte.
 
 Ce qui n'est pas suivi : la purge d'archive (`deploy/archive_tool_calls.py`) retire des
 mois du journal, pas leurs totaux — une fenêtre plus longue que la rétention lit donc
 au-delà de ce que le journal garde. `migrate_sub` repointe `journal_totaux_jour.sub`
 avec le journal.
 
-## Rétention : 90 jours en ligne, le reste en froid (posé le 2026-08-27)
+## Rétention : 30 jours en ligne, le reste en froid (posé le 2026-08-27, 30 j le 2026-10-22)
 
 Le journal n'avait **aucune** rétention : 47 % de la base, et une croissance passée de
 9 600 à ~90 000 lignes/jour en deux semaines sous la charge d'une campagne de runner.
-Décidé par Alexis le 27/08 : **90 jours consultables**, au-delà chaque mois clos part en
+Décidé par Alexis le 27/08 : **90 jours consultables**, ramenés à **30 jours** le 22/10/2026
+(l'archive, elle, ne change pas). Au-delà, chaque mois clos part en
 CSV compressé sur l'Object Storage (`journal/tool_calls/YYYY-MM.csv.gz`, objet **privé**)
 avant d'être effacé de la base. Travail **quotidien** `oto-journal-archive.timer` (04:45
 UTC ; mensuel, le 3, jusqu'au correctif de #1197), script versionné
 `deploy/archive_tool_calls.py`. Un passage sans mois éligible ne fait rien ; un mois
-devient éligible le jour où il sort entièrement de la fenêtre (fin du mois + 90 jours).
+devient éligible le jour où il sort entièrement de la fenêtre (fin du mois + 30 jours :
+septembre part le 31/10). Un mois archivé reste lisible à la demande depuis l'objet S3.
 
 **Ce n'est pas une purge de logs, et c'est le point à comprendre avant d'y toucher.**
 Cette table est à double emploi : journal d'observabilité, ET **source de vérité des
@@ -778,8 +786,8 @@ runs. Ils sont donc **exemptés de toute suppression** ; ils pèsent ~3 % du vol
 garder indéfiniment ne coûte rien. ⚠️ Conséquence assumée : un run dont les appels
 ordinaires ont été archivés garde son ouverture, sa clôture et son issue, mais son
 « dernier signe de vie » retombe sur sa date d'ouverture (`last_seen_at` se dérive du
-dernier appel rattaché) — sans effet sur un run clos, et un run resté ouvert depuis plus
-de 90 jours est de toute façon lu comme silencieux. Sa page, elle, dit « contenu archivé
+dernier appel rattaché) — sans effet sur un run clos, et un run resté ouvert au-delà de
+la rétention est de toute façon lu comme silencieux. Sa page, elle, dit « contenu archivé
 le … » (registre `journal_archives`, #665 — cf. plus haut).
 
 **Trois précautions dans le script, chacune payée par une mesure du jour même :**
@@ -857,9 +865,11 @@ passage suivant adopte l'objet déposé, cf. plus haut), `--retention-days N` (o
 ⚠️ Le timer n'est pas posé par le déploiement : passer au quotidien demande d'installer
 `deploy/oto-journal-archive.timer` sur la box et de recharger systemd.
 
-⚠️ **La rétention à 90 jours n'effacera rien avant fin octobre 2026** : à sa mise en
-place, le journal ne remontait qu'au 28/07. Un premier passage qui ne supprime rien est
-le comportement attendu, pas une panne.
+⚠️ **La rétention à 90 jours n'effaçait rien avant fin octobre 2026** : à sa mise en
+place, le journal ne remontait qu'au 28/07. Un premier passage qui ne supprime rien était
+le comportement attendu, pas une panne. Le passage à 30 jours (22/10/2026) rend juillet,
+août et septembre éligibles d'un coup : le premier passage après le déploiement les
+archive tous les trois.
 
 ### Réparer les jetons déjà écrits (#558)
 

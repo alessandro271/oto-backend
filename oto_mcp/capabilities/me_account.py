@@ -379,7 +379,7 @@ def _my_calls(ctx: ResolvedCtx, inp: MyCallsInput) -> dict:
 
 # ⚠️ `days` n'est PAS borné plus court qu'avant (#1145) : un front tiers en circulation
 # demande `days=365` pour savoir si le compte a déjà appelé un outil. La rétention du
-# journal (90 j) rend ces 365 jours aussi chers que 90 ; le coût est tenu par la passe
+# journal (30 j) rend ces 365 jours aussi chers que 30 ; le coût est tenu par la passe
 # unique de `tool_call_stats` et la borne de durée des lectures d'agrégat.
 _REFUS_SANS_ORG = DeclaredError(400, "no_active_org",
                                 "aucune org active : rien ne borne la lecture à un espace")

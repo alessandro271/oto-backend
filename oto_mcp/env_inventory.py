@@ -392,9 +392,10 @@ _REGLAGES: tuple[Variable, ...] = (
              "le transport commun (le relais de l'instance) ; une org qui envoie avec sa "
              "clé n'en a aucun. Une valeur illisible lève au premier envoi.",
              ("oto_mcp/tools/email.py:78",)),
-    Variable("OTO_JOURNAL_RETENTION_DAYS", Classe.REGLAGE, "90",
-             "Rétention (jours) du journal d'appels avant purge en maintenance.",
-             ("oto_mcp/maintenance.py:57",)),
+    Variable("OTO_JOURNAL_RETENTION_DAYS", Classe.REGLAGE, "30",
+             "Rétention EN LIGNE (jours) du journal d'appels : au-delà, chaque mois clos "
+             "est archivé sur S3 puis supprimé (`deploy/archive_tool_calls.py`).",
+             ("oto_mcp/maintenance.py:98",)),
     Variable("OTO_JOURNAL_REVISIONS_RETENTION_DAYS", Classe.REGLAGE, "90",
              "Rétention (jours) du journal des révisions de ligne du datastore "
              "(oto#273) : `oto-mcp maintenance revisions` purge au-delà, sauf les "

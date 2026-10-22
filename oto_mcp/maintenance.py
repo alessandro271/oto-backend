@@ -85,7 +85,21 @@ logger = logging.getLogger("oto_mcp.maintenance")
 # 0 ligne au-delà de 30 j sur 969 314). Ce module ne purge PAS le journal (c'est
 # l'archive qui le fait, après l'avoir exporté) ; il purge à la MÊME borne ce qui
 # n'a pas d'archive : les étiquettes de runs devenues orphelines.
-_JOURNAL_RETENTION_DAYS = int(os.environ.get("OTO_JOURNAL_RETENTION_DAYS", "90"))
+# 30 jours en ligne depuis le 22/10/2026 (90 avant) ; au-delà, chaque mois clos est
+# archivé sur S3 et lisible à la demande. C'est la SEULE déclaration du défaut : le
+# script d'archive la lit d'ici (`journal_retention_days`), il n'en a pas de copie.
+JOURNAL_RETENTION_DEFAULT_DAYS = 30
+
+
+def journal_retention_days() -> int:
+    """La rétention EN LIGNE du journal d'appels, en jours : `OTO_JOURNAL_RETENTION_DAYS`,
+    sinon `JOURNAL_RETENTION_DEFAULT_DAYS`. Lue à l'appel : le script d'archive la lit
+    à son lancement, ce module une fois à l'import."""
+    return int(os.environ.get("OTO_JOURNAL_RETENTION_DAYS",
+                              str(JOURNAL_RETENTION_DEFAULT_DAYS)))
+
+
+_JOURNAL_RETENTION_DAYS = journal_retention_days()
 # Le fil des runs hébergés a SA fenêtre, et ce n'est pas une seconde politique de
 # rétention du journal : c'est un autre objet. Le fil est l'état d'exécution d'un
 # run, pas sa vérité — celle-ci est au journal, et un run se reprend par le journal

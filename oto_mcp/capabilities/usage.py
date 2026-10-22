@@ -522,7 +522,7 @@ def _first_calls(ctx: ResolvedCtx, inp: FirstCallsInput) -> dict:
 
 CAPABILITIES += [
     # Le premier appel de chaque org : l'horloge de l'essai d'un tenant qui facture
-    # ses orgs (son service d'usage la fige de son côté, le journal expire à ~90 j).
+    # ses orgs (son service d'usage la fige de son côté, le journal expire à ~30 j).
     Capability(key="platform.usage.first_calls", handler=_first_calls, Input=FirstCallsInput,
                Output=FirstCallsOut, authz=PLATFORM_ADMIN,
                description="[platform admin] First journaled call (MCP or REST) of each "

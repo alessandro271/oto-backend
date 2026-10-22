@@ -1326,7 +1326,7 @@ def export_tool_calls_for_org(
 
     ⚠ Les appels antérieurs à la colonne `org_id` (NULL) n'apparaissent dans aucun
     export d'org — non reconstructibles a posteriori. ⚠ La rétention du journal
-    (`OTO_JOURNAL_RETENTION_DAYS`, 90 j) peut effacer des lignes ENTRE deux pages
+    (`OTO_JOURNAL_RETENTION_DAYS`, 30 j) peut effacer des lignes ENTRE deux pages
     d'un même export : le total reste celui du premier appel, la concaténation peut
     alors en compter moins. C'est le seul écart possible, et il retire des lignes,
     il n'en invente pas."""
@@ -1420,9 +1420,10 @@ def _found_from_row(row: dict) -> Optional[dict]:
 
 
 #: La fenêtre la plus large qu'un relevé de consommation lit (oto-backend#1145). Elle
-#: couvre la rétention du journal (`OTO_JOURNAL_RETENTION_DAYS`, 90 j par défaut) : une
-#: fenêtre sans borne basse ne perd donc rien en la recevant par défaut, et une fenêtre
-#: plus large que ce que le journal garde ne lit que plus longtemps, pour le même résultat.
+#: couvre la rétention du journal (`OTO_JOURNAL_RETENTION_DAYS`, 30 j par défaut depuis le
+#: 22/10/2026, 90 avant) : une fenêtre sans borne basse ne perd donc rien en la recevant
+#: par défaut, et une fenêtre plus large que ce que le journal garde en ligne rend moins
+#: de lignes, sans erreur — les mois plus anciens sont dans l'archive S3.
 RELEVE_FENETRE_MAX_JOURS = 92
 #: La page la plus longue d'un relevé, curseur pour la suite.
 RELEVE_LIMITE_MAX = 5000
@@ -2738,7 +2739,7 @@ def datastore_activity(ns_id: int, namespace: Optional[str] = None,
 def premiers_appels(org_ids: list[int]) -> dict[int, Optional[str]]:
     """Le PREMIER appel journalisé de chaque org (`tool_calls`, MCP et REST) — `None`
     pour une org sans aucun appel. Une sonde d'index par org (`idx_tool_calls_org`),
-    jamais un balayage. ⚠️ Le journal ne garde que ~90 jours : passé ce délai, c'est
+    jamais un balayage. ⚠️ Le journal ne garde que ~30 jours : passé ce délai, c'est
     le plus vieux appel CONSERVÉ — l'appelant qui veut une date stable la fige."""
     if not org_ids:
         return {}

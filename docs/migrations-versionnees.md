@@ -200,8 +200,8 @@ politique de rétention en double, c'était une politique qui en annulait une au
 silence, et la plus courte gagnait.
 
 Depuis le lot 0, la rétention du journal a **un seul propriétaire** : l'archive, qui
-exporte puis supprime, à `OTO_JOURNAL_RETENTION_DAYS` (90 par défaut, la même variable
-des deux côtés). Le boot ne purge plus rien ; la moitié « runs devenus orphelins » de
+exporte puis supprime, à `OTO_JOURNAL_RETENTION_DAYS` (90 par défaut alors, 30 depuis le
+22/10/2026 ; la même variable des deux côtés). Le boot ne purge plus rien ; la moitié « runs devenus orphelins » de
 `prune_tool_calls` est passée dans la commande de maintenance, à la même borne.
 
 **Ce que ça change en volumétrie, et pourquoi ce n'est pas un problème de latence** : le

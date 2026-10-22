@@ -43,8 +43,9 @@ _ID = {"id": "org_id"}
 # Deux invariants valent pour TOUTES les lentilles de ce module, et ils décident
 # de ce qu'un chiffre veut dire :
 #
-# ① **Rétention `OTO_JOURNAL_RETENTION_DAYS` jours, 90 par défaut** — portée par le
-#    timer `oto-journal-archive`, qui EXPORTE le mois au froid S3 puis le supprime.
+# ① **Rétention en ligne `OTO_JOURNAL_RETENTION_DAYS` jours, 30 par défaut** (90
+#    jusqu'au 22/10/2026) — portée par le timer `oto-journal-archive`, qui EXPORTE
+#    chaque mois clos au froid S3, lisible à la demande, puis le supprime.
 #    ⚠️ Jusqu'au 2026-08-28 la fenêtre effective était de ~30 jours et personne ne
 #    l'avait décidé : le boot purgeait à 30 j sans archiver, donc plus court que la
 #    politique écrite, qu'il vidait d'avance (ADR 0065 lot 0, oto-backend#426). Un
