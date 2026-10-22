@@ -21,6 +21,7 @@ import base64
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -28,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import (_abonnement, _acces_agent, _cle_exigee, _limites_du_run,
                _lignes_reservables, _modele, _ordre_de_service)
 from .. import db, outils_du_travail, runner_consigne, runner_models, time_saved, tool_alias
+from ..db import user_subscriptions
 from ..access import credits as budget
 from ..access import credits_tours as tours
 from ._authz import WORKER_OR_ORG_MEMBER
@@ -46,7 +48,10 @@ class JobsInput(BaseModel):
                 # UN appel au modèle sur une clé PARTAGÉE (18/10/2026) : réservé avant
                 # d'être envoyé, réglé à son usage avant que le worker continue —
                 # voir `_reserver_un_tour` et `_regler_un_tour`.
-                "reserve", "meter"]
+                "reserve", "meter",
+                # Ce que la SONDE du worker a vu du forfait, AVANT le run (21/10/2026) :
+                # le backend le porte et tranche — voir `_trancher_le_forfait`.
+                "forfait"]
     # enqueue —
     kind: Optional[Literal["start", "continue"]] = None
     payload: Optional[dict[str, Any]] = None
@@ -87,6 +92,13 @@ class JobsInput(BaseModel):
         "platform's, or its primary tenant's), whose calls are settled in the credit "
         "ledger: a worker that does not declare "
         "it never receives one."))
+    forfait_sonde: bool = Field(False, description=(
+        "claim: this worker probes the Claude plan and reports it with `op=forfait` "
+        "before running a job served with `forfait_a_sonder: true`. Such a worker is "
+        "also served jobs whose plan pause is older than the verification window and "
+        "whose limiting window is unknown: the probe decides. A pause whose window "
+        "is known waits for its reset. A worker that does not declare it keeps "
+        "waiting for the stored reset."))
     # reserve / meter — le rang du tour dans la tentative (0, 1, 2…).
     turn: Optional[int] = Field(None, ge=0)
     # reserve — le `max_tokens` de l'appel : la seule borne connue avant l'appel.
@@ -350,6 +362,12 @@ class JobsOut(BaseModel):
     job: Optional[Job] = None
     jobs: Optional[list[Job]] = None
     ok: Optional[bool] = None
+    # forfait — le verdict de la sonde : `false` = le travail est DÉJÀ rendu à la file,
+    # sans tentative comptée ; le worker ne lance rien et ne conclut rien.
+    servable: Optional[bool] = None
+    # forfait — l'échéance d'un forfait au plafond ; null quand il attend autre chose
+    # (une reconnexion).
+    limit_reset_at: Optional[str] = None
     # list (#469) — les deux champs sans lesquels une page pleine est indiscernable
     # d'une file épuisée. Un relevé tronqué SOUS-DÉCLARE : il rassure exactement
     # quand il ne faut pas.
@@ -899,6 +917,71 @@ def _clore_la_tentative(job_id: int, conclu: dict) -> None:
                           estampille.get("mode"))
 
 
+def _reprise_future(ligne: dict) -> Optional[datetime]:
+    """L'échéance d'une pause EN VIGUEUR (`paused_limit` à échéance future), sinon None.
+
+    ⚠️ Lue en base, l'échéance est un TEXTE « AAAA-MM-JJ HH:MM:SS » (la fabrique de
+    lignes du pool), pas un `datetime` : la comparer telle quelle lève."""
+    if ligne.get("statut") != user_subscriptions.PLAFOND:
+        return None
+    reprise = _abonnement.echeance_utc(ligne.get("limit_reset_at"))
+    return reprise if reprise is not None and reprise > datetime.now(timezone.utc) else None
+
+
+def _trancher_le_forfait(ctx, inp: JobsInput) -> dict:
+    """`op=forfait` : ce que la SONDE du worker a vu du forfait, AVANT le run.
+
+    Porté sur la connexion qui PAIE, exactement comme le rapport d'une conclusion
+    (`noter_rapport` : même seuil, même pause), mais un rapport illisible est REFUSÉ
+    (`forfait_report_unreadable`) au lieu d'être avalé. Puis le verdict, relu sur la
+    ligne : servable seulement `connected`, ou en pause ÉCHUE (ou sans échéance, ce que
+    la réservation sert aussi). Tout autre état — au plafond, à reconnecter, déconnecté,
+    sans ligne — RENDS le travail à la file sans tentative comptée : délai de
+    revérification en mode personnel, délai court en pool (un autre prêteur le servira).
+
+    ⚠️ Une pause PROPRE À UN MODÈLE (`seven_day_opus`…) n'est pas levée par la sonde :
+    oto-runner sonde sur son plus petit modèle, qui ne dit rien de la fenêtre d'un autre.
+    Le rapport n'est alors pas porté, et la pause attend son échéance.
+
+    ⚠️ Worker de PLATEFORME seulement, et sur un travail qu'il TIENT : même garde que
+    le rapport de `complete` — un membre ne met pas un collègue en pause."""
+    if not ctx.platform_worker:
+        raise AuthzDenied(403, "platform_worker_only",
+                          "`op=forfait` est réservé au worker de plateforme")
+    _abonnement.exiger_rapport_lisible(inp.result)
+    if inp.job_id is None:
+        raise AuthzDenied(400, "missing_fields", "`op=forfait` exige `job_id`")
+    conclu = db.porteur_et_famille(inp.job_id) or {}
+    if not conclu or not db.tenu_par(inp.job_id, ctx.sub):
+        raise AuthzDenied(404, "job_not_found", "job inconnu")
+    famille = conclu.get("model_family")
+    porteur = conclu.get("abonnement") or conclu.get("sub")
+    ligne = (user_subscriptions.get_subscription(porteur, famille) or {}) if porteur else {}
+    if (_reprise_future(ligne) is not None
+            and user_subscriptions.propre_a_un_modele(ligne.get("limit_fenetre"))):
+        logger.info("sonde du forfait (travail %s) non portée : la pause attend la fenêtre "
+                    "`%s`, propre à un modèle que la sonde ne mesure pas",
+                    inp.job_id, ligne.get("limit_fenetre"))
+    else:
+        _abonnement.noter_rapport(conclu, True, inp.result)
+        ligne = ((user_subscriptions.get_subscription(porteur, famille) or {})
+                 if porteur else {})
+    statut = ligne.get("statut")
+    reprise = _reprise_future(ligne)
+    if ligne.get("sandbox_id") and (statut == user_subscriptions.CONNECTE
+                                    or (statut == user_subscriptions.PLAFOND
+                                        and reprise is None)):
+        return {"ok": True, "servable": True}
+    pool = _abonnement.en_pool(conclu.get("org_id"), famille)
+    db.rendre_a_la_file(inp.job_id, ctx.sub,
+                        _abonnement.raison_de_l_attente(famille, statut, pool=pool,
+                                                        reprise=reprise),
+                        delai_s=(user_subscriptions.RENDU_EN_POOL_S if pool
+                                 else user_subscriptions.VERIFICATION_S))
+    return {"ok": True, "servable": False,
+            "limit_reset_at": reprise.isoformat() if reprise else None}
+
+
 def _avec_abonnement(job: dict, famille: str, appelant: str) -> dict:
     """Le travail d'un abonnement, servi avec le SANDBOX de l'abonnement qui le paie
     (son demandeur, ou le membre qui a prêté le sien au pool de l'org).
@@ -914,6 +997,7 @@ def _avec_abonnement(job: dict, famille: str, appelant: str) -> dict:
     # L'abonnement qui PAIE : celui que la réservation a choisi — le demandeur en
     # mode personnel, un prêteur du pool sinon (`db.porteur_du_forfait`).
     porteur = db.porteur_du_forfait(job)
+    ligne = (user_subscriptions.get_subscription(porteur, famille) or {}) if porteur else {}
     pool = _abonnement.en_pool(job.get("org_id"), famille)
     if job.get("fleet_id") and not pool:
         # Un passage armé pendant le pool, dont l'org est repassée en personnel :
@@ -921,7 +1005,7 @@ def _avec_abonnement(job: dict, famille: str, appelant: str) -> dict:
         # tous — la faute que la pose refuse (`subscription_personal_only`).
         return _refuser_sans_cle(job, appelant,
                                  _abonnement._FLOTTE_HORS_POOL.format(famille=famille))
-    servable, statut, sandbox = _abonnement.servable(porteur, famille)
+    servable, statut, sandbox = _abonnement.servable_de_la_ligne(ligne)
     if not servable and (pool or _abonnement.reparable(statut, sandbox)):
         # ⚠️ RENDU à la file, pas arrêté (21/09/2026) : la personne doit se
         # reconnecter, et ce n'est pas la faute du travail. La réservation saute
@@ -940,6 +1024,12 @@ def _avec_abonnement(job: dict, famille: str, appelant: str) -> dict:
     logger.info("abonnement `%s` servi à %s pour l'org %s (travail %s, sandbox %s%s)",
                 famille, appelant, job.get("org_id"), job.get("id"), sandbox,
                 ", prêté au pool" if pool else "")
+    # La sonde ne vaut que pour une pause : servi alors qu'elle est EN VIGUEUR, c'est
+    # qu'elle est ancienne et de fenêtre inconnue (`pause_en_vigueur(ab, sonde)`), et
+    # le worker doit la sonder avant de lancer. Sur un forfait connecté, le run
+    # rapportera lui-même : une sonde n'y coûterait que des jetons.
+    if _reprise_future(ligne) is not None:
+        return {**job, "sandbox_id": sandbox, "forfait_a_sonder": True}
     return {**job, "sandbox_id": sandbox}
 
 
@@ -1444,7 +1534,8 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         porteur = None if ctx.platform_worker else ctx.sub
         job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail,
                                 depot=inp.provider, famille_seule=famille_seule,
-                                org_ids=inp.org_ids, ferme=ferme, porteur=porteur)
+                                org_ids=inp.org_ids, ferme=ferme, porteur=porteur,
+                                sonde=inp.forfait_sonde)
         if job is None:
             # ⚠️ La file vide n'est pas la fin de l'histoire : une CAMPAGNE en
             # cours est une règle qui produit des travaux, et c'est ici qu'on
@@ -1462,7 +1553,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
                                     depot=inp.provider,
                                     famille_seule=famille_seule,
                                     org_ids=inp.org_ids, ferme=ferme,
-                                    porteur=porteur)
+                                    porteur=porteur, sonde=inp.forfait_sonde)
             if job is None and panne:
                 # « Rien à faire » et « je n'ai pas pu regarder » ne se disent
                 # pas de la même façon. Les confondre a coûté des jours de
@@ -1476,6 +1567,9 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
             # (`repli_disponible` revérifie avant de prendre). Réservé au worker
             # de PLATEFORME, même garde que le sandbox d'abonnement lui-même : ce
             # chemin traverse une famille que le dépôt de ce worker ne nomme pas.
+            # ⚠️ Sans `forfait_sonde` : le repli sur la clé de l'org lit la pause
+            # STOCKÉE, quel que soit le worker — une pause ancienne qu'une sonde
+            # revérifiera reste une pause pour le repli (décision du 22/10/2026).
             job = db.repli_disponible(ctx.org_id, inp.org_ids, ctx.sub,
                                       inp.provider, _abonnement.DEFAUT_LIMITE_PCT,
                                       lease_seconds=bail, ferme=ferme)
@@ -1548,6 +1642,9 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
                               "meter exige `job_id`, `turn` et `result` (l'usage du tour)")
         return _regler_un_tour(ctx, inp.job_id, inp.turn, inp.result)
 
+    if inp.op == "forfait":
+        return _trancher_le_forfait(ctx, inp)
+
     if inp.op == "complete":
         if inp.ok is None:
             raise AuthzDenied(400, "missing_fields", "complete exige `ok` (true/false)")
@@ -1606,6 +1703,10 @@ CAPABILITIES += [
             DeclaredError(404, "fleet_not_found",
                           "`enqueue fleet_id=` désignant une automatisation qui n'est pas "
                           "celle de l'org du porteur"),
+            DeclaredError(400, "forfait_report_unreadable",
+                          "`op=forfait` dont le rapport de sonde (`result.abonnement`) "
+                          "est absent, mal formé, ou ne dit rien : aucun verdict n'est "
+                          "rendu sur un forfait que rien n'a lu"),
             DeclaredError(409, "fleet_not_serving",
                           "`enqueue fleet_id=` désignant une automatisation ni armée ni en "
                           "cours (`draft`, `stopping`, `stopped`…) : l'exécution "

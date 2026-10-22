@@ -162,5 +162,6 @@ last_ok_at TIMESTAMPTZ,
 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 limite_pct SMALLINT CHECK (limite_pct BETWEEN 1 AND 100),
+limit_fenetre TEXT,
 PRIMARY KEY (sub, famille)
 );

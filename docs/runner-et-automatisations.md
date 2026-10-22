@@ -1878,9 +1878,43 @@ cinq heures et sept jours. La personne est mise en attente dès qu'une fenêtre 
 son **plafond de consommation** (`_abonnement.seuil`, ci-dessous), **avant** qu'un
 travail soit refusé ; deux fenêtres saturées attendent la plus lointaine. ⚠️ Un
 `allowed_warning` du fournisseur n'est PAS un refus (`_abonnement.ETATS_SERVABLES`) :
-lu comme tel, il mettait en pause pour sept jours un forfait à quelques %. Un rapport mal
-formé s'ignore et se journalise : il ne fait jamais échouer une conclusion. Seul un
-worker de plateforme est écouté.
+lu comme tel, il mettait en pause pour sept jours un forfait à quelques %. Sur un refus,
+l'échéance attendue est celle de la fenêtre que le fournisseur NOMME (`fenetre` /
+`echeance`, rapportées par oto-runner), plus toute fenêtre au-delà du seuil — la plus
+lointaine de toutes n'est plus que le repli d'un rapport sans fenêtre nommée.
+
+**La sonde avant le run (21/10/2026, revue le 22/10/2026).** Une pause ne se corrigeait
+qu'au rapport d'un run conclu, et un forfait en pause ne reçoit aucun travail : une pause
+fausse figeait le forfait jusqu'à sa réinitialisation. La pause garde désormais la
+fenêtre dont elle attend l'échéance (`user_model_subscriptions.limit_fenetre`) : celle que
+le fournisseur nomme sur un refus, ou celle qui a passé le seuil ; NULL = inconnue (un
+refus sans fenêtre nommée, une pause d'avant la colonne).
+
+- **Qui est sondé.** Un worker qui le promet au claim (`forfait_sonde`, oto-runner
+  `OTO_RUNNER_SONDE_FORFAIT=1`) reçoit aussi les travaux d'un forfait dont la pause est
+  plus vieille que `user_subscriptions.VERIFICATION_S` **et** de fenêtre inconnue
+  (`pause_en_vigueur(ab, sonde)`, le prédicat du personnel et du prêteur du pool). Une
+  pause de fenêtre connue attend son échéance : le fournisseur l'a donnée, la sonder ne
+  coûterait que des jetons. Un travail ainsi servi porte `forfait_a_sonder: true` ; sur un
+  forfait connecté, il n'en porte pas, et le run rapportera lui-même.
+- **Le verdict** (`op=forfait`, le rapport de la sonde : un tour sans outil, dont on lit
+  le `rate_limit_event`). Un rapport illisible est refusé
+  (`400 forfait_report_unreadable`), jamais avalé : c'est l'objet de l'appel, pas l'à-côté
+  d'une conclusion. Sinon, même `noter_rapport` qu'une conclusion, puis le verdict relu
+  sur la ligne : servable seulement `connected`, ou en pause échue. Tout autre état (au
+  plafond, à reconnecter, déconnecté) rend le travail à la file sans tentative comptée,
+  avec `VERIFICATION_S` de délai en mode personnel et `RENDU_EN_POOL_S` en pool, où un
+  autre prêteur le servira. La raison écrite dit « au plafond jusqu'au … », pas
+  « reconnecter ».
+- **Une pause propre à un modèle** (`seven_day_opus`, `seven_day_sonnet`, toute fenêtre
+  hors `five_hour` / `seven_day`) n'est pas levée par la sonde : oto-runner sonde sur son
+  plus petit modèle, qui ne mesure pas la fenêtre d'un autre. Le rapport n'est pas porté.
+- **Le repli sur la clé de l'org ignore `forfait_sonde`** : il lit la pause stockée,
+  quel que soit le worker.
+
+Un worker qui ne sonde pas attend l'échéance stockée, comme avant. À la conclusion, un
+rapport mal formé s'ignore et se journalise : il ne fait jamais échouer une conclusion.
+Seul un worker de plateforme est écouté.
 
 **Le plafond de consommation (25/09/2026).** Un forfait sert aussi la personne pour son
 propre usage : l'épuiser jusqu'au refus la laisserait sans rien. Le plafond est une part

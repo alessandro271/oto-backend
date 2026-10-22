@@ -559,6 +559,13 @@ CREATE TABLE IF NOT EXISTS user_model_subscriptions (
     -- base existante : révision `0019` ou le démarrage
     -- (`user_subscriptions.DDL_COLONNE_LIMITE`, même forme).
     limite_pct SMALLINT CHECK (limite_pct BETWEEN 1 AND 100),
+    -- La fenêtre dont une pause attend l'échéance (`paused_limit` seulement) : nommée
+    -- par le fournisseur sur un refus, ou passée au-delà du seuil. NULL = inconnue, et
+    -- seule une telle pause se revérifie par la sonde (`user_subscriptions.
+    -- pause_en_vigueur`). Sur une base existante : révision
+    -- `20261022_2112_forfait_fenetre` ou le démarrage
+    -- (`user_subscriptions.DDL_COLONNE_FENETRE`, même forme).
+    limit_fenetre TEXT,
     PRIMARY KEY (sub, famille)
 );
 """

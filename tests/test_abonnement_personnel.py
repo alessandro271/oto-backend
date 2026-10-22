@@ -534,6 +534,41 @@ class TestRapport:
         (ligne,) = [r.getMessage() for r in caplog.records if "forfait en pause" in r.getMessage()]
         assert "etat='rejected'" in ligne and "seven_day" in ligne
 
+    def test_un_refus_attend_la_fenetre_NOMMEE_pas_la_plus_lointaine(self, _ecrits):
+        """oto-runner rapporte la fenêtre qui a refusé (`rateLimitType` → `fenetre`,
+        `resetsAt` → `echeance`) : un refus sur cinq heures ne fige plus sept jours."""
+        _abonnement.noter_rapport(self._conclu(), False, {
+            "abonnement": {"etat": "rejected", "fenetre": "five_hour",
+                           "echeance": 1790029800,
+                           "fenetres": self._fenetres(cinq_h=0.4, sept_j=0.1)}})
+        (_, statut, k), = _ecrits
+        assert statut == US.PLAFOND and k["epuise"] is True
+        assert int(k["limit_reset_at"].timestamp()) == 1790029800
+
+    def test_un_refus_nomme_attend_AUSSI_une_fenetre_saturee_plus_lointaine(self, _ecrits):
+        _abonnement.noter_rapport(self._conclu(), False, {
+            "abonnement": {"etat": "rejected", "fenetre": "five_hour",
+                           "echeance": 1790029800,
+                           "fenetres": self._fenetres(cinq_h=1.0, sept_j=0.9)}})
+        (_, _, k), = _ecrits
+        assert int(k["limit_reset_at"].timestamp()) == 1790053200
+
+    def test_la_pause_garde_la_fenetre_qu_elle_attend(self, _ecrits):
+        """La fenêtre part avec la pause (`limit_fenetre`) : nommée sur un refus, la
+        saturée la plus lointaine sinon, et INCONNUE (None) sur un refus sans fenêtre
+        nommée ni saturée — la seule pause que la sonde revérifie."""
+        _abonnement.noter_rapport(self._conclu(), False, {
+            "abonnement": {"etat": "rejected", "fenetre": "seven_day_opus",
+                           "echeance": 1790029800,
+                           "fenetres": self._fenetres(cinq_h=0.4, sept_j=0.1)}})
+        _abonnement.noter_rapport(self._conclu(), True, {
+            "abonnement": {"etat": "allowed",
+                           "fenetres": self._fenetres(cinq_h=0.95, sept_j=0.9)}})
+        _abonnement.noter_rapport(self._conclu(), False, {
+            "abonnement": {"etat": "rejected",
+                           "fenetres": self._fenetres(cinq_h=0.4, sept_j=0.1)}})
+        assert [k["fenetre"] for _, _, k in _ecrits] == ["seven_day_opus", "seven_day", None]
+
     def test_un_etat_inconnu_reste_un_refus(self, _ecrits):
         _abonnement.noter_rapport(self._conclu(), True, {
             "abonnement": {"etat": "quelque_chose_de_neuf",

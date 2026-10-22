@@ -884,6 +884,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # cette table à chaque prise, on ne demande pas son verrou exclusif pour rien.
     if _colonne_absente(conn, "user_model_subscriptions", user_subscriptions.COLONNE_LIMITE):
         conn.execute(user_subscriptions.DDL_COLONNE_LIMITE)
+    # La fenêtre d'une pause de forfait — la même que pose la révision
+    # `20261022_2112_forfait_fenetre` : ordre indifférent entre elles, même garde.
+    if _colonne_absente(conn, "user_model_subscriptions", user_subscriptions.COLONNE_FENETRE):
+        conn.execute(user_subscriptions.DDL_COLONNE_FENETRE)
     # #317 : le rôle `title` devient une PRÉSENTATION (`display`). Conversion
     # ADDITIVE — le `role` reste en place, seuls les lecteurs changent de source ;
     # son retrait est l'étape suivante du dossier, une fois la bascule vérifiée.

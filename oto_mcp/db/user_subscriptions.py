@@ -29,7 +29,7 @@ PLAFOND = "paused_limit"        # forfait épuisé jusqu'à `limit_reset_at`
 DECONNECTE = "disconnected"     # la personne a coupé, ou n'a jamais connecté
 
 _CHAMPS = ("sub, famille, sandbox_id, statut, plan, method, limit_reset_at, "
-           "last_ok_at, created_at, updated_at, limite_pct")
+           "last_ok_at, created_at, updated_at, limite_pct, limit_fenetre")
 
 # Le plafond PERSO de consommation (% de l'usage total du compte). Même forme dans le
 # `CREATE TABLE` (`db/schema/runs.py`), dans la révision `0019` et au démarrage : une
@@ -42,6 +42,60 @@ LIMITE_PERSO_MAX = 95
 DDL_COLONNE_LIMITE = (f"ALTER TABLE user_model_subscriptions ADD COLUMN IF NOT EXISTS "
                       f"{COLONNE_LIMITE} SMALLINT "
                       f"CHECK ({COLONNE_LIMITE} BETWEEN 1 AND 100)")
+
+
+#: La FENÊTRE dont une pause attend l'échéance (`paused_limit` seulement, NULL sinon) :
+#: celle que le fournisseur NOMME sur un refus (`rateLimitType`, rapportée par oto-runner),
+#: ou celle qui a passé le seuil. NULL = inconnue : un refus sans fenêtre nommée, ou une
+#: pause écrite avant cette colonne. Même forme dans le `CREATE TABLE`
+#: (`db/schema/runs.py`), dans la révision `20261022_2112_forfait_fenetre` et au démarrage.
+COLONNE_FENETRE = "limit_fenetre"
+DDL_COLONNE_FENETRE = (f"ALTER TABLE user_model_subscriptions ADD COLUMN IF NOT EXISTS "
+                       f"{COLONNE_FENETRE} TEXT")
+
+#: Les fenêtres du COMPTE, communes à tous les modèles. Toute autre fenêtre nommée
+#: (`seven_day_opus`, `seven_day_sonnet`, ou une fenêtre que le fournisseur ajouterait)
+#: est PROPRE À UN MODÈLE : la sonde d'un autre modèle n'en dit rien.
+FENETRES_DU_COMPTE = ("five_hour", "seven_day")
+
+
+def propre_a_un_modele(fenetre: Optional[str]) -> bool:
+    """La pause attend-elle une fenêtre propre à un modèle ? Une fenêtre inconnue l'est :
+    dans le doute, une sonde ne lève pas ce qu'elle ne mesure peut-être pas."""
+    return bool(fenetre) and fenetre not in FENETRES_DU_COMPTE
+
+
+#: Combien de temps une pause fait foi sans être revérifiée, pour un worker qui SONDE le
+#: forfait (`forfait_sonde` à la réservation). Au-delà, le travail est servi et la sonde
+#: tranche : une pause posée par un rapport faux ou ancien ne fige plus le forfait
+#: jusqu'à sa réinitialisation — sans travail servi, aucun rapport ne venait la corriger.
+#: Une pause dont la fenêtre est CONNUE (`limit_fenetre`) n'est jamais sondée : son
+#: échéance est celle que le fournisseur a donnée pour cette fenêtre, et la sonder ne
+#: coûterait que des jetons.
+VERIFICATION_S = 600
+
+#: Le délai d'un travail rendu à la file en mode POOL quand le prêteur choisi est au
+#: plafond : un AUTRE prêteur peut le servir tout de suite — la réservation saute celui-ci,
+#: dont la pause vient d'être écrite. Le délai ne fait qu'éviter de reprendre le travail
+#: dans la même seconde.
+RENDU_EN_POOL_S = 5
+
+
+def pause_en_vigueur(ab: str, sonde: bool = False) -> str:
+    """SQL : la ligne `ab` est-elle en pause qui FREINE la réservation ? Jamais NULL.
+
+    `sonde` : le worker sondera le forfait avant de lancer — une pause plus vieille que
+    `VERIFICATION_S` ne freine plus, SAUF si sa fenêtre est connue (`limit_fenetre`) :
+    on se fie alors à l'échéance que le fournisseur a donnée. Seules les pauses dont la
+    cause est inconnue se sondent. ⚠️ L'horloge est `updated_at` : toute autre écriture
+    de la ligne (plafond perso, sandbox, connexion) la rajeunit, ce qui ne fait que
+    retarder la revérification — le sens sûr. Ne pas la « corriger » en colonne dédiée
+    sans raison."""
+    fraiche = (f" AND ({ab}.{COLONNE_FENETRE} IS NOT NULL OR {ab}.updated_at > "
+               f"NOW() - make_interval(secs => {int(VERIFICATION_S)}))"
+               if sonde else "")
+    return (f"COALESCE({ab}.statut = '{PLAFOND}' AND {ab}.limit_reset_at > NOW()"
+            f"{fraiche}, false)")
 
 
 def get_subscription(sub: str, famille: str) -> Optional[dict]:
@@ -90,6 +144,7 @@ def marquer_statut(sub: str, famille: str, statut: str, *,
                    limit_reset_at: Optional[Any] = None,
                    epuise: bool = False,
                    utilisation: Optional[float] = None,
+                   fenetre: Optional[str] = None,
                    ok: bool = False,
                    observe: bool = False) -> Optional[dict]:
     """Écrit l'état observé. Ne crée RIEN : sans sandbox, il n'y a rien à
@@ -117,7 +172,10 @@ def marquer_statut(sub: str, famille: str, statut: str, *,
     remis à FALSE / NULL par tout autre statut) — le fournisseur a refusé, ou la
     part de la fenêtre la plus chargée. Le repli vers la clé d'une org les relit
     (`runner_jobs.PAUSE_POUR_L_ORG`) : il n'en part que si le forfait est épuisé, ou
-    si le seuil de l'org du TRAVAIL est lui-même dépassé."""
+    si le seuil de l'org du TRAVAIL est lui-même dépassé.
+
+    `fenetre` : la fenêtre dont la pause attend l'échéance (`COLONNE_FENETRE`), `None`
+    quand on ne la connaît pas — et c'est alors seulement que la sonde la revérifie."""
     with _connect() as conn:
         row = conn.execute(
             f"""UPDATE user_model_subscriptions
@@ -129,13 +187,15 @@ def marquer_statut(sub: str, famille: str, statut: str, *,
                        limit_epuise = %s = '{PLAFOND}' AND %s::boolean,
                        limit_utilisation = CASE WHEN %s = '{PLAFOND}'
                                                 THEN %s::double precision END,
+                       limit_fenetre = CASE WHEN %s = '{PLAFOND}' THEN %s::text END,
                        last_ok_at = CASE WHEN %s THEN NOW() ELSE last_ok_at END,
                        updated_at = NOW()
                  WHERE sub = %s AND famille = %s
                    AND (NOT %s::boolean OR statut <> '{DECONNECTE}')
              RETURNING {_CHAMPS}""",
             (statut, plan, method, statut, limit_reset_at, statut, bool(epuise),
-             statut, utilisation, bool(ok), sub, famille, bool(observe)),
+             statut, utilisation, statut, fenetre, bool(ok), sub, famille,
+             bool(observe)),
         ).fetchone()
     return dict(row) if row else None
 

@@ -101,7 +101,20 @@ def reparable(statut: Optional[str], sandbox: Optional[str]) -> bool:
                                     user_subscriptions.DECONNECTE)
 
 
-def raison_de_l_attente(famille: str, statut: Optional[str], *, pool: bool = False) -> str:
+def raison_de_l_attente(famille: str, statut: Optional[str], *, pool: bool = False,
+                        reprise: Optional[datetime] = None) -> str:
+    """Pourquoi un travail rendu à la file attend. ⚠️ Un forfait AU PLAFOND n'a rien à
+    reconnecter : le texte dit jusqu'à quand il attend (`reprise`), pas un geste que
+    personne n'a à faire."""
+    if statut == user_subscriptions.PLAFOND:
+        jusqu = f" jusqu'au {reprise:%d/%m/%Y %H:%M} UTC" if reprise else ""
+        if pool:
+            return (f"en attente : ce travail tourne sur le pool `{famille}` de "
+                    f"l'organisation, et l'abonnement prêté qui devait le servir est au "
+                    f"plafond{jusqu}. Il repartira sur le prochain abonnement prêté "
+                    "disponible.")
+        return (f"en attente : ce travail tourne sur l'abonnement `{famille}` de son "
+                f"demandeur, au plafond{jusqu}. Il repartira tout seul à la reprise.")
     if pool:
         return (f"en attente : ce travail tourne sur le pool `{famille}` de "
                 f"l'organisation, et l'abonnement prêté qui devait le servir ne peut "
@@ -179,7 +192,11 @@ def servable(sub: Optional[str], famille: str) -> tuple[bool, Optional[str], Opt
     Deux juges du même plafond finiraient par se contredire — voir plus bas."""
     if not sub:
         return False, None, None
-    ligne = user_subscriptions.get_subscription(sub, famille) or {}
+    return servable_de_la_ligne(user_subscriptions.get_subscription(sub, famille) or {})
+
+
+def servable_de_la_ligne(ligne: dict) -> tuple[bool, Optional[str], Optional[str]]:
+    """`servable`, sur une ligne déjà lue (`{}` = aucune)."""
     statut, sandbox = ligne.get("statut"), ligne.get("sandbox_id")
     if not sandbox:
         return False, statut, None
@@ -394,7 +411,7 @@ def raison_de_peremption(sub: Optional[str], org_id: int,
                 "reconnecter (Réglages › Fournisseurs de modèles) — il repartira "
                 "tout seul.")
     if statut == user_subscriptions.PLAFOND:
-        reset = _echeance_utc(ligne.get("limit_reset_at"))
+        reset = echeance_utc(ligne.get("limit_reset_at"))
         if reset and reset > datetime.now(timezone.utc):
             return (f"{base} L'abonnement `{famille}` de son propriétaire avait "
                     "atteint son plafond de consommation.")
@@ -405,7 +422,7 @@ def raison_de_peremption(sub: Optional[str], org_id: int,
     return aucun_agent
 
 
-def _echeance_utc(v) -> Optional[datetime]:
+def echeance_utc(v) -> Optional[datetime]:
     """Une échéance lue en base — texte « AAAA-MM-JJ HH:MM:SS » (le `row_factory` du
     pool), ou `datetime` — en `datetime` UTC ; None si absente."""
     if isinstance(v, str):
@@ -418,7 +435,7 @@ def _echeance_utc(v) -> Optional[datetime]:
 def _famille_non_servie(base: str, org_id: int, famille: str) -> str:
     """Aucun worker vivant ne sert `famille` pour cette org : quand en a-t-on vu un
     pour la dernière fois (`dernier_vu_de_famille`) ? Jamais = « aucun worker vu »."""
-    vu = _echeance_utc(db_runner_jobs.dernier_vu_de_famille(org_id, famille))
+    vu = echeance_utc(db_runner_jobs.dernier_vu_de_famille(org_id, famille))
     quand = f"dernier vu le {vu:%d/%m/%Y %H:%M} UTC" if vu else "aucun worker vu"
     return f"{base} Aucun worker ne sert la famille `{famille}` ({quand})."
 
@@ -432,7 +449,7 @@ def _pool_au_plafond(base: str, org_id: int, famille: str, modele: Optional[str]
     pause = org_subscription_pool.pool_au_plafond(org_id, famille, depot)
     repli = (org_subscription_pool.repli_api_par_defaut() if pause["repli_api"] is None
              else bool(pause["repli_api"]))
-    reprise = _echeance_utc(pause["reprise"])
+    reprise = echeance_utc(pause["reprise"])
     au_plafond = (f"{base} Le pool `{famille}` de l'organisation est en pause : "
                   "abonnements au plafond"
                   + (f" jusqu'au {reprise:%d/%m/%Y %H:%M} UTC" if reprise else ""))
@@ -462,6 +479,7 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
     Le rapport voyage dans le résultat déclaré, clé `abonnement` :
 
         {"etat": "allowed" | "allowed_warning" | <autre>,   # `rate_limit_info.status`
+         "fenetre": "five_hour", "echeance": 1790029800,  # `rateLimitType` / `resetsAt`
          "deconnecte": true,                     # le programme n'a plus de session
          "fenetres": {"five_hour": {"utilization": 0.07, "resetsAt": 1790029800},
                       "seven_day": {"utilization": 0.49, "resetsAt": 1790053200}}}
@@ -498,24 +516,37 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
             return
         fenetres = rapport.get("fenetres") or {}
         plafond = seuil(porteur, conclu.get("org_id"), famille) if fenetres else None
+        # (échéance, fenêtre) : la fenêtre part avec la pause (`limit_fenetre`) — une
+        # pause dont on connaît la fenêtre n'est pas revérifiée par la sonde, et une
+        # fenêtre propre à un modèle n'est pas levée par la sonde d'un autre.
         echeances = [
-            f["resetsAt"] for f in fenetres.values()
+            (f["resetsAt"], nom) for nom, f in fenetres.items()
             if isinstance(f, dict)
             and isinstance(f.get("resetsAt"), (int, float))
             and isinstance(f.get("utilization"), (int, float))
             and f["utilization"] >= plafond]
         refuse = rapport.get("etat") not in ETATS_SERVABLES
-        if refuse and not echeances:
-            # Refusé sans fenêtre saturée lisible : toutes les échéances connues
-            # comptent, faute de savoir laquelle a mordu.
-            echeances = [f["resetsAt"] for f in fenetres.values()
+        if refuse and isinstance(rapport.get("echeance"), (int, float)):
+            # Le fournisseur NOMME la fenêtre qui a refusé (`rateLimitType`, rapportée
+            # en `fenetre`/`echeance` par oto-runner) : c'est son échéance qu'on attend,
+            # pas la plus lointaine — un refus sur cinq heures ne fige plus une semaine.
+            nommee = rapport.get("fenetre")
+            echeances.append((rapport["echeance"],
+                              nommee if isinstance(nommee, str) and nommee else None))
+        elif refuse and not echeances:
+            # Refusé sans fenêtre nommée ni saturée lisible (un runner d'avant
+            # `fenetre`) : toutes les échéances connues comptent, faute de savoir
+            # laquelle a mordu — et la fenêtre reste INCONNUE.
+            echeances = [(f["resetsAt"], None) for f in fenetres.values()
                          if isinstance(f, dict)
                          and isinstance(f.get("resetsAt"), (int, float))]
         if echeances or refuse:
             # Bornée AVANT la conversion : une échéance en millisecondes déborde `fromtimestamp`,
             # et la levée faisait ignorer le rapport entier.
             borne = (datetime.now(timezone.utc) + ECHEANCE_MAX).timestamp()
-            quand = (datetime.fromtimestamp(min(max(echeances), borne), tz=timezone.utc)
+            retenue, fenetre = (max(echeances, key=lambda e: e[0]) if echeances
+                                else (None, None))
+            quand = (datetime.fromtimestamp(min(retenue, borne), tz=timezone.utc)
                      if echeances else None)
             # La CAUSE part avec la pause (décision du 28/09/2026) : le repli vers la
             # clé d'une org n'en part que si le forfait est épuisé, ou si le seuil de
@@ -528,13 +559,14 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
             # (`limit_epuise`, `limit_utilisation`), qui ne dit ni l'état exact du
             # fournisseur ni la fenêtre qui a mordu — sans lui, une pause douteuse ne
             # se prouve pas.
-            logger.info("forfait en pause (famille %s, porteur %s) : etat=%r seuil=%s "
-                        "fenetres=%s → jusqu'à %s", famille, porteur, rapport.get("etat"),
-                        plafond, fenetres, quand)
+            logger.info("forfait en pause (famille %s, porteur %s) : etat=%r fenetre=%r "
+                        "seuil=%s fenetres=%s → jusqu'à %s", famille, porteur,
+                        rapport.get("etat"), rapport.get("fenetre"), plafond, fenetres,
+                        quand)
             user_subscriptions.marquer_statut(
                 porteur, famille, user_subscriptions.PLAFOND, limit_reset_at=quand,
                 epuise=refuse, utilisation=max(charges) if charges else None,
-                observe=True)
+                fenetre=fenetre, observe=True)
             return
         user_subscriptions.marquer_statut(
             porteur, famille, user_subscriptions.CONNECTE, ok=bool(ok),
@@ -543,6 +575,56 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
         logger.warning("rapport d'abonnement illisible pour le travail conclu "
                        "(famille %s) — ignoré, la conclusion tient", famille,
                        exc_info=True)
+
+
+def _nombre(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _pourquoi_illisible(rapport) -> Optional[str]:
+    """Ce qui rend un rapport de sonde illisible, ou None s'il se lit."""
+    if not isinstance(rapport, dict):
+        return "`result.abonnement` absent ou pas un objet"
+    for champ, type_, nom in (("etat", str, "un texte"), ("fenetre", str, "un texte"),
+                              ("deconnecte", bool, "un booléen")):
+        if rapport.get(champ) is not None and not isinstance(rapport[champ], type_):
+            return f"`{champ}` n'est pas {nom}"
+    if rapport.get("echeance") is not None and not _nombre(rapport["echeance"]):
+        return "`echeance` n'est pas un nombre"
+    fenetres = rapport.get("fenetres")
+    if fenetres is not None and not isinstance(fenetres, dict):
+        return "`fenetres` n'est pas un objet"
+    for nom, f in (fenetres or {}).items():
+        if not isinstance(f, dict):
+            return f"la fenêtre `{nom}` n'est pas un objet"
+        for champ in ("utilization", "resetsAt"):
+            if f.get(champ) is not None and not _nombre(f[champ]):
+                return f"`{nom}.{champ}` n'est pas un nombre"
+    if not (isinstance(rapport.get("etat"), str) or fenetres
+            or rapport.get("deconnecte") is True):
+        return "ni état, ni fenêtre, ni session perdue : il ne dit rien"
+    return None
+
+
+def exiger_rapport_lisible(resultat) -> dict:
+    """Le rapport d'une SONDE (`op=forfait`), relu AVANT d'être porté — ou la 400
+    `forfait_report_unreadable`. Rend le rapport (`resultat["abonnement"]`).
+
+    ⚠️ Pas la tolérance de `noter_rapport` : là, le rapport est l'à-côté d'une conclusion
+    qui doit tenir quoi qu'il arrive, et un rapport mal formé s'y avale. Ici, il est
+    l'OBJET de l'appel : l'avaler rendrait un verdict sur une ligne que rien n'a lue, et
+    le worker lancerait un run sur un forfait qu'il croirait vérifié.
+
+    Lisible = la forme qu'oto-runner envoie (`rapport_du_forfait`), et qui dit quelque
+    chose : un état, une fenêtre, ou une session perdue."""
+    rapport = resultat.get("abonnement") if isinstance(resultat, dict) else None
+    pourquoi = _pourquoi_illisible(rapport)
+    if pourquoi:
+        raise AuthzDenied(400, "forfait_report_unreadable",
+                          f"`op=forfait` : rapport de la sonde illisible ({pourquoi}). "
+                          "Attendu `result.abonnement` = {etat, fenetres, fenetre?, "
+                          "echeance?, deconnecte?}.")
+    return rapport
 
 
 def noter_rapport_du_travail(job_id: int, ok: bool, resultat: Optional[dict]) -> None:
