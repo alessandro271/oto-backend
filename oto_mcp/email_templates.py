@@ -24,13 +24,14 @@ directe `mailer._send = ...` que fait `test_signal_reporter_notice.py`) ne
 toucherait jamais — le test patcherait `email._send`, ce module continuerait
 d'appeler l'ancien. Un import de MODULE reste une référence partagée : patcher
 un attribut sur `email` est vu par `email_templates` immédiatement. C'est aussi
-ce qui rend l'import circulaire inoffensif dans les deux sens : `email.py`
-réexpose ces quatre fonctions (`from .email_templates import ...`) pour que
-`email.send_invite_email` etc. restent des attributs valides du module `email`
-— c'est ce que les tests monkeypatchent (`monkeypatch.setattr(email,
-"send_invite_email", ...)`, `D.email.send_...`, `R.email.send_...`) — et
-`import email as _email` ici ne dépend d'AUCUN attribut déjà défini, juste de
-l'existence du module dans `sys.modules`.
+ce qui rend l'import circulaire inoffensif dans les deux sens — à condition que
+`email.py` s'y tienne aussi : il importe CE module (`from . import email_templates`)
+et lit À L'APPEL, par son `__getattr__`, les gabarits qu'il réexpose
+(`email.send_invite_email` etc., ce que les tests monkeypatchent :
+`monkeypatch.setattr(email, "send_invite_email", ...)`, `R.email.send_...`). Son
+ancien `from .email_templates import send_invite_email, ...` cassait l'entrée par
+ce module-ci (la maintenance, `alertes-credential`) : `email` y cherchait un nom
+que ce module, à moitié chargé, n'avait pas encore défini.
 
 **Locale, un seul paramètre.** Chaque gabarit prend `locale: str | None = None`.
 `'en'` sert la version anglaise ; toute autre valeur (dont `None`, le cas
