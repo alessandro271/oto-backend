@@ -245,6 +245,44 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   porteur est refusée, `org_out_of_job`) et ses droits sur le tableau. Les refus du
   contrat valent pour tous. Aucune règle propre aux agents, comme pour `oto_call`.
 
+## L'affichage d'une recette — `display`, sur la fiche
+
+Ce qu'une page de processus montre à l'endroit où il lance la recette : ses étapes, dans
+l'ordre où elle les fait, et ce que chacune facture. **Sur la FICHE** (`recipes.display`,
+JSONB nullable, révision `20261022_2100_recipes_display` + démarrage), comme le titre et
+la description — **pas dans le corps versionné** : le changer ne propose ni ne republie
+rien (republier une recette-code coûte une épreuve facturée, pour une étiquette).
+
+- **Écrire** : `oto_recipe op=describe` (`slug`, `title?`, `description?`, `display`),
+  ou `display` dès `op=create`. `display={}` l'efface.
+- **Forme**, validée à l'écriture (`contrat.valider_affichage`, refus `invalid_display`
+  avec tous les défauts) : `{steps: [{label, detail?, credits?, per?}], saves?}` — 1 à 10
+  étapes ; `label` ≤ 60 caractères ; `detail` une phrase ≤ 200 ; `credits` (0 à 10 000)
+  et `per` (`contact` | `company` | `row`) vont ensemble, absents sur une étape gratuite ;
+  `saves` une phrase MESURÉE (≤ 160) de ce que la recette épargne, jamais une estimation.
+- **Une recette DÉCLARATIVE n'a rien à écrire** : sans `display`, la route LIT ses étapes
+  dans le corps de la version en service, sinon de la dernière proposée tant qu'aucune
+  n'est publiée (`recipes/affichage.py` : pour chaque ligne, l'outil et sa pagination, le
+  filtre, les colonnes et la clé) — elles suivent le corps et ne dérivent jamais. Les
+  corps de toute la liste se lisent en une requête (`db.recipes.get_bodies`). Pas de crédits : le corps n'en dit rien (`max_units` est
+  un plafond, pas un prix). Une recette-CODE n'a rien de lisible : ses étapes s'écrivent.
+- **Les crédits écrits sont une ESTIMATION** : déclarés par qui décrit la recette, pas
+  mesurés (aucun reçu d'exécution n'est gardé). La page les marque « estimated ».
+- **Lire** : `op=list` / `op=get` (la fiche), et `GET /api/orgs/{id}/recipes`, dont
+  `display.source` dit `described` (écrit) ou `derived` (lu dans le corps).
+- **Où la page la dessine** : sur l'étape du schéma du processus qui NOMME la recette —
+  `oto_recipe <slug>` dans sa note de marge (guide plateforme `procedure-flowchart`).
+  C'est l'agent qui dessine le processus qui la place ; la page ne devine pas.
+
+## Lecture REST : les recettes d'une org (PROVISOIRE)
+
+`GET /api/orgs/{id}/recipes` (capacité `org.recipes`, REST seule, membre de l'org,
+`x-oto-provisoire`) rend les fiches de l'org SANS corps — le corps d'une recette-code est
+du code : `slug`, `title`, `description`, `status` (`published` dès qu'une version est en
+service, sinon `proposed`), `published_version`, `latest_version`, `updated_at` (ISO 8601), et
+`display` — écrit, sinon lu dans le corps d'une recette déclarative, null pour une
+recette-code sans affichage écrit.
+
 ## Ce qui vient ensuite
 
 Le bloc `async` (soumettre puis collecter : Dropcontact, FullEnrich, Apify), le mode par

@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS recipes (
     slug TEXT NOT NULL,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    -- Ce qu'une page de processus montre à l'endroit où il lance la recette (ses étapes,
+    -- ce que chacune facture) : sur la fiche, pas dans une version — la changer ne
+    -- republie rien. NULL = rien d'écrit (docs/recettes.md §Affichage).
+    display JSONB,
     -- La version qui s'exécute. NULL = rien de publié.
     published_version INTEGER,
     created_by TEXT,

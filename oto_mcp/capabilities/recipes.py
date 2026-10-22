@@ -29,9 +29,9 @@ from starlette.concurrency import run_in_threadpool
 from .. import access, session_org, tool_alias, tool_registry
 from ..db import recipes as db_recipes
 from ..functions import executor as bac
-from ..recipes import code, contrat, moteur
-from ._authz import BY_OP, ORG_MEMBER_OPT, SUB_ONLY
-from ._types import AuthzDenied, Capability, ResolvedCtx
+from ..recipes import affichage, code, contrat, moteur
+from ._authz import BY_OP, ORG_MEMBER_OF, ORG_MEMBER_OPT, SUB_ONLY
+from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
 _PORTEE = BY_OP({None: ORG_MEMBER_OPT("org"), "org": ORG_MEMBER_OPT("org"),
@@ -40,8 +40,8 @@ _APPELANTES = ("sample", "test", "publish", "run")
 
 
 class RecipeInput(BaseModel):
-    op: Literal["list", "get", "versions", "create", "propose", "sample", "test",
-                "publish", "run"]
+    op: Literal["list", "get", "versions", "create", "propose", "describe", "sample",
+                "test", "publish", "run"]
     slug: Optional[str] = None
     scope: Optional[Literal["org", "user"]] = None
     org: Optional[int] = None
@@ -72,6 +72,12 @@ class RecipeInput(BaseModel):
         "test, never delete/merge; a batch via `items`/`ids` (≤50) counts one write per "
         "record against `max_writes`) and returns a receipt of counts; test/publish of "
         "a code recipe are platform-only."))
+    display: Optional[dict[str, Any]] = Field(default=None, description=(
+        "create/describe: what a process page shows where a process runs this recipe — "
+        "{steps: [{label, detail?, credits?, per: contact|company|row}], saves?}: 1 to "
+        f"{contrat.MAX_ETAPES} steps in the order the recipe runs them, `credits` what a step bills per `per` "
+        "(omit both on a free step), `saves` one MEASURED sentence. On the recipe, not in "
+        "a version: changing it republishes nothing. describe with `{}` clears it."))
     note: Optional[str] = None
     expected_version: Optional[int] = Field(default=None, description=(
         "propose: the latest version you read."))
@@ -101,6 +107,17 @@ def _besoin(valeur, code: str, message: str):
     if valeur is None or (isinstance(valeur, str) and not valeur.strip()):
         raise AuthzDenied(400, code, message)
     return valeur
+
+
+def _affichage(brut: dict) -> Optional[dict]:
+    """`display` validé ; `{}` = effacer (None)."""
+    if brut == {}:
+        return None
+    try:
+        return contrat.valider_affichage(brut)
+    except contrat.RecetteInvalide as e:
+        raise AuthzDenied(400, "invalid_display", str(e),
+                          details={"problems": e.problemes}) from None
 
 
 def _proprietaire(ctx: ResolvedCtx, inp: RecipeInput) -> tuple[str, str]:
@@ -136,8 +153,13 @@ def _fiche(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
     return fiche
 
 
+def _numero(fiche: dict, numero: Optional[int] = None) -> Optional[int]:
+    """La version demandée, sinon celle en service, sinon la dernière proposée."""
+    return numero or fiche["published_version"] or fiche["latest_version"]
+
+
 def _version(fiche: dict, numero: Optional[int]) -> dict:
-    numero = numero or fiche["published_version"] or fiche["latest_version"]
+    numero = _numero(fiche, numero)
     version = db_recipes.get_version(fiche["id"], numero) if numero else None
     if version is None:
         raise AuthzDenied(404, "unknown_version", f"`{fiche['slug']}` has no version {numero}.")
@@ -161,11 +183,12 @@ def _gerer(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
         title = _besoin(inp.title, "missing_title", "`title` is required for create.")
         corps = _corps(ctx, _besoin(inp.recipe, "missing_recipe", "`recipe` is required."))
         owner = _proprietaire(ctx, inp)
+        display = _affichage(inp.display) if inp.display is not None else None
         try:
             fiche = db_recipes.create_recipe(
                 owner_type=owner[0], owner_id=owner[1], slug=slug, title=title.strip(),
                 description=inp.description or "", created_by=ctx.sub, body=corps,
-                note=inp.note)
+                note=inp.note, display=display)
         except db_recipes.RecipeExists:
             raise AuthzDenied(409, "recipe_exists", f"Recipe `{slug}` already exists here: "
                                                     "propose a new version.") from None
@@ -175,6 +198,20 @@ def _gerer(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
         return {"recipe": fiche, "versions": db_recipes.list_versions(fiche["id"])}
     if inp.op == "get":
         return {"recipe": fiche, "version": _version(fiche, inp.version)}
+    if inp.op == "describe":
+        if inp.title is None and inp.description is None and inp.display is None:
+            raise AuthzDenied(400, "nothing_to_describe",
+                              "Pass `title`, `description` and/or `display`.")
+        if inp.title is not None and not inp.title.strip():
+            raise AuthzDenied(400, "missing_title", "`title` can't be empty.")
+        champs: dict = {}
+        if inp.display is not None:
+            champs["display"] = _affichage(inp.display)
+        db_recipes.describe_recipe(
+            fiche["id"], title=inp.title.strip() if inp.title else None,
+            description=inp.description, **champs)
+        return {"recipe": db_recipes.get_recipe(fiche["owner_type"], fiche["owner_id"],
+                                                fiche["slug"])}
     # propose
     attendue = _besoin(inp.expected_version, "missing_expected_version",
                        "`expected_version` is required: the latest version you read "
@@ -338,7 +375,8 @@ CAPABILITIES += [
     Capability(
         key="me.recipe", handler=_recipe, Input=RecipeInput, Output=RecipeOut,
         authz=BY_OP({op: _PORTEE for op in ("list", "get", "versions", "create", "propose",
-                                            "sample", "test", "publish", "run")}),
+                                            "describe", "sample", "test", "publish",
+                                            "run")}),
         description=(
             "RECIPES: move a connector tool's results into a table on the server, with no "
             "model reading or retyping the rows. Only connector tools DECLARED READ-ONLY can "
@@ -350,6 +388,10 @@ CAPABILITIES += [
             "one billed call) · op=test (slug or inline `recipe`, params → one real page, "
             "nothing written, fill rate per column) · op=create (slug, title, recipe → "
             "version 1, PROPOSED) · op=propose (slug, expected_version, recipe) · "
+            "op=describe (slug, title?, description?, display → what a process page shows "
+            "where a process runs the recipe: its steps and what each bills; on the "
+            "recipe, not a version, so nothing is republished; name the recipe in the "
+            "process flowchart's margin as `oto_recipe <slug>`) · "
             "op=publish (slug, version, params → test page, then in service) · op=run "
             "(slug of a PUBLISHED recipe, params, datastore → counts only; `max_pages` "
             "bounds each call, `resume` continues a partial run; a table without a declared "
@@ -375,5 +417,96 @@ CAPABILITIES += [
             "it declares (`writes`), at most `limits.max_writes` per run (default 50), in "
             "the run's org, with the caller's own connector account. PROVISIONAL surface."),
         mcp="oto_recipe",
+    ),
+]
+
+
+# ── Lecture REST : les recettes d'une org, pour qu'une page les nomme ────────────
+#
+# La face MCP (`oto_recipe op=list`) sert l'agent ; une page de processus a besoin
+# de savoir, sans session MCP, quelles recettes l'org possède et si chacune est en
+# service. Lecture seule, fiches sans corps (le corps d'une recette-code est du
+# code), membre de l'org. Provisoire : la forme suivra ce que la page affiche.
+
+
+class OrgRecipesInput(BaseModel):
+    org_id: int
+
+
+class RecipeStepDisplay(BaseModel):
+    label: str
+    detail: str = ""
+    credits: Optional[float] = None
+    per: Optional[Literal["contact", "company", "row"]] = None
+
+
+class RecipeDisplay(BaseModel):
+    steps: list[RecipeStepDisplay]
+    saves: Optional[str] = None
+    source: Literal["described", "derived"] = Field(description=(
+        "`described`: written on the recipe (`op=describe`), credits included — an "
+        "ESTIMATE, not measured. `derived`: read from the body of the version in "
+        "service, else the latest proposed (a declarative recipe), so it follows its "
+        "body; no credits."))
+
+
+class OrgRecipe(BaseModel):
+    slug: str
+    title: str
+    description: str
+    status: Literal["published", "proposed"] = Field(description=(
+        "`published` when a version is in service (`published_version`), else "
+        "`proposed`: only a published version runs."))
+    published_version: Optional[int] = None
+    latest_version: Optional[int] = None
+    updated_at: Optional[str] = Field(default=None, description="ISO 8601.")
+    display: Optional[RecipeDisplay] = Field(default=None, description=(
+        "What a process page draws where it runs this recipe: the steps written by "
+        "`oto_recipe op=describe`, else those read from a declarative recipe's body; "
+        "null for a code recipe with none written."))
+
+
+class OrgRecipes(BaseModel):
+    recipes: list[OrgRecipe]
+
+
+def _affichage_de(fiche: dict, corps: Any) -> Optional[dict]:
+    """Ce que la page dessine : l'affichage ÉCRIT s'il y en a un, sinon les étapes LUES
+    dans `corps`, celui de la version `_numero` (en service, sinon la dernière proposée)
+    d'une recette déclarative. Le corps ne sort jamais d'ici."""
+    if fiche.get("display"):
+        return {**fiche["display"], "source": "described"}
+    lues = affichage.etapes_lues(corps)
+    return {**lues, "source": "derived"} if lues else None
+
+
+def _lister_org(org_id: int) -> list[dict]:
+    """Les fiches de l'org et leur affichage : deux requêtes quel que soit leur nombre
+    (les fiches, puis les corps à lire, tous ensemble)."""
+    fiches = db_recipes.list_recipes([("org", str(org_id))])
+    a_lire = {f["id"]: _numero(f) for f in fiches if not f.get("display") and _numero(f)}
+    corps = db_recipes.get_bodies(a_lire)
+    return [{**f, "display": _affichage_de(f, corps.get(f["id"]))} for f in fiches]
+
+
+async def _org_recipes(ctx: ResolvedCtx, inp: OrgRecipesInput) -> dict:
+    fiches = await run_in_threadpool(_lister_org, inp.org_id)
+    return {"recipes": [{
+        "slug": f["slug"], "title": f["title"], "description": f["description"] or "",
+        "status": "published" if f["published_version"] else "proposed",
+        "published_version": f["published_version"], "latest_version": f["latest_version"],
+        "updated_at": f["updated_at"].isoformat() if f.get("updated_at") is not None
+        else None,
+        "display": f.get("display"),
+    } for f in fiches]}
+
+
+CAPABILITIES += [
+    Capability(
+        key="org.recipes", handler=_org_recipes, Input=OrgRecipesInput, Output=OrgRecipes,
+        authz=ORG_MEMBER_OF("org_id"), mcp=None,
+        rest=RestBinding("GET", "/api/orgs/{id}/recipes", {"id": "org_id"}, provisoire=True),
+        description=("The org's recipes (no bodies): slug, title, whether one is in service, "
+                     "and the steps a process page draws where it runs one."),
     ),
 ]

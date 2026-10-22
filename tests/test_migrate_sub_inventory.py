@@ -409,6 +409,8 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("orgs", "field_filters"), ("orgs", "time_saved_minutes"),
         ("process_shares", "preview_shape"),
         ("process_shares", "preview_views"), ("project_links", "config"),
+        # L'affichage d'une recette : étiquettes, phrases, crédits déclarés par étape.
+        ("recipes", "display"),
         ("recipe_versions", "body"), ("recipe_versions", "test_report"),
         ("runner_fleets", "descriptions_outils"), ("runner_fleets", "row_filter"),
         ("runner_fleets", "tools"), ("runner_triggers", "payload_fields"),

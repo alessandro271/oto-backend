@@ -125,6 +125,58 @@ def test_proposer_exige_la_derniere_version_lue(capa):
     assert [v["version"] for v in appeler(op="versions", slug=slug)["versions"]] == [2, 1]
 
 
+def test_decrire_pose_l_affichage_sans_nouvelle_version(capa):
+    """L'affichage vit sur la FICHE : le poser ne propose ni ne republie rien, `list` le
+    rend, `{}` l'efface."""
+    appeler, _ = capa
+    slug = f"acme-display-{uuid.uuid4().hex[:6]}"
+    cree = appeler(op="create", slug=slug, title="t", recipe=CORPS,
+                   display={"steps": [{"label": "Find people"}]})
+    # Écrit avec la recette, dans sa transaction : la fiche rendue le porte déjà.
+    assert cree["recipe"]["display"] == {"steps": [{"label": "Find people", "detail": ""}]}
+    out = appeler(op="describe", slug=slug, title="Acme people",
+                  display={"steps": [{"label": "Find people", "credits": 0.3, "per": "row"},
+                                     {"label": "Write"}],
+                           "saves": "one call a page"})
+    assert out["recipe"]["title"] == "Acme people"
+    assert out["recipe"]["display"]["steps"][0] == {
+        "label": "Find people", "detail": "", "credits": 0.3, "per": "row"}
+    assert out["recipe"]["latest_version"] == 1
+    listees = {r["slug"]: r for r in appeler(op="list")["recipes"]}
+    assert listees[slug]["display"]["saves"] == "one call a page"
+    assert appeler(op="describe", slug=slug, display={})["recipe"]["display"] is None
+
+
+def test_les_corps_de_plusieurs_recettes_se_lisent_en_une_requete(capa):
+    """`get_bodies` rend le corps de CHAQUE version demandée, en une requête : la liste
+    `GET /api/orgs/{id}/recipes` ne relit pas la base recette par recette."""
+    from unittest import mock
+
+    import psycopg
+
+    from oto_mcp.db import recipes as db_recipes
+    appeler, _ = capa
+    ids = {}
+    for i in range(3):
+        slug = f"acme-corps-{i}-{uuid.uuid4().hex[:6]}"
+        ids[i] = appeler(op="create", slug=slug, title="t",
+                         recipe={**CORPS, "limits": {"max_units": 10 + i}})["recipe"]["id"]
+    appeler(op="propose", slug=slug, expected_version=1,
+            recipe={**CORPS, "limits": {"max_units": 99}})
+    vues = []
+    reel = psycopg.Cursor.execute
+
+    def _ex(self, query, *a, **k):
+        vues.append(query)
+        return reel(self, query, *a, **k)
+    with mock.patch.object(psycopg.Cursor, "execute", _ex):
+        corps = db_recipes.get_bodies({ids[0]: 1, ids[1]: 1, ids[2]: 2})
+    assert len(vues) == 1
+    assert {rid: c["limits"]["max_units"] for rid, c in corps.items()} == {
+        ids[0]: 10, ids[1]: 11, ids[2]: 99}
+    assert db_recipes.get_bodies({}) == {}
+
+
 def test_une_recette_fautive_est_refusee_avec_ses_defauts(capa):
     from oto_mcp.capabilities._types import AuthzDenied
     appeler, _ = capa
