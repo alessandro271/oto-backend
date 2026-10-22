@@ -1,8 +1,8 @@
 """HubSpot CRM — contacts, companies, deals, tickets, notes (read + write).
 
-Wraps `oto.tools.hubspot.HubSpotClient` (private app token). Key resolved per
-call via `access.resolve_api_key("hubspot")` — byo (user key on /account or
-the org's shared credential). No platform key.
+Wraps `oto.tools.hubspot.HubSpotClient` (the key: service key or private app).
+Key resolved per call via `access.resolve_api_key("hubspot")` — byo (user key on
+/account or the org's shared credential). No platform key.
 
 Generic surface: `object_type` = contacts | companies | deals | tickets
 (or any custom object) for search/get/create/update/delete — lossless merge.
@@ -56,9 +56,9 @@ is guesswork.
    sliced to 100 by the client) and returns complete rows. Without `properties`,
    the op answers exactly what it has always answered, in a single call.
 
-⚠️ **Scopes**: lists require `crm.lists.read` / `crm.lists.write` in the
-private app. Tokens created before these tools only have the `crm.objects.*` scopes
-→ a 403 here means "add the scope", NOT "invalid key".
+⚠️ **Scopes**: lists require `crm.lists.read` / `crm.lists.write` on the
+key (service key or private app). Tokens created before these tools only have
+the `crm.objects.*` scopes → a 403 here means "add the scope", NOT "invalid key".
 """
 from __future__ import annotations
 
@@ -706,8 +706,8 @@ def register(mcp: FastMCP) -> None:
           `object_type` + `record_id`.
 
         ⚠️ Requires the `crm.lists.read` / `crm.lists.write` scopes on the
-        private app. A token created before these scopes existed answers 403 —
-        that means "add the scope", not "the key is wrong".
+        key (service key or private app). A token created before these scopes
+        existed answers 403 — that means "add the scope", not "the key is wrong".
 
         Args:
             op: search | get | create | update | delete | restore | members |
