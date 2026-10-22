@@ -16,9 +16,10 @@ remuneration booked elsewhere is not. `by_account` gives the split, so the reade
 can leave out an account. Employer contributions (645x) are never counted.
 
 **What "college" is here.** The DSN conventional status of the French contract
-(`statutConventionnelDsn`, block S21.G00.40.002): 01 executive officer and 02
-other cadres → `cadre`; 03 intermediate profession, 04 employee, 05 worker →
-`non_cadre`; anything else → `null`, with the raw code kept. ⚠️ The API does not
+(`statutConventionnelDsn`, block S21.G00.40.002): 03 executive officer
+(cadre dirigeant) and 04 other cadres → `cadre`; 05 intermediate profession, 06
+employee, 07 worker → `non_cadre`; 01-02 (a farmer, craftsman or trader paid by
+their own business) and 08-10 (civil servants) → `null`, with the raw code kept. ⚠️ The API does not
 serve the supplementary-pension category (S21.G00.40.003), so an "assimilé
 cadre" (article 36) is not distinguishable from a non-cadre here.
 
@@ -33,8 +34,8 @@ MAX_MONTHS = 12
 WAGE_PREFIX = "641"
 CADRE = "cadre"
 NON_CADRE = "non_cadre"
-_CADRE_CODES = frozenset({"01", "02"})
-_NON_CADRE_CODES = frozenset({"03", "04", "05"})
+_CADRE_CODES = frozenset({"03", "04"})
+_NON_CADRE_CODES = frozenset({"05", "06", "07"})
 _MONTH = re.compile(r"\d{4}(0[1-9]|1[0-2])")
 
 

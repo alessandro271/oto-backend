@@ -6,8 +6,8 @@ Ce que ce fichier verrouille :
   chiffres ; un 645x (cotisations) n'y entre jamais ;
 - une ligne par contrat ACTIF ; le brut d'un contrat sorti va dans `others` ;
   un contrat actif sans écriture rend `gross: null`, jamais 0 ;
-- le collège lu dans le statut conventionnel DSN (01-02 cadre, 03-05 non-cadre,
-  le reste `null`) ;
+- le collège lu dans le statut conventionnel DSN (S21.G00.40.002 : 03-04 cadre,
+  05-07 non-cadre, le reste `null`) ;
 - la période (douze mois au plus, `YYYYMM`), les mois de paie non clos signalés ;
 - l'outil déclaré en lecture (une recette peut l'appeler) et les scopes déclarés.
 
@@ -26,7 +26,7 @@ def _e(account, debit=None, credit=None, contract="k1"):
     return {"accountId": account, "debit": debit, "credit": credit, "contractId": contract}
 
 
-def _c(cid, statut="04", status="ACTIVE", last="Martin", **kw):
+def _c(cid, statut="06", status="ACTIVE", last="Martin", **kw):
     return {"contractId": cid, "firstName": "Ada", "lastName": last, "status": status,
             "jobName": "Poste", "startDate": "2024-01-01", "natureContratDsn": "01",
             "statutConventionnelDsn": statut, "estCadreDirigeant": False, **kw}
@@ -55,9 +55,10 @@ def test_une_ligne_par_contrat_actif_le_sorti_va_dans_others():
 
 
 @pytest.mark.parametrize("statut,dirigeant,attendu", [
-    ("01", False, "cadre"), ("02", False, "cadre"), ("03", False, "non_cadre"),
-    ("04", False, "non_cadre"), ("05", False, "non_cadre"), ("07", False, None),
-    (None, False, None), ("04", True, "cadre")])
+    ("01", False, None), ("02", False, None), ("03", False, "cadre"),
+    ("04", False, "cadre"), ("05", False, "non_cadre"), ("06", False, "non_cadre"),
+    ("07", False, "non_cadre"), ("08", False, None), ("10", False, None),
+    (None, False, None), ("06", True, "cadre")])
 def test_le_college_vient_du_statut_conventionnel_dsn(statut, dirigeant, attendu):
     assert B.college(_c("k", statut=statut, estCadreDirigeant=dirigeant)) == attendu
 
@@ -115,7 +116,7 @@ def test_l_outil_rend_le_compact_et_les_mois_non_clos(client):
     client.list_accounting_entries.side_effect = lambda m: [_e("6411000", 1000)]
     client.list_contracts.side_effect = [
         {"contracts": [_c("k1")], "meta": {"nextPageToken": "p2"}},
-        {"contracts": [_c("k2", statut="02", last="Zola")], "meta": {}}]
+        {"contracts": [_c("k2", statut="04", last="Zola")], "meta": {}}]
     out = _tool().fn(op="gross_by_contract", date="202608", date_to="202609")
     assert out["company"] == {"name": "Société factice", "siren": "000000000",
                               "siret": "00000000000000"}

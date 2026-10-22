@@ -233,7 +233,7 @@ def register(mcp: FastMCP) -> None:
           figures and no aggregate of them. Not paginated: the whole month arrives.
         - **"gross_by_contract"**: ONE ROW PER ACTIVE CONTRACT — name, job, DSN
           contract nature, `college` (`cadre` | `non_cadre` | null, from the DSN
-          conventional status: 01-02 cadre, 03-05 non-cadre), `gross` and its
+          conventional status: 03-04 cadre, 05-07 non-cadre), `gross` and its
           `by_account` split — instead of ~30 accounting lines per employee.
           `gross` = debit − credit on the 641x accounts (wages, paid leave,
           bonuses, allowances, benefits in kind) over `date` → `date_to` (12
