@@ -25,7 +25,9 @@ et, avec l'en-tête, un identifiant mal formé rend 400 (`anthropic-workspace-id
 be a valid workspace ID.`), un workspace inconnu ou inaccessible 404 (`not_found_error`).
 
 **Aucun repli** : Anthropic injoignable (réseau, délai, 5xx, 429) REFUSE la pose. Une clé
-non vérifiée ne se dépose pas — c'est l'objet de ce module.
+non vérifiée ne se dépose pas — c'est l'objet de ce module. Ce refus-là n'est pas une faute
+de saisie : il sort en `VerificationImpossible`, que les capacités de pose rendent en 503
+(`capabilities/_refus_de_pose.py`) ; un refus d'Anthropic sort en 400.
 
 ⚠️ Ni la clé ni le workspace n'entrent dans un message, une exception ou un journal : le
 texte d'Anthropic relayé en est expurgé, une erreur réseau ne rend que son TYPE (l'objet
@@ -43,7 +45,10 @@ from typing import Optional
 
 import httpx
 
-from .credentials_store import CredentialFieldsInvalid
+# Import du MODULE, pas de ses noms : `credentials_store` importe ce module-ci (point de
+# passage unique des poses), et l'import mutuel de deux modules ne tient que si l'on
+# n'y lit rien avant l'appel.
+from . import credentials_store
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +62,6 @@ _ENTETE = "anthropic-workspace-id"
 
 CLE_D_ORGANISATION = ("clé d'organisation Anthropic : renseigner le champ Workspace, "
                       "ou déposer une clé créée dans un workspace")
-
-WORKSPACE_REQUIS = "anthropic_workspace_required"
-CLE_REFUSEE = "anthropic_key_rejected"
-INJOIGNABLE = "anthropic_unreachable"
 
 _PAS_DEPOSEE = "la clé n'est pas déposée"
 
@@ -86,7 +87,13 @@ def _texte_d_anthropic(r: httpx.Response, *secrets: Optional[str]) -> str:
 
 def verifier(cle: str, workspace_id: Optional[str] = None) -> None:
     """Rend `None` si Anthropic accepte la clé (avec son workspace s'il est saisi) ;
-    sinon lève `CredentialFieldsInvalid` — code pour la machine, phrase pour l'humain."""
+    sinon lève un refus nommé — code pour la machine, phrase pour l'humain :
+    `CredentialFieldsInvalid` quand Anthropic REFUSE (la saisie est en cause, 400),
+    `VerificationImpossible` quand il n'a pas pu répondre (rien n'est jugé, 503).
+
+    ⚠️ Codes LITTÉRAUX dans chaque `raise` : le relevé des refus atteignables
+    (`tests/_refus_atteignables.py`) ne lit que des constantes — c'est ce qui permet aux
+    capacités de pose de les DÉCLARER (`capabilities/_refus_de_pose.py`)."""
     workspace_id = (workspace_id or "").strip() or None
     entetes = {"x-api-key": cle, "anthropic-version": VERSION}
     if workspace_id:
@@ -97,8 +104,8 @@ def verifier(cle: str, workspace_id: Optional[str] = None) -> None:
     except httpx.HTTPError as e:
         logger.warning("pose d'une clé anthropic : Anthropic injoignable (%s)",
                        type(e).__name__)
-        raise CredentialFieldsInvalid(
-            INJOIGNABLE,
+        raise credentials_store.VerificationImpossible(
+            "anthropic_unreachable",
             f"Anthropic injoignable ({type(e).__name__}) : la clé n'a pas pu être "
             f"vérifiée, {_PAS_DEPOSEE} — réessayer dans un instant.") from None
 
@@ -108,23 +115,27 @@ def verifier(cle: str, workspace_id: Optional[str] = None) -> None:
     detail = _texte_d_anthropic(r, cle, workspace_id)
     suite = f" : {detail}" if detail else ""
     if code == 400 and not workspace_id and _ENTETE in detail:
-        raise CredentialFieldsInvalid(WORKSPACE_REQUIS, CLE_D_ORGANISATION)
+        raise credentials_store.CredentialFieldsInvalid(
+            "anthropic_workspace_required", CLE_D_ORGANISATION)
     if code == 401:
-        raise CredentialFieldsInvalid(
-            CLE_REFUSEE, f"clé Anthropic refusée (HTTP 401) : clé invalide, révoquée ou "
-                         f"expirée — {_PAS_DEPOSEE}.")
+        raise credentials_store.CredentialFieldsInvalid(
+            "anthropic_key_rejected",
+            f"clé Anthropic refusée (HTTP 401) : clé invalide, révoquée ou expirée — "
+            f"{_PAS_DEPOSEE}.")
     if code == 403:
-        raise CredentialFieldsInvalid(
-            CLE_REFUSEE, f"clé Anthropic sans droit (HTTP 403){suite} — {_PAS_DEPOSEE}.")
+        raise credentials_store.CredentialFieldsInvalid(
+            "anthropic_key_rejected",
+            f"clé Anthropic sans droit (HTTP 403){suite} — {_PAS_DEPOSEE}.")
     if code == 404 and workspace_id:
-        raise CredentialFieldsInvalid(
-            CLE_REFUSEE, "Workspace introuvable, ou inaccessible à cette clé (HTTP 404) — "
-                         f"vérifier l'identifiant `wrkspc_…` du champ Workspace ; "
-                         f"{_PAS_DEPOSEE}.")
+        raise credentials_store.CredentialFieldsInvalid(
+            "anthropic_key_rejected",
+            f"Workspace introuvable, ou inaccessible à cette clé (HTTP 404) — vérifier "
+            f"l'identifiant `wrkspc_…` du champ Workspace ; {_PAS_DEPOSEE}.")
     if code == 429 or code >= 500:
         logger.warning("pose d'une clé anthropic : Anthropic a répondu HTTP %s", code)
-        raise CredentialFieldsInvalid(
-            INJOIGNABLE, f"Anthropic n'a pas pu vérifier la clé (HTTP {code}){suite} — "
-                         f"{_PAS_DEPOSEE}, réessayer dans un instant.")
-    raise CredentialFieldsInvalid(
-        CLE_REFUSEE, f"Anthropic refuse la clé (HTTP {code}){suite} — {_PAS_DEPOSEE}.")
+        raise credentials_store.VerificationImpossible(
+            "anthropic_unreachable",
+            f"Anthropic n'a pas pu vérifier la clé (HTTP {code}){suite} — "
+            f"{_PAS_DEPOSEE}, réessayer dans un instant.")
+    raise credentials_store.CredentialFieldsInvalid(
+        "anthropic_key_rejected", f"Anthropic refuse la clé (HTTP {code}){suite} — {_PAS_DEPOSEE}.")

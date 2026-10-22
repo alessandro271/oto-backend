@@ -797,9 +797,13 @@ consommé, délai de 10 s. 200 : la pose se fait. Une clé d'organisation sans w
 Anthropic « Authentication › Select a workspace ») : refus
 `anthropic_workspace_required`, « clé d'organisation Anthropic : renseigner le champ
 Workspace, ou déposer une clé créée dans un workspace ». 401/403, workspace inconnu
-(404) ou autre 4xx : refus `anthropic_key_rejected`, avec la raison. Réseau, délai,
-429 ou 5xx : refus `anthropic_unreachable` — **aucun repli**, une clé non vérifiée ne
-se dépose pas. Ni la clé ni le workspace n'entrent dans un message ou un journal. Une
+(404) ou autre 4xx : refus `anthropic_key_rejected`, avec la raison. Ces deux refus
+sortent en HTTP 400. Réseau, délai, 429 ou 5xx : refus `anthropic_unreachable` en HTTP
+**503** — ce n'est pas une faute de saisie (`credentials_store.VerificationImpossible`,
+traduite par `capabilities/_refus_de_pose.py` pour les quatre capacités de pose, qui
+déclarent les trois codes) — et **aucun repli** : une clé non vérifiée ne se dépose pas.
+Une pose PARTIELLE (le seul `workspace_id`, sans la clé) est acceptée : la saisie est
+complétée par le coffre, et c'est la clé déjà déposée qui part avec le nouveau workspace. Ni la clé ni le workspace n'entrent dans un message ou un journal. Une
 clé DÉJÀ déposée n'est pas revérifiée : seule la pose l'est.
 
 ⚠️ **Ce que les journaux en voient : rien**, et c'est tenu par des cliquets, pas

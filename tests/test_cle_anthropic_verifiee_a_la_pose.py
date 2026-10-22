@@ -10,13 +10,19 @@ Ces bancs tiennent, SANS aucun appel réel (transport bouchon `httpx.MockTranspo
   refus, avec la phrase qui dit quoi faire ;
 - la même clé avec son workspace : l'en-tête part, la pose se fait ;
 - 401 / 403 / workspace inconnu : refus avec la raison ;
-- réseau, délai, 5xx : refus, AUCUN repli ;
+- réseau, délai, 5xx : refus, AUCUN repli — et ce refus-là n'est pas une faute de
+  saisie : `VerificationImpossible`, servi en 503 sur chaque route REST de pose ;
+- reposer le SEUL workspace : la clé du coffre part avec le nouvel en-tête, et la pose
+  passe ou est refusée selon la réponse d'Anthropic ;
 - la clé n'apparaît dans aucun message ni journal, le workspace dans aucun journal ;
 - les quatre chemins de pose partagée (org, équipe, tenant, plateforme) y passent, et
   une pose refusée n'écrit rien.
 """
 from __future__ import annotations
 
+import asyncio
+import dataclasses
+import json
 import logging
 
 import httpx
@@ -173,7 +179,7 @@ def _leve(exc):
 ])
 def test_anthropic_injoignable_refuse_sans_repli(anthropic, coffre_vide, repondre, nomme):
     anthropic["repondre"] = repondre
-    with pytest.raises(CS.CredentialFieldsInvalid) as e:
+    with pytest.raises(CS.VerificationImpossible) as e:
         _poser(key=CLE)
     assert e.value.code == "anthropic_unreachable"
     assert nomme in e.value.message and "pas déposée" in e.value.message
@@ -306,6 +312,7 @@ def test_chaque_chemin_refuse_quand_anthropic_est_injoignable(
     anthropic["repondre"] = _leve(httpx.ConnectTimeout("délai de connexion"))
     with pytest.raises(AuthzDenied) as e:
         poser({"key": CLE, "workspace_id": WORKSPACE})
+    assert e.value.status == 503
     assert e.value.code == "anthropic_unreachable"
     assert ecrit == [], "une clé non vérifiée a été écrite"
 
@@ -320,3 +327,177 @@ def test_chaque_chemin_pose_la_cle_avec_son_workspace(
     assert len(ecrit) == 1
     (r,) = anthropic["requetes"]
     assert r.headers["anthropic-workspace-id"] == WORKSPACE
+
+
+@pytest.mark.parametrize("statut, repondre", [
+    (400, _org_sans_workspace),
+    (400, lambda r: httpx.Response(401, json=_erreur("authentication_error", "x"))),
+])
+def test_un_refus_d_anthropic_reste_une_faute_de_saisie(anthropic, coffre_vide, statut,
+                                                       repondre):
+    """Le pendant du 503 : ce qu'Anthropic REFUSE n'est pas un service indisponible."""
+    anthropic["repondre"] = repondre
+    with pytest.raises(CS.CredentialFieldsInvalid) as e:
+        _poser(key=CLE)
+    assert not isinstance(e.value, CS.VerificationImpossible)
+
+
+# ── reposer le SEUL workspace : la clé du coffre part avec le nouvel en-tête ──────
+
+@pytest.fixture
+def cle_au_coffre(monkeypatch):
+    """Une clé d'organisation DÉJÀ déposée, sans workspace."""
+    monkeypatch.setattr(CS, "get_credential_with_meta",
+                        lambda *a, **k: {"secret": CLE, "meta": {}})
+
+
+@pytest.mark.parametrize("repondre, attendu", [
+    (_org_sans_workspace, None),
+    (lambda r: httpx.Response(404, json=_erreur("not_found_error", "Workspace not found.")),
+     "anthropic_key_rejected"),
+    (_leve(httpx.ConnectError("connexion refusée")), "anthropic_unreachable"),
+])
+def test_reposer_le_seul_workspace_verifie_la_cle_du_coffre(
+        anthropic, cle_au_coffre, sans_garde_de_compte, monkeypatch, repondre, attendu):
+    """Une pose qui ne porte QUE `workspace_id` : la saisie est complétée par le coffre
+    (#448), et c'est la PAIRE — clé déposée, workspace neuf — qui part chez Anthropic.
+    La pose passe ou est refusée selon SA réponse, jamais sur la seule forme."""
+    from oto_mcp.capabilities._types import AuthzDenied
+    ecrit: list = []
+    poser = _pose_org(monkeypatch, ecrit)
+    anthropic["repondre"] = repondre
+    if attendu is None:
+        poser({"workspace_id": WORKSPACE})
+        ((_, args, kwargs),) = ecrit
+        assert args[2] == CLE, "la clé du coffre est réécrite telle quelle"
+        assert kwargs["meta"] == {"workspace_id": WORKSPACE}
+    else:
+        with pytest.raises(AuthzDenied) as e:
+            poser({"workspace_id": WORKSPACE})
+        assert e.value.code == attendu
+        assert ecrit == []
+    (r,) = anthropic["requetes"]
+    assert r.headers["x-api-key"] == CLE
+    assert r.headers["anthropic-workspace-id"] == WORKSPACE
+
+
+# ── le 503, servi sur chaque route REST de pose ───────────────────────────────
+
+def _route(cle_capacite: str, chemin: str):
+    from oto_mcp.capabilities import registry
+    cap = next(c for c in registry.CAPABILITIES if c.key == cle_capacite)
+    binding = next(b for b in cap.rest_bindings() if b.path == chemin)
+    return cap, binding
+
+
+#: (capacité, route, paramètres de chemin, corps) — chaque route REST qui pose une clé
+#: `anthropic` partagée.
+_ROUTES = [
+    ("org.secret.set", "/api/orgs/{id}/secrets/{provider}",
+     {"id": "42", "provider": "anthropic"}, {}),
+    ("org.secret.set", "/api/admin/orgs/{id}/secrets/{provider}",
+     {"id": "42", "provider": "anthropic"}, {}),
+    ("group.secret.set", "/api/groups/{id}/secrets/{provider}",
+     {"id": "7", "provider": "anthropic"}, {}),
+    ("admin.tenant_key_set", "/api/admin/tenants/{slug}/keys/{provider}",
+     {"slug": "un-tenant", "provider": "anthropic"}, {}),
+    ("platform.key.create", "/api/admin/platform-keys", {},
+     {"provider": "anthropic", "label": "partagee"}),
+]
+
+
+def _servir(cle_capacite, chemin, params, corps):
+    """La route servie par l'adaptateur REST réel ; seules l'authentification et la règle
+    d'autz sont doublées (elles lisent la base, et ce n'est pas l'objet ici)."""
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+
+    from oto_mcp.capabilities import _rest_adapter
+    from oto_mcp.capabilities._types import ResolvedCtx
+
+    cap, binding = _route(cle_capacite, chemin)
+    cap = dataclasses.replace(
+        cap, authz=lambda raw, inp=None: ResolvedCtx(sub=raw.sub, org_id=42, role="admin"))
+
+    async def _auth(_req, _verifier, **_kw):
+        return "admin", None
+
+    handler = _rest_adapter._make_handler(
+        cap, binding, None, _auth,
+        lambda _req, payload, status=200: JSONResponse(payload, status_code=status),
+        lambda _req, status, code, message=None, **kw: JSONResponse(
+            {"error": code, "detail": message}, status_code=status))
+    brut = json.dumps(corps).encode()
+
+    async def _receive():
+        return {"type": "http.request", "body": brut, "more_body": False}
+
+    requete = Request({"type": "http", "method": binding.verb, "path": chemin,
+                       "headers": [(b"content-type", b"application/json")],
+                       "query_string": b"", "path_params": params}, receive=_receive)
+    reponse = asyncio.run(handler(requete))
+    return reponse.status_code, json.loads(reponse.body)
+
+
+@pytest.fixture
+def poses_doublees(monkeypatch, sans_garde_de_compte):
+    """Les écritures et les lectures de base des quatre capacités, doublées."""
+    from oto_mcp import db, group_store, org_store, org_suspension, tenancy, tenant_vault
+    ecrit: list = []
+    monkeypatch.setattr(org_suspension, "garde_capacite", lambda *a, **k: None)
+    monkeypatch.setattr(org_store, "get_org", lambda org_id: {"id": org_id})
+    monkeypatch.setattr(db, "tenant_exists", lambda slug: True)
+    monkeypatch.setattr(tenancy, "primary_slug", lambda: "primaire")
+    for mod, nom in ((org_store, "set_org_secret"), (group_store, "set_group_secret"),
+                     (tenant_vault, "set_tenant_secret"), (CS, "set_platform_key")):
+        monkeypatch.setattr(mod, nom, lambda *a, _n=nom, **k: ecrit.append(_n))
+    return ecrit
+
+
+@pytest.mark.parametrize("cle_capacite, chemin, params, corps", _ROUTES,
+                         ids=[r[1] for r in _ROUTES])
+def test_chaque_route_rest_rend_503_quand_anthropic_est_injoignable(
+        anthropic, coffre_vide, poses_doublees, cle_capacite, chemin, params, corps):
+    anthropic["repondre"] = _leve(httpx.ConnectTimeout("délai de connexion"))
+    statut, corps_rendu = _servir(cle_capacite, chemin, params,
+                                  {**corps, "fields": {"key": CLE, "workspace_id": WORKSPACE}})
+    assert statut == 503, corps_rendu
+    assert corps_rendu["error"] == "anthropic_unreachable"
+    assert "ConnectTimeout" in corps_rendu["detail"]
+    _sans_secret(json.dumps(corps_rendu))
+    assert poses_doublees == [], "une clé non vérifiée a été écrite"
+
+
+@pytest.mark.parametrize("cle_capacite, chemin, params, corps", _ROUTES,
+                         ids=[r[1] for r in _ROUTES])
+def test_chaque_route_rest_rend_400_pour_une_cle_d_organisation_sans_workspace(
+        anthropic, coffre_vide, poses_doublees, cle_capacite, chemin, params, corps):
+    anthropic["repondre"] = _org_sans_workspace
+    statut, corps_rendu = _servir(cle_capacite, chemin, params,
+                                  {**corps, "fields": {"key": CLE}})
+    assert statut == 400, corps_rendu
+    assert corps_rendu["error"] == "anthropic_workspace_required"
+    assert poses_doublees == []
+
+
+@pytest.mark.parametrize("cle_capacite, chemin, params, corps", _ROUTES,
+                         ids=[r[1] for r in _ROUTES])
+def test_chaque_route_rest_pose_la_cle_verifiee(
+        anthropic, coffre_vide, poses_doublees, cle_capacite, chemin, params, corps):
+    anthropic["repondre"] = _org_sans_workspace
+    statut, corps_rendu = _servir(cle_capacite, chemin, params,
+                                  {**corps, "fields": {"key": CLE, "workspace_id": WORKSPACE}})
+    assert statut == 200, corps_rendu
+    assert len(poses_doublees) == 1
+
+
+def test_les_trois_refus_sont_declares_sur_les_quatre_capacites_de_pose():
+    """Déclarés, donc publiés par `/openapi.json` — un intégrateur sait qu'un 503
+    `anthropic_unreachable` se réessaie, qu'un 400 se corrige."""
+    from oto_mcp.capabilities import registry
+    attendus = {(400, "anthropic_workspace_required"), (400, "anthropic_key_rejected"),
+                (503, "anthropic_unreachable")}
+    for cle in ("org.secret.set", "group.secret.set", "admin.tenant_key_set",
+                "platform.key.create"):
+        cap = next(c for c in registry.CAPABILITIES if c.key == cle)
+        assert attendus <= {(e.status, e.code) for e in cap.errors}, cle

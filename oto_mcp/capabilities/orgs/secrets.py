@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from ... import providers, credentials_store, org_store
 from .._authz import ORG_ADMIN_OF
+from .._refus_de_pose import REFUS_DE_VERIFICATION, refus_de_pose
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
 
 from ..registry import CAPABILITIES
@@ -32,7 +33,7 @@ class OrgSecretSet(BaseModel):
     ⚠️ `ok: true` dit « écrit et chiffré », **pas** « ce credential fonctionne » : rien
     n'est appelé chez le fournisseur ici. Tester = `POST /api/me/connectors/{provider}/verify`.
     Seule exception : une clé `anthropic` est essayée chez Anthropic AVANT l'écriture, et
-    refusée si elle n'y passe pas (`anthropic_cle`)."""
+    refusée si elle n'y passe pas (400), ou si Anthropic ne répond pas (503)."""
     ok: bool
     org_id: int
     provider: str
@@ -86,10 +87,8 @@ def _set_secret(ctx: ResolvedCtx, inp: SetSecretInput) -> dict:
         secret, meta_champs = credentials_store.preparer_pose(
             "org", str(inp.org_id), inp.provider, account, inp.api_key, inp.fields)
     except ValueError as e:
-        # Refus NOMMÉ quand la validation en porte un (#449) : « champ(s) requis
-        # vide(s) : Nom du header » vaut mieux qu'un « incomplet » à deviner.
-        raise AuthzDenied(400, getattr(e, "code", str(e)),
-                          getattr(e, "message", "Credential incomplet ou vide."))
+        # Saisie refusée (400) ou non vérifiable chez le fournisseur (503).
+        raise refus_de_pose(e)
     # Même garde de pose qu'au palier membre (source unique, #409) : coexistence des
     # comptes si le connecteur est multi, refus nommé du compte nommé s'il est mono.
     try:
@@ -125,7 +124,7 @@ CAPABILITIES += [
                 DeclaredError(409, "account_required",
                               "connecteur multi-compte sans `account` : il faut "
                               "nommer le compte, sans quoi la pose est ambiguë"),
-                DeclaredError(404, "unknown_org", "org inconnue")),
+                DeclaredError(404, "unknown_org", "org inconnue")) + REFUS_DE_VERIFICATION,
         rest=(RestBinding("PUT", "/api/orgs/{id}/secrets/{provider}", _ID),
               RestBinding("PUT", "/api/admin/orgs/{id}/secrets/{provider}", _ID)),
     ),

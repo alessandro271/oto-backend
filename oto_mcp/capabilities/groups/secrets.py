@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from ... import providers, credentials_store, group_store
 from .._authz import GROUP_ADMIN_OF
+from .._refus_de_pose import REFUS_DE_VERIFICATION, refus_de_pose
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
 from ..registry import CAPABILITIES
 
@@ -105,10 +106,8 @@ def _set_secret(ctx: ResolvedCtx, inp: SetGroupSecretInput) -> dict:
         secret, meta_champs = credentials_store.preparer_pose(
             "group", str(inp.group_id), inp.provider, account, inp.api_key, inp.fields)
     except ValueError as e:
-        # Refus NOMMÉ quand la validation en porte un (#449) : « champ(s) requis
-        # vide(s) : Nom du header » vaut mieux qu'un « incomplet » à deviner.
-        raise AuthzDenied(400, getattr(e, "code", str(e)),
-                          getattr(e, "message", "Credential incomplet ou vide."))
+        # Saisie refusée (400) ou non vérifiable chez le fournisseur (503).
+        raise refus_de_pose(e)
     # Même garde de pose qu'au palier membre (source unique, #409) : coexistence des
     # comptes si le connecteur est multi, refus nommé du compte nommé s'il est mono.
     try:
@@ -142,7 +141,8 @@ CAPABILITIES += [
                               "qu'un — la clé écraserait l'unique"),
                 DeclaredError(409, "account_required",
                               "connecteur multi-compte sans `account` : il faut "
-                              "nommer le compte, sans quoi la pose est ambiguë"),),
+                              "nommer le compte, sans quoi la pose est ambiguë"),
+                ) + REFUS_DE_VERIFICATION,
         rest=RestBinding("PUT", "/api/groups/{id}/secrets/{provider}", _GID),
     ),
     Capability(

@@ -30,7 +30,10 @@ import re
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from . import providers, crypto
+# `anthropic_cle` : la vérification d'une clé `anthropic` à la pose (`preparer_pose`). Il
+# importe ce module en retour, pour ses exceptions — import mutuel de MODULES, sans rien
+# lire avant l'appel.
+from . import anthropic_cle, providers, crypto
 from .db import _connect, connector_instances
 from .db.lecture_d_appel import lecture_d_appel
 
@@ -800,6 +803,13 @@ class CredentialFieldsInvalid(ValueError):
         self.message = message
 
 
+class VerificationImpossible(CredentialFieldsInvalid):
+    """La saisie n'a pas pu être VÉRIFIÉE chez le fournisseur (réseau, délai, 429, 5xx) :
+    la pose est refusée — une clé non vérifiée ne s'écrit pas — mais rien n'est jugé de
+    la saisie. Ce n'est pas une erreur de saisie : les capacités de pose la rendent en
+    503, les autres refus de ce module en 400 (`capabilities/_refus_de_pose.py`)."""
+
+
 def _guard_choices(c, provided: dict) -> None:
     """Refuse une valeur hors du jeu FERMÉ d'un champ (`CredentialField.choices`).
 
@@ -989,7 +999,8 @@ def preparer_pose(entity_type: str, entity_id: str, connector: str, account: str
 def _verifier_chez_le_fournisseur(connector: str, retenus: dict) -> None:
     """La clé `anthropic` vérifiée CHEZ ANTHROPIC avant d'être écrite (`anthropic_cle`) :
     clé refusée, clé d'organisation sans son workspace, ou Anthropic injoignable — la
-    pose est REFUSÉE (`CredentialFieldsInvalid`), jamais faite sur une clé non vérifiée.
+    pose est REFUSÉE (`CredentialFieldsInvalid`, ou `VerificationImpossible` quand
+    Anthropic n'a pas répondu), jamais faite sur une clé non vérifiée.
 
     Ici, et pas dans une capacité : `preparer_pose` est le point de passage UNIQUE des
     poses partagées (org, équipe, tenant, plateforme). La vérification porte sur la
@@ -997,7 +1008,6 @@ def _verifier_chez_le_fournisseur(connector: str, retenus: dict) -> None:
     la clé déjà déposée. ⚠️ Appel réseau : les handlers qui posent sont synchrones, joués
     dans le threadpool — jamais dans la boucle."""
     if connector == "anthropic":
-        from . import anthropic_cle
         anthropic_cle.verifier(retenus.get("key", ""), retenus.get("workspace_id"))
 
 

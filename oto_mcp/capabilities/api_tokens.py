@@ -63,6 +63,7 @@ from .. import (access, credentials_store, db, org_origin, org_store, ownership,
                 providers, roles)
 from ..auth import token_scopes
 from ._authz import SUB_ONLY, SUPER_ADMIN
+from ._refus_de_pose import REFUS_DE_VERIFICATION, refus_de_pose
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -541,8 +542,8 @@ def _keys_create(ctx: ResolvedCtx, inp: PlatformKeyCreateInput) -> dict:
         secret, meta_champs = credentials_store.preparer_pose(
             credentials_store.PLATFORM, label, provider, "", api_key or None, inp.fields)
     except ValueError as e:
-        raise AuthzDenied(400, getattr(e, "code", str(e)),
-                          getattr(e, "message", "Credential incomplet ou vide."))
+        # Saisie refusée (400) ou non vérifiable chez le fournisseur (503).
+        raise refus_de_pose(e)
     try:
         credentials_store.set_platform_key(label, provider, secret, set_by=ctx.sub,
                                            meta=meta_champs or None)
@@ -599,7 +600,7 @@ _D_K_CREATE = ("Pose une clé plateforme. Elle est chiffrée au coffre et ne res
                "`missing_fields`, `missing_credentials`, `invalid_field_value`, "
                "`invalid_platform_provider` ; une clé `anthropic` est essayée chez "
                "Anthropic avant l'écriture (`anthropic_workspace_required`, "
-               "`anthropic_key_rejected`, `anthropic_unreachable`).")
+               "`anthropic_key_rejected` en 400, `anthropic_unreachable` en 503).")
 _D_K_DELETE = ("Retire une clé plateforme. Ses grants vivent sur sa ligne : ils partent "
                "avec elle, sans orphelin.")
 
@@ -649,6 +650,7 @@ CAPABILITIES += [
     Capability(
         key="platform.key.create", handler=_keys_create, Input=PlatformKeyCreateInput,
         authz=SUPER_ADMIN, Output=PlatformKeyCreated, description=_D_K_CREATE,
+        errors=REFUS_DE_VERIFICATION,
         mcp=None,   # `api_key` est un secret brut : jamais un argument d'outil
         rest=RestBinding("POST", _KEYS),
     ),
