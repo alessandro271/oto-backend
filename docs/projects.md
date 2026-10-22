@@ -225,9 +225,9 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > qu'un autre consommera le dépose désormais EN TRANSIT (`oto_mcp/transit.py`, seul
 > fabricant : `transit.deposer` → `media_store.upload_transit`, sous
 > `tmp/<préfixe>/<sub>/<empreinte>`, purgé en un jour) et rend une `source`
-> `{"kind":"transit","ref":"<préfixe>/<32 hex>"}` — `threecx_recording`, `aircall_calls`
-> `op="recording"|"voicemail"` (l'URL signée seulement sur demande, `link=true`, pour
-> écouter). `file_source` la relit dans le stockage (`transit.lire` →
+> `{"kind":"transit","ref":"<préfixe>/<32 hex>"}` — `threecx_recording` (l'URL signée
+> seulement sur demande, `link=true`, pour écouter), `aircall_calls`
+> `op="recording"|"voicemail"`, `allo` `op="recording"`. `file_source` la relit dans le stockage (`transit.lire` →
 > `media_store.lire_objet`), donc tout consommateur d'une `source` en hérite. Garde :
 > **l'owner est l'appelant par construction** — la référence ne le porte pas, la clé se
 > recompose avec le `sub` de l'appel, celui du dépôt ; une référence d'un autre utilisateur
