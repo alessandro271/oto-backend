@@ -30,7 +30,9 @@ class OrgSecretSet(BaseModel):
     sous-ensemble est refusé (`missing_credentials`), pas complété par l'existant.
 
     ⚠️ `ok: true` dit « écrit et chiffré », **pas** « ce credential fonctionne » : rien
-    n'est appelé chez le fournisseur ici. Tester = `POST /api/me/connectors/{provider}/verify`."""
+    n'est appelé chez le fournisseur ici. Tester = `POST /api/me/connectors/{provider}/verify`.
+    Seule exception : une clé `anthropic` est essayée chez Anthropic AVANT l'écriture, et
+    refusée si elle n'y passe pas (`anthropic_cle`)."""
     ok: bool
     org_id: int
     provider: str

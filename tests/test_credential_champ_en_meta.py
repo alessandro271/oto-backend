@@ -16,11 +16,22 @@ Ces bancs tiennent :
 """
 from __future__ import annotations
 
+import httpx
 import pytest
 
+from oto_mcp import anthropic_cle
 from oto_mcp import credentials_store as CS
 from oto_mcp import providers
 from oto_mcp.providers._model import CredentialField
+
+
+@pytest.fixture(autouse=True)
+def _anthropic_accepte_la_cle(monkeypatch):
+    """La pose essaie la clé chez Anthropic (`anthropic_cle`) : ici Anthropic l'accepte,
+    sans réseau. Ces bancs portent sur la FORME du coffre ; la vérification a les siens
+    (`test_cle_anthropic_verifiee_a_la_pose.py`)."""
+    monkeypatch.setattr(anthropic_cle, "_client", lambda: httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"data": []}))))
 
 
 def test_in_meta_sur_un_champ_secret_leve_a_l_import():

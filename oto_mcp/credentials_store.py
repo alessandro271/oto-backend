@@ -982,7 +982,23 @@ def preparer_pose(entity_type: str, entity_id: str, connector: str, account: str
     if not en_meta:
         return secret_from_input(connector, api_key, fields), {}
     retenus = validate_fields(connector, fields or {})
+    _verifier_chez_le_fournisseur(connector, retenus)
     return pack_secret(connector, retenus), meta_fields(connector, retenus)
+
+
+def _verifier_chez_le_fournisseur(connector: str, retenus: dict) -> None:
+    """La clé `anthropic` vérifiée CHEZ ANTHROPIC avant d'être écrite (`anthropic_cle`) :
+    clé refusée, clé d'organisation sans son workspace, ou Anthropic injoignable — la
+    pose est REFUSÉE (`CredentialFieldsInvalid`), jamais faite sur une clé non vérifiée.
+
+    Ici, et pas dans une capacité : `preparer_pose` est le point de passage UNIQUE des
+    poses partagées (org, équipe, tenant, plateforme). La vérification porte sur la
+    saisie COMPLÉTÉE par le coffre (#448) : une repose du seul workspace se vérifie avec
+    la clé déjà déposée. ⚠️ Appel réseau : les handlers qui posent sont synchrones, joués
+    dans le threadpool — jamais dans la boucle."""
+    if connector == "anthropic":
+        from . import anthropic_cle
+        anthropic_cle.verifier(retenus.get("key", ""), retenus.get("workspace_id"))
 
 
 def _aad(entity_type: str, entity_id: str, connector: str, account: str = "") -> str:

@@ -42,12 +42,18 @@ CONNECTOR = _c(
         # `usr` (personal or workspace key, the Console's shape since 2026), `svc`
         # (service account). A session token (`sk-ant-oat…`) or an admin key
         # (`sk-ant-admin…`) is not a model key: refused at deposit, not at the claim.
+        # Then the key is TRIED at Anthropic before it is written (`anthropic_cle`, called
+        # by `credentials_store.preparer_pose`): `GET /v1/models?limit=1`, no token spent.
+        # Rejected key, organization key without its workspace, or Anthropic unreachable:
+        # the deposit is refused — an unverified key is never stored.
         CredentialField("key", "API key", secret=True,
                         prefixes=("sk-ant-api", "sk-ant-usr", "sk-ant-svc")),
         CredentialField(
             "workspace_id", "Workspace", secret=False, required=False, in_meta=True,
             help="Only for an ORGANIZATION key (created outside a workspace): "
-                 "the id of the workspace to bill. Empty for a workspace key."),
+                 "the id of the workspace to bill (`wrkspc_…`). Empty for a workspace key. "
+                 "The key is tried at Anthropic on deposit: an organization key without "
+                 "its workspace is refused."),
     ),
     help="Anthropic model key — used by the organization's scheduled agents, never by a tool. "
          "Without one, a platform key granted to the organization is used and billed.",

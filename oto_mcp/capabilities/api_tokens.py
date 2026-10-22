@@ -597,7 +597,9 @@ _D_K_CREATE = ("Pose une clé plateforme. Elle est chiffrée au coffre et ne res
                "remplit son premier champ secret ; les autres champs passent par "
                "`fields`. Refus nommés : `invalid_provider` (hors registre), "
                "`missing_fields`, `missing_credentials`, `invalid_field_value`, "
-               "`invalid_platform_provider`.")
+               "`invalid_platform_provider` ; une clé `anthropic` est essayée chez "
+               "Anthropic avant l'écriture (`anthropic_workspace_required`, "
+               "`anthropic_key_rejected`, `anthropic_unreachable`).")
 _D_K_DELETE = ("Retire une clé plateforme. Ses grants vivent sur sa ligne : ils partent "
                "avec elle, sans orphelin.")
 

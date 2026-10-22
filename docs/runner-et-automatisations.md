@@ -788,6 +788,20 @@ au claim en `job["model_workspace"]`, seulement s'il est posé, par la **même
 lecture** que la clé. Seul un champ déclaré sort de `meta` ; il n'entre dans aucune
 trace. Une clé de workspace s'en passe : champ vide, rien ne part.
 
+⚠️ **La clé est ESSAYÉE chez Anthropic avant d'être écrite** (`oto_mcp/anthropic_cle.py`,
+appelé par `credentials_store.preparer_pose`, point de passage unique des poses
+partagées : org, équipe, tenant, plateforme). `GET /v1/models?limit=1` avec `x-api-key`,
+`anthropic-version` et `anthropic-workspace-id` s'il est saisi — une lecture, aucun jeton
+consommé, délai de 10 s. 200 : la pose se fait. Une clé d'organisation sans workspace
+(HTTP 400 `invalid_request_error` qui nomme l'en-tête, forme attestée par la doc
+Anthropic « Authentication › Select a workspace ») : refus
+`anthropic_workspace_required`, « clé d'organisation Anthropic : renseigner le champ
+Workspace, ou déposer une clé créée dans un workspace ». 401/403, workspace inconnu
+(404) ou autre 4xx : refus `anthropic_key_rejected`, avec la raison. Réseau, délai,
+429 ou 5xx : refus `anthropic_unreachable` — **aucun repli**, une clé non vérifiée ne
+se dépose pas. Ni la clé ni le workspace n'entrent dans un message ou un journal. Une
+clé DÉJÀ déposée n'est pas revérifiée : seule la pose l'est.
+
 ⚠️ **Ce que les journaux en voient : rien**, et c'est tenu par des cliquets, pas
 par une promesse. `tool_calls` ne garde aucune réponse (la clé part dans la
 réponse au claim, pas dans ses arguments — le masque de #558/#564 ne la couvre
