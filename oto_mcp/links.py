@@ -213,6 +213,19 @@ _NOMS = {"table": "table", "doc": "page", "project": "project",
          "public_doc": "public page", "connectors": "connectors"}
 
 
+def table_lit_sa_vue(sub: Optional[str]) -> bool:
+    """Does the table page this account opens read a filtered VIEW from its address
+    (`?f=`, `q`, `sort`/`dir` — `datastore/vue_par_url.py`)?
+
+    Only OUR dashboard's is known to: its table page reads them on load (oto-app,
+    `DatastoreTable.vue::readTableQuery`). A tenant's product, or an instance that
+    declares its own table path, may route the same parameters nowhere — and a link that
+    claims a filter its page ignores shows the whole table while passing itself off as the
+    view. So: no tenant entry, and the instance's table path is ours."""
+    return (_tenant_of(sub) is None
+            and instance_paths().get("table") == DEFAULT_PATHS["table"])
+
+
 def _chemin_pour(kind: str, sub: Optional[str]) -> Optional[str]:
     entry = _tenant_of(sub)
     if entry is None:

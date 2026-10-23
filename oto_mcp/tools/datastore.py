@@ -2006,17 +2006,47 @@ def register(mcp: FastMCP) -> None:
         return {"ok": True, "id": id}
 
     @mcp.tool()
-    def data_url(datastore: Adresse) -> dict:
+    def data_url(datastore: Adresse, filter: Optional[dict] = None, q: str | None = None,
+                 order_by: str | None = None, order_dir: str = "desc") -> dict:
         """Return the web URL of a datastore, for the user to open it. `url` is null
         when this account's product has no table page — `url_absente` then says why;
-        the table still exists. `datastore` accepts `slot:<name>` (active project)."""
+        the table still exists. `datastore` accepts `slot:<name>` (active project).
+        With `filter`/`q`/`order_by` (as in `data_rows`), the URL opens that filtered,
+        sorted view — a shareable link — and `count` = the rows it shows."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
         datastore, _ = _adresse(datastore)
         try:
-            return adresse_servie(store.get_url(datastore), sub)
+            url = store.get_url(datastore)
+            if url is None or not (filter or q or order_by):
+                return adresse_servie(url, sub)
+            # The view is written in the format OUR table page reads (signal 1355); a
+            # product not known to read it gets a refusal, never a link that would show
+            # the whole table while claiming a filter.
+            from .. import links
+            from ..datastore import vue_par_url
+            if not links.table_lit_sa_vue(sub):
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    "this account's table page is not known to read a filtered view from "
+                    "its address: call `data_url` without `filter`/`q`/`order_by` for the "
+                    "plain link.")))
+            jetons.verifier_champs(filter=filter)
+            # The REAL path judges the filter (operators, values, `q`) and counts what the
+            # link will show; a column found nowhere in the table is refused, not linked.
+            total = store.count_rows(datastore, filter=filter, q=q)
+            vise = {**(filter or {}), **({order_by: None} if order_by else {})}
+            inconnues = _unknown_filter_keys(store, datastore, vise) if vise else set()
+            if inconnues:
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    f"unknown column(s) in this datastore: {', '.join(sorted(inconnues))}"
+                    " — check the spelling")))
+            return {"url": vue_par_url.avec_la_vue(url, filter=filter, q=q,
+                                                   order_by=order_by, order_dir=order_dir),
+                    "count": total, **identite.numero(store.dernier_tableau)}
         except DatastoreNotFound as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
+        except ValueError as e:  # malformed filter / unknown operator / dropped value
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
     @mcp.tool()
     def data_share(

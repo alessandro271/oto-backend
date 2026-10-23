@@ -63,6 +63,19 @@ pas une URL de Sheet. Code : `datastore/core.py` (`DatastorePg`) + `tools/datast
 Surfaces :
 - MCP tools `data_*` (`data_create_datastore`, `data_write`, `data_rows`,
   `data_delete_row`, `data_url`, `data_share`, etc.) — pour Claude.ai / Claude Code.
+- **Une vue filtrée, par lien** (23/10/2026, signal 1355) : `data_url` accepte `filter`
+  (forme de `data_rows`), `q` et `order_by`/`order_dir`, et rend l'adresse que la page
+  tableau du tableau de bord sait déjà lire à l'ouverture — `?f=` (triplets `[champ, op,
+  valeur]` en JSON), `q`, `sort`/`dir` (oto-app, `DatastoreTable.vue::readTableQuery`,
+  `lib/datastoreFilters.ts::filtersFromParam`) —, avec `count`, le nombre de lignes
+  qu'elle montre (`datastore/vue_par_url.py`). Le filtre est jugé par le VRAI chemin
+  (`count_rows`), une colonne trouvée nulle part est refusée, et ce que la page
+  écarterait sans rien dire (une valeur vide, un `in` sans liste) est refusé plutôt que
+  lié. ⚠️ **Seulement vers notre page** (`links.table_lit_sa_vue`) : le produit d'un
+  tenant, ou une instance qui déclare son propre chemin de tableau, reçoit un refus nommé
+  — jamais un lien qui montrerait tout le tableau en se donnant pour la vue. Sans ces
+  paramètres, la réponse ne change pas. Hors périmètre : regrouper par colonne, replier
+  des sections — la page ne les sait pas. Banc : `tests/datastore/test_data_url_vue_filtree.py`.
 - MCP **App** `data_app` (`@mcp.tool(app=True)`, SEP-1865, prefab_ui) — variante à
   interface rendue : sans `datastore` = table des datastores ; avec `datastore` =
   table triable/cherchable/paginée des rows, avec `filter` exact-match optionnel
