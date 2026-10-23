@@ -27,6 +27,7 @@ def env(monkeypatch):
     for var in _INTERRUPTEURS:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
+    monkeypatch.setenv("OTO_ALERTE_AGENTS_ENABLED", "1")
     monkeypatch.delenv("OTO_ENV", raising=False)
     monkeypatch.delenv("OTO_SENTRY_ENV", raising=False)
     return monkeypatch
@@ -146,3 +147,18 @@ def test_la_composition_precede_toute_ecriture_en_base():
     preparation = re.search(r"^\s*_prepare_database\(\)\s*$", src, re.M)
     assert preparation is not None
     assert src.index("boucles_de_fond.composer(") < preparation.start()
+
+
+def test_l_alerte_aux_admins_est_eteinte_tant_qu_on_ne_l_allume_pas(env):
+    env.setenv("OTO_ENV", _PROD)
+    env.delenv("OTO_ALERTE_AGENTS_ENABLED")
+    assert _fonction("alerte_agents_bloques") not in boucles_de_fond.composer()
+    env.setenv("OTO_ALERTE_AGENTS_ENABLED", "1")
+    assert _fonction("alerte_agents_bloques") in boucles_de_fond.composer()
+
+
+def test_l_alerte_aux_admins_refuse_un_reglage_ambigu(env):
+    env.setenv("OTO_ENV", _PROD)
+    env.setenv("OTO_ALERTE_AGENTS_ENABLED", "true")
+    with pytest.raises(ValueError):
+        boucles_de_fond.composer()

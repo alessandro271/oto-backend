@@ -70,6 +70,18 @@ def _interrupteur(var: str) -> Callable[[], bool]:
     return lambda: os.environ.get(var, "1") != "0"
 
 
+def _zero_ou_un(var: str, valeur: str) -> bool:
+    if valeur not in ("0", "1"):
+        raise ValueError(f"{var} vaut 0 ou 1, pas {valeur!r}")
+    return valeur == "1"
+
+
+def _allumee_si_declaree(var: str) -> Callable[[], bool]:
+    """Éteinte tant que `var` ne vaut pas `1` : une boucle qui écrit à des clients ne
+    part pas d'un oubli de réglage. Toute autre valeur que `0`/`1` refuse."""
+    return lambda: _zero_ou_un(var, os.environ.get(var, "0"))
+
+
 def _scheduler() -> Fonction:
     from . import scheduler
     return scheduler.run_scheduler_loop
@@ -197,7 +209,7 @@ BOUCLES: tuple[Boucle, ...] = (
     # Prévient l'admin d'une org quand un de ses agents programmés est bloqué
     # (`alerte_agents_bloques.py`, signal 1168) : ENVOIE un courriel à un client.
     Boucle(nom="alerte_agents_bloques", tiers=True,
-           armee=_interrupteur("OTO_ALERTE_AGENTS_ENABLED"), fonction=_alerte_agents),
+           armee=_allumee_si_declaree("OTO_ALERTE_AGENTS_ENABLED"), fonction=_alerte_agents),
     # Échéances d'abonnement, relances, réconciliation, factures (ADR 0043) : PRÉLÈVE
     # via Mollie. Armée par le drapeau billing ET son interrupteur propre.
     Boucle(nom="billing_runner", tiers=True,

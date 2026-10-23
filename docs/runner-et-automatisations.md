@@ -2349,8 +2349,9 @@ escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'an
   calmes par défaut (`scheduler.DEFAULT_QUIET_HOURS`, 20 h–8 h à Paris : un épisode vu
   la nuit part au premier passage du matin). Un envoi raté ne marque rien.
 - **Où** : une boucle de fond déclarée `tiers=True` (`boucles_de_fond.py`,
-  `alerte_agents_bloques`, un passage par quart d'heure, `OTO_ALERTE_AGENTS_ENABLED=0`
-  l'éteint) — la préprod, qui partage la base, et le développement ne la composent pas.
+  `alerte_agents_bloques`, un passage par quart d'heure) — ⚠️ **éteinte par défaut** :
+  elle n'écrit que sur une instance qui déclare `OTO_ALERTE_AGENTS_ENABLED=1`, toute
+  autre valeur que `0`/`1` refuse (un oubli de réglage n'envoie rien à personne) — la préprod, qui partage la base, et le développement ne la composent pas.
 - ⚠️ **Une org d'un tenant tiers est écartée** (`db.org_tenant_slug`, fermé sur erreur),
   comptée (`tenant_tiers_ecartes`) et dite une fois au journal : aucun tenant n'a déclaré
   de règle pour ce courrier, et la convention du 08/10/2026 n'en ajoute pas
