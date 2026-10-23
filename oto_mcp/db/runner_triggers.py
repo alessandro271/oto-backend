@@ -35,12 +35,23 @@ DDL_COLONNE_OUTILS_PLATEFORME = (
 COLONNE_HOOK_SOURCES = "hook_sources"
 DDL_COLONNE_HOOK_SOURCES = (f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS "
                             f"{COLONNE_HOOK_SOURCES} JSONB")
+# La date du dernier CHANGEMENT d'un agent — allumé, éteint, horaire, réglage, adresse,
+# propriétaire (docs/runner-et-automatisations.md §Dater un changement) : posée par la
+# révision `20261023_1033_trigger_updated_at` ET par le démarrage, sous garde de
+# catalogue — même DDL. NULL = aucun changement depuis la création (ou depuis que la
+# colonne existe, pour un agent plus ancien). Le tick ne l'écrit JAMAIS : enfiler une
+# occurrence n'est pas changer l'agent.
+COLONNE_UPDATED_AT = "updated_at"
+DDL_COLONNE_UPDATED_AT = (f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS "
+                          f"{COLONNE_UPDATED_AT} TIMESTAMPTZ")
+#: Le fragment que TOUTE écriture de configuration ajoute à son `SET`, et elles seules.
+_DATE_DU_CHANGEMENT = f"{COLONNE_UPDATED_AT} = NOW()"
 
 _COLS = ("id, org_id, sub, label, folder, procedure, project_id, tools, "
          "outils_plateforme AS platform_tools, "
          "input, max_steps, "
          "max_tokens, max_run_seconds, model, kind, payload_mode, payload_fields, max_per_hour, fraicheur_s, "
-         "cron, tz, enabled, next_due, last_enqueued_at, created_at, hook_auth, "
+         "cron, tz, enabled, next_due, last_enqueued_at, created_at, updated_at, hook_auth, "
          "(hook_signing_secret_enc IS NOT NULL) AS signing_secret_set, "
          "max_per_day, hook_slug, hook_sources")
 
@@ -239,7 +250,8 @@ def reprendre_trigger(trigger_id: int, org_id: int,
         # ⚠️ La liste d'outils d'admin ne SUIT PAS l'agent : posée par l'ancien
         # propriétaire pour SON rôle, elle s'éteint au transfert (`outils_plateforme`).
         row = conn.execute(
-            f"UPDATE runner_triggers SET sub = %s, outils_plateforme = '[]'::jsonb "
+            f"UPDATE runner_triggers SET sub = %s, outils_plateforme = '[]'::jsonb, "
+            f"{_DATE_DU_CHANGEMENT} "
             f"WHERE id = %s AND org_id = %s "
             f"RETURNING {_COLS}",
             (nouveau_sub, trigger_id, org_id),
@@ -301,7 +313,7 @@ def update_trigger(trigger_id: int, org_id: int, champs: dict[str, Any], *,
             vals.append(v)
     with _connect() as conn:
         row = conn.execute(
-            f"UPDATE runner_triggers SET {', '.join(sets)} "
+            f"UPDATE runner_triggers SET {', '.join([*sets, _DATE_DU_CHANGEMENT])} "
             f"WHERE id = %s AND org_id = %s"
             + ("" if hors_abonnement_d_autrui is None else
                " AND (model IS NULL OR NOT (model = ANY(%s)) OR sub = %s OR "
@@ -433,7 +445,7 @@ def poser_adresse_de_hook(trigger_id: int, org_id: int, slug: Optional[str]) -> 
     (`runner_hook.nouvelle_adresse`)."""
     with _connect() as conn:
         cur = conn.execute(
-            "UPDATE runner_triggers SET hook_slug = %s "
+            f"UPDATE runner_triggers SET hook_slug = %s, {_DATE_DU_CHANGEMENT} "
             "WHERE id = %s AND org_id = %s AND kind = 'webhook'",
             (slug, trigger_id, org_id))
         return bool(cur.rowcount)
@@ -454,18 +466,18 @@ def poser_auth_de_hook(trigger_id: int, org_id: int, hook_auth: str,
         if effacer_le_secret:
             cur = conn.execute(
                 "UPDATE runner_triggers SET hook_auth = %s, "
-                "hook_signing_secret_enc = NULL "
+                f"hook_signing_secret_enc = NULL, {_DATE_DU_CHANGEMENT} "
                 "WHERE id = %s AND org_id = %s AND kind = 'webhook'",
                 (hook_auth, trigger_id, org_id))
         elif secret_enc is not None:
             cur = conn.execute(
                 "UPDATE runner_triggers SET hook_auth = %s, "
-                "hook_signing_secret_enc = %s "
+                f"hook_signing_secret_enc = %s, {_DATE_DU_CHANGEMENT} "
                 "WHERE id = %s AND org_id = %s AND kind = 'webhook'",
                 (hook_auth, secret_enc, trigger_id, org_id))
         else:
             cur = conn.execute(
-                "UPDATE runner_triggers SET hook_auth = %s "
+                f"UPDATE runner_triggers SET hook_auth = %s, {_DATE_DU_CHANGEMENT} "
                 "WHERE id = %s AND org_id = %s AND kind = 'webhook'",
                 (hook_auth, trigger_id, org_id))
         return bool(cur.rowcount)
@@ -475,7 +487,7 @@ def poser_secret_de_hook(trigger_id: int, org_id: int, secret_hash: str) -> bool
     """Pose (ou remplace) le haché du secret. Le clair ne passe jamais par ici."""
     with _connect() as conn:
         cur = conn.execute(
-            "UPDATE runner_triggers SET hook_secret_hash = %s "
+            f"UPDATE runner_triggers SET hook_secret_hash = %s, {_DATE_DU_CHANGEMENT} "
             "WHERE id = %s AND org_id = %s AND kind = 'webhook'",
             (secret_hash, trigger_id, org_id),
         )
@@ -495,7 +507,7 @@ def poser_sources_de_hook(trigger_id: int, org_id: int, sources: Optional[list],
     n'existe plus : rien n'est écrit, à l'appelant de le dire."""
     with _connect() as conn:
         cur = conn.execute(
-            "UPDATE runner_triggers SET hook_sources = %s::jsonb "
+            f"UPDATE runner_triggers SET hook_sources = %s::jsonb, {_DATE_DU_CHANGEMENT} "
             f"WHERE id = %s AND org_id = %s AND kind = 'webhook' AND {_SOURCES_INCHANGEES}",
             (json.dumps(sources) if sources else None, trigger_id, org_id,
              json.dumps(sources_avant or [])),
@@ -519,7 +531,7 @@ def brancher_la_source(trigger_id: int, org_id: int, *, hook_auth: str,
         cur = conn.execute(
             "UPDATE runner_triggers SET hook_slug = %s, hook_auth = %s, "
             "hook_secret_hash = %s, hook_signing_secret_enc = NULL, "
-            "hook_sources = %s::jsonb "
+            f"hook_sources = %s::jsonb, {_DATE_DU_CHANGEMENT} "
             f"WHERE id = %s AND org_id = %s AND kind = 'webhook' AND {_SOURCES_INCHANGEES}",
             (hook_slug, hook_auth, secret_hash, json.dumps(sources), trigger_id, org_id,
              json.dumps(sources_avant or [])),

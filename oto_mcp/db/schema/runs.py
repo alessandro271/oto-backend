@@ -365,7 +365,11 @@ CREATE TABLE IF NOT EXISTS runner_triggers (
     -- 20/10/2026 : les webhooks qu'oto a INSCRITS chez la source pour cet agent
     -- (`connect_source`) — `[{source, remote_id, event, campaign_id}]`. Des
     -- identifiants chez le tiers, jamais un secret. NULL = rien d'inscrit.
-    hook_sources JSONB
+    hook_sources JSONB,
+    -- 23/10/2026 : la date du dernier CHANGEMENT de l'agent (allumé, éteint, horaire,
+    -- réglage, adresse, propriétaire). NULL = aucun depuis sa création. Le tick ne
+    -- l'écrit jamais.
+    updated_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_runner_triggers_due
     ON runner_triggers(next_due) WHERE enabled;

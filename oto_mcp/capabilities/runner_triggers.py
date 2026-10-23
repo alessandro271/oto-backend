@@ -338,6 +338,11 @@ class Trigger(BaseModel):
     next_due: Optional[str] = None
     last_enqueued_at: Optional[str] = None
     created_at: Optional[str] = None
+    #: Le dernier CHANGEMENT de l'agent — allumé, éteint, horaire, réglage, adresse,
+    #: propriétaire ; jamais une occurrence enfilée (`last_enqueued_at`). `null` =
+    #: aucun depuis la création, ou depuis le 23/10/2026 pour un agent plus ancien.
+    #: Une suppression ne se date pas ici : la ligne disparaît avec elle.
+    updated_at: Optional[str] = None
     #: Ce que ce déclencheur a PERDU : des occurrences enfilées que personne n'est
     #: venu prendre dans leur cycle, et que le tick a périmées.
     #: ⚠️ Servi avec le déclencheur parce que c'est là qu'on le cherche. Compté à

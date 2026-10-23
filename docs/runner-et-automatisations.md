@@ -2302,6 +2302,34 @@ arrête les automatisations de tout le monde — et le pire qu'on risque en la
 ratant est ce qu'on avait déjà, un travail de trop en attente. *(Défaut trouvé
 par son propre test avant d'être servi.)*
 
+### Dater un changement d'agent : `updated_at` (23/10/2026, signal 987)
+
+Un agent qui passe de sept à six, un agent rallumé avec son horaire déplacé de 20:00 à
+18:55 : rien de tout ça ne se datait depuis `oto_trigger` — la lecture portait
+`created_at` et `last_enqueued_at`, rien entre les deux. Une ingestion quotidienne ne
+pouvait que BORNER ces événements, en comparant son empreinte de la veille.
+
+- `runner_triggers.updated_at` (`TIMESTAMPTZ`, nullable, sans défaut) est servie par la
+  lecture d'un agent sur les deux faces (`oto_trigger op=get|list`, `POST
+  /api/me/runner/triggers`). Une seule date, pas de journal.
+- **Qui l'écrit** : toute écriture de configuration de `db/runner_triggers.py` — la
+  retouche (`update_trigger` : allumer, éteindre, horaire, fuseau, réglages), le transfert
+  (`reprendre_trigger`), l'adresse, la preuve et les sources d'un webhook — par le même
+  fragment `_DATE_DU_CHANGEMENT`. Une retouche vide n'écrit rien, donc ne date rien.
+- ⚠️ **Le tick ne l'écrit JAMAIS** (`consume_due`) : enfiler une occurrence n'est pas
+  changer l'agent, et un agent quotidien se lirait sinon « changé ce matin » chaque matin.
+  C'est `last_enqueued_at` qui date le tick. Banc : `tests/test_trigger_updated_at_db.py`.
+- `null` = aucun changement depuis la création — ou depuis la révision
+  `20261023_1033_trigger_updated_at` pour un agent plus ancien. La colonne n'a pas de
+  `DEFAULT NOW()` exprès : il aurait daté chaque agent existant du jour de la migration,
+  une date fausse donnée pour vraie.
+- ⚠️ **Une suppression ne se date PAS ici** : elle est dure (`DELETE`, `delete_trigger`),
+  la ligne part avec sa date. La dater demande un choix, non tranché : (1) une suppression
+  douce (`deleted_at`, et toutes les lectures de la table qui filtrent) — `op=delete`
+  changerait de sens ; (2) lire le journal d'appels, qui porte déjà la date de chaque
+  `oto_trigger op=delete` passé par MCP (`tool_calls`, lentille org) ; (3) rien, la
+  disparition reste une absence.
+
 ### `op=list` : la page dit ce qu'elle laisse dehors (#469, 01/09/2026)
 
 **Mesuré le 28/08** : `POST /api/me/runner/jobs {op: list, limit: 1000}` rendait
