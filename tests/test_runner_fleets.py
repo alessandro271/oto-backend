@@ -518,7 +518,7 @@ def test_la_temperature_ne_se_change_PAS_en_vol():
 
 _CARTE = {"id", "label", "status", "procedure", "namespace", "row_filter", "max_rows",
           "model", "stop_reason", "armed_at", "started_at", "stopping_at", "stopped_at",
-          "created_at", "taken_by", "input_sha256"}
+          "created_at", "taken_by", "trigger_id", "input_sha256"}
 
 
 def _ligne(**surcharges) -> dict:
@@ -538,7 +538,7 @@ def _ligne(**surcharges) -> dict:
         "status": "running", "stop_reason": None,
         "armed_at": "2026-09-13 08:00:00", "started_at": "2026-09-13 08:00:05",
         "stopping_at": None, "heartbeat_at": None, "taken_by": None, "stopped_at": None,
-        "created_at": "2026-09-12 17:00:00"}
+        "created_at": "2026-09-12 17:00:00", "trigger_id": None}
     assert set(ligne) == {c.strip() for c in dbf._COLS.split(",")}, (
         "la doublure ne porte plus les colonnes du SELECT servi")
     ligne.update(surcharges)
@@ -599,3 +599,60 @@ def test_get_rend_la_declaration_telle_quelle(monkeypatch):
 
 def test_une_liste_vide_ne_fabrique_pas_de_notice(monkeypatch):
     assert _lister(monkeypatch, []) == {"fleets": [], "projection": None}
+
+
+# ── l'agent qui déclare le passage (23/10/2026) ───────────────────────────────
+
+class _Verrou:
+    def __init__(self, job_id):
+        self.job_id = job_id
+
+
+def _create_capture(monkeypatch, *, job_id, agents):
+    """`create` jusqu'à l'écriture, l'écriture capturée : le travail du jeton est
+    `job_id` (None = une personne), et `agents` dit, par (travail, org), l'agent que
+    `db.agent_du_travail` résout."""
+    monkeypatch.setattr(RF.verrou_org, "travail_de_la_requete",
+                        lambda: None if job_id is None else _Verrou(job_id))
+    lus = []
+    monkeypatch.setattr(RF.db, "agent_du_travail",
+                        lambda j, org: lus.append((j, org)) or agents.get((j, org)))
+    monkeypatch.setattr(RF, "_cible_a_la_declaration", lambda ctx, ns: ns)
+    vu = {}
+    monkeypatch.setattr(RF.db, "create_fleet", lambda *a, **kw: vu.update(kw) or {"id": 1})
+    _appel(_ctx(), op="create", label="cartes", procedure="pousser-les-appels",
+           tools=["oto_kb"])
+    return vu, lus
+
+
+def test_un_passage_declare_par_un_agent_heberge_porte_cet_agent(monkeypatch):
+    """Un agent déclare un passage d'une AUTRE procédure que la sienne : seul ce lien
+    le range sous lui. L'agent se lit par le travail du JETON, dans l'org de l'appel."""
+    vu, lus = _create_capture(monkeypatch, job_id=900, agents={(900, 2): 41})
+    assert vu["trigger_id"] == 41
+    assert lus == [(900, 2)]
+
+
+def test_un_passage_declare_par_une_personne_ne_porte_aucun_agent(monkeypatch):
+    vu, lus = _create_capture(monkeypatch, job_id=None, agents={})
+    assert vu["trigger_id"] is None
+    assert lus == [], "sans travail au jeton, rien ne se lit"
+
+
+def test_un_travail_sans_agent_ne_porte_aucun_agent(monkeypatch):
+    """Un travail de campagne, enfilé à la main, ou dont l'agent est d'une autre org ou
+    supprimé : `agent_du_travail` ne le résout pas (son banc sur base :
+    `test_agent_du_travail_db.py`)."""
+    vu, _ = _create_capture(monkeypatch, job_id=901, agents={})
+    assert vu["trigger_id"] is None
+
+
+def test_un_agent_ne_se_designe_pas_par_un_argument():
+    """Aucun champ d'entrée ne porte l'agent déclarant : il ne se lit qu'au jeton."""
+    assert "trigger_id" not in RF.FleetInput.model_fields
+
+
+def test_la_carte_de_list_sert_l_agent_declarant():
+    assert "trigger_id" in RF.FleetCard.model_fields
+    from oto_mcp import db
+    assert "trigger_id" in db.runner_fleets._COLS

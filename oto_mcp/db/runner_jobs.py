@@ -1377,6 +1377,24 @@ def charge_du_travail(job_id: int) -> Optional[dict]:
     return row["payload"] if row else None
 
 
+def agent_du_travail(job_id: int, org_id: int) -> Optional[int]:
+    """L'agent hébergé (`runner_triggers.id`) dont le travail `job_id` est un run, s'il
+    est de l'org `org_id` — None pour un travail enfilé à la main ou d'un passage, ou
+    dont l'agent a été supprimé. Sans filtre de porteur : un run lancé à la main par un
+    éditeur (`oto_trigger op=run`) tourne sous lui, et reste un run de cet agent.
+
+    Le travail est celui du jeton de la requête, pas un nom passé par l'appelant, et le
+    `trigger_id` de sa charge n'est posé que par le serveur (horloge, webhook,
+    `oto_trigger op=run`) : `runner.jobs enqueue` refuse d'en recevoir un."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT t.id FROM runner_jobs j JOIN runner_triggers t "
+            "  ON t.id::text = j.payload->>'trigger_id' "
+            "WHERE j.id = %s AND j.org_id = %s AND t.org_id = j.org_id",
+            (job_id, org_id)).fetchone()
+    return int(row["id"]) if row else None
+
+
 def porteur_et_famille(job_id: int) -> Optional[dict]:
     """`{sub, org_id, model_family, abonnement}` d'un travail — de quoi adresser le
     rapport de forfait à la conclusion (OTO-130) à l'abonnement qui l'a SERVI

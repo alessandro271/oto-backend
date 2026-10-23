@@ -1473,6 +1473,14 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         if inp.kind == "start" and not inp.payload:
             raise AuthzDenied(400, "missing_fields",
                               "un job `start` exige `payload` (au moins la procédure à charger)")
+        # ⚠️ Le `trigger_id` d'une charge dit de quel AGENT ce travail est un run : le
+        # serveur seul le pose (horloge, webhook, `oto_trigger op=run`). Reçu ici, il
+        # rangerait un travail quelconque sous l'agent d'un autre — et, par lui, le
+        # passage qu'il déclarerait (`runner_fleets._agent_declarant`).
+        if "trigger_id" in (inp.payload or {}):
+            raise AuthzDenied(400, "trigger_id_server_set",
+                              "`payload.trigger_id` est posé par le serveur pour le run "
+                              "d'un agent : lance un agent par `oto_trigger op=run`.")
         if inp.run_id:
             # Le gate propriétaire tient CÔTÉ SERVEUR, pas dans le séquencement de
             # l'UI : enfiler un `continue` sur le run d'autrui ferait continuer son

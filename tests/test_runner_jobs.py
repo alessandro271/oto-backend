@@ -178,6 +178,17 @@ def test_enqueue_scope_lorg_de_lappel(espion):
     assert espion["org"] == 42 and out["id"] == 7
 
 
+def test_enqueue_refuse_un_trigger_id_fourni(espion):
+    """Le `trigger_id` d'une charge dit de quel agent un travail est un run : le serveur
+    seul le pose. Fourni à `enqueue`, il rangerait un travail quelconque — et le passage
+    que ce travail déclarerait (`oto_fleet op=create`) — sous l'agent d'un autre."""
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="enqueue", kind="start",
+               payload={"procedure": "veille", "trigger_id": 42})
+    assert (e.value.status, e.value.code) == (400, "trigger_id_server_set")
+    assert "payload" not in espion, "rien n'est enfilé"
+
+
 # ── conclure ce qui ne nous appartient pas = job inconnu (pas d'oracle) ───────
 
 def test_conclure_le_job_dun_autre_rend_job_inconnu(espion):
