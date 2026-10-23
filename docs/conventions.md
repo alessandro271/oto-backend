@@ -441,10 +441,12 @@ rien ne rendait navigable et que rien ne tenait.
     l'allowlist que la règle précédente proscrit : c'est l'agent qui nomme ce qu'il veut,
     pas le connecteur qui décide à sa place, et la réponse NOMME ce qu'elle a écarté
     (`selection.omitted`) et ce qui était demandé mais absent (`selection.missing`). Le
-    tri porte sur la liste de lignes trouvée à deux niveaux au plus (l'enveloppe — total,
-    curseur — reste), sinon sur l'objet unique ; **plusieurs listes ⇒ rien n'est trié**
-    et les chemins sont nommés (`selection.ambiguous`), plutôt que d'en choisir une au
-    hasard. Appliqué **après** la rédaction : il ne fait que retirer, un champ masqué
+    tri porte là où sont les clés demandées : la liste de lignes (deux niveaux au plus)
+    qui les porte, l'enveloppe — total, curseur — restant ; sinon l'objet unique qui
+    les porte — une fiche qui contient une liste reste une fiche. **Plusieurs listes
+    candidates ⇒ rien n'est trié** et les chemins sont nommés (`selection.ambiguous`),
+    plutôt que d'en choisir une au hasard. Une erreur (`is_error`) n'est jamais triée.
+    Appliqué **après** la rédaction : il ne fait que retirer, un champ masqué
     par la politique de l'org ne revient pas. `fields=[]` est refusé **avant**
     l'exécution, pour ne pas facturer un appel dont la réponse serait jetée.
   - **Le handshake aussi a un budget.** Les 6 jetons `_*` sont recopiés dans ~400 schémas : une

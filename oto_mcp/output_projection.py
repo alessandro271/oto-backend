@@ -173,8 +173,8 @@ def summarize(rows: list[dict], *, body_fields: Iterable[str],
 
 _HINT_SELECTION = (f'Fields kept by `fields`. `fields=["{RAW}"]` returns the whole '
                    "response.")
-_HINT_AMBIGU = ("Several result lists: nothing was filtered. Call the tool directly, "
-                "or filter on your side.")
+_HINT_AMBIGU = ("Several result lists carry these fields: nothing was filtered. Omit "
+                "`fields`, or filter on your side.")
 
 
 def _est_liste_de_lignes(valeur: Any) -> bool:
@@ -197,16 +197,29 @@ def _chemins_de_lignes(payload: dict) -> list[str]:
     return chemins
 
 
+def _porte_un_champ(payload: dict, chemin: str, garde: set[str]) -> bool:
+    return any(isinstance(r, dict) and not garde.isdisjoint(r)
+               for r in _rows_at(payload, chemin))
+
+
 def select_fields(payload: Any, fields: Iterable[str]) -> tuple[Any, Optional[dict]]:
     """Le payload réduit aux `fields` demandés par l'APPELANT, quel que soit l'outil
-    (`oto_call fields=`). Pur, non destructif.
+    (`oto_call fields=`). Pur, non destructif. Les clés sont lues au premier niveau de
+    la ligne ou de l'objet : une clé pointée (`a.b`) n'est pas suivie, elle est nommée
+    absente.
 
-    Où porte le tri — sans rien connaître de l'outil :
-    - une liste de lignes, au sommet ou à deux niveaux au plus : chaque ligne ne garde
-      que `fields`, l'enveloppe (`total`, curseur, crédits) reste, comme `project` ;
-    - aucune liste : un objet unique, dont on garde les seules clés demandées ;
-    - PLUSIEURS listes : rien n'est trié. Choisir l'une au hasard ferait disparaître
-      l'autre sans un mot — la notice nomme les chemins.
+    Où porte le tri — sans rien connaître de l'outil, d'après OÙ sont les clés demandées :
+    - une liste de lignes (au sommet ou à deux niveaux au plus) dont des lignes portent
+      un champ demandé : chaque ligne ne garde que `fields`, l'enveloppe (`total`,
+      curseur, crédits) reste, comme `project` ;
+    - sinon, un objet unique qui porte un champ demandé à son premier niveau : on garde
+      ses seules clés demandées. Une fiche qui contient une liste (un profil et ses
+      expériences) reste une fiche : trier sa sous-liste rendrait la fiche entière et
+      nommerait « absents » des champs bien présents ;
+    - sinon (aucun champ trouvé nulle part) : la seule liste, s'il n'y en a qu'une —
+      une page vide garde sa forme —, l'objet s'il n'y en a aucune ;
+    - PLUSIEURS listes candidates : rien n'est trié. Choisir l'une au hasard ferait
+      disparaître l'autre sans un mot — la notice nomme les chemins.
 
     Rend `(payload, notice)`. La notice NOMME ce qui a été écarté (`omitted`) et ce qui
     était demandé mais absent partout (`missing`, leçon oto#174) ; `None` quand rien
@@ -225,6 +238,11 @@ def select_fields(payload: Any, fields: Iterable[str]) -> tuple[Any, Optional[di
     if not isinstance(payload, dict):
         return payload, None
     chemins = _chemins_de_lignes(payload)
+    portes = [c for c in chemins if _porte_un_champ(payload, c, garde)]
+    if not portes and not garde.isdisjoint(payload):
+        chemins = []                                    # une fiche, pas une enveloppe
+    elif portes:
+        chemins = portes
     if len(chemins) > 1:
         return payload, {"ambiguous": chemins, "hint": _HINT_AMBIGU}
     if chemins:

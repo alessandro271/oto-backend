@@ -21,8 +21,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import (access, call_axes, calllog, db, deprecations, error_taxonomy, geste,
                 guide_run, outils_du_travail, outils_retires, output_projection,
-                redaction, run_org,
-                session_org, tool_alias, verrou_org)
+                redaction, run_org, session_org, tool_alias, verrou_org)
 from ..access import credits as budget
 from ..auth.hooks import current_user_sub_from_token
 from ..connectors import access_level_gate, activation_gate
@@ -349,7 +348,13 @@ def _selectionner(result, fields: list[str]):
 
     Un résultat sans JSON (texte libre) repart tel quel — il n'a pas de clés. La notice
     va sous `selection`, ou `oto_call_selection` si la cible porte déjà ce nom : elle ne
-    doit jamais écraser un champ de la réponse."""
+    doit jamais écraser un champ de la réponse.
+
+    Un résultat d'ERREUR (`is_error`) repart intact, comme dans chaque middleware qui
+    réécrit une sortie : le trier effacerait le message, et `rebuild_result` rendrait
+    une erreur lisible comme un succès."""
+    if getattr(result, "is_error", False):
+        return result
     payload = redaction.extract_payload(result)
     if payload is None:
         return result
@@ -444,8 +449,9 @@ def register(mcp: FastMCP) -> None:
                 listed tool. Accepted here as well as inside `arguments` — same
                 token, same effect — so the instruction « pass it on every call »
                 never costs a call.
-            fields: keep ONLY these keys in each result row (or in the single
-                object returned); `["*"]` = the whole response. Omit = unchanged.
+            fields: keep ONLY these top-level keys of each result row (or of the
+                single object); `selection` names what was dropped. `["*"]` = all.
+                A target's own `fields` goes in `arguments`.
         """
         # Ambient identity: the JWT's sub already carries the call (the target handler
         # resolves its own credentials on it). Soft — without a token (local dev) there is

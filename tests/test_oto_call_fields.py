@@ -86,6 +86,37 @@ def test_plusieurs_listes_ne_trient_rien_et_nomment_les_chemins():
     assert notice["ambiguous"] == ["people", "companies"]
 
 
+def test_une_fiche_qui_contient_une_liste_reste_une_fiche():
+    # un profil et ses expériences : les champs demandés sont ceux de la fiche, pas ceux
+    # de la sous-liste — la trier rendrait la fiche entière et dirait « absents » des
+    # champs bien présents
+    profil = {"first_name": "J", "headline": "H", "ssn": "1",
+              "experience": [{"title": "x", "company": "y"}]}
+    out, notice = select_fields(profil, ["first_name", "headline"])
+    assert out == {"first_name": "J", "headline": "H"}
+    assert notice["omitted"] == ["experience", "ssn"]
+    assert "missing" not in notice and "items_path" not in notice
+
+
+def test_une_fiche_avec_une_liste_vide_est_triee_et_le_dit():
+    out, notice = select_fields({"name": "A", "ssn": "1", "tags": []}, ["name"])
+    assert out == {"name": "A"}
+    assert notice["omitted"] == ["ssn", "tags"]
+
+
+def test_la_liste_qui_porte_les_champs_l_emporte_sur_une_liste_voisine():
+    payload = {"results": [{"name": "A", "x": 1}], "facets": [{"label": "f", "count": 2}]}
+    out, notice = select_fields(payload, ["name"])
+    assert out["results"] == [{"name": "A"}]
+    assert out["facets"] == payload["facets"]
+    assert notice["items_path"] == "results"
+
+
+def test_une_cle_pointee_n_est_pas_suivie_elle_est_nommee_absente():
+    _, notice = select_fields({"results": [{"a": {"b": 1}}]}, ["a.b"])
+    assert notice["missing"] == ["a.b"]
+
+
 def test_etoile_rend_le_brut():
     assert select_fields(_SALARIES, ["*"]) == (_SALARIES, None)
 
@@ -204,3 +235,12 @@ def test_une_selection_vide_ou_invalide_est_refusee_avant_l_appel(oto_call_fn,
         _call(oto_call_fn, [cible], name="fr_ccn_search", arguments={}, fields=fields)
     assert "fields" in str(ei.value)
     assert cible.runs == 0                       # aucun appel facturé pour rien
+
+
+def test_un_resultat_d_erreur_repart_intact(oto_call_fn, sans_politique):
+    resultat = ToolResult(content=[TextContent(type="text", text=json.dumps(
+        {"error": "upstream refused", "code": "x"}))], is_error=True)
+    cible = _FakeTool("fr_ccn_search", resultat)
+    out = _call(oto_call_fn, [cible], name="fr_ccn_search", arguments={},
+                fields=["name"])
+    assert out is resultat
