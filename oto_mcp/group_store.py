@@ -349,6 +349,24 @@ def has_group_secret(group_id: int, provider: str) -> bool:
             or bool(lent_instances(group_id, provider)))
 
 
+def groups_holding(group_ids, org_id: int, provider: str) -> set[int]:
+    """The teams among `group_ids` (all of `org_id`) that hold a `provider` key — their
+    own row or a live loan, the definition of `has_group_secret` — in two queries whatever
+    the number of teams, plus the liveness of each loan found (`_vivants`). Never one read
+    per team: the "nothing resolves" refusal asks it of every team of the caller (#1317)."""
+    gids = sorted({int(g) for g in group_ids})
+    if not gids:
+        return set()
+    out = {int(e) for e in credentials_store.entities_holding(
+        "group", [str(g) for g in gids], provider)}
+    cibles = {f"group:{g}": g for g in gids if g not in out}
+    for r in credentials_store.lent_to_scopes(list(cibles), provider):
+        prises = {cibles[s] for s in (r["share_side"] or []) if s in cibles} - out
+        if prises and _vivants([r], int(org_id), provider):
+            out |= prises
+    return out
+
+
 def set_group_secret(group_id: int, provider: str, api_key: str,
                      set_by: Optional[str] = None, meta: Optional[dict] = None,
                      account: str = "") -> None:

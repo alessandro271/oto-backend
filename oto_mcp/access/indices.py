@@ -7,7 +7,7 @@ what is within reach; this module turns that into TEXT for an already-raised ref
 
 Two shared properties, which are the reason for keeping them together:
 
-- **read-only, never a resolution**: we name a gesture (`group=`, `_project=`),
+- **read-only, never a resolution**: we name a gesture (`_group=`, `_project=`),
   the agent performs it — nothing silently switches a call onto someone else's bill;
 - **fail-soft**: a hint is added to a refusal, a DB hiccup returns the refusal
   without it, never a 500 in its place.
@@ -80,7 +80,44 @@ def _projects_pinning(sub: str, org: Optional[int], provider: str) -> list[dict]
         return []
 
 
-def _reachable_hint(sub: str, org: Optional[int], provider: str) -> str:
+def refus_sans_cle(sub: str, org: Optional[int], provider: str, constat: str,
+                   geste: str) -> str:
+    """The text of a "nothing resolves" refusal (`resolve`), revoked and reachable hints
+    included: `constat` + `geste` ("set your own key"), unless teams of the caller hold a
+    `provider` key — then the refusal OPENS on them, each with its `_group=<id>`, before
+    any other gesture (#1317: a team key reported as a bare "no key").
+
+    Named, never picked: outside an opt-in tenant the cascade reads only the call's or
+    the active team (2026-10-03, `scope._equipe_par_defaut`), and a key within reach is a
+    gesture the agent performs for the entity it works for (2026-07-16). Several teams:
+    all are listed and none is chosen. One read of what is within reach, shared."""
+    items = rbac.reachable_instances(sub, org, provider)
+    equipes = [it for it in items if it["kind"] == "group"]
+    if not equipes:
+        return (constat + geste + _revoked_hint(sub, org, provider)
+                + _reachable_hint(sub, org, provider, items=items))
+    autres = [it for it in items if it["kind"] != "group"]
+    return (_tete_equipes(provider, equipes) + "Otherwise — " + geste
+            + _revoked_hint(sub, org, provider)
+            + _reachable_hint(sub, org, provider, items=autres))
+
+
+def _tete_equipes(provider: str, equipes: list[dict]) -> str:
+    """The opening of the refusal when teams within reach hold the key (#1317)."""
+    if len(equipes) == 1:
+        e = equipes[0]
+        return (f"No `{provider}` key resolves for this call: it names no team, and the "
+                f"team « {e['name']} » (id {e['id']}) holds one. Pass `_group={e['id']}` "
+                f"on the call if it is made for that team, at its expense. ")
+    noms = ", ".join(f"« {e['name']} » (`_group={e['id']}`)" for e in equipes[:6])
+    plus = f", … +{len(equipes) - 6}" if len(equipes) > 6 else ""
+    return (f"No `{provider}` key resolves for this call: it names no team, and several "
+            f"teams hold one — {noms}{plus}. None is picked for you: pass `_group=<id>` "
+            f"with the team the call is made for, at its expense. ")
+
+
+def _reachable_hint(sub: str, org: Optional[int], provider: str, *,
+                    items: Optional[list] = None) -> str:
     """Actionable suffix for "nothing resolves" errors: surfaces the instances
     within reach with the pin GESTURE for each — call token first (`_group=`/
     `_org=`, per-call, stateless), `_instance=` for fine grain. Empty string if
@@ -90,8 +127,10 @@ def _reachable_hint(sub: str, org: Optional[int], provider: str) -> str:
     pins an instance of this provider, we name THAT project and the gesture that
     activates it (`_project=<id>` on the call) — "link the instance to your project"
     sent people to redo a link already set, and the agent fumbled. The link advice
-    only shows up by default."""
-    items = rbac.reachable_instances(sub, org, provider)
+    only shows up by default. `items` = what is within reach, when the caller has
+    already read it (`refus_sans_cle`)."""
+    if items is None:
+        items = rbac.reachable_instances(sub, org, provider)
     # The project binding is read under the CARRIER, as resolution reads it
     # (`scope.project_pinned_instance(porteur)`); the text keeps the called name.
     pins = _projects_pinning(sub, org, providers.credential_provider(provider))
@@ -103,11 +142,11 @@ def _reachable_hint(sub: str, org: Optional[int], provider: str) -> str:
         for it in items[:4]:
             if it["kind"] == "group":
                 lines.append(
-                    f"· team « {it['name']} » → pass group={it['id']} on the call "
-                    f"(or instance=group:{it['id']}:{provider})")
+                    f"· team « {it['name']} » → pass `_group={it['id']}` on the call "
+                    f"(or `_instance=group:{it['id']}:{provider}`)")
             else:
                 lines.append(
-                    f"· org « {it['name']} » → pass org={it['id']} on the call")
+                    f"· org « {it['name']} » → pass `_org={it['id']}` on the call")
         more = len(items) - 4
         if more > 0:
             lines.append(f"· … +{more} (oto_instance op=list to see all)")

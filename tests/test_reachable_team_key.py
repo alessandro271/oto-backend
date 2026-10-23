@@ -6,7 +6,7 @@ sec et le drawer un faux message RBAC. Couvre :
 - `access.reachable_team_key` : équipe dont le sub est membre + secret présent ;
 - `access.reachable_instances` + `_reachable_hint` : les instances à portée
   (équipes membres + autres orgs) remontées dans les erreurs « rien ne résout »,
-  geste de pin per-call (`group=`/`org=`/`instance=`) en tête ;
+  geste de pin per-call (`_group=`/`_org=`/`_instance=`) en tête ;
 - `status_for` : miroir de cascade des providers `fields` (group/org, ex-user-only)
   + champ `team_key_group` quand mode=forbidden.
 """
@@ -25,6 +25,8 @@ def _wire_reachable(monkeypatch, *, groups=(SALES,), secret_groups=(2,), orgs=()
                         lambda sub, org_id=None: list(groups))
     monkeypatch.setattr(access.group_store, "has_group_secret",
                         lambda gid, prov: gid in secret_groups)
+    monkeypatch.setattr(access.group_store, "groups_holding",
+                        lambda gids, org, prov: {g for g in gids if g in secret_groups})
     monkeypatch.setattr(access.org_store, "list_orgs_for_user",
                         lambda sub: list(orgs))
 
@@ -83,8 +85,8 @@ def test_reachable_instances_includes_org_admin_governed_teams(monkeypatch):
     monkeypatch.setattr(access.group_store, "list_groups",
                         lambda org_id: [{"id": 2, "name": "sales"},
                                         {"id": 9, "name": "finance"}])
-    monkeypatch.setattr(access.group_store, "has_group_secret",
-                        lambda gid, prov: gid == 2)             # clé sur sales seule
+    monkeypatch.setattr(access.group_store, "groups_holding",
+                        lambda gids, org, prov: {g for g in gids if g == 2})  # sales seule
     monkeypatch.setattr(access.org_store, "list_orgs_for_user", lambda sub: [])
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: True)
     items = access.reachable_instances("admin", 35, "zoho")
@@ -99,7 +101,8 @@ def test_reachable_instances_non_admin_stays_membership_only(monkeypatch):
                         lambda sub, org_id=None: [])
     monkeypatch.setattr(access.group_store, "list_groups",
                         lambda org_id: [{"id": 2, "name": "sales"}])
-    monkeypatch.setattr(access.group_store, "has_group_secret", lambda gid, prov: gid == 2)
+    monkeypatch.setattr(access.group_store, "groups_holding",
+                        lambda gids, org, prov: {g for g in gids if g == 2})
     monkeypatch.setattr(access.org_store, "list_orgs_for_user", lambda sub: [])
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: False)
     assert access.reachable_instances("u1", 35, "zoho") == []
@@ -116,10 +119,10 @@ def test_resolution_failure_mentions_reachable_team(monkeypatch):
     _wire_reachable(monkeypatch)
     with pytest.raises(McpError) as e:
         access._resolve_credential_impl("zoho", "byo", "u1")
-    # le geste per-call (jeton d'appel) d'abord, le ref d'instance en repli
-    assert "group=2" in str(e.value)
-    assert "sales" in str(e.value)
-    assert "instance=group:2:zoho" in str(e.value)
+    # #1317 : l'équipe qui porte la clé OUVRE le refus, avec son jeton d'appel `_group=`
+    msg = str(e.value)
+    assert msg.startswith("No `zoho` key resolves for this call")
+    assert "`_group=2`" in msg and "sales" in msg
 
 
 def test_resolution_failure_lists_other_org(monkeypatch):
@@ -137,7 +140,7 @@ def test_resolution_failure_lists_other_org(monkeypatch):
     monkeypatch.setattr(access.db, "has_member_api_key", lambda *a, **k: False)
     with pytest.raises(McpError) as e:
         access._resolve_credential_impl("zoho", "byo", "u1")
-    assert "org=167" in str(e.value)
+    assert "`_org=167`" in str(e.value)
     assert "Acme Test" in str(e.value)
 
 

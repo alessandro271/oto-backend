@@ -36,6 +36,8 @@ def wired(monkeypatch):
     # Mêmes faits, exposés par l'API per-provider qu'utilise `reachable_instances`.
     monkeypatch.setattr(access.group_store, "has_group_secret",
                         lambda gid, p: gid == 2 and p == "zoho")
+    monkeypatch.setattr(access.group_store, "groups_holding",
+                        lambda gids, org, p: {g for g in gids if g == 2 and p == "zoho"})
     monkeypatch.setattr(access.org_store, "has_org_secret",
                         lambda oid, p: oid == 167 and p == "zoho")
     monkeypatch.setattr(access.db, "has_member_api_key",
@@ -115,8 +117,8 @@ def test_unknown_tool_has_no_connector(monkeypatch):
 def test_hint_text_names_the_pin_gesture(wired, monkeypatch):
     """Le hint doit donner le GESTE, pas seulement constater l'existence."""
     txt = access._reachable_hint("u1", 35, "zoho")
-    assert "group=2" in txt and "instance=group:2:zoho" in txt
-    assert "org=167" in txt
+    assert "`_group=2`" in txt and "`_instance=group:2:zoho`" in txt
+    assert "`_org=167`" in txt
 
 
 def test_map_and_per_provider_agree(wired):

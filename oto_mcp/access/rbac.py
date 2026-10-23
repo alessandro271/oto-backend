@@ -199,8 +199,12 @@ def reachable_instances(sub: str, org: Optional[int], provider: str) -> list[dic
     try:
         if org is not None and shareable:
             seen_gids: set = set()
-            for g in group_store.list_groups_for_user(sub, org):
-                if group_store.has_group_secret(g["group_id"], provider):
+            # One batched read for all the caller's teams, never one per team (#1317).
+            mes_equipes = group_store.list_groups_for_user(sub, org)
+            detiennent = group_store.groups_holding(
+                [g["group_id"] for g in mes_equipes], org, provider)
+            for g in mes_equipes:
+                if int(g["group_id"]) in detiennent:
                     out.append({"kind": "group", "id": g["group_id"],
                                 "name": g["name"]})
                     seen_gids.add(g["group_id"])
@@ -212,11 +216,14 @@ def reachable_instances(sub: str, org: Optional[int], provider: str) -> list[dic
             from .. import roles
             try:  # ISOLATED best-effort escalation: must not damage the enumeration
                 if roles.is_org_admin(sub, org):  # below (orgs) if it hiccups.
-                    for g in group_store.list_groups(org):
-                        gid = g["id"]
-                        if gid not in seen_gids and group_store.has_group_secret(gid, provider):
-                            out.append({"kind": "group", "id": gid, "name": g["name"]})
-                            seen_gids.add(gid)
+                    gouvernees = [g for g in group_store.list_groups(org)
+                                  if g["id"] not in seen_gids]
+                    detiennent = group_store.groups_holding(
+                        [g["id"] for g in gouvernees], org, provider)
+                    for g in gouvernees:
+                        if int(g["id"]) in detiennent:
+                            out.append({"kind": "group", "id": g["id"], "name": g["name"]})
+                            seen_gids.add(g["id"])
             # noqa: SILENT — visibility fail-open, hard backstop at call time
             except Exception:
                 pass

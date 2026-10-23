@@ -154,6 +154,35 @@ def list_shared_with(scopes: list) -> list[dict]:
             (list(scopes),)).fetchall()
 
 
+def entities_holding(entity_type: str, entity_ids: Sequence[str], connector: str) -> set[str]:
+    """The `entity_ids` that hold a `connector` row at `entity_type` — `has_credential`
+    (any account) for a whole list, in ONE query whatever its length (#1317)."""
+    ids = sorted({str(e) for e in entity_ids})
+    if not ids:
+        return set()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT entity_id FROM connector_credentials "
+            "WHERE entity_type = %s AND entity_id = ANY(%s) AND connector = %s",
+            (entity_type, ids, connector)).fetchall()
+    return {r["entity_id"] for r in rows}
+
+
+def lent_to_scopes(scopes: Sequence[str], connector: str) -> list[dict]:
+    """The `connector` rows whose `share_side` holds one of `scopes`, WITH that
+    `share_side` — what `list_shared_with` reads, for one connector, plus the column
+    that says to whom each row is lent: a caller asking for several teams at once tells
+    them apart without one query per team (#1317). Metadata only, the secret is never read."""
+    if not scopes:
+        return []
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT entity_type, entity_id, connector, account, meta, share_side "
+            "FROM connector_credentials "
+            "WHERE connector = %s AND jsonb_exists_any(share_side, %s)",
+            (connector, list(scopes))).fetchall()
+
+
 def services_pretes(entity_type: str, entity_id: str, connector: str,
                     account: str = "") -> dict[str, list]:
     """`{cible: [services]}` — les services qu'un prêt couvre, par cible du `share_side`

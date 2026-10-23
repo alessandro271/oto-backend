@@ -357,10 +357,10 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             raise CredentialUnavailable(ErrorData(
                 code=INVALID_PARAMS,
                 message=(
-                    f"No `{provider}` credential configured for you. Set it"
-                    f"{links.ou_poser_la_cle(sub, org=lien_org, connecteur=provider)}."
-                    + indices._revoked_hint(sub, active_org, provider)
-                    + indices._reachable_hint(sub, active_org, provider)
+                    indices.refus_sans_cle(
+                        sub, active_org, provider,
+                        f"No `{provider}` credential configured for you. ",
+                        f"Set it{links.ou_poser_la_cle(sub, org=lien_org, connecteur=provider)}.")
                     + heritage.indice_refus(sub, active_org, provider)
                 ),
             ))
@@ -371,11 +371,11 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             # "the Whatsapp section" of their account page, where there is no field,
             # is a dead end. The "a team has the key" hint is also looked up
             # under the carrier — that is where shared secrets exist.
+            # A team of the caller holding the key opens the refusal (#1317).
             message=(
-                f"No `{porteur}` key configured for you. "
-                + indices._poser_ou_accorder(sub, lien_org, porteur)
-                + indices._revoked_hint(sub, active_org, porteur)
-                + indices._reachable_hint(sub, active_org, porteur)
+                indices.refus_sans_cle(sub, active_org, porteur,
+                                       f"No `{porteur}` key configured for you. ",
+                                       indices._poser_ou_accorder(sub, lien_org, porteur))
                 + heritage.indice_refus(sub, active_org, porteur)
             ),
         ))

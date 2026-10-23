@@ -49,6 +49,16 @@ Résolution par appel (`resolve_api_key` / `resolve_credential`) :
 5. Instance **plateforme** (grant/free-tier, ADR 0044 §F) avec quota.
 6. Rien → McpError actionnable + **instances à portée** (voir walker ci-dessous).
 
+⚠️ **Équipe non désignée** (#1317) : le palier 3 ne lit que l'équipe de l'APPEL (`_group=`) ou l'équipe
+active — jamais « une équipe dont je suis membre » prise d'office (l'équipe par défaut est réservée aux
+tenants opt-in depuis le 03/10/2026, `docs/groups-and-roles.md` ; une clé à portée est un geste que
+l'agent fait pour l'entité pour qui il travaille, décision du 16/07/2026). Quand rien ne résout et
+qu'une ou plusieurs équipes de l'appelant portent la clé, le refus **s'ouvre sur elles**, chacune avec
+son `_group=<id>` ; plusieurs : toutes listées, aucune choisie (`access/indices.refus_sans_cle`). Une
+équipe dont l'appelant n'est pas membre n'est ni servie ni nommée (sauf escalade org_admin, #218).
+L'élargissement à toutes les équipes est celui de la chaîne de grants (ADR 0053, `elargissement_equipe`
+ci-dessous), qui arrive avec la bascule L7, pas par la cascade.
+
 ⚠️ **Projet partagé à un non-membre** (#480, `access/heritage.py`) : sous `_project=` d'une
 org dont l'appelant n'est pas membre, les paliers **org** (3) et les accès plateforme
 `org:<id>` (5) de cette org sont **sautés**, et le palier 2 s'ouvre à tout connecteur à clé
@@ -235,7 +245,9 @@ mentir une surface (vécu 16/07). Contrat gardé par `tests/test_cascade_walker.
 `_project=`, ADR 0038) court-circuitent AVANT la marche ; `_group` se passe en
 lazy (callable) côté fetch. Échec « rien ne résout » : l'erreur remonte les
 **instances à portée** (`access.reachable_instances` — équipes dont le sub est
-membre, autres orgs) avec le geste per-call en tête (`_group=`/`_org=`/`_instance=`) ;
+membre, lues en lot par `group_store.groups_holding`, jamais une requête par équipe ; autres
+orgs) avec le geste per-call en tête (`_group=`/`_org=`/`_instance=`) — et une équipe qui porte
+la clé ouvre le refus (#1317) ;
 le drawer reçoit le même signal via `status_for.team_key_group`.
 
 ### Fenêtre de double lecture L7 (2026-08-29, `access/chain_shadow.py`)
