@@ -15,6 +15,7 @@ create a token in GitHub (Settings → Developer settings → Personal access to
 - "what changed between these two versions?" → `github_repos(op="compare", base="v1.2.0", head="main")`
 - "the open tickets" → `github_issues(op="search", state="open")`
 - "open a ticket" → `github_issues(op="create", fields={"title": "…", "body": "…"})`
+- "open a PR on a fix" → `github_act(op="create_branch", branch="fix/x", ref="main")`, then `github_files(op="write", branch="fix/x", …)` — `branch` required, otherwise the commit lands on the default branch — then `github_pulls(op="create")`; an existing branch is refused (422), never moved
 - "the PRs awaiting review" → `github_pulls(op="search", state="open")` then `op="reviews"` on a number
 - "what does this PR change?" → `github_pulls(op="files", number=…)`
 - "why did CI fail?" → `github_actions(op="runs", status="failure")` → `op="jobs"` → `op="logs"`

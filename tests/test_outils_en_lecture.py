@@ -87,6 +87,6 @@ async def test_aucun_outil_de_plateforme_ni_ecrivain_connu_n_est_declare():
                 "data_write", "whatsapp_act", "telegram_act", "instagram_act",
                 "linkedin_unipile_act", "chat_act", "teams_act", "apollo_act",
                 "lightfield_act", "luma_act", "pennylane_act", "signwell_act",
-                "productlane_act", "ahrefs_act", "lemlist_act"):
+                "productlane_act", "ahrefs_act", "lemlist_act", "github_act"):
         if nom in servis:
             assert not en_lecture(servis[nom]), nom

@@ -1,7 +1,8 @@
 """GitHub tools — repositories and code, issues, pull requests, organizations, Actions.
 
 Wraps `oto.tools.github.client.GitHubClient` (REST v3, Bearer). Seven tools, one
-per family of the upstream API.
+per family of the upstream API, plus `github_act` for creating a branch: the tool an
+MCP client asks to confirm (`ACTE`).
 
 Four traps of this API are handled here rather than left to the agent, because
 none of them shows up as an error:
@@ -36,6 +37,7 @@ what makes them checkable by the version-skew probe
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Literal, Optional
 
 from fastmcp import FastMCP
@@ -45,6 +47,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access, egress
 from ..connectors import verify as connector_verify
 from . import github_index
+from .lecture import ACTE
 
 #: The ops of each tool that return a LIST, and the body keys their default view
 #: reduces to a size. `full` is refused elsewhere: one object is served whole.
@@ -102,6 +105,32 @@ def _upstream_message(e) -> str:
     if status in (500, 502, 503, 504):
         return f"GitHub is temporarily unavailable (HTTP {status}) — retry later."
     return f"GitHub refused the request (HTTP {status}): {e.body}"
+
+
+#: A full commit SHA: what `ref` of `create_branch` takes besides a branch name.
+_SHA_COMPLET = re.compile(r"[0-9a-f]{40}")
+
+
+def _create_branch_message(e, branch: str, ref: Optional[str]) -> Optional[str]:
+    """The two refusals of `create_branch` said by name, or None (the generic one).
+
+    - 422 "Reference already exists": the branch exists; it is never moved.
+    - `ref` not found: the client resolves a branch NAME to its HEAD (404 when there
+      is no such branch) and passes a full SHA as is (422 "Object does not exist"
+      when there is no such commit). A tag or a short SHA is neither."""
+    status = e.status_code
+    msg = (e.body.get("message") if isinstance(e.body, dict) else str(e.body or "")) or ""
+    if status == 422 and "already exists" in msg.lower():
+        return (f"GitHub: the branch {branch!r} already exists (422) — it is never "
+                "moved or overwritten here. Choose another name.")
+    sha = ref is not None and bool(_SHA_COMPLET.fullmatch(ref))
+    if ref is not None and ((status == 404 and not sha)
+                            or (status == 422 and "does not exist" in msg.lower())):
+        return (f"GitHub: `ref` {ref!r} not found — a branch name or a full "
+                "40-character commit SHA is expected (a tag or a short SHA is not "
+                "resolved). ⚠️ On a private repository, a 404 can also mean the "
+                "token does not cover it.")
+    return None
 
 
 def _check_base_url(base_url) -> None:
@@ -312,6 +341,49 @@ def register(mcp: FastMCP) -> None:
                           "compare | tags | contributors | languages | topics | "
                           "releases | release | latest_release | create_release | "
                           "update_release")
+
+    @mcp.tool(annotations=ACTE)
+    def github_act(
+        op: Literal["create_branch"],
+        owner: Optional[str] = None,
+        repo: Optional[str] = None,
+        branch: Optional[str] = None,
+        ref: Optional[str] = None,
+    ) -> Any:
+        """⚠️ ACTS on a GitHub repository: creates a branch. Reading the repository
+        and its branches is `github_repos`.
+
+        `op='create_branch'` is how a pull request is opened without a shell, in
+        three steps:
+        1. `github_act(op='create_branch', branch='fix/x')`, from `ref`;
+        2. write the files with `github_files(op='write', branch='fix/x', …)` —
+           `branch` is REQUIRED there, otherwise the commit lands on the default
+           branch; GitHub refuses a write to a branch that does not exist;
+        3. `github_pulls(op='create')` with the new branch as head.
+
+        ⚠️ An existing branch is refused (422), never moved.
+
+        Args:
+            op: create_branch.
+            owner: repository owner.
+            repo: repository name.
+            branch: the new branch's name (`fix/x`, not `refs/heads/…`).
+            ref: the branch name, or full 40-character commit SHA, to start from
+                (default: the repository's default branch). A tag or a short SHA
+                is not resolved.
+        """
+        if op == "create_branch":
+            o, r = _repo(owner, repo, op)
+            _need(branch, "branch", op)
+            c = _client()
+            try:
+                return c.create_branch(o, r, branch, from_ref=ref)
+            except ValueError as e:
+                raise _bad(str(e))
+            except UpstreamHTTPError as e:
+                raise _bad(_create_branch_message(e, branch, ref)
+                           or _upstream_message(e))
+        raise _bad_op(op, "create_branch")
 
     # --- files ----------------------------------------------------------------
 

@@ -39,7 +39,7 @@ EXPECTED = {
                     "productlane_changelogs", "productlane_docs",
                     "productlane_tags", "productlane_workspace", "productlane_act"},
     "github": {"github_repos", "github_files", "github_issues", "github_pulls",
-               "github_orgs", "github_actions", "github_search"},
+               "github_orgs", "github_actions", "github_search", "github_act"},
 }
 
 
@@ -242,6 +242,86 @@ def test_le_declenchement_part_vraiment_quand_on_le_demande():
         _call("github", "github_actions", op="dispatch", owner="o", repo="r",
               workflow="ci.yml", ref="main", dry_run=False)
     assert [c[0] for c in fake.calls] == ["dispatch_workflow"]
+
+
+# --- créer une branche : `github_act` -------------------------------------------
+
+class _Refus(_Fake):
+    """Client dont `create_branch` lève le refus de GitHub donné."""
+
+    def __init__(self, status, body):
+        super().__init__()
+        self._refus = (status, body)
+
+    def create_branch(self, *a, **kw):
+        from oto.tools.common.errors import UpstreamHTTPError
+        self.calls.append(("create_branch", a, kw))
+        raise UpstreamHTTPError(self._refus[0], self._refus[1], service="github")
+
+
+def test_creer_une_branche_part_de_la_ref_donnee():
+    """Sans shell, c'est la seule façon d'avoir une branche où écrire avant
+    d'ouvrir une PR : l'API contents refuse une branche inexistante."""
+    fake = _Fake()
+    with _with("oto.tools.github.client.GitHubClient", fake):
+        _call("github", "github_act", op="create_branch", owner="o", repo="r",
+              branch="fix/x", ref="main")
+    assert fake.calls == [("create_branch", ("o", "r", "fix/x"),
+                           {"from_ref": "main"})]
+
+
+def test_creer_une_branche_sans_ref_part_de_la_branche_par_defaut():
+    """`ref` omis : le client lit la branche par défaut du dépôt (`from_ref=None`)."""
+    fake = _Fake()
+    with _with("oto.tools.github.client.GitHubClient", fake):
+        _call("github", "github_act", op="create_branch", owner="o", repo="r",
+              branch="fix/x")
+    assert fake.calls == [("create_branch", ("o", "r", "fix/x"), {"from_ref": None})]
+
+
+def test_creer_une_branche_sans_nom_est_refuse_avant_tout_appel():
+    fake = _Fake()
+    with _with("oto.tools.github.client.GitHubClient", fake):
+        with pytest.raises(McpError, match="branch"):
+            _call("github", "github_act", op="create_branch", owner="o", repo="r")
+    assert fake.calls == []
+
+
+def test_une_branche_existante_est_refusee_en_le_disant():
+    fake = _Refus(422, {"message": "Reference already exists"})
+    with _with("oto.tools.github.client.GitHubClient", fake):
+        with pytest.raises(McpError) as exc:
+            _call("github", "github_act", op="create_branch", owner="o", repo="r",
+                  branch="fix/x", ref="main")
+    m = str(exc.value)
+    assert "'fix/x' already exists" in m and "Choose another name" in m, m
+
+
+@pytest.mark.parametrize("ref,status,message", [
+    ("v1.2.0", 404, "Branch not found"),
+    ("a" * 40, 422, "Object does not exist"),
+])
+def test_une_ref_introuvable_dit_ce_qui_est_attendu(ref, status, message):
+    fake = _Refus(status, {"message": message})
+    with _with("oto.tools.github.client.GitHubClient", fake):
+        with pytest.raises(McpError) as exc:
+            _call("github", "github_act", op="create_branch", owner="o", repo="r",
+                  branch="fix/x", ref=ref)
+    m = str(exc.value)
+    assert f"`ref` {ref!r} not found" in m, m
+    assert "branch name or a full 40-character commit SHA" in m, m
+
+
+def test_github_repos_ne_cree_pas_de_branche():
+    """Le lecteur des dépôts ne porte aucune écriture neuve : créer une branche est
+    `github_act`, l'outil que le client fait confirmer."""
+    outils = _tools("github")
+    ops = outils["github_repos"].parameters["properties"]["op"]
+    assert "create_branch" not in str(ops)
+    act = outils["github_act"]
+    assert act.annotations.readOnlyHint is False
+    assert act.annotations.destructiveHint is not None
+    assert act.annotations.openWorldHint is not None
 
 
 def test_aucun_autre_outil_nest_en_dry_run_par_defaut():
