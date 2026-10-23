@@ -60,7 +60,9 @@ def _faux_scopes():
     s.CALENDAR = (G + "Calendars.ReadWrite",)
     s.TEAMS = (G + "Team.ReadBasic.All", G + "Chat.ReadWrite")
     s.NOTES = (G + "Notes.ReadWrite.All",)
-    s.DIRECTORY = (G + "Directory.Read.All", G + "AuditLog.Read.All", G + "Sites.Read.All")
+    s.DIRECTORY = (G + "Directory.Read.All", G + "AuditLog.Read.All", G + "Sites.Read.All",
+                   G + "LicenseAssignment.ReadWrite.All", G + "User.EnableDisableAccount.All",
+                   G + "GroupMember.ReadWrite.All")
     s.TEAMS_ADMIN = (G + "ChannelMessage.Read.All",)
     s.REFRESH = (G + ".default", "offline_access")
     canon = {n.removeprefix(G).lower(): n.removeprefix(G)
@@ -973,7 +975,7 @@ def test_l_axe_account_est_accepte_sur_les_outils(env):
 
     for outil in ("sharepoint_file", "sharepoint_site", "outlook",
                   "outlook_act", "outlook_calendar_calendars", "outlook_calendar_event",
-                  "teams", "teams_act", "onenote", "onenote_act", "entra"):
+                  "teams", "teams_act", "onenote", "onenote_act", "entra", "entra_act"):
         assert "_account" in {a.param for a in call_axes.axes_for_call(outil)}, outil
 
 
@@ -1192,7 +1194,7 @@ def test_le_schema_annonce_account_sur_toutes_les_cartes_microsoft():
     for outil in ("microsoft_accounts", "sharepoint_file", "sharepoint_site",
                   "outlook", "outlook_act", "outlook_calendar_calendars",
                   "outlook_calendar_event", "teams", "teams_act", "onenote", "onenote_act",
-                  "entra"):
+                  "entra", "entra_act"):
         assert "_account" in {a.param for a in call_axes.axes_for(outil)}, outil
     for carte in (PORTEUR, "sharepoint", "outlook", "outlook_calendar", "teams", "onenote",
                   "entra"):

@@ -1,14 +1,18 @@
-"""Tool `entra` du connecteur « Microsoft 365 directory » (service du porteur `microsoft`).
+"""Tools `entra` / `entra_act` du connecteur « Microsoft 365 directory » (service du
+porteur `microsoft`).
 
 Ce que ce fichier verrouille :
-- la SURFACE : un seul outil, `entra`, en lecture — rien n'écrit (décision du 21/10/2026) ;
-  le jeton du service `entra` ;
+- la SURFACE : la paire de tout connecteur, `entra` en lecture, `entra_act` qui agit et ne
+  fait que trois gestes — licence, compte activé, membre d'un groupe (21/10/2026) ; le
+  jeton du service `entra` ;
 - le dispatch vers les VRAIES méthodes de `DirectoryClient` (autospec) ;
 - les licences nommées par les abonnements du tenant, achetées / attribuées / libres ;
 - les filtres des comptes, appliqués après lecture ; la dernière connexion refusée par
   Microsoft (403) dite avec son prérequis, pas en « accès refusé » générique ;
 - un groupe Microsoft 365 avec son site d'équipe, une liste de diffusion sans ;
 - les arguments d'une autre op refusés avant tout appel ;
+- l'écriture : une licence nommée comme la lecture la montre, refusée sans licence libre ;
+  un membre ajouté par son id objet, jamais dans une liste de diffusion (Exchange) ;
 - l'approbation d'administrateur : l'annuaire n'est jamais dans le lien par défaut, seulement
   depuis sa carte ou nommé.
 """
@@ -65,25 +69,26 @@ def client(monkeypatch):
     return inst
 
 
-def _tool():
+def _tool(name="entra"):
     from fastmcp import FastMCP
     from oto_mcp.tools import entra as X
 
     m = FastMCP("t")
     X.register(m)
-    return asyncio.run(m.get_tool("entra")).fn
+    return asyncio.run(m.get_tool(name)).fn
 
 
-def test_surface_lecture_seule():
+def test_surface_lecture_et_acte():
     from fastmcp import FastMCP
     from oto_mcp.tools import entra as X
-    from oto_mcp.tools.lecture import LECTURE
+    from oto_mcp.tools.lecture import ACTE, LECTURE
 
     m = FastMCP("t")
     X.register(m)
     outils = {t.name: t for t in asyncio.run(m.list_tools())}
-    assert set(outils) == {"entra"}, "l'annuaire se lit, il ne s'écrit pas"
+    assert set(outils) == {"entra", "entra_act"}
     assert outils["entra"].annotations == LECTURE
+    assert outils["entra_act"].annotations == ACTE
 
 
 def test_licences_achetees_attribuees_libres(client):
@@ -103,7 +108,7 @@ def test_comptes_vue_resserree_licences_nommees(client):
         "id": "ana", "name": "Ana", "email": "ana@contoso.example",
         "mail": "ana@contoso.example", "enabled": True, "type": "Member", "jobTitle": None,
         "department": "Accueil", "city": None, "office": None, "created": None,
-        "licenses": ["Microsoft 365 Business Standard"]}]
+        "usageLocation": None, "licenses": ["Microsoft 365 Business Standard"]}]
     client.list_users.assert_called_once_with(sign_in=False, limit=5000)
 
 
@@ -245,3 +250,81 @@ def test_l_annuaire_hors_du_lien_d_approbation_par_defaut(monkeypatch):
     assert "entra" in depuis_sa_carte["services"]
     assert set(depuis_sa_carte["services"]) == set(ms.SERVICES)
     assert ms.admin_approval("sub-1", services=["entra"])["services"] == ["entra"]
+
+
+# ── L'écriture (`entra_act`) ────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("license", ["Business Standard", "O365_BUSINESS_PREMIUM", BS,
+                                     "microsoft 365 business standard"])
+def test_licence_attribuee_par_son_nom_ou_son_sku(client, license):
+    client.assign_licenses.return_value = {"assignedLicenses": [{"skuId": BS}, {"skuId": BB}]}
+    out = _tool("entra_act")(op="add_license", user="ana@contoso.example", license=license)
+    assert out == {"user": "ana@contoso.example",
+                   "license": "Microsoft 365 Business Standard",
+                   "licenses": ["Microsoft 365 Business Standard",
+                                "Microsoft 365 Business Basic"]}
+    client.assign_licenses.assert_called_once_with("ana@contoso.example", add=[BS])
+
+
+def test_licence_retiree(client):
+    client.assign_licenses.return_value = {"assignedLicenses": []}
+    out = _tool("entra_act")(op="remove_license", user="bob", license="Business Basic")
+    assert out["licenses"] == []
+    client.assign_licenses.assert_called_once_with("bob", remove=[BB])
+
+
+def test_sans_licence_libre_refuse_avant_l_ecriture(client):
+    with pytest.raises(McpError, match="No free Microsoft 365 Business Basic licence"):
+        _tool("entra_act")(op="add_license", user="dan", license="Business Basic")
+    client.assign_licenses.assert_not_called()
+
+
+@pytest.mark.parametrize("license,motif", [
+    ("Microsoft 365", "names several"), ("Visio", "names none")])
+def test_licence_ambigue_ou_inconnue_refusee(client, license, motif):
+    with pytest.raises(McpError, match=motif):
+        _tool("entra_act")(op="add_license", user="dan", license=license)
+    client.assign_licenses.assert_not_called()
+
+
+def test_compte_desactive_puis_reactive(client):
+    assert _tool("entra_act")(op="disable_account", user="cle") == {"user": "cle",
+                                                                    "enabled": False}
+    _tool("entra_act")(op="enable_account", user="cle")
+    assert [c.args for c in client.set_account_enabled.call_args_list] == [
+        ("cle", False), ("cle", True)]
+
+
+def test_membre_ajoute_par_son_id_objet(client):
+    client.get_group.return_value = {"id": "g1", "displayName": "Qualité",
+                                     "groupTypes": ["Unified"]}
+    client.get_user.return_value = {"id": "uid-ana"}
+    out = _tool("entra_act")(op="add_member", user="ana@contoso.example", group_id="g1")
+    assert out == {"user": "ana@contoso.example", "group": "Qualité", "member": True}
+    client.add_group_member.assert_called_once_with("g1", "uid-ana")
+    _tool("entra_act")(op="remove_member", user="ana@contoso.example", group_id="g1")
+    client.remove_group_member.assert_called_once_with("g1", "uid-ana")
+
+
+@pytest.mark.parametrize("groupe", [
+    {"displayName": "Tous", "mailEnabled": True},
+    {"displayName": "Admins", "mailEnabled": True, "securityEnabled": True}])
+def test_liste_de_diffusion_refusee_c_est_exchange(client, groupe):
+    client.get_group.return_value = groupe
+    with pytest.raises(McpError, match="changed in Exchange"):
+        _tool("entra_act")(op="add_member", user="ana", group_id="g2")
+    client.add_group_member.assert_not_called()
+
+
+@pytest.mark.parametrize("args,motif", [
+    ({"op": "add_license", "user": "a"}, "license"),
+    ({"op": "add_license", "license": "x"}, "user"),
+    ({"op": "add_member", "user": "a"}, "group_id"),
+    ({"op": "disable_account", "user": "a", "license": "x"}, "license"),
+    ({"op": "remove_license", "user": "a", "license": "x", "group_id": "g"}, "group_id"),
+    ({"op": "delete_user", "user": "a"}, "op must be"),
+])
+def test_ecriture_refusee_avant_le_jeton(client, args, motif):
+    with pytest.raises(McpError, match=motif):
+        _tool("entra_act")(**args)
+    assert client.construits == []

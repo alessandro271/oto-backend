@@ -1,20 +1,22 @@
-"""Microsoft 365 directory — an organization's Microsoft Entra ID, READ, via Microsoft
-Graph (`DirectoryClient`): accounts and licences, subscriptions, groups and members,
-sites.
+"""Microsoft 365 directory — an organization's Microsoft Entra ID via Microsoft Graph
+(`DirectoryClient`): accounts and licences, subscriptions, groups and members, sites
+read; licences, enabled accounts and group members written.
 
 Credential = the PERSON's Microsoft 365 account (carrier `microsoft`, OAuth, delegated
 permissions) that has authorized THIS service (scopes `DIRECTORY`, approved by a tenant
 administrator — never by the default approval, `auth/microsoft.ADMIN_ONLY_SERVICES`);
 her own Microsoft role bounds what Graph returns.
 
-**Surface** — one tool, `entra`, `lecture.LECTURE`: nothing here writes (the decision of
-21/10/2026: the directory is read first; changing a licence or an account stays in the
-Microsoft 365 admin centre).
+**Surface** — the pair of every connector: `entra` reads (`lecture.LECTURE`), `entra_act`
+acts (`lecture.ACTE`) and does only three things — assign or remove a licence, enable or
+disable an account, add or remove a group member. No account is created or deleted, no
+password touched: that stays in the Microsoft 365 admin centre (decision of 21/10/2026).
 
 Protocol facts the tool carries (`oto.tools.microsoft.directory`): a licence is a
 `skuId` named by the tenant's subscriptions; the last sign-in needs Entra ID P1 and a
 reporting role, or Graph refuses the whole listing; a team site's members are its
-group's, SharePoint's own permissions are not listed.
+group's, SharePoint's own permissions are not listed; a licence needs the user's usage
+location; a distribution list's members are Exchange's, Graph does not change them.
 """
 from __future__ import annotations
 
@@ -24,13 +26,17 @@ from fastmcp import FastMCP
 
 from .. import output_projection
 from ._microsoft_graph import bad, need, raise_refusal, raw, refuse_ignored, run, token
-from .lecture import LECTURE
+from .lecture import ACTE, LECTURE
 
 #: The Microsoft service this tool calls: its scopes, its card (`auth/microsoft`).
 _SERVICE = "entra"
 _LABEL = "Microsoft 365 directory"
 
 _OPS = ("licenses", "users", "user", "groups", "group", "sites")
+_ACT_OPS = ("add_license", "remove_license", "enable_account", "disable_account",
+            "add_member", "remove_member")
+#: The groups whose members Graph cannot change (Exchange's).
+_EXCHANGE_KINDS = ("distribution", "mail_security")
 #: How many accounts or groups are read before filtering — far above an SMB's directory.
 _READ_CEILING = 5000
 
@@ -40,8 +46,8 @@ _SIGN_IN_REFUSED = (
     "reporting role for the connected account. Retry without `sign_in`.")
 
 
-def _ops_error() -> str:
-    return "op must be " + ", ".join(f"'{o}'" for o in _OPS[:-1]) + f" or '{_OPS[-1]}'"
+def _ops_error(ops: tuple = _OPS) -> str:
+    return "op must be " + ", ".join(f"'{o}'" for o in ops[:-1]) + f" or '{ops[-1]}'"
 
 
 def _contient(valeur: Optional[str], cherche: str) -> bool:
@@ -60,10 +66,13 @@ def register(mcp: FastMCP) -> None:
     def _run(fn):
         return run(fn, _LABEL)
 
-    def _noms(c: DirectoryClient) -> dict:
+    def _nom(s: dict) -> str:
+        """A subscription's commercial name, its part number when unknown."""
+        return SKU_NAMES.get(s.get("skuPartNumber"), s.get("skuPartNumber")) or ""
+
+    def _noms(abonnements: list) -> dict:
         """`skuId` → the licence's name, from the tenant's subscriptions."""
-        return {s.get("skuId"): SKU_NAMES.get(s.get("skuPartNumber"), s.get("skuPartNumber"))
-                for s in _run(c.list_subscriptions)}
+        return {s.get("skuId"): _nom(s) for s in abonnements}
 
     def _licences(u: dict, noms: dict) -> list:
         return [noms.get(l.get("skuId"), l.get("skuId")) for l in u.get("assignedLicenses") or []]
@@ -74,7 +83,8 @@ def register(mcp: FastMCP) -> None:
                "enabled": u.get("accountEnabled"), "type": u.get("userType"),
                "jobTitle": u.get("jobTitle"), "department": u.get("department"),
                "city": u.get("city"), "office": u.get("officeLocation"),
-               "created": u.get("createdDateTime"), "licenses": _licences(u, noms)}
+               "created": u.get("createdDateTime"), "usageLocation": u.get("usageLocation"),
+               "licenses": _licences(u, noms)}
         if "signInActivity" in u:
             a = u.get("signInActivity") or {}
             vue.update(lastSignIn=a.get("lastSignInDateTime"),
@@ -182,7 +192,7 @@ def register(mcp: FastMCP) -> None:
                 achete = (s.get("prepaidUnits") or {}).get("enabled")
                 utilise = s.get("consumedUnits")
                 vues.append({"sku": s.get("skuPartNumber"),
-                             "name": SKU_NAMES.get(s.get("skuPartNumber"), s.get("skuPartNumber")),
+                             "name": _nom(s),
                              "bought": achete, "assigned": utilise,
                              "free": (achete - utilise) if isinstance(achete, int)
                              and isinstance(utilise, int) else None,
@@ -198,7 +208,7 @@ def register(mcp: FastMCP) -> None:
                 if sign_in and e.status_code == 403:
                     raise bad(_SIGN_IN_REFUSED) from e
                 raise_refusal(e, _LABEL)
-            noms = _noms(c)
+            noms = _noms(_run(c.list_subscriptions))
             cherche, licence = (query or "").lower(), (license or "").lower()
             gardes = []
             for u in comptes:
@@ -226,7 +236,7 @@ def register(mcp: FastMCP) -> None:
             if full:
                 return {**u, "groups": groupes}
             m = u.get("manager") or None
-            return {**_compte(u, _noms(c)),
+            return {**_compte(u, _noms(_run(c.list_subscriptions))),
                     "manager": {"id": m.get("id"), "name": m.get("displayName"),
                                 "mail": m.get("mail")} if m else None,
                     "groups": [_groupe(g) for g in groupes]}
@@ -262,3 +272,104 @@ def register(mcp: FastMCP) -> None:
         return _liste("sites", [raw(s) if full else {
             "id": s.get("id"), "name": s.get("displayName"), "webUrl": s.get("webUrl"),
             "created": s.get("createdDateTime")} for s in sites])
+
+    def _abonnement(abonnements: list, license: str) -> dict:
+        """The subscription `license` names: its `skuId`, its part number or its name —
+        exactly, or by a part of the name when only one matches."""
+        cherche = license.strip().lower()
+        for s in abonnements:
+            if cherche in ((s.get("skuId") or "").lower(),
+                           (s.get("skuPartNumber") or "").lower(), _nom(s).lower()):
+                return s
+        proches = [s for s in abonnements if cherche in _nom(s).lower()]
+        if len(proches) == 1:
+            return proches[0]
+        noms = sorted(_nom(s) for s in (proches or abonnements))
+        raise bad(f"`license` {license!r} names {'several' if proches else 'none'} of the "
+                  f"organization's subscriptions: {', '.join(noms) or 'none'}. Nothing was "
+                  f"changed.")
+
+    @mcp.tool(name="entra_act", annotations=ACTE)
+    def entra_act(
+        op: Literal["add_license", "remove_license", "enable_account", "disable_account",
+                    "add_member", "remove_member"],
+        user: Optional[str] = None,
+        license: Optional[str] = None,
+        group_id: Optional[str] = None,
+    ) -> dict:
+        """CHANGE the organization's Microsoft 365 directory: ⚠️ every op takes effect at
+        once for the person concerned. Only three things: a licence, an account enabled
+        or not, a group's members. Creating or deleting an account and passwords stay in
+        the Microsoft 365 admin centre. Reading is `entra`. Microsoft checks the
+        connected person's role on every call: License Administrator for licences, User
+        Administrator for accounts, Groups Administrator (or the group's owner) for
+        members.
+
+        `op` (required):
+        - **"add_license"** / **"remove_license"**: gives `user` the subscription
+          `license`, or takes it back — named as `entra(op="licenses")` shows it (its
+          name, e.g. "Business Standard", or its `sku`). Adding needs a free licence
+          and the user's usage location (set in the admin centre). Removing a licence
+          cuts the services it brings (mailbox, OneDrive, Teams…) once Microsoft's
+          grace period ends. Returns {user, license, licenses}.
+        - **"enable_account"** / **"disable_account"**: `user` can sign in again, or no
+          longer can; data, licences and groups stay. Returns {user, enabled}.
+        - **"add_member"** / **"remove_member"**: `user` joins or leaves the group
+          `group_id` — for a Microsoft 365 group, its team and its SharePoint team site.
+          Only security and Microsoft 365 groups: a distribution list's members are
+          changed in Exchange. Returns {user, group, member}.
+
+        Args:
+            op: add_license | remove_license | enable_account | disable_account |
+                add_member | remove_member.
+            user: the account — its id or address (`entra(op="users")`).
+            license: op="add_license"/"remove_license" — the subscription.
+            group_id: op="add_member"/"remove_member" — the group's id
+                (`entra(op="groups")`).
+        """
+        if op not in _ACT_OPS:
+            raise bad(_ops_error(_ACT_OPS))
+        qui = need(user, "user", op)
+
+        if op in ("add_license", "remove_license"):
+            refuse_ignored(op, group_id=group_id)
+            nom = need(license, "license", op)
+            c = _client()
+            abonnements = _run(c.list_subscriptions)
+            abonnement = _abonnement(abonnements, nom)
+            sku = abonnement.get("skuId")
+            libelle = _nom(abonnement)
+            if op == "add_license":
+                achete = (abonnement.get("prepaidUnits") or {}).get("enabled")
+                if isinstance(achete, int) and abonnement.get("consumedUnits", 0) >= achete:
+                    raise bad(f"No free {libelle} licence: {achete} bought, all assigned. "
+                              f"Buy one, or remove it from another account. Nothing was "
+                              f"changed.")
+                u = _run(lambda: c.assign_licenses(qui, add=[sku]))
+            else:
+                u = _run(lambda: c.assign_licenses(qui, remove=[sku]))
+            return {"user": qui, "license": libelle,
+                    "licenses": _licences(u or {}, _noms(abonnements))}
+
+        if op in ("enable_account", "disable_account"):
+            refuse_ignored(op, license=license, group_id=group_id)
+            actif = op == "enable_account"
+            c = _client()
+            _run(lambda: c.set_account_enabled(qui, actif))
+            return {"user": qui, "enabled": actif}
+
+        refuse_ignored(op, license=license)
+        gid = need(group_id, "group_id", op)
+        c = _client()
+        g = _run(lambda: c.get_group(gid))
+        if group_kind(g) in _EXCHANGE_KINDS:
+            raise bad(f"{g.get('displayName') or gid} is a {group_kind(g).replace('_', ' ')} "
+                      f"group: its members are changed in Exchange (admin centre), not "
+                      f"through Microsoft Graph. Nothing was changed.")
+        membre = _run(lambda: c.get_user(qui)).get("id")
+        if op == "add_member":
+            _run(lambda: c.add_group_member(gid, membre))
+        else:
+            _run(lambda: c.remove_group_member(gid, membre))
+        return {"user": qui, "group": g.get("displayName") or gid,
+                "member": op == "add_member"}
