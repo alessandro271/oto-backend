@@ -83,7 +83,7 @@ KB = Retrait(
 # `RENOMMAGES_MESSAGERIES` pour `20261021_1219_outils_act_msg`. Une ligne ajoutée est
 # annoncée, refusée et migrée ; rien ne se recopie ailleurs.
 #
-# **Le sens d'une liste réécrite** (décision d'Alexis du 21/10/2026, à partir du lot des
+# **Le sens d'une liste réécrite** (décision du 21/10/2026, à partir du lot des
 # messageries) : une liste qui AUTORISE ne reçoit, pour un ancien outil MIXTE (qui lisait
 # et, en transition, envoyait encore), que le nouveau lecteur — jamais `<ns>_act` ; seul
 # un ancien outil d'envoi DÉDIÉ donne `<ns>_act`, et seulement si `<ns>_act` ne fait rien
@@ -110,12 +110,22 @@ KB = Retrait(
 #   masque aussi `<ns>_act` (`remplacants`).
 # Les ops de `<ns>_act` portent leur objet quand le connecteur agit sur plusieurs
 # (`react_message` n'est pas `react_post`, `send_email` chez Apollo).
+#
+# 23/10/2026, les PERSONAS lemlist : `lemlist_database` (la base partagée) sauvait et
+# supprimait aussi des personas, donc aucune recette ne pouvait l'appeler. Il ne fait plus
+# que lire ; ses deux ops d'écriture passent à `lemlist_act`, l'acteur unique du
+# connecteur (`OPS_DEPLACEES_PERSONAS`, que la révision `20261023_0713_lemlist_personas`
+# lit). Choix assumé : autoriser `lemlist_inbox_send` donne toujours `lemlist_act`, qui
+# porte désormais aussi les personas — aucun agent vivant ne perd l'envoi
+# (`ops_en_plus` ne compte pas les ops de ce lot). La révision du lot des envois lit
+# `OPS_DEPLACEES_ENVOIS`, pas ce lot : elle garde le sens avec lequel elle a été jouée.
 
 
 #: Les jours des lots : Gmail et Outlook, puis les messageries et les envois.
 LOT_MAILS = datetime.date(2026, 10, 17)
 LOT_MESSAGERIES = datetime.date(2026, 10, 21)
 LOT_ENVOIS = datetime.date(2026, 10, 21)
+LOT_PERSONAS = datetime.date(2026, 10, 23)
 
 
 class Renommage(NamedTuple):
@@ -201,9 +211,18 @@ RENOMMAGES_ENVOIS: tuple[Renommage, ...] = (
 RENOMMAGES: tuple[Renommage, ...] = (RENOMMAGES_ACT + RENOMMAGES_MESSAGERIES
                                      + RENOMMAGES_ENVOIS)
 
+#: Le lot des personas lemlist (23/10/2026), que la révision
+#: `20261023_0713_lemlist_personas` lit : le lecteur de la base partagée reste servi.
+OPS_DEPLACEES_PERSONAS: tuple[Renommage, ...] = (
+    *_vers("lemlist_database", "lemlist_act",
+           {"persona_create": "create_persona", "persona_delete": "delete_persona"},
+           LOT_PERSONAS),
+)
+
 #: Le lot des envois, lecteurs MIXTES : l'outil reste servi, ces ops passent à
-#: `<ns>_act`. `ancien` = l'outil qui reste.
-OPS_DEPLACEES: tuple[Renommage, ...] = (
+#: `<ns>_act`. `ancien` = l'outil qui reste. La révision `20261021_1352_outils_act_envois`
+#: lit cette table-ci.
+OPS_DEPLACEES_ENVOIS: tuple[Renommage, ...] = (
     *_vers("linkedin_unipile_post", "linkedin_unipile_act", _PUBLICATION, LOT_ENVOIS),
     *_vers("linkedin_unipile_network", "linkedin_unipile_act", _INVITATIONS, LOT_ENVOIS),
     *_vers("linkedin_unipile_profile", "linkedin_unipile_act",
@@ -220,6 +239,9 @@ OPS_DEPLACEES: tuple[Renommage, ...] = (
            {"broadcast": "broadcast_changelog"}, LOT_ENVOIS),
     *_vers("ahrefs_social", "ahrefs_act", {"publish": "publish_post"}, LOT_ENVOIS),
 )
+
+#: Tous les lecteurs MIXTES (envois, puis personas) : ce que le refus et l'annonce lisent.
+OPS_DEPLACEES: tuple[Renommage, ...] = OPS_DEPLACEES_ENVOIS + OPS_DEPLACEES_PERSONAS
 
 #: L'annonce est servie aux agents (`instructions`, section « Ton contexte oto » : au
 #: handshake et dans `oto_context`) jusqu'à ce jour inclus — deux mois après le dernier
@@ -245,9 +267,12 @@ def ops_de_l_acteur(acteur: str) -> frozenset[str]:
 
 
 def ops_en_plus(ancien: str, acteur: str) -> tuple[str, ...]:
-    """Ce que `acteur` fait de plus que l'ancien outil retiré `ancien`."""
+    """Ce que `acteur` fait de plus que l'ancien outil retiré `ancien`. Les ops du lot
+    des personas n'y comptent pas : `lemlist_inbox_send` autorisé garde `lemlist_act`
+    (choix du 23/10/2026)."""
     donnees = {r.op for r in RENOMMAGES if r.ancien == ancien and r.outil == acteur}
-    return tuple(sorted(ops_de_l_acteur(acteur) - donnees))
+    hors = {r.op for r in OPS_DEPLACEES_PERSONAS if r.outil == acteur}
+    return tuple(sorted(ops_de_l_acteur(acteur) - donnees - hors))
 
 
 def remplacants_autorises(ancien: str) -> tuple[str, ...]:

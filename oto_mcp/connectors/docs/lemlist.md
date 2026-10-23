@@ -23,10 +23,10 @@ the connector mirrors the **141 documented routes**, without exception. by famil
 **lemlist CRM** — `lemlist_contact`, `lemlist_company`, `lemlist_team(op="fields")`
 - ⚠️ a **contact** is not a **lead**: the lead is a person's copy INSIDE a campaign, the contact is the person themselves. this is the most costly confusion here.
 
-**inbox** — `lemlist_inbox` (conversations, drafts, labels) and `lemlist_act` (the direct sends)
+**inbox** — `lemlist_inbox` (conversations, drafts, labels) and `lemlist_act` (the direct sends, and the personas of the shared base)
 **unsubscribes** — `lemlist_unsubscribe`: ⚠️ **three distinct lists** (v1 emails/domains, v2 variables, a contact's do-not-contact flag); writing to one does not write to the others
 **signals** — `lemlist_watchlist`: companies that are hiring, fundraising, job changes, visiting your website… (website visitors: section below)
-**the rest** — `lemlist_task`, `lemlist_database` (shared base + personas), `lemlist_team`, `lemlist_mailbox` (SMTP/IMAP connection + lemwarm), `lemlist_deliverability`, `lemlist_webhook`, `lemlist_get_activities`
+**the rest** — `lemlist_task`, `lemlist_database` (shared base, read-only: people, companies, filters, personas — saving or deleting a persona is `lemlist_act`), `lemlist_team`, `lemlist_mailbox` (SMTP/IMAP connection + lemwarm), `lemlist_deliverability`, `lemlist_webhook`, `lemlist_get_activities`
 
 ## usage — website visitors
 
@@ -45,7 +45,7 @@ four tools send or **arm** sending. all four are **hidden by default** — they 
 
 - `lemlist_campaign_start` — starting the campaign runs the sequence for all its launched leads
 - `lemlist_launch_lead` — take a lead out of manual review
-- `lemlist_act` — **direct** email / LinkedIn / WhatsApp (`op=send_email|send_linkedin|send_whatsapp`): no campaign, no sequence, no review in front of them, the message goes out
+- `lemlist_act` — **direct** email / LinkedIn / WhatsApp (`op=send_email|send_linkedin|send_whatsapp`): no campaign, no sequence, no review in front of them, the message goes out. it also saves or deletes a persona of the shared base (`op=create_persona|delete_persona`)
 - `lemlist_campaign_auto_review` — sends nothing itself, but makes every lead **added** afterwards go out: with it, `lemlist_create_lead` becomes a send
 
 everything else works on data or on a campaign that has nothing to send yet.

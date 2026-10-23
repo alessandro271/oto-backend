@@ -500,3 +500,77 @@ def test_max_chars_nul_est_refuse(max_chars):
         with pytest.raises(Exception, match="max_chars"):
             _tool("lemlist_inbox").fn(op="messages", contact_id="ctc_1",
                                       max_chars=max_chars)
+
+
+# --- La base partagée : elle lit, ses personas passent à `lemlist_act` (23/10/2026) ----
+
+def test_la_base_partagee_se_declare_en_lecture_et_ses_personas_vont_a_l_acteur():
+    """Une recette n'appelle que des outils déclarés en lecture : la recherche dans la
+    base partagée doit l'être ; créer et supprimer un persona est un acte, celui de
+    l'acteur unique du connecteur."""
+    from oto_mcp.tools.lecture import en_lecture
+
+    lecture = _tool("lemlist_database")
+    assert en_lecture(lecture)
+    ops = lecture.parameters["properties"]["op"]["enum"]
+    assert ops == ["people", "companies", "filters", "personas"]
+    assert not {"name", "persona_id"} & set(lecture.parameters["properties"])
+    act = _tool("lemlist_act")
+    assert not en_lecture(act)
+    assert {"create_persona", "delete_persona"} <= set(
+        act.parameters["properties"]["op"]["enum"])
+
+
+@pytest.mark.parametrize("op,acte", [("persona_create", "create_persona"),
+                                     ("persona_delete", "delete_persona")])
+def test_une_op_de_persona_sur_la_lecture_refuse_en_nommant_l_acteur(op, acte):
+    """Le vrai chemin : la signature refuse l'op, la taxonomie nomme le nouvel appel
+    (`outils_retires.OPS_DEPLACEES`), sans appeler lemlist."""
+    from fastmcp import FastMCP
+    from oto_mcp import error_taxonomy
+    from oto_mcp.tools import lemlist_crm
+
+    m = FastMCP("t")
+    lemlist_crm.register(m)
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        try:
+            asyncio.run(m.call_tool("lemlist_database", {"op": op}))
+        except Exception as e:  # noqa: BLE001 — la taxonomie la classe ci-dessous
+            info = error_taxonomy.classify(e)
+        else:
+            pytest.fail(f"lemlist_database(op={op!r}) ne doit plus rien servir")
+        assert not client_cls.called
+    assert info.code == "invalid_input"
+    assert f'`lemlist_act(op="{acte}", …)`' in info.message
+
+
+def test_les_personas_passent_par_l_acteur():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        act = _tool("lemlist_act")
+        act.fn(op="create_persona", name="CX leads", mode="leads",
+               filters=[{"filterId": "department", "in": ["Customer service"]}])
+        assert inst.create_persona.call_args.args == ("CX leads",)
+        assert inst.create_persona.call_args.kwargs["mode"] == "leads"
+        act.fn(op="delete_persona", persona_id="pdp_1")
+        assert inst.delete_persona.call_args.args == ("pdp_1",)
+        assert not inst.send_inbox_email.called
+
+
+def test_un_acte_incomplet_est_refuse_sans_aller_retour():
+    """Les arguments d'un envoi ne sont plus exigés par la signature (un persona n'en a
+    pas) : le bord les exige, op par op."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        act = _tool("lemlist_act")
+        with pytest.raises(Exception, match="message"):
+            act.fn(op="send_email", send_user_id="usr_1", send_user_email="me@x.fr",
+                   send_user_mailbox_id="mbx_1")
+        with pytest.raises(Exception, match="mode"):
+            act.fn(op="create_persona", name="CX leads")
+        with pytest.raises(Exception, match="persona_id"):
+            act.fn(op="delete_persona")
+        assert not inst.method_calls

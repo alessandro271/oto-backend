@@ -9,7 +9,7 @@ lot dans `outils_retires`, sans les recopier :
 
 - `RENOMMAGES_ENVOIS` — les outils d'envoi DÉDIÉS, retirés (`linkedin_unipile_publish`,
   `linkedin_unipile_invite`, `lemlist_inbox_send`) ;
-- `OPS_DEPLACEES` — les lecteurs MIXTES, qui RESTENT servis sous leur nom et perdent
+- `OPS_DEPLACEES_ENVOIS` — les lecteurs MIXTES, qui RESTENT servis sous leur nom et perdent
   leurs ops d'envoi (`apollo_email`, `linkedin_unipile_post`…).
 
 **Le sens, décision d'Alexis du 21/10/2026 : autoriser reste étroit, masquer reste large**
@@ -69,7 +69,7 @@ def _revision_des_messageries():
 def acteurs_elargis() -> tuple[str, ...]:
     """Les acteurs nés au lot des messageries auxquels ce lot ajoute des ops."""
     from oto_mcp import outils_retires
-    lot = outils_retires.RENOMMAGES_ENVOIS + outils_retires.OPS_DEPLACEES
+    lot = outils_retires.RENOMMAGES_ENVOIS + outils_retires.OPS_DEPLACEES_ENVOIS
     return tuple(sorted({r.outil for r in outils_retires.RENOMMAGES_MESSAGERIES
                          if r.outil.endswith("_act")} & {r.outil for r in lot}))
 
@@ -78,7 +78,7 @@ def correspondances() -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, 
     """`(autorise, masque)` du lot des envois."""
     from oto_mcp import outils_retires
     autorise, masque = _revision_des_messageries().correspondances(
-        outils_retires.RENOMMAGES_ENVOIS + outils_retires.OPS_DEPLACEES)
+        outils_retires.RENOMMAGES_ENVOIS + outils_retires.OPS_DEPLACEES_ENVOIS)
     for acteur in acteurs_elargis():
         autorise[acteur] = ()
         masque[acteur] = (acteur,)

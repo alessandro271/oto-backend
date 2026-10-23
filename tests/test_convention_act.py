@@ -194,6 +194,11 @@ def test_autoriser_un_ancien_lecteur_n_autorise_que_la_lecture():
     assert r("linkedin_unipile_post") == ("linkedin_unipile_post",)
     assert r("linkedin_unipile_publish") == () and r("linkedin_unipile_invite") == ()
     assert r("lemlist_inbox_send") == ("lemlist_act",)
+    # Lot des personas (23/10/2026) : le lecteur reste lui-même ; `lemlist_act` porte aussi
+    # les personas, et `lemlist_inbox_send` le donne toujours (choix assumé).
+    assert r("lemlist_database") == ("lemlist_database",)
+    assert outils_retires.remplacants("lemlist_database") == ("lemlist_database",
+                                                              "lemlist_act")
     # Masquer reste large : masquer l'ancien outil dédié masque l'acteur.
     assert outils_retires.remplacants("linkedin_unipile_invite") == ("linkedin_unipile_act",)
     perdus = {"linkedin_unipile_send", "linkedin_unipile_publish", "linkedin_unipile_invite"}
@@ -356,6 +361,33 @@ def test_la_revision_des_envois_garde_le_lecteur_et_n_autorise_pas_l_acteur():
     assert reecrire(["linkedin_unipile_publish"], masque) == ["linkedin_unipile_act"]
     assert not set(autorise) & {r.ancien for r in outils_retires.RENOMMAGES_ACT
                                 + outils_retires.RENOMMAGES_MESSAGERIES}
+    # Le lot des personas (23/10/2026) n'entre pas dans cette révision déjà jouée.
+    assert "lemlist_database" not in autorise and "lemlist_database" not in masque
+
+
+def test_la_revision_des_personas_masque_l_acteur_et_garde_l_envoi():
+    """Lot des personas (23/10/2026) : `lemlist_database` ne fait plus que lire. Masqué,
+    il masque aussi `lemlist_act` ; autorisé, il reste lui-même ; `lemlist_act` autorisé
+    n'est pas touché (choix assumé : il garde l'envoi et reçoit les personas)."""
+    import importlib.util
+    from pathlib import Path
+
+    import oto_mcp
+
+    chemin = (Path(oto_mcp.__file__).parent / "db" / "migrations" / "versions"
+              / "20261023_0713_lemlist_personas.py")
+    spec = importlib.util.spec_from_file_location("revision_personas", chemin)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m.down_revision == "20261022_2112_forfait_fenetre"
+    autorise, masque = m.correspondances()
+    assert set(autorise) == set(masque) == {"lemlist_database"}
+    reecrire = m._revision_des_messageries()._revision_0062().reecrire
+    assert reecrire(["lemlist_database", "fr_get"], autorise) == ["lemlist_database",
+                                                                  "fr_get"]
+    assert reecrire(["lemlist_act", "lemlist_inbox"], autorise) == ["lemlist_act",
+                                                                    "lemlist_inbox"]
+    assert reecrire(["lemlist_database"], masque) == ["lemlist_database", "lemlist_act"]
 
 
 #: Les connecteurs encore dans `A_MIGRER` dont la PAIRE est déjà née : leurs outils

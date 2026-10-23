@@ -93,6 +93,23 @@ async def test_les_lecteurs_lemlist_sont_declares_en_lecture():
 
 
 @pytest.mark.asyncio
+async def test_les_lectures_de_prospection_sont_declarees_en_lecture():
+    """Ce qu'un process de prospection lit dans une recette, qui garde côté serveur des
+    réponses de centaines de milliers de caractères : la base partagée lemlist (en lecture
+    depuis que ses personas sont passés à `lemlist_act`, 23/10/2026), TheirStack, les
+    technologies d'un site, une page web publique. `lemlist_enrich`, `lemlist_enrich_bulk`
+    (une `webhook_url` pousse le résultat chez un tiers) et `apify_run_sync` (un acteur
+    arbitraire) ne le sont pas."""
+    servis = {t.name: t for t in await _outils()}
+    for nom in ("lemlist_database", "theirstack_jobs_search", "theirstack_companies_search",
+                "dataforseo_technologies", "web_read"):
+        assert en_lecture(servis[nom]), nom
+    for nom in ("lemlist_enrich", "lemlist_enrich_bulk", "apify_run_sync"):
+        if nom in servis:
+            assert not en_lecture(servis[nom]), nom
+
+
+@pytest.mark.asyncio
 async def test_aucun_outil_de_plateforme_ni_ecrivain_connu_n_est_declare():
     servis = {t.name: t for t in await _outils()}
     for nom in ("email_send", "slack_post_message", "gmail", "gmail_act", "outlook",

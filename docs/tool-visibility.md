@@ -199,7 +199,7 @@ Garde : `tests/test_convention_act.py` — une op à effet hors d'un `*_act` rou
 fermée `A_MIGRER`, qui ne peut que rétrécir. Les anciens noms d'une migration refusent en
 nommant l'appel à faire (`outils_retires.RENOMMAGES`) ; les listes d'outils
 enregistrées (presets de projet, flottes, déclencheurs, masquages) sont réécrites par
-migration : autoriser reste étroit, masquer reste large (décision d'Alexis du 21/10/2026) : une liste qui autorisait un ancien lecteur ne reçoit que le nouveau lecteur, jamais `<ns>_act` — même si l'ancien lecteur envoyait encore en transition ; un ancien outil d'envoi dédié ne donne `<ns>_act` que si celui-ci ne fait rien de plus que lui — sinon RIEN : `linkedin_unipile_send`, `_publish` et `_invite` ne donnent pas `linkedin_unipile_act`, qui publie, invite et envoie ; on l'ajoute explicitement, le refus de l'ancien nom le dit ; une liste qui masquait masque tout ce que l'ancien outil faisait (le premier lot, joué avant cette règle, avait donné tous les
+migration : autoriser reste étroit, masquer reste large (décision du 21/10/2026) : une liste qui autorisait un ancien lecteur ne reçoit que le nouveau lecteur, jamais `<ns>_act` — même si l'ancien lecteur envoyait encore en transition ; un ancien outil d'envoi dédié ne donne `<ns>_act` que si celui-ci ne fait rien de plus que lui — sinon RIEN : `linkedin_unipile_send`, `_publish` et `_invite` ne donnent pas `linkedin_unipile_act`, qui publie, invite et envoie ; on l'ajoute explicitement, le refus de l'ancien nom le dit ; une liste qui masquait masque tout ce que l'ancien outil faisait (le premier lot, joué avant cette règle, avait donné tous les
 remplaçants aux deux sens). Premier lot : Gmail et Outlook (17/10/2026). Deuxième lot, les messageries
 (21/10/2026) : `whatsapp`, `telegram`, `instagram`, `teams`, `chat` (Google Chat) et la
 messagerie LinkedIn (`linkedin_unipile` / `linkedin_unipile_act`, le reste du connecteur
@@ -209,7 +209,8 @@ ou un outil d'envoi dédié passe à `<ns>_act` (LinkedIn — publication, invit
 sur un membre —, Apollo, Lightfield, Luma, Pennylane, SignWell, Productlane, Ahrefs,
 lemlist) ; le lecteur garde son nom et refuse l'ancienne op en nommant le nouvel appel
 (`outils_retires.OPS_DEPLACEES`). `lemlist_act` (ex-`lemlist_inbox_send`) reste masqué par
-défaut.
+défaut ; depuis le 23/10/2026 il sauve et supprime aussi les personas de la base partagée,
+et `lemlist_database` ne fait plus que lire.
 
 ## Méta-tools et `PROTECTED_TOOLS`
 

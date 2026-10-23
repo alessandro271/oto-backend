@@ -329,6 +329,22 @@ lot des messageries joué seul se perd de même ; une liste qui masque masque au
 
 `lemlist_inbox` n'envoyait rien (brouillons et labels seulement) : il ne change pas.
 
+### Personas lemlist : `lemlist_database` ne fait plus que lire (23/10/2026)
+
+Pour qu'une recette puisse chercher dans la base partagée de lemlist, `lemlist_database`
+perd ses deux ops d'écriture au profit de l'acteur unique du connecteur
+(`OPS_DEPLACEES_PERSONAS`) ; l'ancienne op refuse en nommant le nouvel appel. Révision
+`20261023_0713_lemlist_personas`, même sens : une liste qui autorise `lemlist_database`
+n'est pas touchée, une liste qui le masque masque aussi `lemlist_act`. Une liste qui autorise
+`lemlist_act` le garde, et `lemlist_inbox_send` le donne toujours : l'acteur porte désormais
+aussi les personas, qu'un agent qui l'avait reçoit (choix assumé du 23/10/2026, aucun agent
+vivant ne perd l'envoi). La révision du lot des envois lit `OPS_DEPLACEES_ENVOIS`, sans ce
+lot.
+
+| Ancien appel (refusé depuis le 23/10/2026) | Nouvel appel |
+| --- | --- |
+| `lemlist_database(op=persona_create/persona_delete)` | `lemlist_act(op="create_persona"/"delete_persona")` |
+
 ### Pourquoi les clés de capacité n'ont pas d'alias
 
 Une clé de capacité ne sort du serveur qu'à deux endroits : `/api/admin/capabilities`

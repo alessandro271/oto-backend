@@ -22,7 +22,8 @@ or arm it, and all four are hidden by default
 (`DEFAULT_HIDDEN_TOOLS`, self-activatable): `lemlist_campaign_start` (lemlist
 runs the sequence for all launched leads), `lemlist_launch_lead` (a lead
 leaves review), `lemlist_act` (the three direct sends of the inbox, with no
-campaign or review in front of them) and `lemlist_campaign_auto_review`. Everything else — create,
+campaign or review in front of them — and the personas of the shared base) and
+`lemlist_campaign_auto_review`. Everything else — create,
 configure, duplicate, pause, schedule, tidy the CRM — works on a DRAFT
 or on data, and sends nothing.
 

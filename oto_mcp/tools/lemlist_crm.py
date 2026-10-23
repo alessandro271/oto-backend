@@ -18,6 +18,8 @@ confirm). Its three routes (`/inbox/email`, `/inbox/linkedin`,
 `/inbox/whatsapp`) are the most immediate sends of the whole connector —
 no campaign, no sequence, no review in front of them: the message goes out. Hence
 the BARE tool, the only grain that `DEFAULT_HIDDEN_TOOLS` knows how to hide.
+Since 23/10/2026 it also saves and deletes the personas of the shared base, so that
+`lemlist_database` only reads — and a recipe (`oto_recipe`) can call it.
 
 Two surfaces can send INDIRECTLY and stay visible, by saying so:
 a watch list set to `push_to_campaign` feeds a campaign on its own,
@@ -38,7 +40,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
-from .lecture import ACTE
+from .lecture import ACTE, LECTURE
 
 
 def _bad(msg: str) -> McpError:
@@ -386,9 +388,10 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=ACTE)
     def lemlist_act(
-        op: Literal["send_email", "send_linkedin", "send_whatsapp"],
-        message: str,
-        send_user_id: str,
+        op: Literal["send_email", "send_linkedin", "send_whatsapp",
+                    "create_persona", "delete_persona"],
+        message: Optional[str] = None,
+        send_user_id: Optional[str] = None,
         contact_id: Optional[str] = None,
         lead_id: Optional[str] = None,
         send_user_email: Optional[str] = None,
@@ -397,8 +400,13 @@ def register(mcp: FastMCP) -> None:
         subject: Optional[str] = None,
         cc: Optional[list[str]] = None,
         reply_to_activity_id: Optional[str] = None,
+        name: Optional[str] = None,
+        filters: Optional[list[dict]] = None,
+        mode: Optional[str] = None,
+        persona_id: Optional[str] = None,
     ) -> dict:
-        """Send a message from the inbox — DIRECTLY, to a real person.
+        """Send a message from the inbox — DIRECTLY, to a real person — or save or
+        delete a persona of the shared base.
         `oto_guide op=read slug="lemlist-playbook"`: build order, where each id comes from, and the doc↔API gaps.
 
         The most immediate send of the whole connector: no campaign, no
@@ -413,7 +421,12 @@ def register(mcp: FastMCP) -> None:
           `reply_to_activity_id`.
         - `send_linkedin`: `send_user_id`, `lead_id`, `contact_id`, `message`.
         - `send_whatsapp`: the same plus `send_user_whatsapp_account_id`.
+        - `create_persona`: `name` + `filters` + `mode` (`leads` or `companies`) —
+          a saved search of the shared base, used by watch lists.
+        - `delete_persona`: `persona_id` — irreversible.
         """
+        if op.startswith("send_"):
+            _need(message=message, send_user_id=send_user_id)
         client, is_platform = _client()
         if op == "send_email":
             _need(send_user_email=send_user_email,
@@ -435,9 +448,15 @@ def register(mcp: FastMCP) -> None:
                 send_user_id=send_user_id,
                 send_user_whatsapp_account_id=send_user_whatsapp_account_id,
                 lead_id=lead_id, contact_id=contact_id, message=message)
+        elif op == "create_persona":
+            _need(name=name, mode=mode)
+            result = client.create_persona(name, filters=filters or [], mode=mode)
+        elif op == "delete_persona":
+            _need(persona_id=persona_id)
+            result = client.delete_persona(persona_id)
         else:
             raise _bad(f'unknown op "{op}" — expected: send_email, send_linkedin, '
-                       'send_whatsapp')
+                       'send_whatsapp, create_persona, delete_persona')
         return result
 
     # --- Unsubscribes ------------------------------------------------------------
@@ -723,31 +742,29 @@ def register(mcp: FastMCP) -> None:
                 "filters, filter_values, library, history, signals, push_signals")
         return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def lemlist_database(
-        op: Literal["people", "companies", "filters", "personas",
-                    "persona_create", "persona_delete"],
+        op: Literal["people", "companies", "filters", "personas"],
         filters: Optional[list[dict]] = None,
         search: Optional[str] = None,
         excludes: Optional[list[str]] = None,
         page: Optional[int] = None,
         size: Optional[int] = None,
-        name: Optional[str] = None,
         mode: Optional[str] = None,
-        persona_id: Optional[str] = None,
     ) -> dict:
-        """Search lemlist's SHARED prospecting database, and save personas.
+        """Search lemlist's SHARED prospecting database. Reads only.
 
         Distinct from `lemlist_contact`/`lemlist_company`, which hold only YOUR
         data. Read `op="filters"` first: the filter vocabulary is server-side,
-        and a `filters` payload built from guesswork comes back empty.
+        and a `filters` payload built from guesswork comes back empty. Every
+        call spends the quota of your lemlist key. Saving or deleting a persona
+        is `lemlist_act`.
 
         Args by op:
         - `people`: `filters`, `search`, `excludes`, `page`, `size`.
         - `companies`: `filters`, `page`, `size`.
         - `filters`: no argument — the available filters.
-        - `personas`: optional `mode`. `persona_create`: `name` + `filters` +
-          `mode` (`leads` or `companies`). `persona_delete`: `persona_id`.
+        - `personas`: optional `mode` — the saved personas.
         """
         client, is_platform = _client()
         if op == "people":
@@ -761,15 +778,9 @@ def register(mcp: FastMCP) -> None:
             result = {"filters": client.get_database_filters()}
         elif op == "personas":
             result = {"personas": client.list_personas(mode=mode)}
-        elif op == "persona_create":
-            _need(name=name, mode=mode)
-            result = client.create_persona(name, filters=filters or [], mode=mode)
-        elif op == "persona_delete":
-            _need(persona_id=persona_id)
-            result = client.delete_persona(persona_id)
         else:
             raise _bad(f'unknown op "{op}" — expected: people, companies, filters, '
-                       "personas, persona_create, persona_delete")
+                       "personas")
         return result
 
     # --- Team, mailboxes, deliverability, webhooks -----------------------------------
