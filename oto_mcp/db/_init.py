@@ -13,7 +13,7 @@ import time
 
 import psycopg
 
-from . import (_prerequis, access_shadow, index_concurrent, index_releve, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
+from . import (_prerequis, access_shadow, alertes_agents, index_concurrent, index_releve, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
                projects, recipes, revision, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
@@ -678,6 +678,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `20261023_1033_trigger_updated_at` : ordre indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_UPDATED_AT):
         conn.execute(runner_triggers.DDL_COLONNE_UPDATED_AT)
+    # L'épisode de blocage annoncé d'un agent — la même que pose la révision
+    # `20261023_1040_echec_annonce` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "runner_triggers", alertes_agents.COLONNE_ECHEC_ANNONCE):
+        conn.execute(alertes_agents.DDL_COLONNE_ECHEC_ANNONCE)
     # L'affichage d'une recette (ses étapes, pour une page) — le même que pose la
     # révision `20261022_2100_recipes_display` : ordre indifférent entre elles.
     if _colonne_absente(conn, "recipes", recipes.COLONNE_DISPLAY):

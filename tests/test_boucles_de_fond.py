@@ -16,7 +16,8 @@ _INTERRUPTEURS = ("OTO_SCHEDULER_ENABLED", "OTO_EMBED_WORKER_ENABLED",
                   "OTO_FILE_EXTRACT_WORKER_ENABLED", "OTO_RANK_BACKFILL_ENABLED",
                   "OTO_FORMULA_BACKFILL_ENABLED", "OTO_TRANSCRIPTION_WORKER_ENABLED",
                   "OTO_RUNNER_TICK_ENABLED", "OTO_BILLING_RUNNER_ENABLED",
-                  "OTO_HANG_WATCH_ENABLED", "OTO_CREDITS_ECHEANCES_ENABLED")
+                  "OTO_HANG_WATCH_ENABLED", "OTO_CREDITS_ECHEANCES_ENABLED",
+                  "OTO_ALERTE_AGENTS_ENABLED")
 _PROD, _PREPROD = config.PROD, config.PREPROD
 
 
@@ -53,11 +54,11 @@ def test_la_preprod_ne_compose_aucune_boucle_tierce(env):
     assert set(composees) == _toutes(tiers=False)
 
 
-def test_la_production_compose_les_onze(env):
+def test_la_production_compose_les_douze(env):
     env.setenv("OTO_ENV", _PROD)
     env.setenv("OTO_SENTRY_ENV", "production")
     composees = boucles_de_fond.composer()
-    assert len(composees) == len(boucles_de_fond.BOUCLES) == 11
+    assert len(composees) == len(boucles_de_fond.BOUCLES) == 12
     assert set(composees) == _toutes()
 
 
@@ -94,6 +95,7 @@ def test_sans_boucle_tierce_armee_la_question_nest_pas_posee(env):
     env.setenv("OTO_BILLING_ENABLED", "0")
     env.setenv("OTO_TRANSCRIPTION_WORKER_ENABLED", "0")
     env.setenv("OTO_JEV_JOBS_WORKER_ENABLED", "0")
+    env.setenv("OTO_ALERTE_AGENTS_ENABLED", "0")
     assert set(boucles_de_fond.composer()) == _toutes(tiers=False)
 
 
@@ -123,7 +125,8 @@ def test_les_boucles_qui_touchent_un_tiers_le_declarent():
     assert len(noms) == len(set(noms))
     # Faits de code, pas de goût : l'une envoie des emails, l'autre prélève, la
     # troisième fige dans la page d'un client le lien de l'environnement qui l'a écrite.
-    assert {"scheduler", "billing_runner", "transcription_worker", "jev_jobs_worker"} <= {
+    assert {"scheduler", "billing_runner", "transcription_worker", "jev_jobs_worker",
+            "alerte_agents_bloques"} <= {
         b.nom for b in boucles_de_fond.BOUCLES if b.tiers}
 
 

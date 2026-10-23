@@ -628,6 +628,11 @@ _REGLAGES: tuple[Variable, ...] = (
              "d'unités passées leur échéance (`credits_echeances.py`). N'écrit qu'en "
              "base, tous environnements.",
              ("oto_mcp/boucles_de_fond.py:185",)),
+    Variable("OTO_ALERTE_AGENTS_ENABLED", Classe.REGLAGE, "1",
+             "Boucle de fond : prévient l'admin d'une org quand un de ses agents "
+             "programmés est bloqué (`alerte_agents_bloques.py`) — AGIT sur un tiers "
+             "(courriel), donc production seulement. `0` l'éteint.",
+             ("oto_mcp/boucles_de_fond.py:200",)),
     Variable("OTO_BILLING_RUNNER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : runner de facturation — AGIT sur un tiers "
              "(prélèvement), donc lu aussi par `est_la_production()`.",

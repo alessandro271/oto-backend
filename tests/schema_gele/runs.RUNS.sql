@@ -110,7 +110,8 @@ hook_signing_secret_enc TEXT,
 max_per_day INT,
 hook_slug TEXT,
 hook_sources JSONB,
-updated_at TIMESTAMPTZ
+updated_at TIMESTAMPTZ,
+echec_annonce_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_runner_triggers_due
 ON runner_triggers(next_due) WHERE enabled;

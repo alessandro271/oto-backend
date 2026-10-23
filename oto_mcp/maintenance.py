@@ -472,6 +472,7 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
     # le nom et la langue de l'INSTANCE, et oubliait l'expéditeur du tenant de l'org.
     from . import email_templates as _gabarits
     from .db import alertes_credential as db_alertes
+    from .alerte_agents_bloques import destinataire_admin
     from .db import users as db_users
     from . import org_store
 
@@ -481,11 +482,8 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
     envoyes, marques, sans_destinataire = 0, 0, 0
     for org_id in sorted(set(retraits) | set(cles_ko)):
         g, ko = retraits.get(org_id), cles_ko.get(org_id, [])
-        admins = [m["sub"] for m in org_store.list_org_members(org_id)
-                  if m.get("org_role") == "org_admin"]
-        adresses = db_users.emails_by_subs(admins)
-        destinataire = next((s for s in admins if adresses.get(s)), None)
-        if destinataire is None:
+        dest = destinataire_admin(org_id)
+        if dest is None:
             # On ne marque PAS : sans destinataire, la ligne reste à notifier. Le jour
             # où l'org gagne un admin, elle partira — la perdre ici serait la perdre
             # exactement quand elle devient délivrable.
@@ -498,9 +496,10 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
         # (`users.locale`) prime sur la langue de la marque. Le gabarit vit dans
         # `email_templates` et part par `_envoyer`, comme tous les autres.
         _base, marque = org_store.org_front(org_id)
+        destinataire, adresse = dest
         fiche = db_users.get_user(destinataire) or {}
         if _gabarits.send_credential_alert_email(
-                adresses[destinataire], retrait=g, cles_ko=ko, brand=marque,
+                adresse, retrait=g, cles_ko=ko, brand=marque,
                 locale=fiche.get("locale")):
             envoyes += 1
             if g:

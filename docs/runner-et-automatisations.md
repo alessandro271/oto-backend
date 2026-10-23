@@ -2330,6 +2330,40 @@ pouvait que BORNER ces événements, en comparant son empreinte de la veille.
   `oto_trigger op=delete` passé par MCP (`tool_calls`, lentille org) ; (3) rien, la
   disparition reste une absence.
 
+### Prévenir quand un agent est bloqué (23/10/2026, signal 1168)
+
+Une routine a buté 33 passages de suite sur une clé refusée par son fournisseur, et
+personne n'a été prévenu : chaque passage écrivait son compte rendu dans un canal que
+plus personne ne lisait. *Un compte rendu dans le canal que l'agent tient n'est pas une
+escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'annonçait.
+
+- **L'épisode** (`db/alertes_agents.py`) = les travaux morts (`failed`) d'un agent ALLUMÉ
+  depuis son dernier travail réussi (`done`), donc consécutifs, sur sept jours. Il
+  s'annonce quand il atteint `alerte_agents_bloques.SEUIL` (3, déclaré), UNE fois :
+  `runner_triggers.echec_annonce_at` est posé après l'envoi, et l'épisode suivant ne
+  s'ouvre qu'après un succès. Aucune remise à zéro à écrire. La marque ne date pas
+  l'agent (`updated_at`).
+- **Le courriel** : un par org, à son premier admin joignable (la même règle que
+  `alertes-credential`, `destinataire_admin`), par le courrier de plateforme sous la
+  marque de l'org (`org_store.org_front` → `email_templates._envoyer`), hors des heures
+  calmes par défaut (`scheduler.DEFAULT_QUIET_HOURS`, 20 h–8 h à Paris : un épisode vu
+  la nuit part au premier passage du matin). Un envoi raté ne marque rien.
+- **Où** : une boucle de fond déclarée `tiers=True` (`boucles_de_fond.py`,
+  `alerte_agents_bloques`, un passage par quart d'heure, `OTO_ALERTE_AGENTS_ENABLED=0`
+  l'éteint) — la préprod, qui partage la base, et le développement ne la composent pas.
+- ⚠️ **Une org d'un tenant tiers est écartée** (`db.org_tenant_slug`, fermé sur erreur),
+  comptée (`tenant_tiers_ecartes`) et dite une fois au journal : aucun tenant n'a déclaré
+  de règle pour ce courrier, et la convention du 08/10/2026 n'en ajoute pas
+  (`docs/tenants.md`). ⚠️ L'org qui a remonté le signal en est une : ce canal ne la
+  prévient donc pas.
+- ⚠️ **Ce que l'épisode ne voit pas** : un passage qui conclut normalement après avoir
+  constaté qu'il ne peut rien faire est un travail `done`, pas `failed`. Le cas exact du
+  signal — une clé refusée en 401/403 — est aussi lu par l'autre canal, la clé marquée
+  rouge à l'appel (`alertes-credential`, `maintenance.py`), fermé par
+  `OTO_ALERTE_CREDENTIAL`.
+- Bancs : `tests/test_alerte_agents_bloques.py` (sans base), `tests/test_alertes_agents_db.py`
+  (l'épisode en SQL), `tests/test_migration_20261023_echec_annonce.py`.
+
 ### `op=list` : la page dit ce qu'elle laisse dehors (#469, 01/09/2026)
 
 **Mesuré le 28/08** : `POST /api/me/runner/jobs {op: list, limit: 1000}` rendait

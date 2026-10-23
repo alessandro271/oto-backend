@@ -369,7 +369,10 @@ CREATE TABLE IF NOT EXISTS runner_triggers (
     -- 23/10/2026 : la date du dernier CHANGEMENT de l'agent (allumé, éteint, horaire,
     -- réglage, adresse, propriétaire). NULL = aucun depuis sa création. Le tick ne
     -- l'écrit jamais.
-    updated_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ,
+    -- 23/10/2026 : l'annonce du dernier épisode de BLOCAGE (travaux morts consécutifs)
+    -- à l'admin de l'org (`db/alertes_agents.py`). NULL = aucun annoncé.
+    echec_annonce_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_runner_triggers_due
     ON runner_triggers(next_due) WHERE enabled;
