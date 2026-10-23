@@ -310,6 +310,14 @@ _READS = {
     "companies": {}, "company": {"company_id": "com-1"},
     "deals": {}, "deal": {"deal_id": "dea-1"},
     "attributes": {"entity": "person"}, "queue": {},
+    "user": {"user_id": "usr-1"}, "note": {"note_id": "not-1"},
+    "thread": {"entity_type": "CALL", "entity_id": "cll-1"},
+    "queues": {}, "dialer_session": {"session_id": "pds-1"},
+    "summary_templates": {}, "summary_template": {"template_id": "tpl-1"},
+    "webhooks": {}, "webhook": {"webhook_id": "whk-1"}, "webhook_events": {},
+    "flow": {"allo_number": "+33199000000", "draft": True},
+    "receptionist": {"allo_number": "+33199000000"},
+    "calendars": {}, "calendar": {"calendar_id": "cal-1"}, "voices": {},
     "metrics": {"date_from": "2026-10-01", "date_to": "2026-10-20"},
     "outbound": {"date_from": "2026-10-01", "date_to": "2026-10-20", "stage": "CONVERSION"},
 }
@@ -347,6 +355,36 @@ _ACTS = {
     "create_queue": {"name": "October"}, "update_queue": {"name": "October"},
     "add_queue_numbers": {"entries": [{"number": "+33199000001"}]},
     "remove_queue_numbers": {"unassigned": True},
+    "add_queue": {"name": "Week 44", "email": "rep@example.com"},
+    "delete_queue": {"queue_id": "pdl-1"},
+    "set_queue_assignee": {"queue_id": "pdl-1", "email": "rep@example.com"},
+    "delete_tag": {"tag_id": "tag-1"},
+    "update_note": {"note_id": "not-1", "content": "x"},
+    "delete_note": {"note_id": "not-1", "person_id": "per-1"},
+    "create_thread": {"entity_type": "CALL", "entity_id": "cll-1", "content": "x"},
+    "add_comment": {"thread_id": "thr-1", "content": "x"},
+    "update_comment": {"comment_id": "cmt-1", "content": "x"},
+    "update_thread": {"thread_id": "thr-1", "resolved": True},
+    "create_attribute": {"entity": "person", "label": "Note d'appel",
+                         "attribute_type": "TEXT"},
+    "update_attribute": {"entity": "company", "key": "tier", "is_visible": False},
+    "delete_attribute": {"entity": "person", "key": "note_d_appel"},
+    "create_summary_template": {"name": "Discovery"},
+    "update_summary_template": {"template_id": "tpl-1", "name": "Discovery"},
+    "delete_summary_template": {"template_id": "tpl-1"},
+    "set_default_summary_template": {"allo_number": "+33199000000", "template_id": "tpl-1"},
+    "delete_webhook": {"webhook_id": "whk-1"},
+    "update_call_flow_draft": {"allo_number": "+33199000000", "definition": {"nodes": []},
+                       "schema_version": 1},
+    "publish_call_flow": {"allo_number": "+33199000000", "lock_version": 3},
+    "update_receptionist": {"allo_number": "+33199000000", "fields": {"name": "Front desk"}},
+    "set_receptionist_status": {"allo_number": "+33199000000", "status": "ACTIVE"},
+    "set_receptionist_prompt": {"allo_number": "+33199000000", "sections": [{"t": "x"}]},
+    "add_receptionist_website": {"allo_number": "+33199000000", "url": "https://x.test"},
+    "update_receptionist_website": {"allo_number": "+33199000000", "website_id": "web-1",
+                                    "status": "DISABLED"},
+    "delete_receptionist_website": {"allo_number": "+33199000000", "website_id": "web-1"},
+    "delete_receptionist_file": {"allo_number": "+33199000000", "file_id": "fil-1"},
 }
 
 
@@ -391,6 +429,25 @@ _ALLOWED_METHODS = frozenset({
     "create_person_note", "create_conversation_note", "create_person", "update_person",
     "create_company", "update_company", "reset_dialing_queue", "update_dialing_queue",
     "add_queue_numbers", "remove_queue_numbers",
+    # Allo 1.2.0, the rest of the team API: none of them is a recording link, and
+    # what they answer is stripped anyway (the poisoned answers above).
+    "get_user", "delete_tag", "get_conversation_note", "update_conversation_note",
+    "delete_conversation_note", "update_person_note", "delete_person_note", "find_thread",
+    "get_thread", "create_thread", "add_thread_comment", "update_thread_comment",
+    "resolve_thread", "unresolve_thread", "create_person_attribute",
+    "update_person_attribute", "delete_person_attribute", "create_company_attribute",
+    "update_company_attribute", "delete_company_attribute", "list_summary_templates",
+    "get_summary_template", "create_summary_template", "update_summary_template",
+    "delete_summary_template", "set_default_summary_template", "list_webhooks",
+    "get_webhook", "delete_webhook",
+    "list_webhook_event_types", "get_call_flow", "get_call_flow_draft",
+    "save_call_flow_draft", "publish_call_flow", "get_receptionist", "update_receptionist",
+    "set_receptionist_status", "set_receptionist_prompt", "add_receptionist_website",
+    "update_receptionist_website", "delete_receptionist_website", "delete_receptionist_file",
+    "list_calendars", "get_calendar", "list_voices", "list_dialing_queues",
+    "create_dialing_queue", "get_dialing_queue_by_id", "update_dialing_queue_by_id",
+    "delete_dialing_queue", "add_numbers_to_queue", "remove_numbers_from_queue",
+    "assign_dialing_queue", "delete_current_dialing_queue", "get_dialer_session",
 })
 
 
@@ -547,3 +604,211 @@ def test_probe_refused(monkeypatch, status):
 def test_probe_other_error_unclassified(monkeypatch):
     with pytest.raises(RuntimeError):
         _probe_with(monkeypatch, _upstream(500))({"key": "ak_test"})
+
+
+# --- the full API: custom fields, queues by id, threads, line settings ---------------
+
+def test_create_a_person_field_and_a_company_attribute(client):
+    _tool("allo_act")(op="create_attribute", entity="person", label="Note d'appel",
+                      attribute_type="TEXT")
+    client.create_person_attribute.assert_called_once_with("Note d'appel", "TEXT", options=None)
+    opts = [{"label": "Hot"}, {"label": "Cold"}]
+    _tool("allo_act")(op="create_attribute", entity="company", label="Temperature",
+                      attribute_type="DROPDOWN", options=opts, prompt="From the call",
+                      should_prompt_override=False)
+    client.create_company_attribute.assert_called_once_with(
+        "Temperature", "DROPDOWN", options=opts, prompt="From the call",
+        should_prompt_override=False)
+
+
+def test_update_and_delete_a_field_by_side(client):
+    _tool("allo_act")(op="update_attribute", entity="person", key="note_d_appel",
+                      description="Read before dialling")
+    client.update_person_attribute.assert_called_once_with(
+        "note_d_appel", label=None, description="Read before dialling", options=None)
+    _tool("allo_act")(op="delete_attribute", entity="company", key="tier")
+    client.delete_company_attribute.assert_called_once_with("tier")
+    client.delete_person_attribute.assert_not_called()
+
+
+@pytest.mark.parametrize("kwargs,needle", [
+    ({"op": "create_attribute", "entity": "person", "label": "X", "attribute_type": "TEXT",
+      "prompt": "p"}, "person field does not take `prompt`"),
+    ({"op": "update_attribute", "entity": "company", "key": "k", "description": "d"},
+     "company field does not take `description`"),
+    ({"op": "create_attribute", "entity": "person", "label": "X"},
+     "`attribute_type` is required"),
+    ({"op": "delete_attribute", "entity": "person"}, "`key` is required"),
+])
+def test_attribute_refusals(client, kwargs, needle):
+    with pytest.raises(McpError, match=needle):
+        _tool("allo_act")(**kwargs)
+    assert client.built == []
+
+
+def test_queue_ops_by_id(client):
+    _tool("allo")(op="queue", queue_id="pdl-1", page=2)
+    client.get_dialing_queue_by_id.assert_called_once_with("pdl-1", page=2, size=None)
+    entries = [{"number": "+33199000001"}]
+    _tool("allo_act")(op="add_queue_numbers", queue_id="pdl-1", entries=entries)
+    client.add_numbers_to_queue.assert_called_once_with("pdl-1", entries)
+    client.add_queue_numbers.assert_not_called()
+    _tool("allo_act")(op="update_queue", queue_id="pdl-1", voicemail_handling="SKIP")
+    client.update_dialing_queue_by_id.assert_called_once_with(
+        "pdl-1", name=None, voicemail_handling="SKIP", do_not_disturb=None)
+    _tool("allo_act")(op="delete_queue", email="rep@example.com")
+    client.delete_current_dialing_queue.assert_called_once_with(
+        user_id=None, email="rep@example.com")
+    _tool("allo_act")(op="set_queue_assignee", queue_id="pdl-1", user_id="usr-2")
+    client.assign_dialing_queue.assert_called_once_with("pdl-1", user_id="usr-2", email=None)
+
+
+@pytest.mark.parametrize("tool,kwargs,needle", [
+    ("allo", {"op": "queue", "queue_id": "pdl-1", "email": "a@b.c"}, "not both"),
+    ("allo_act", {"op": "add_queue_numbers", "queue_id": "pdl-1", "user_id": "usr-1",
+                  "entries": [{"number": "+33199000001"}]}, "not both"),
+    ("allo_act", {"op": "set_queue_assignee", "queue_id": "pdl-1"}, "needs the new assignee"),
+    ("allo", {"op": "thread"}, "needs `thread_id`"),
+    ("allo", {"op": "thread", "thread_id": "thr-1", "entity_id": "cll-1"}, "not both"),
+])
+def test_queue_and_thread_refusals(client, tool, kwargs, needle):
+    with pytest.raises(McpError, match=needle):
+        _tool(tool)(**kwargs)
+    assert client.built == []
+
+
+def test_notes_threads_and_line_settings_route(client):
+    _tool("allo_act")(op="update_note", note_id="not-1", person_id="per-1", content="x")
+    client.update_person_note.assert_called_once_with("per-1", "not-1", "x")
+    _tool("allo_act")(op="delete_note", note_id="not-2")
+    client.delete_conversation_note.assert_called_once_with("not-2")
+    _tool("allo")(op="thread", thread_id="thr-1")
+    client.get_thread.assert_called_once_with("thr-1")
+    _tool("allo")(op="flow", allo_number="+33199000000")
+    client.get_call_flow.assert_called_once_with("+33199000000")
+    _tool("allo_act")(op="publish_call_flow", allo_number="+33199000000", lock_version=3)
+    client.publish_call_flow.assert_called_once_with("+33199000000", 3)
+    _tool("allo_act")(op="set_default_summary_template", allo_number="+33199000000")
+    client.set_default_summary_template.assert_called_once_with(
+        "+33199000000", summary_template_id=None)
+    _tool("allo_act")(op="update_receptionist", allo_number="+33199000000",
+                      fields={"language": "fr"})
+    client.update_receptionist.assert_called_once_with("+33199000000", language="fr")
+    _tool("allo_act")(op="delete_webhook", webhook_id="whk-1")
+    client.delete_webhook.assert_called_once_with("whk-1")
+
+
+def test_a_thread_is_resolved_or_reopened(client):
+    _tool("allo_act")(op="update_thread", thread_id="thr-1", resolved=False)
+    client.unresolve_thread.assert_called_once_with("thr-1")
+    client.resolve_thread.assert_not_called()
+    _tool("allo_act")(op="update_thread", thread_id="thr-1", resolved=True)
+    client.resolve_thread.assert_called_once_with("thr-1")
+
+
+def test_the_receptionist_s_line_is_never_a_field(client):
+    with pytest.raises(McpError, match="not `fields.number`"):
+        _tool("allo_act")(op="update_receptionist", allo_number="+33199000000",
+                          fields={"number": "+33199000009"})
+    client.update_receptionist.assert_not_called()
+
+
+# --- GUARD: the agent points no delivery address anywhere ---------------------------
+#
+# A webhook receives the team's call events, and with them the signed recording links
+# that no read lets out: an address chosen by the agent would be the way out. Judged on
+# the surface, not on two op names: no op of `allo_act` takes an argument that names
+# where Allo delivers something, and the module calls no client method that sets one.
+
+#: Argument names that say "deliver to this address".
+_DELIVERY = frozenset({"url", "webhook_url", "callback", "callback_url", "endpoint",
+                       "target_url", "notify_url", "notification_url", "hook_url",
+                       "redirect_url", "uri", "topics"})
+
+#: The only op that takes a `url`: a page Allo crawls for the receptionist to answer
+#: from. Allo reads it; nothing is sent to it.
+_URL_READ_BY_ALLO = {"add_receptionist_website": "url"}
+
+
+def test_no_act_op_takes_a_delivery_address():
+    from oto_mcp.tools import allo as A
+    for op, takes in A._ACT_TAKES.items():
+        assert not (takes & _DELIVERY) - {_URL_READ_BY_ALLO.get(op)}, op
+    assert not {op for op in A._ACT_OPS if "webhook" in op} - {"delete_webhook"}
+
+
+def test_the_schema_of_allo_act_names_no_delivery_address():
+    props = asyncio.run(_mcp().get_tool("allo_act")).parameters["properties"]
+    assert set(props) & _DELIVERY == {"url"}
+    assert "website" in props["url"]["description"]
+
+
+@pytest.mark.parametrize("op", ["create_webhook", "update_webhook"])
+def test_creating_or_moving_a_webhook_is_refused(client, op):
+    with pytest.raises(McpError, match="Unknown op"):
+        _tool("allo_act")(op=op, url="https://example.com/h")
+    assert client.built == []
+
+
+def test_no_client_method_that_sets_an_address_is_called():
+    """Read on the library: whatever it adds, a method that takes a delivery address
+    is not one this module calls (the receptionist's website apart, read by Allo)."""
+    import inspect
+    from oto.tools.allo.client import AlloClient
+    setters = {name for name, fn in inspect.getmembers(AlloClient, inspect.isfunction)
+               if not name.startswith("_")
+               and set(inspect.signature(fn).parameters) & _DELIVERY}
+    assert {"create_webhook", "update_webhook"} <= setters  # the probe sees them
+    assert _client_methods_called() & setters == {"add_receptionist_website"}
+
+
+# --- GUARD: a webhook's signing secret is never served -------------------------------
+
+def _webhook_with_secret():
+    return {"id": "whk-1", "url": "https://example.com/h", "topics": ["call.completed"],
+            "signing_secret": "whsec_sentinel"}
+
+
+@pytest.mark.parametrize("tool,kwargs", [
+    ("allo", {"op": "webhook", "webhook_id": "whk-1"}),
+    ("allo", {"op": "webhooks"}),
+    ("allo_act", {"op": "delete_webhook", "webhook_id": "whk-1"}),
+])
+def test_no_answer_serves_a_webhook_signing_secret(client, tool, kwargs):
+    for name in ("get_webhook", "delete_webhook"):
+        getattr(client, name).return_value = _webhook_with_secret()
+    client.list_webhooks.return_value = {"data": [_webhook_with_secret()],
+                                         "pagination": dict(_PAGE)}
+    text = json.dumps(_tool(tool)(**kwargs))
+    assert '"whk-1"' in text, text  # the answer did go through
+    assert "signing_secret" not in text and "whsec_sentinel" not in text, text
+
+
+def test_the_library_s_webhook_secrets_are_all_removed_here():
+    from oto.tools.allo._api.templates_webhooks import _WEBHOOK_SECRET_FIELDS
+    from oto_mcp.tools import allo as A
+    assert set(_WEBHOOK_SECRET_FIELDS) <= A._NEVER_SERVED
+
+
+# --- refusals before any call: queue, receptionist, statuses -------------------------
+
+@pytest.mark.parametrize("kwargs,needle", [
+    ({"op": "delete_queue"}, "needs the queue"),
+    ({"op": "update_receptionist", "allo_number": "+33199000000",
+      "fields": {"webhook": "https://example.com/h"}}, "does not take `webhook`"),
+    ({"op": "set_receptionist_status", "allo_number": "+33199000000", "status": "DISABLED"},
+     "ACTIVE or FORWARDING, not DISABLED"),
+    ({"op": "update_receptionist_website", "allo_number": "+33199000000",
+      "website_id": "web-1", "status": "FORWARDING"}, "ACTIVE or DISABLED, not FORWARDING"),
+])
+def test_line_settings_refusals(client, kwargs, needle):
+    with pytest.raises(McpError, match=needle):
+        _tool("allo_act")(**kwargs)
+    assert client.built == []
+
+
+def test_a_receptionist_field_of_the_list_goes_through(client):
+    _tool("allo_act")(op="update_receptionist", allo_number="+33199000000",
+                      fields={"tone_of_voice": "FRIENDLY", "business_name": "Acme"})
+    client.update_receptionist.assert_called_once_with(
+        "+33199000000", tone_of_voice="FRIENDLY", business_name="Acme")

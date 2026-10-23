@@ -51,6 +51,12 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.197.0 = allo 1.2.0 : toute l'API d'équipe d'Allo (champs perso, files nommées,
+    # fils, réglages d'une ligne), servie par `allo` / `allo_act` dans le MÊME commit,
+    # sans créer ni modifier de webhook ; github `create_branch` (servi par `github_act`
+    # au commit suivant) ; folk 1.0.1 (les deals filtrés par personne en relation,
+    # `filter[people][in][id]`) ; descriptions seules (origami, salesforce, lemlist 1.2.1/
+    # 1.2.2, mistral, pennylane_firm, yousign : coûts déclarés, aucun client Python changé).
     # v1.196.0 = sivan 1.1.0 : `list_timesheets_summary` — totaux hebdomadaires sans le
     # détail jour par jour (`weeks.days` retiré pour la paie) ; l'outil
     # `sivan_timesheets_summary` arrive dans le MÊME commit.
@@ -476,7 +482,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.196.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.197.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome
