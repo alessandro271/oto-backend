@@ -1569,7 +1569,61 @@ agent sans modèle, ou au modèle sorti du catalogue, est refusé comme au tick,
 même motif (`runner_models.motif_sans_famille`) : 409 `trigger_no_model`, pas
 `model_required`, qui enverrait déclarer un modèle à qui en a déjà un. Et un travail
 de cet agent qui attend déjà un worker (`pending`) refuse le second : 409
-`run_already_queued` — il ne partirait pas plus tôt, il doublerait le run.
+`run_already_queued` — il ne partirait pas plus tôt, il doublerait le run. Ce refus ne
+vaut que pour un `run_now` SANS `handoff` : un run qui reçoit un contexte n'en double
+aucun autre, et les enchaînements sont bornés par la chaîne (ci-dessous).
+
+**Enchaîner des agents** : un agent hébergé qui a `oto_trigger` dans ses outils appelle
+`run_now` en fin de run pour lancer le suivant, et lui passe son résultat en `handoff`
+(≤ 20 000 caractères). Le run suivant reçoit sa PROPRE instruction, intacte, suivie du
+contexte transmis, délimité et nommé comme donnée (`_instruction.transmise`) : la
+procédure du second agent fait foi, le premier ne la réécrit pas. Toute balise
+`handoff` du contexte perd son `<` (`&lt;/handoff>`) : un maillon ne ferme pas le cadre
+pour écrire au dehors. C'est le premier
+agent qui décide — lancer ou non, et quoi passer — selon ce que sa procédure lui dit :
+pas de graphe déclaré, une chaîne se lit dans les procédures.
+
+La lignée se range dans la charge du travail lancé (`_chaine` : `parent_job`,
+`root_job`, `depth`), écrite par le SERVEUR seul (`enqueue_job(chaine=…)`, retirée
+d'une charge reçue comme `_plateforme`). Elle se lit depuis le travail porté par le
+jeton (`verrou_org.travail_de_la_requete`), jamais depuis l'appel. Deux refus :
+relancer son propre agent (`chain_self`), et dépasser **5 maillons** après le départ
+(`chain_too_deep`, `CHAINE_MAX` ; le départ est à la profondeur 0, une chaîne compte
+donc **6 agents** au plus) — chaque maillon est un run payé par le porteur, la borne est le seul
+frein d'une boucle par un tiers (A → B → A). Le run enchaîné tourne au nom du porteur
+du premier (`ctx.sub` du jeton), qui doit avoir le droit de modifier le second agent ;
+son libellé par défaut est `enchaîné — <procédure>`.
+
+La profondeur ne borne pas la LARGEUR : un modèle qui appelle l'outil deux fois
+lancerait deux runs payés. D'où deux refus de plus, lus dans les enfants déjà lancés
+par ce run (`db.enfants_du_travail`, par la lignée) : relancer un agent déjà lancé
+(`chain_already_started`), et plus de **5 agents** par run (`chain_too_wide`).
+
+Profondeur et largeur se multiplient : 5 agents par run sur 5 maillons, c'est jusqu'à
+~3 900 runs payés pour un seul départ. D'où un **budget par départ** : **20 runs** au
+plus, le départ compris, comptés sur toute la lignée (`db.runs_de_la_chaine`, par
+`root_job`, quel que soit le statut) — au-delà, `chain_budget_exhausted`
+(`CHAINE_BUDGET`). C'est une borne de QUANTITÉ seulement : elle ne dit pas quel agent
+peut en lancer quel autre. Une flotte n'est pas bornée au-delà : chacun de ses travaux
+est un départ, la taille de la campagne est la borne qu'a posée son auteur.
+
+Les deux lectures (`enfants_du_travail`, `runs_de_la_chaine`) passent par
+`idx_runner_jobs_declencheurs` : `org_id` égal, le prédicat de l'index mot pour mot
+(`PREDICAT_DECLENCHEUR` — un travail de `run_now` porte toujours son `trigger_id`), et
+`due_at` borné par la naissance (`created_at`) du travail parent ou du départ. Un
+descendant naît après lui et son `due_at` n'avance jamais qu'en avant : la borne n'en
+perd aucun. Un ancêtre introuvable lève, plutôt que de compter zéro.
+
+`run_now` enfile TOUT DE SUITE : c'est le DERNIER geste du premier agent. Le second
+peut partir pendant que le premier écrit encore — ce qu'il lui faut voyage dans
+`handoff`, pas dans un tableau que le premier n'a pas fini de remplir.
+
+⚠️ **Donner `oto_trigger` à un agent, c'est laisser ce qu'il LIT lancer tout agent que
+son porteur peut modifier, avec un `handoff` de son choix.** Un agent qui lit des
+courriels entrants et passe la main à un agent qui en envoie ouvre une injection de
+prompt d'un agent à l'autre. Le `handoff` est délimité et nommé comme donnée, et la
+cible exige le droit de modifier — ce sont des freins, pas une garantie : n'enchaîne
+vers un agent qui agit au dehors qu'un agent dont les lectures sont sûres.
 
 `queue_pending`/`queue_held` comptent **exactement le prédicat de `clear_queue`**
 (`status IN ('pending','held')` pour ce déclencheur, dans cette org) — le nombre

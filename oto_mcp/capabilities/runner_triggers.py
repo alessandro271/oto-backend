@@ -35,7 +35,8 @@ from starlette.concurrency import run_in_threadpool
 from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
                _modele, _source_du_hook, runner_jobs)
 from .. import (db, org_store, ownership, procedure_retiree, roles, runner_hook,
-                runner_models, runner_tick, session_visibility, tool_alias, tool_registry)
+                runner_models, runner_tick, session_visibility, tool_alias, tool_registry,
+                verrou_org)
 from ..tools import catalogue as tool_catalogue
 from ._authz import ORG_MEMBER
 from ._dossier import FOLDER_MAX, dossier_valide
@@ -53,6 +54,26 @@ _TZ_DEFAUT = "Europe/Paris"
 # gardes que seul —, bornée bien en deçà des 45 s de l'invocation REST : deux à
 # trois lectures et une écriture par agent.
 _LOT_MAX = 100
+
+
+#: La taille d'un `handoff` : le résultat d'un run, pas un export — un volume se passe
+#: par un tableau ou un document, que le run suivant lit lui-même.
+HANDOFF_MAX = 20_000
+#: La profondeur d'une chaîne d'agents (`run_now` depuis un travail hébergé). Chaque
+#: maillon est un run payé par le porteur : la borne est le seul frein d'une chaîne qui
+#: se relancerait par un tiers (A → B → A …). Cinq maillons couvrent une chaîne réelle
+#: (collecter → enrichir → noter → rédiger → publier) ; au-delà, c'est une boucle.
+CHAINE_MAX = 5
+#: Combien d'agents UN run peut lancer. La profondeur ne borne pas la LARGEUR : un
+#: modèle qui appelle l'outil deux fois, ou une boucle sur une liste, lancerait autant
+#: de runs payés. Cinq suffisent à un aiguillage (« selon le résultat, B ou C ou D »).
+CHAINE_ENFANTS_MAX = 5
+#: Combien de runs UNE chaîne compte au plus, son départ compris (`root_job`). Profondeur
+#: et largeur se multiplient : 5 agents par run sur 5 maillons, c'est jusqu'à ~3 900 runs
+#: payés pour un seul départ, et un `handoff` porte une injection d'un maillon à l'autre.
+#: ⚠️ Une borne de QUANTITÉ, rien d'autre : elle ne dit pas QUI peut lancer QUI — elle
+#: compte les runs d'une lignée, quels que soient les agents et leur droit de se lancer.
+CHAINE_BUDGET = 20
 
 
 class TriggerInput(BaseModel):
@@ -116,6 +137,13 @@ class TriggerInput(BaseModel):
         "editor; cleared on `give`/`take_over`. `[]` clears it."))
     project_id: Optional[int] = None
     input: Optional[str] = None
+    #: `run_now` seulement : ce que l'appelant passe au run qu'il lance — le résultat
+    #: d'un premier agent pour le second d'une chaîne. AJOUTÉ à l'instruction de l'agent,
+    #: jamais à sa place (`_instruction.transmise`).
+    handoff: Optional[str] = Field(default=None, max_length=HANDOFF_MAX, description=(
+        "run_now only: context handed to the run you start — typically your own "
+        "result, so the next agent of a chain works from it. Appended to that agent's "
+        f"instruction as data, never replacing it (≤ {HANDOFF_MAX} characters)."))
     label: Optional[str] = None
     folder: Optional[str] = Field(default=None, description=(
         "update: the folder the agent is shown under in lists — a free label "
@@ -770,6 +798,62 @@ def _noms_canoniques(ctx: ResolvedCtx, inp: TriggerInput) -> TriggerInput:
     return inp.model_copy(update=maj) if maj else inp
 
 
+def _maillon_suivant(org_id: int, trigger_id: int) -> Optional[dict]:
+    """La lignée du run que `run_now` va lancer, quand l'appel vient d'un AGENT HÉBERGÉ —
+    None pour une personne (bouton de l'écran, MCP d'un humain) : rien ne s'enchaîne.
+
+    Le travail appelant est celui du JETON (`verrou_org.travail_de_la_requete`), et sa
+    lignée se lit dans SA charge en base — jamais un argument de l'appel : un agent qui
+    déclarerait sa propre profondeur désarmerait la borne.
+
+    ⚠️ Cinq refus, avant tout enfilage : relancer SON PROPRE agent (`chain_self` — une
+    boucle immédiate, qui n'attendrait même pas la borne), dépasser `CHAINE_MAX`
+    maillons après le départ (`chain_too_deep` — la boucle par un tiers, A → B → A ; le
+    départ est à la profondeur 0, la chaîne compte donc `CHAINE_MAX + 1` agents),
+    relancer un agent que ce run a déjà lancé (`chain_already_started` — l'appel répété
+    d'un modèle), en lancer plus de `CHAINE_ENFANTS_MAX` (`chain_too_wide`), et faire
+    passer la chaîne au-delà de `CHAINE_BUDGET` runs (`chain_budget_exhausted` —
+    profondeur et largeur se multiplient).
+
+    La relecture des enfants et l'enfilage ne partagent pas de verrou : deux appels
+    SIMULTANÉS d'un même run passeraient tous deux. Un agent appelle ses outils l'un
+    après l'autre ; la borne vise la répétition, pas la course."""
+    v = verrou_org.travail_de_la_requete()
+    if v is None or v.job_id is None:
+        return None
+    parent = db.charge_du_travail(v.job_id) or {}
+    if str(parent.get("trigger_id")) == str(trigger_id):
+        raise AuthzDenied(400, "chain_self",
+                          "un agent hébergé ne relance pas son propre agent : la "
+                          "prochaine occurrence passe par son horloge.")
+    enfants = db.enfants_du_travail(v.job_id, org_id)
+    if str(trigger_id) in enfants:
+        raise AuthzDenied(400, "chain_already_started",
+                          f"le job {v.job_id} a déjà lancé l'agent {trigger_id} : un run "
+                          "passe la main une fois par agent.")
+    if len(enfants) >= CHAINE_ENFANTS_MAX:
+        raise AuthzDenied(400, "chain_too_wide",
+                          f"le job {v.job_id} a déjà lancé {len(enfants)} agents — "
+                          f"au plus {CHAINE_ENFANTS_MAX} par run.")
+    lignee = parent.get(db.CHAMP_CHAINE) or {}
+    profondeur = int(lignee.get("depth") or 0) + 1
+    if profondeur > CHAINE_MAX:
+        raise AuthzDenied(400, "chain_too_deep",
+                          f"chaîne d'agents de plus de {CHAINE_MAX} maillons — "
+                          f"refusé au job {v.job_id} : c'est une boucle, pas un enchaînement.")
+    racine = int(lignee.get("root_job") or v.job_id)
+    runs = db.runs_de_la_chaine(racine, org_id)
+    if runs >= CHAINE_BUDGET:
+        raise AuthzDenied(400, "chain_budget_exhausted",
+                          f"la chaîne partie du job {racine} compte déjà {runs} runs — "
+                          f"au plus {CHAINE_BUDGET} par départ, le départ compris.")
+    return {"parent_job": v.job_id, "root_job": racine,
+            "depth": profondeur,
+            # Ce que le run suivant lit de qui l'a lancé : un numéro de job ne lui dit
+            # rien, le nom de l'agent et sa procédure si.
+            "parent_label": parent.get("label") or parent.get("procedure")}
+
+
 def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     """TOUT le SQL de `runner.triggers`, en synchrone — `_triggers` l'exécute dans le
     threadpool. Rend les déclencheurs SANS leurs avertissements d'outils : ceux-là
@@ -786,6 +870,9 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     if inp.op in ("create", "update"):
         _limites_du_run.valider(inp.max_tokens, inp.max_run_seconds)
 
+    if inp.handoff is not None and inp.op != "run_now":
+        raise AuthzDenied(400, "handoff_run_now_only",
+                          "`handoff` ne se passe qu'à `op=run_now`.")
     if inp.platform_tools is not None and inp.op != "update":
         raise AuthzDenied(400, "platform_tools_update_only",
                           "`platform_tools` ne se pose que par `op=update`, sur un agent "
@@ -1089,7 +1176,12 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         _cle_exigee.exiger_a_la_pose(ctx.org_id, famille)
         # Un travail de cet agent attend déjà un worker : un second ne partirait pas
         # plus tôt, il doublerait le run. Le prédicat est celui de `clear_queue`.
-        en_attente = db.file_du_declencheur(t["id"], ctx.org_id)["pending"]
+        # ⚠️ Sans `handoff` seulement : un run qui reçoit un contexte n'en double aucun
+        # autre (une flotte de A qui passe chacun son résultat à B, un éventail
+        # A → B → D et A → C → D). Ceux-là sont bornés par la chaîne (`chain_*`, dont
+        # le budget par départ), pas par la file.
+        en_attente = (0 if inp.handoff
+                      else db.file_du_declencheur(t["id"], ctx.org_id)["pending"])
         if en_attente:
             raise AuthzDenied(409, "run_already_queued",
                               f"un run de cet agent attend déjà un worker ({en_attente} "
@@ -1102,18 +1194,30 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # redéduite, garde d'abonnement sur l'appelant.
         # ⚠️ L'identité est l'APPELANT (`ctx.sub`), pas le propriétaire : un run
         # lancé à la main tourne en ton nom — comme le bouton de l'écran.
+        chaine = _maillon_suivant(ctx.org_id, inp.trigger_id)
         charge = runner_tick.charge_du_declencheur(
             {**t, "tz": t.get("tz") or _TZ_DEFAUT},
-            datetime.datetime.now(datetime.timezone.utc), origine="à la demande")
+            datetime.datetime.now(datetime.timezone.utc),
+            origine="enchaîné" if chaine else "à la demande")
+        if inp.handoff:
+            charge["input"] = _instruction.transmise(
+                charge["input"], inp.handoff,
+                depuis=(f"the agent “{chaine['parent_label']}” (job {chaine['parent_job']})"
+                        if chaine and chaine.get("parent_label")
+                        else f"hosted job {chaine['parent_job']}" if chaine else None))
         charge = runner_jobs.charge_et_modele(ctx, runner_jobs.JobsInput(
             op="enqueue", kind="start",
             payload={k: v for k, v in charge.items() if v is not None}))
-        res = db.enqueue_job(ctx.org_id, "start", payload=charge, sub=ctx.sub)
-        logger.info("déclencheur %s (org %s) : run lancé à la demande de %s — job %s",
-                    inp.trigger_id, ctx.org_id, ctx.sub, res["id"])
+        res = db.enqueue_job(ctx.org_id, "start", payload=charge, sub=ctx.sub,
+                             chaine=chaine)
+        logger.info("déclencheur %s (org %s) : run lancé à la demande de %s — job %s%s",
+                    inp.trigger_id, ctx.org_id, ctx.sub, res["id"],
+                    f", maillon {chaine['depth']} après le job {chaine['parent_job']}"
+                    if chaine else "")
         return {"ok": True,
                 "job": {"id": res["id"], "status": res["status"],
-                        "due_at": str(res["due_at"])},
+                        "due_at": str(res["due_at"]),
+                        **({"chain": chaine} if chaine else {})},
                 "trigger": _avec_hook(ctx.org_id, t)}
 
     if inp.op == "take_over":
@@ -1849,12 +1953,25 @@ CAPABILITIES += [
                           "automatisation inconnue dans l'org du porteur"),
             DeclaredError(400, "procedure_archived",
                           "`run_now` d'un agent dont la procédure est archivée"),
+            DeclaredError(400, "handoff_run_now_only", "`handoff` hors d'`op=run_now`"),
+            DeclaredError(400, "chain_self",
+                          "`run_now` d'un agent hébergé sur son propre agent"),
+            DeclaredError(400, "chain_too_deep",
+                          f"`run_now` au-delà de {CHAINE_MAX} maillons après l'agent de "
+                          "départ"),
+            DeclaredError(400, "chain_already_started",
+                          "`run_now` d'un agent que ce run a déjà lancé"),
+            DeclaredError(400, "chain_too_wide",
+                          f"`run_now` au-delà de {CHAINE_ENFANTS_MAX} agents lancés par un run"),
+            DeclaredError(400, "chain_budget_exhausted",
+                          f"`run_now` au-delà de {CHAINE_BUDGET} runs lancés depuis un "
+                          "même départ (`root_job`)"),
             DeclaredError(409, "trigger_no_model",
                           "`run_now` d'un agent sans modèle, ou au modèle sorti du "
                           "catalogue : le même refus que le tick et le webhook"),
             DeclaredError(409, "run_already_queued",
-                          "`run_now` alors qu'un travail de cet agent attend déjà un "
-                          "worker (`pending`)"),
+                          "`run_now` sans `handoff` alors qu'un travail de cet agent "
+                          "attend déjà un worker (`pending`)"),
             DeclaredError(403, "org_admin_required",
                           "`take_over` par quelqu'un qui n'est pas admin de l'org"),
             DeclaredError(403, "owner_still_member",
@@ -1930,7 +2047,19 @@ CAPABILITIES += [
             "agent's own history; returns `job` {id, status, due_at} — the call does "
             "not wait for the run; refused like `create` when nothing serves the "
             "agent's model, `trigger_no_model` when it declares no catalogued model, "
-            "`run_already_queued` while one of its runs still waits for a worker) / take_over (org admin only, and "
+            "`run_already_queued` while one of its runs still waits for a worker (unless "
+            "you pass a `handoff`). "
+            "CHAINING: a hosted agent with `oto_trigger` in its tools calls "
+            "run_now at the end of its run to start the next agent, passing its result "
+            "as `handoff` — the next agent gets it appended to its own instruction, as "
+            "data; the run is filed with its lineage (`job.chain`: parent_job, root_job, "
+            f"depth). Call it as your LAST action: the next run may start at once. An agent "
+            "cannot relaunch itself (`chain_self`), starts each agent once per run "
+            f"(`chain_already_started`), at most {CHAINE_ENFANTS_MAX} per run "
+            f"(`chain_too_wide`); a chain stops after {CHAINE_MAX} links, i.e. "
+            f"{CHAINE_MAX + 1} agents counting the first (`chain_too_deep`), and "
+            f"starts at most {CHAINE_BUDGET} runs in all (`chain_budget_exhausted`)) / "
+            "take_over (org admin only, and "
             "only when the agent's owner is no longer a member of the org — "
             "`owner_still_member` otherwise: an agent is shared, never taken. You "
             "become the agent's owner — it then acts as YOU and, on a personal "
