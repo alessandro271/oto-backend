@@ -7,7 +7,7 @@ fixe, à chaque écriture** :
 
 | # | la question | ce qui répond |
 |---|---|---|
-| 1 | la destination EXISTE-t-elle ? | `unknown_fields: "reject"` (#614/#678) |
+| 1 | la destination EXISTE-t-elle ? | une colonne non déclarée est refusée (#614/#678, oto#124) |
 | 2 | est-elle À MOI ? | `readonly` (#606), `origine: "system"` (#586) |
 | 3 | la valeur est-elle recevable ? | types, bornes, options, cycle de vie |
 
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import pytest
 
+from oto_mcp.datastore import colonnes_non_declarees as cnd
 from oto_mcp.datastore import core as dsm
 from oto_mcp.datastore import schema as dsv2
 from oto_mcp.datastore.core import DatastorePg
@@ -37,7 +38,6 @@ from oto_mcp.datastore.errors import RowValidationError
 # Un tableau qui porte les TROIS crans à la fois.
 SCHEMA = {
     "key": "siren", "new_rows": "reject",
-    "unknown_columns": "reject",
     "fields": [
         {"key": "siren", "type": "text"},
         {"key": "adresse", "type": "text", "readonly": True},          # #606
@@ -50,21 +50,19 @@ LIGNE = {"siren": "552081317", "adresse": "1 rue A", "naf": "62.01Z"}
 
 def test_le_tableau_aux_trois_crans_est_un_schema_VALIDE():
     """Le premier fait à établir : rien dans la famille ne s'exclut mutuellement
-    par construction. Les trois tiennent sur une même déclaration — STOCKÉE : le
-    cran `reject` ne se pose plus depuis oto#124, il ne vit que dans un schéma déjà
-    en base, qui reste valide tant qu'on n'y touche pas."""
-    assert dsv2.validate_schema_def(SCHEMA, SCHEMA) == []
+    par construction. Les trois tiennent sur une même déclaration."""
+    assert dsv2.validate_schema_def(SCHEMA) == []
 
 
 def test_les_deux_etages_sont_disjoints():
-    """Une colonne réservée est DÉCLARÉE ; une colonne refusée par
-    `unknown_fields` ne l'est pas. Aucune écriture ne peut donc recevoir deux
+    """Une colonne réservée est DÉCLARÉE ; une colonne refusée comme non déclarée
+    ne l'est pas. Aucune écriture ne peut donc recevoir deux
     verdicts opposés — c'est ce qui rend l'ordre des étages sans conséquence."""
     reservees = (dsv2.readonly_fields(SCHEMA)
                  | dsv2.system_origin_fields(SCHEMA))
     declarees = {f["key"] for f in SCHEMA["fields"]}
     assert reservees <= declarees
-    assert dsv2.off_schema_keys(SCHEMA, {k: "v" for k in reservees}) == []
+    assert cnd.non_declarees(SCHEMA, {k: "v" for k in reservees}) == []
 
 
 # ── les crans qui ne pourraient pas s'appliquer, refusés à la POSE ──────────
@@ -145,7 +143,7 @@ def test_LE_GESTE_DOMINANT_traverse_les_trois(banc):
 
 @pytest.mark.parametrize("patch,attendu", [
     # étage 1 : la destination n'existe pas
-    ({"_liberation": "x"}, "no declared column"),
+    ({"_liberation": "x"}, "not declared"),
     # étage 2 : elle existe, elle n'est pas à moi — deux façons
     ({"adresse": "2 rue B"}, "adresse.comment"),
 ])
@@ -163,7 +161,7 @@ def test_chaque_etage_refuse_ET_N_ECRIT_RIEN(banc, patch, attendu):
 
 def test_la_colonne_inventee_ne_se_deguise_pas_en_couche(banc):
     """La porte de côté à fermer : `adresse` est verrouillée, donc l'agent range
-    sa valeur dans `adresse_bis`. Sur un tableau fermé, elle ne s'ouvre pas."""
+    sa valeur dans `adresse_bis`. Non déclarée, elle ne s'ouvre pas."""
     store, etat = banc
     with pytest.raises(RowValidationError):
         store.update_row("viviers", "r1", {"adresse_bis": "2 rue B"})

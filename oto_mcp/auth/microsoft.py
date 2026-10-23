@@ -3,7 +3,7 @@ permissions).
 
 The ACCOUNT carrier `microsoft` (`providers/microsoft.py`) holds the vault, the
 callback and the application's coordinates; each SERVICE (`SERVICE_SCOPES`: `sharepoint`,
-`outlook`, `outlook_calendar`, `teams`) is a connector that borrows
+`outlook`, `outlook_calendar`, `teams`, `onenote`, `entra`) is a connector that borrows
 it (`credential_of="microsoft"`) and asks for ITS scopes only — the Google pattern
 (`auth/google.py`), written for Entra.
 
@@ -116,10 +116,18 @@ SERVICE_SCOPES: dict[str, str] = {
     "outlook": "MAIL",
     "outlook_calendar": "CALENDAR",
     "teams": "TEAMS",
+    "onenote": "NOTES",
+    "entra": "DIRECTORY",
 }
 SERVICES: tuple[str, ...] = tuple(SERVICE_SCOPES)
 SERVICE_LABELS = {"sharepoint": "SharePoint & OneDrive", "outlook": "Outlook",
-                  "outlook_calendar": "Outlook Calendar", "teams": "Teams"}
+                  "outlook_calendar": "Outlook Calendar", "teams": "Teams",
+                  "onenote": "OneNote", "entra": "Microsoft 365 directory"}
+#: The services whose OWN scopes need a tenant administrator (the organization's
+#: directory): an approval link covers them only when asked for by name, or from their
+#: card — never in the default « approve oto for the whole organization », which would
+#: otherwise open the directory to every member who connects a card.
+ADMIN_ONLY_SERVICES: frozenset[str] = frozenset({"entra"})
 #: A service's ADMINISTRATOR tier: the lib's scopes that no card requests at connection
 #: (only a tenant administrator can grant them, `admin_consent_url`), what they open,
 #: checked at use by the service's tools (`has_scopes`). Teams: reading channel messages.
@@ -399,17 +407,32 @@ def verify_admin_state(state: Optional[str]) -> Optional[EtatApprobation]:
 # --- starting the flow -------------------------------------------------------
 
 def build_auth_url(sub: str, return_app: str = "", connector: str = CONNECTOR,
-                   tenant: Optional[str] = None, scope: str = "member") -> str:
+                   tenant: Optional[str] = None, scope: str = "member",
+                   login_hint: Optional[str] = None) -> str:
     """The Microsoft dialog URL — for the account, or for ONE service (identity +
     its scopes, `scopes_for`), on the directory `tenant` (already normalized), for the
-    tier `scope` (`scope_target`: raises `PermissionError`/`ValueError`)."""
+    tier `scope` (`scope_target`: raises `PermissionError`/`ValueError`). `login_hint`
+    pre-fills the address (a reconnection: `reconnection_target`)."""
     group = scope_target(sub, scope)
     org_id = _ctx_org(sub)
     return _coeur().auth.authorize_url(
         app()["client_id"], oauth_flow.redirect_uri(_CALLBACK_PATH),
         make_state(sub, org_id, oauth_flow.resolve_return_app(return_app), connector,
                    tenant, scope, group),
-        scopes=scopes_for(connector), tenant=annuaire(tenant))
+        scopes=scopes_for(connector), tenant=annuaire(tenant), login_hint=login_hint)
+
+
+def reconnection_target(sub: str, account: str) -> tuple[str, Optional[str]]:
+    """The address and directory to reconnect the person's linked account `account`
+    with: the dialog is pre-filled with ITS address, on ITS directory (a guest connected
+    on a client's directory must come back there, or Entra serves another account). The
+    callback recognizes the account by its Microsoft `id` (`persist_grant`): its row,
+    default status and loans stay. Raises `LookupError` for an account she has not linked."""
+    meta = next((c.get("meta") or {} for c in _comptes(_ctx_org(sub), sub)
+                 if c["account"] == account), None)
+    if meta is None:
+        raise LookupError(f"No linked Microsoft account named `{account}` to reconnect.")
+    return meta.get("email") or "", meta.get("tenant")
 
 
 _PALIERS = ("member", "org", "group")
@@ -474,11 +497,13 @@ def admin_approval(sub: str, services: Optional[list[str]] = None,
                    tenant: Optional[str] = None, return_app: str = "",
                    connector: str = "sharepoint") -> dict:
     """The administrator's approval link, as the card serves it: `{url, services,
-    tenant, expires_at}`. `services` defaults to ALL the Microsoft cards; `tenant` is
+    tenant, expires_at}`. `services` defaults to the Microsoft cards — those of
+    `ADMIN_ONLY_SERVICES` only when the link is asked from their own card; `tenant` is
     what the person typed (domain, directory ID, SharePoint address — `normalize_tenant`),
     `organizations` when empty. Raises `ValueError` (unknown service, card or directory),
     `RuntimeError` (application not configured)."""
-    choisis = tuple(services) if services else SERVICES
+    choisis = tuple(services) if services else tuple(
+        s for s in SERVICES if s not in ADMIN_ONLY_SERVICES or s == connector)
     annuaire_choisi = normalize_tenant(tenant)
     url = admin_consent_url(sub, choisis, annuaire_choisi, return_app, connector)
     expire = datetime.fromtimestamp(time.time() + ADMIN_LINK_TTL, tz=timezone.utc)
@@ -503,11 +528,22 @@ def _start_flow_for(connector: str):
             tenant = normalize_tenant(values.get("tenant"))
         except ValueError as e:
             raise AuthzDenied(400, "invalid_tenant", str(e))
+        # `account` (hidden, like `scope`): « Reconnect » on the line of an account of
+        # hers — the dialog targets that account, on its directory.
+        login_hint = None
+        if values.get("account"):
+            if (values.get("scope") or "member") != "member":
+                raise AuthzDenied(400, "invalid_scope",
+                                  "Only an account of your own is reconnected by name.")
+            try:
+                login_hint, tenant = reconnection_target(ctx.sub, values["account"])
+            except LookupError as e:
+                raise AuthzDenied(404, "account_not_found", str(e))
         try:
             # `scope` is a HIDDEN key like `app` (Google, Salesforce): never a form field.
             return connector_flow.FlowStart(auth_url=build_auth_url(
                 ctx.sub, values.get("app") or "", connector, tenant,
-                values.get("scope") or "member"))
+                values.get("scope") or "member", login_hint=login_hint))
         except PermissionError as e:
             raise AuthzDenied(403, "scope_forbidden", str(e))
         except ValueError as e:
@@ -553,6 +589,16 @@ def _iso(dt: datetime) -> str:
 def _scope(org_id: int, sub: str, scope: str = "member",
            group: Optional[int] = None) -> tuple[str, str]:
     return credentials_store.entity_for_scope(scope, org_id, sub, group)
+
+
+def _cause_entra(e: Exception) -> str:
+    """Entra's reason for a refused refresh, as the lib reads it (`AADSTS…: <first line>`),
+    bounded: `code` alone when the text says nothing more, a generic phrase without either."""
+    texte = str(e).split("): ", 1)[-1].strip()
+    code = getattr(e, "code", None)
+    if code and code not in texte:
+        texte = f"{code}: {texte}" if texte else code
+    return texte[:300] or "expired, revoked, or the password changed"
 
 
 def _cle(ligne: tuple, refresh_token: str) -> str:
@@ -791,9 +837,15 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
                                    refresh_token, scopes=tuple(coeur.scopes.REFRESH),
                                    tenant=annuaire(meta.get("tenant")))
     except coeur.MicrosoftGrantExpired as e:
-        message = (f"Microsoft no longer accepts the sign-in of `{rc.account}` (expired, "
-                   "revoked, or the password changed). Reconnect this account from your "
-                   f"connectors page, card « {label} ».")
+        # Entra's own words name the cause (AADSTS50173 password changed or sessions
+        # revoked, AADSTS700082 inactivity…): without them, nobody can say afterwards
+        # why an account was cut. First line only (the lib drops Trace ID and timestamp).
+        cause = _cause_entra(e)
+        logger.warning("microsoft: refresh refused for %s (%s)", rc.account, cause)
+        message = (f"Microsoft no longer accepts the sign-in of `{rc.account}` "
+                   f"(Entra: {cause}). Reconnect it with the « Reconnect » "
+                   f"button on its line, card « {label} » of the connectors page: its "
+                   "default setting and its loans are kept.")
         connector_health.mark_rejected(rc.entity_type, rc.entity_id, CONNECTOR,
                                        rc.account, message)
         raise MicrosoftReauthRequired(message) from e

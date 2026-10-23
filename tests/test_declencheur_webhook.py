@@ -208,7 +208,7 @@ def file(monkeypatch):
     t = {"id": 5, "org_id": ORG, "sub": "alexis", "procedure": "veille",
          "tools": ["a"], "input": "fais la veille", "enabled": True,
          "kind": "webhook", "payload_mode": "ignore", "payload_fields": None,
-         "max_per_hour": None, "fraicheur_s": None, "model": None,
+         "max_per_hour": None, "fraicheur_s": None, "model": "claude-sonnet-5",
          "project_id": None, "max_steps": None, "label": None}
     vu["trigger"] = t
     monkeypatch.setattr(runner_hook.db, "trigger_par_secret", lambda i, h: dict(t))
@@ -300,15 +300,17 @@ def test_un_agent_en_PAUSE_refuse_et_le_DIT(file):
     assert file["livraisons"] == [(runner_hook.db.REFUSE_PAUSED, None)]
 
 
-def test_un_agent_SANS_modele_n_enfile_AUCUNE_famille(file):
-    """⚠️ Le piège que #939 a déjà payé une fois. Si `charge(None)` posait le
-    défaut du catalogue, chaque travail de webhook partirait étiqueté d'une
-    famille — et sur un parc qui n'en sert qu'une autre, il attendrait un worker
-    qui ne viendra pas, puis périmerait par notre propre fraîcheur. La panne
-    serait TOTALE et SILENCIEUSE : des 202 partout, zéro exécution."""
-    _tirer(file)
-    assert "model_family" not in file["enfile"]["payload"]
-    assert "model" not in file["enfile"]["payload"]
+def test_un_agent_SANS_modele_n_enfile_RIEN(file):
+    """⚠️ Le piège que #939 a déjà payé une fois : poser le défaut du catalogue sur
+    un agent sans modèle ferait partir chaque travail étiqueté d'une famille qu'aucun
+    worker ne sert peut-être — des 202 partout, zéro exécution. Et sans famille, le
+    travail n'était pas servable non plus. Depuis le 21/10/2026, la livraison est
+    REFUSÉE et motivée (`refused_no_model`) : rien n'est enfilé, aucune famille posée."""
+    with pytest.raises(runner_hook.HookRefus) as e:
+        _tirer(file, model=None)
+    assert (e.value.statut, e.value.code) == (409, "trigger_no_model")
+    assert file["livraisons"] == [(runner_hook.db.REFUSE_NO_MODEL, None)]
+    assert "enfile" not in file
 
 
 def test_un_agent_AVEC_modele_enfile_sa_famille(file):

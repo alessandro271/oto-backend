@@ -6,16 +6,16 @@ s'étend au-delà du rendu (0016) avec quatre couches OPT-IN :
 - **types imbriqués** : `type: "object"` (+ `fields: [...]`) et `type: "list"`
   (+ `of: <field-def>` — scalaire ou sous-record) décrivent une *fiche* (occupant,
   `contacts[]`, `signaux[]`) que le blob JSONB porte déjà ;
-- **référentiel fermé quand le format fait contrat** (`validation_complete` : partout
-  à partir du 21/10/2026, oto#124 — plus aucun réglage) : dans un composite DÉCLARÉ
-  (`object.fields`, `list.of.fields`), un attribut que la déclaration ne nomme pas est
-  REFUSÉ, en nommant l'élément (`contacts[1].email_pattern`). Au premier niveau, une
-  colonne non déclarée est refusée à la même date (`colonnes_non_declarees`) ;
+- **référentiel fermé quand le format fait contrat** (`validation_complete` : tout
+  tableau qui déclare une colonne, oto#124 — plus aucun réglage) : dans un composite
+  DÉCLARÉ (`object.fields`, `list.of.fields`), un attribut que la déclaration ne nomme
+  pas est REFUSÉ, en nommant l'élément (`contacts[1].email_pattern`). Au premier
+  niveau, une colonne non déclarée est refusée (`colonnes_non_declarees`) ;
 - **validation à l'écriture** : `field.required`, conformité de type,
   `field.required_when: {<champ>: <valeur>}` (le guard-rail : livrables requis
   quand `status = "qualified"`) et `field.max_length` (borne de longueur — un
   intitulé de poste n'est pas un paragraphe de raisonnement) — active si le format
-  fait contrat (partout à la date) OU si un field déclare une exigence ;
+  fait contrat OU si un field déclare une exigence ;
 - **cycle de vie** : `lifecycle: {states, transitions, terminal?}` sur le field
   `role="status"` — état inconnu ou transition non déclarée = refus ;
 - **états terminaux** : `terminal` explicite, sinon dérivés (état sans transition
@@ -46,8 +46,8 @@ c'est ce qui rend la coupe relisable (un fichier, pas cinquante appelants).
 | `motifs.py` | le COÛT d'un `pattern` — la garde qui empêche un motif de figer le serveur |
 | `declaration.py` | LIRE une déclaration : « que déclare ce schéma ? » |
 | `cycle_de_vie.py` | états, transitions, terminaux, plafond de reprises, périmètre |
-| `hors_schema.py` | une clé que la déclaration ne nomme pas — signalée en haut, refusée dessous |
-| `champs_reserves.py` | `readonly` / `origine: system` / `agent_access`, et le préavis daté |
+| `hors_schema.py` | une clé qu'un sous-record déclaré ne nomme pas, refusée ; la couche mal écrite |
+| `champs_reserves.py` | `readonly` / `origine: system` / `agent_access` |
 | `definition.py` | valider le SCHÉMA lui-même, à la pose |
 | `cles_inconnues.py` | refuser une clé que son niveau n'admet pas (`schema_keys.ADMISES`) |
 | `couches_exigees.py` | `required_layers` — ce que la valeur doit porter avec elle |
@@ -106,12 +106,11 @@ from .cycle_de_vie import (
     queue_release_warning,
 )
 from .hors_schema import (
-    off_schema_keys, _unknown_subkeys, _unknown_subkey_refusal, _off_schema,
-    off_schema_warning, types_geles_warning, _REFERENTIEL_CITE,
-    couche_mal_ecrite, enveloppe_probable, off_schema_refusal,
+    _unknown_subkeys, _unknown_subkey_refusal, types_geles_warning,
+    couche_mal_ecrite, enveloppe_probable,
 )
 from .champs_reserves import (
-    PARAMETRE_ORIGINE, _MOIS_FR, description_parametre_origine, _en_francais,
+    PARAMETRE_ORIGINE, description_parametre_origine,
     _les_deux_gestes, refus_origine, origine_posee,
     reserved_refusals, _origine_attendue,
 )
@@ -144,8 +143,7 @@ from .donnees_d_origine import (
     description_parametre as description_donnees_d_origine,
 )
 from .non_applique import (
-    _options_already_enforced,
-    options_not_enforced, options_not_enforced_warning, json_fields_depth,
+    json_fields_depth,
     json_depth_warning, lifecycle_hors_statut, lifecycle_hors_statut_warning,
     motif_sans_obligation, motif_sans_obligation_warning,
     couche_exigee_sans_forme, couche_exigee_sans_forme_warning,

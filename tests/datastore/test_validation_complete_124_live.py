@@ -1,22 +1,18 @@
-"""oto#124 — le format déclaré fait contrat sur TOUS les tableaux, préavis au 21/10/2026.
+"""oto#124 — le format déclaré fait contrat sur TOUS les tableaux.
 
-Décidé le 05/10/2026 : toujours refuser, plus aucun réglage. La validation complète
-(`options` de tête, forme de `text`/`url`/`object`/`list`/`enum`, couches inconnues,
-sous-records fermés) ne dépend plus d'`unknown_columns` : elle s'applique partout à la
-date. D'ici là, sur un tableau qui ne la portait pas, l'écriture passe et `notices` dit
-chaque faute (colonne, valeur, règle), la date et le geste — sur toutes les faces.
+Décidé le 05/10/2026, en vigueur depuis le 21/10/2026 : toujours refuser, plus aucun
+réglage. La validation complète (`options` de tête, forme de `text`/`url`/`object`/
+`list`/`enum`, couches inconnues, sous-records fermés) s'applique à tout tableau qui
+déclare au moins une colonne, sur toutes les faces.
 
 **On juge ce que le geste ÉCRIT, jamais ce que la ligne porte déjà** : une ligne en
-faute s'écrit sur ses autres colonnes, avant comme après la date ; sa faute se dit
-(`hors_type`), elle ne refuse rien. Les données des tenants ne sont pas touchées.
+faute s'écrit sur ses autres colonnes ; sa faute se dit (`hors_type`), elle ne refuse
+rien. Les données des tenants ne sont pas touchées.
 
-AVANT = la veille (gréée par le `conftest`) ; APRÈS = le LENDEMAIN de la date. On lit
-la BASE, pas seulement ce que l'appel a bien voulu rendre.
+On lit la BASE, pas seulement ce que l'appel a bien voulu rendre.
 """
 from __future__ import annotations
 
-import datetime as dt
-import time
 import uuid
 
 import pytest
@@ -61,52 +57,22 @@ EN_FAUTE = {"statut": "z", "etape": "w", "nom": 42, "site": "www.x.fr", "fiche":
             "tags": "a,b", "contacts": [{"nom": "A", "perso": "x"}]}
 
 
-@pytest.fixture
-def lendemain(monkeypatch):
-    """La bascule passée d'un jour : le lendemain de la date, épinglé."""
-    monkeypatch.setattr(vc, "_aujourdhui",
-                        lambda: vc.VALIDATION_COMPLETE_LE + dt.timedelta(days=1))
-
-
-def _preavis(schema, row, **kw):
-    out: list = []
-    return S.validate_row(schema, row, preavis=out, **kw), out
-
-
 # ── la règle, sans base ──────────────────────────────────────────────────────
 
-def test_la_date_le_reglage_et_un_reglage_illisible(monkeypatch):
-    assert vc.VALIDATION_COMPLETE_LE.isoformat() == "2026-10-21"
-    assert not vc.bascule_faite()
-    monkeypatch.setenv(vc.ENV_VALIDATION_COMPLETE_LE, "2026-01-01")
-    assert vc.bascule_faite()
-    monkeypatch.setenv(vc.ENV_VALIDATION_COMPLETE_LE, "21 octobre")
-    with pytest.raises(ValueError, match=vc.ENV_VALIDATION_COMPLETE_LE):
-        vc.bascule_faite()
-
-
 @pytest.mark.parametrize("famille,col,valeur,dit", FAUTES, ids=IDS)
-def test_avant_chaque_famille_passe_et_se_dit(famille, col, valeur, dit):
-    errs, preavis = _preavis(SCHEMA, {col: valeur})
-    assert errs == [], (famille, errs)
-    assert len(preavis) == 1 and dit in preavis[0], (famille, preavis)
-
-
-@pytest.mark.parametrize("famille,col,valeur,dit", FAUTES, ids=IDS)
-def test_au_lendemain_chaque_famille_est_refusee(famille, col, valeur, dit, lendemain):
-    errs, preavis = _preavis(SCHEMA, {col: valeur})
+def test_chaque_famille_est_refusee(famille, col, valeur, dit):
+    errs = S.validate_row(SCHEMA, {col: valeur})
     assert any(dit in e for e in errs), (famille, errs)
-    assert preavis == [], "la règle est en vigueur : plus de préavis"
 
 
-def test_un_tableau_sans_colonne_n_a_ni_preavis_ni_refus(lendemain):
-    assert _preavis({"fields": []}, {"x": 1}) == ([], [])
-    assert not vc.complete(None) and not vc.en_preavis({"fields": []})
+def test_un_tableau_sans_colonne_n_a_pas_de_refus_de_format():
+    assert S.validate_row({"fields": []}, {"x": 1}) == []
+    assert not vc.complete(None) and not vc.complete({"fields": []})
+    assert vc.complete(SCHEMA)
 
 
 @pytest.mark.parametrize("famille,col,valeur,dit", FAUTES, ids=IDS)
-def test_une_ligne_en_faute_s_ecrit_sur_une_AUTRE_colonne(famille, col, valeur, dit,
-                                                          lendemain):
+def test_une_ligne_en_faute_s_ecrit_sur_une_AUTRE_colonne(famille, col, valeur, dit):
     """LA règle : on juge ce que le geste écrit. La faute en place part dans `gelees`
     (servie en `hors_type`) — ni refus, ni silence."""
     gelees: list = []
@@ -119,12 +85,10 @@ def test_une_ligne_en_faute_s_ecrit_sur_une_AUTRE_colonne(famille, col, valeur, 
         assert any(g["champ"].startswith(col) for g in gelees), (famille, gelees)
 
 
-def test_une_couche_inconnue_en_place_ne_bloque_plus_sur_un_tableau_report():
-    """Le cas qui était FAUX avant ce lot : sous un format qui faisait déjà contrat,
-    une couche inconnue en place refusait l'écriture d'une autre colonne."""
-    schema = {"unknown_columns": "report", "fields": SCHEMA["fields"]}
+def test_une_couche_inconnue_en_place_ne_bloque_pas():
+    """Une couche inconnue en place ne refuse pas l'écriture d'une autre colonne."""
     gelees: list = []
-    errs = S.validate_row(schema, {"autre": {"valeur": "v", "commentaire": "c"},
+    errs = S.validate_row(SCHEMA, {"autre": {"valeur": "v", "commentaire": "c"},
                                    "nom": "ok"}, written={"nom"}, gelees=gelees)
     assert errs == [] and [g["champ"] for g in gelees] == ["autre"]
 
@@ -133,21 +97,16 @@ def test_hors_options_ne_releve_que_ce_que_le_geste_pose():
     """L'autre défaut corrigé : une valeur hors options DÉJÀ en place entrait dans le
     relevé `hors` (ce que l'écriture peut ÉCARTER), et faussait l'écartement de la
     valeur que le geste pose, lui."""
-    schema = {"unknown_columns": "report", "fields": SCHEMA["fields"]}
     hors: list = []
-    errs = S.validate_row(schema, {"statut": "z", "etape": "w"}, written={"etape"},
+    errs = S.validate_row(SCHEMA, {"statut": "z", "etape": "w"}, written={"etape"},
                           hors=hors)
     assert [h["champ"] for h in hors] == ["etape"] and len(errs) == 1
 
 
-def test_le_texte_servi_est_derive_de_la_date(monkeypatch):
-    avant = vc.description_ecriture()
-    assert "From 2026-10-21 on" in avant and "Until then" in avant
-    assert "data_patch_schema" in avant and "OTHER columns" in avant
+def test_le_texte_servi_dit_la_regle_au_present():
+    texte = vc.description_ecriture()
+    assert "CONTRACT on every table" in texte and "OTHER columns" in texte
     assert "unknown_columns` was REMOVED" in vc.description_schema()
-    monkeypatch.setenv(vc.ENV_VALIDATION_COMPLETE_LE, "2026-01-01")
-    apres = vc.description_ecriture()
-    assert "CONTRACT on every table" in apres and "Until then" not in apres
 
 
 def test_la_description_servie_dit_la_regle():
@@ -251,93 +210,13 @@ def _base(ns_id: int) -> list[dict]:
     return [{"_id": r["row_id"], **r["data"]} for r in rows]
 
 
-def _preavis_servi(rep: dict) -> str:
-    return next(n for n in rep.get("notices") or [] if "declared format not respected" in n)
-
-
-def _toutes_dites(texte: str) -> None:
-    for _, col, _, dit in FAUTES:
-        if dit.startswith("statut: expected") or col == "autre":
-            continue                  # une faute par case ; la couche, cf. EN_FAUTE
-        assert dit in texte, dit
-    assert "From 2026-10-21 on" in texte and "data_patch_schema" in texte
-
-
 def _sans_id(lignes: list[dict]) -> list[dict]:
     return [{k: v for k, v in ligne.items() if k != "_id"} for ligne in lignes]
 
 
-# ── AVANT : toutes les faces passent, et le disent ───────────────────────────
+# ── refusé, rien n'est écrit ; la ligne en faute reste écrivable ────────────
 
-def test_avant_mcp_et_rest_ecrivent_et_disent_chaque_faute(client, data_write):
-    for face in ("mcp", "rest"):
-        ns, ns_id, _ = _table()
-        if face == "mcp":
-            rep = data_write(datastore=ns, row=dict(EN_FAUTE))
-        else:
-            r = client.post(f"/api/datastores/{ns}/rows", headers=_h(), json=EN_FAUTE)
-            assert r.status_code == 201, r.text
-            rep = r.json()
-        texte = _preavis_servi(rep)
-        _toutes_dites(texte)
-        assert "(+" in texte or texte.count(";") >= 7, "chaque faute est citée"
-        assert _sans_id(_base(ns_id)) == [EN_FAUTE], "la donnée est écrite telle quelle"
-
-
-def test_avant_le_lot_dit_une_seule_phrase(client, data_write):
-    ns, ns_id, _ = _table()
-    lot = [{"nom": "A", "statut": "z"}, {"nom": "B", "site": "www.x.fr"}]
-    rep = data_write(datastore=ns, rows=lot)
-    phrases = [n for n in rep["notices"] if "declared format not respected" in n]
-    assert len(phrases) == 1 and "'z'" in phrases[0] and "www.x.fr" in phrases[0]
-    r = client.post(f"/api/datastores/{ns}/rows/batch", headers=_h(), json={"rows": lot})
-    assert r.status_code == 200, r.text
-    assert len([n for n in r.json()["notices"] if "declared format not respected" in n]) == 1
-    assert len(_base(ns_id)) == 4
-
-
-def test_avant_le_patch_par_id_est_averti(client, data_write):
-    ns, _, ids = _table(lignes=[{"nom": "A"}])
-    r = client.patch(f"/api/datastores/{ns}/rows/{ids[0]}", headers=_h(),
-                     json={"site": "www.x.fr"})
-    assert r.status_code == 200, r.text
-    assert "www.x.fr" in _preavis_servi(r.json())
-    rep = data_write(datastore=ns, id=ids[0], row={"statut": "z"})
-    assert "'z' not among the options" in _preavis_servi(rep)
-
-
-def test_avant_l_upload_signe_et_l_import_avertissent(live, monkeypatch):
-    from oto_mcp import upload_tokens
-    ns, ns_id, _ = _table()
-    corps = b'{"nom": "A", "statut": "z"}\n{"nom": "B", "site": "www.x.fr"}\n'
-    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": ns, "format": "ndjson"}
-    rep = upload_tokens.materialize(SUB, cible, corps, "application/x-ndjson")
-    assert rep["inserted"] == 2 and "'z' not among the options" in _preavis_servi(rep)
-    monkeypatch.setattr(upload_tokens, "IMPORT_SLICE", 1)
-    rep = upload_tokens.import_rows(SUB, cible, [{"nom": "C", "etape": "w"},
-                                                 {"nom": "D", "tags": "a,b"}],
-                                    deadline=time.monotonic() + 60)
-    phrases = [n for n in rep["notices"] if "declared format not respected" in n]
-    assert rep["done"] and len(phrases) == 1
-    assert "'w' not among the options" in phrases[0] and "tags: expected list" in phrases[0]
-    assert len(_base(ns_id)) == 4
-
-
-def test_avant_un_tableau_qui_faisait_deja_contrat_refuse_toujours(client):
-    """Le réglage STOCKÉ `report` garde la validation complète d'ici à la date."""
-    from oto_mcp import db
-    ns, ns_id, _ = _table()
-    db.set_datastore_schema(ns_id, {**SCHEMA, "unknown_columns": "report"})
-    r = client.post(f"/api/datastores/{ns}/rows", headers=_h(),
-                    json={"nom": "A", "site": "www.x.fr"})
-    assert r.status_code == 400 and r.json()["error"] == "row_invalid", r.text
-    assert _base(ns_id) == []
-
-
-# ── APRÈS : refusé, rien n'est écrit ; la ligne en faute reste écrivable ─────
-
-def test_au_lendemain_une_faute_est_refusee_sur_toutes_les_faces(client, data_write,
-                                                                  lendemain):
+def test_une_faute_est_refusee_sur_toutes_les_faces(client, data_write):
     from oto_mcp.mcp_errors import McpError
     ns, ns_id, _ = _table()
     with pytest.raises(McpError) as e:
@@ -349,8 +228,8 @@ def test_au_lendemain_une_faute_est_refusee_sur_toutes_les_faces(client, data_wr
     assert _base(ns_id) == []
 
 
-def test_au_lendemain_une_valeur_hors_options_seule_est_ecartee(client, lendemain):
-    """Le régime des tableaux qui faisaient contrat, désormais celui de tous (#667)."""
+def test_une_valeur_hors_options_seule_est_ecartee(client):
+    """Le régime de tous les tableaux (#667)."""
     ns, ns_id, _ = _table()
     r = client.post(f"/api/datastores/{ns}/rows", headers=_h(),
                     json={"nom": "A", "statut": "z"})
@@ -359,36 +238,27 @@ def test_au_lendemain_une_valeur_hors_options_seule_est_ecartee(client, lendemai
     assert _sans_id(_base(ns_id)) == [{"nom": "A"}]
 
 
-def test_au_lendemain_la_ligne_en_faute_s_ecrit_sur_ses_autres_colonnes(
-        client, data_write, monkeypatch):
-    """LA règle, sur la vraie base : la ligne porte une faute de CHAQUE famille, écrite
-    la veille sous préavis ; au lendemain, écrire une autre colonne passe, la ligne
-    n'est pas corrigée, et ses fautes se disent."""
-    ns, ns_id, ids = _table(lignes=[dict(EN_FAUTE)])          # la veille : écrite
-    monkeypatch.setattr(vc, "_aujourdhui",
-                        lambda: vc.VALIDATION_COMPLETE_LE + dt.timedelta(days=1))
+def test_la_ligne_en_faute_s_ecrit_sur_ses_autres_colonnes(client, data_write):
+    """LA règle, sur la vraie base : la ligne porte une faute de CHAQUE famille, posée
+    en base avant la règle ; écrire une autre colonne passe, la ligne n'est pas
+    corrigée, et ses fautes se disent."""
+    from oto_mcp import db
+    ns, ns_id, _ = _table()
+    ids = [uuid.uuid4().hex]
+    db.datastore_insert_row(ns_id, ids[0], dict(EN_FAUTE))   # l'existant, hors format
     r = client.patch(f"/api/datastores/{ns}/rows/{ids[0]}", headers=_h(),
                      json={"nom": "Acme"})
     assert r.status_code == 200, r.text
     signale = set(r.json().get("hors_type") or {})
     for col in ("statut", "etape", "site", "fiche", "tags"):
         assert any(c.startswith(col) for c in signale), (col, signale)
-    rep = data_write(datastore=ns, id=ids[0], row={"nom": "Acme bis"})
-    assert not any("declared format not respected" in n for n in rep.get("notices") or [])
+    data_write(datastore=ns, id=ids[0], row={"nom": "Acme bis"})
     ligne = _sans_id(_base(ns_id))[0]
     assert ligne == {**EN_FAUTE, "nom": "Acme bis"}, "les données du tenant restent"
     # Réécrire la colonne fautive avec la MÊME faute, en revanche, est refusé.
     r = client.patch(f"/api/datastores/{ns}/rows/{ids[0]}", headers=_h(),
                      json={"site": "www.y.fr"})
     assert r.status_code == 400 and r.json()["error"] == "row_invalid", r.text
-
-
-def test_avant_la_ligne_en_faute_ne_preavise_pas_ce_qu_on_n_ecrit_pas(client):
-    ns, _, ids = _table(lignes=[dict(EN_FAUTE)])
-    r = client.patch(f"/api/datastores/{ns}/rows/{ids[0]}", headers=_h(),
-                     json={"nom": "Acme"})
-    assert r.status_code == 200, r.text
-    assert not any("declared format not respected" in n for n in r.json().get("notices") or [])
 
 
 # ── `unknown_columns` : refusé à la pose et au patch, sur la face REST ───────
@@ -405,18 +275,3 @@ def test_unknown_columns_est_refuse_a_la_pose_et_au_patch(client):
     assert "plus aucun réglage" in r.json()["detail"]
     from oto_mcp import db
     assert "unknown_columns" not in db.get_datastore_by_id(ns_id)["schema"]
-
-
-def test_unknown_columns_stocke_ne_bloque_pas_le_patch(client):
-    """Entre le déploiement et le retrait du stocké, patcher un tableau qui le porte
-    passe : le réglage inchangé est reconduit, et la lecture le dit."""
-    from oto_mcp import db
-    ns, ns_id, _ = _table()
-    db.set_datastore_schema(ns_id, {**SCHEMA, "unknown_columns": "reject"})
-    r = client.patch(f"/api/datastores/{ns}/schema", headers=_h(),
-                     json={"fields": [{"key": "ville", "type": "text"}]})
-    assert r.status_code == 200, r.text
-    assert "no setting any more" in (r.json().get("warning") or "")
-    assert db.get_datastore_by_id(ns_id)["schema"]["unknown_columns"] == "reject"
-    r = client.get(f"/api/datastores/{ns}/schema", headers=_h())
-    assert r.status_code == 200 and r.json()["reglages"] == {"new_rows": "create"}

@@ -104,12 +104,12 @@ def test_collision_avec_un_AUTRE_ENTETE_du_fichier():
     assert "N.SIREN" in msg and "N_SIREN" in msg, "le refus nomme LES DEUX"
 
 
-def test_collision_avec_une_colonne_DECLAREE_au_schema():
-    """La cible peut être prise sans être dans le fichier : l'import écrirait alors
-    dans une colonne du tableau que le client n'a jamais visée."""
-    with pytest.raises(RowValidationError):
-        traduire_les_entetes({"fields": [{"key": "N_SIREN", "type": "text"}]},
-                             ["N.SIREN"])
+def test_une_cible_DECLAREE_au_schema_est_celle_que_vise_l_import():
+    """Le fichier rechargé chaque mois : `N_SIREN` est déclarée dès le premier
+    chargement, et chaque rechargement de `N.SIREN` y écrit. Ce n'est pas une
+    collision."""
+    assert traduire_les_entetes({"fields": [{"key": "N_SIREN", "type": "text"}]},
+                                ["N.SIREN"]) == {"N.SIREN": "N_SIREN"}
 
 
 def test_deux_entetes_pointes_qui_visent_la_MEME_cible():

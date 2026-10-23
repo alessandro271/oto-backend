@@ -328,13 +328,15 @@ def traduire_les_entetes(schema: Optional[dict], entetes: list) -> dict:
 
     Rend `{en-tête: colonne}`, limité à ce qui est effectivement traduit. Trois
     conditions, aucune décorative : **dite** (l'appelant reçoit ce dict et le rend),
-    **sûre en collision** (cas 4, on refuse en nommant les deux), et **déterministe** —
-    la traduction ne lit que les en-têtes et le schéma, jamais les lignes en place, donc
-    un fichier rechargé chaque mois vise toujours les mêmes colonnes. Sans quoi il
-    fabriquerait un doublon par colonne et par passage."""
+    **sûre en collision** (cas 4 : deux en-têtes du FICHIER sur une même colonne, on
+    refuse en nommant les deux), et **déterministe** — la traduction ne lit que les
+    en-têtes et le schéma, jamais les lignes en place, donc un fichier rechargé chaque
+    mois vise toujours les mêmes colonnes. Une cible que le schéma DÉCLARE est celle
+    que vise chaque rechargement : `N.SIREN` écrit dans la colonne `N_SIREN` déclarée,
+    ce n'est pas une collision. Le schéma ne sert qu'au cas 1."""
     presents = [e for e in entetes if e]
-    reelles = set(presents) | {f.get("key") for f in dsv2._fields(schema)
-                               if f.get("key")}
+    du_fichier = set(presents)
+    reelles = du_fichier | {f.get("key") for f in dsv2._fields(schema) if f.get("key")}
     traduits: dict = {}
     cibles: dict = {}
     for entete in presents:
@@ -344,15 +346,14 @@ def traduire_les_entetes(schema: Optional[dict], entetes: list) -> dict:
         if adresse is not None and adresse[0] in reelles:
             continue                                  # cas 1 : le store la rangera
         cible = entete.replace(".", "_")
-        if cible in reelles or cible in cibles:
-            autre = (f"another header of the file, `{cibles[cible]}`"
-                     if cible in cibles else
-                     "another header of the file, or a column of the table")
+        if cible in du_fichier or cible in cibles:
+            autre = cibles.get(cible, cible)
             raise RowValidationError([
                 f"The header `{entete}` cannot become the column `{cible}`: this "
-                f"name is already taken by {autre}. Two distinct columns would be "
-                f"merged and one would overwrite the other. Nothing was imported — "
-                f"rename `{entete}` in the source file, then reload."])
+                f"name is already taken by another header of the file, `{autre}`. Two "
+                f"distinct columns would be merged and one would overwrite the other. "
+                f"Nothing was imported — rename `{entete}` in the source file, then "
+                f"reload."])
         traduits[entete] = cible
         cibles[cible] = entete
     return traduits

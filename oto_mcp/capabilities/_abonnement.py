@@ -326,8 +326,9 @@ def seuil(sub: str, org_id: Optional[int], famille: str) -> float:
     return pct / 100
 
 
-def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
-                         famille: Optional[str], etat_runner: dict) -> str:
+def raison_de_peremption(sub: Optional[str], org_id: int,
+                         famille: str, etat_runner: dict,
+                         modele: Optional[str] = None) -> str:
     """La raison SERVIE quand le tick périme une occurrence non prise DANS SON
     CYCLE (27/09/2026) — nommant la VRAIE cause plutôt que le texte générique
     d'avant, qui disait toujours « aucun agent ne dessert cette organisation »
@@ -342,22 +343,25 @@ def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
     état a pu changer une seconde avant ou après (une reconnexion qui gagne de
     justesse contre le tick, par exemple) — la RÈGLE d'expiration (occurrence
     superседée) ne change pas d'un mot, seul le TEXTE qui l'accompagne s'affine.
+
+    `modele` = le modèle déclaré : il nomme le dépôt d'un repli sur la clé d'org
+    (`runner_models.repli_api`), que le diagnostic d'un pool au plafond lit.
+
+    `famille` est toujours déclarée : un déclencheur sans modèle n'enfile rien, sa
+    livraison est refusée avant (`runner_models.motif_sans_famille`, 21/10/2026).
     """
     base = "occurrence non prise dans son cycle : le déclencheur a enfilé la suivante."
     aucun_agent = f"{base} Aucun agent ne dessert cette organisation."
-    servies = etat_runner.get("families") or []
+    if famille not in (etat_runner.get("families") or []):
+        # Aucun worker vivant ne sert cette famille pour cette org (21/10/2026) : le
+        # dire, et depuis quand. « Aucun agent ne dessert cette organisation »
+        # laissait croire à une org sans runner, quand c'est une FAMILLE qui manque.
+        return _famille_non_servie(base, org_id, famille)
     if not est_abonnement(famille):
-        if famille:
-            # Famille API déclarée : la seule distinction qu'on sait faire ici
-            # est « un worker de cette famille existe-t-il ? » — le détail
-            # d'une clé manquante appartient à `_cle_exigee`, pas à ce module.
-            return aucun_agent if famille not in servies else base
-        # Aucun modèle déclaré (agents d'avant le catalogue, ou posés sans
-        # modèle) : n'importe quel worker sert ce travail, donc la seule
-        # question qui vaille est « un runner existe-t-il pour cette org, tout
-        # court ? » — la même lecture que `_modele.exige_un_runner`.
-        return aucun_agent if not etat_runner.get("armed") else base
-    if famille not in servies or not sub:
+        # Famille API servie : le détail d'une clé manquante appartient à
+        # `_cle_exigee`, pas à ce module.
+        return base
+    if not sub:
         return aucun_agent
     if en_pool(org_id, famille):
         # ⚠️ `taille_du_pool` compte les prêteurs SERVABLES MAINTENANT — 0 y est
@@ -376,9 +380,7 @@ def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
                 return (f"{base} Les membres qui prêtent leur abonnement `{famille}` "
                         "au pool de l'organisation doivent le reconnecter (Réglages › "
                         "Fournisseurs de modèles) — il repartira tout seul.")
-            return (f"{base} Le pool `{famille}` de l'organisation était en pause "
-                    "(plafond de consommation atteint) au moment où la suivante est "
-                    "arrivée.")
+            return _pool_au_plafond(base, org_id, famille, modele)
         # Un prêteur EST servable maintenant : la vraie cause a déjà cédé.
         return aucun_agent
     # ⚠️ `servable()` répond FAIT EXPRÈS `True` pour un `paused_limit`, quelle que
@@ -392,11 +394,7 @@ def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
                 "reconnecter (Réglages › Fournisseurs de modèles) — il repartira "
                 "tout seul.")
     if statut == user_subscriptions.PLAFOND:
-        reset = ligne.get("limit_reset_at")
-        if isinstance(reset, str):
-            reset = datetime.fromisoformat(reset)
-        if reset and reset.tzinfo is None:
-            reset = reset.replace(tzinfo=timezone.utc)
+        reset = _echeance_utc(ligne.get("limit_reset_at"))
         if reset and reset > datetime.now(timezone.utc):
             return (f"{base} L'abonnement `{famille}` de son propriétaire avait "
                     "atteint son plafond de consommation.")
@@ -407,6 +405,54 @@ def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
     return aucun_agent
 
 
+def _echeance_utc(v) -> Optional[datetime]:
+    """Une échéance lue en base — texte « AAAA-MM-JJ HH:MM:SS » (le `row_factory` du
+    pool), ou `datetime` — en `datetime` UTC ; None si absente."""
+    if isinstance(v, str):
+        v = datetime.fromisoformat(v)
+    if v and v.tzinfo is None:
+        v = v.replace(tzinfo=timezone.utc)
+    return v or None
+
+
+def _famille_non_servie(base: str, org_id: int, famille: str) -> str:
+    """Aucun worker vivant ne sert `famille` pour cette org : quand en a-t-on vu un
+    pour la dernière fois (`dernier_vu_de_famille`) ? Jamais = « aucun worker vu »."""
+    vu = _echeance_utc(db_runner_jobs.dernier_vu_de_famille(org_id, famille))
+    quand = f"dernier vu le {vu:%d/%m/%Y %H:%M} UTC" if vu else "aucun worker vu"
+    return f"{base} Aucun worker ne sert la famille `{famille}` ({quand})."
+
+
+def _pool_au_plafond(base: str, org_id: int, famille: str, modele: Optional[str]) -> str:
+    """Un pool AU PLAFOND, et pourquoi le repli sur la clé d'org ne l'a pas pris
+    (21/10/2026) : fermé, ou ouvert sans clé déposée. Sans ce détail, l'expiration ne
+    disait ni jusqu'à quand attendre, ni quel réglage aurait servi le travail. Les
+    autres cas gardent le texte d'avant. UNE lecture (`pool_au_plafond`)."""
+    depot = runner_models.famille(runner_models.repli_api(modele))
+    pause = org_subscription_pool.pool_au_plafond(org_id, famille, depot)
+    repli = (org_subscription_pool.repli_api_par_defaut() if pause["repli_api"] is None
+             else bool(pause["repli_api"]))
+    reprise = _echeance_utc(pause["reprise"])
+    au_plafond = (f"{base} Le pool `{famille}` de l'organisation est en pause : "
+                  "abonnements au plafond"
+                  + (f" jusqu'au {reprise:%d/%m/%Y %H:%M} UTC" if reprise else ""))
+    if not repli:
+        return f"{au_plafond}, repli sur la clé d'org fermé."
+    if depot and not pause["cle_org"]:
+        return (f"{au_plafond}, repli sur la clé d'org ouvert mais aucune clé `{depot}` "
+                "déposée par l'organisation.")
+    return (f"{base} Le pool `{famille}` de l'organisation était en pause "
+            "(plafond de consommation atteint) au moment où la suivante est arrivée.")
+
+
+#: Les `rate_limit_info.status` qui SERVENT encore. `allowed_warning` n'est pas un
+#: refus : le fournisseur prévient seulement qu'une fenêtre approche de sa limite. Lu
+#: comme un refus, il mettait la personne en pause jusqu'à l'échéance la plus
+#: lointaine (sept jours) avec quelques % d'usage — seul le seuil juge la jauge. Un
+#: état inconnu reste un refus : dans le doute, on attend.
+ETATS_SERVABLES = (None, "allowed", "allowed_warning")
+
+
 def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
     """Ce que le worker a VU du forfait en exécutant ce travail, porté sur la
     connexion qui l'a SERVI (`conclu["abonnement"]` : le demandeur en mode personnel,
@@ -415,7 +461,7 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
 
     Le rapport voyage dans le résultat déclaré, clé `abonnement` :
 
-        {"etat": "allowed" | <autre>,            # `rate_limit_info.status`
+        {"etat": "allowed" | "allowed_warning" | <autre>,   # `rate_limit_info.status`
          "deconnecte": true,                     # le programme n'a plus de session
          "fenetres": {"five_hour": {"utilization": 0.07, "resetsAt": 1790029800},
                       "seven_day": {"utilization": 0.49, "resetsAt": 1790053200}}}
@@ -458,7 +504,7 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
             and isinstance(f.get("resetsAt"), (int, float))
             and isinstance(f.get("utilization"), (int, float))
             and f["utilization"] >= plafond]
-        refuse = rapport.get("etat") not in (None, "allowed")
+        refuse = rapport.get("etat") not in ETATS_SERVABLES
         if refuse and not echeances:
             # Refusé sans fenêtre saturée lisible : toutes les échéances connues
             # comptent, faute de savoir laquelle a mordu.
@@ -478,6 +524,13 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
             charges = [f["utilization"] for f in fenetres.values()
                        if isinstance(f, dict)
                        and isinstance(f.get("utilization"), (int, float))]
+            # Le rapport BRUT au journal : la ligne ne garde que la cause résumée
+            # (`limit_epuise`, `limit_utilisation`), qui ne dit ni l'état exact du
+            # fournisseur ni la fenêtre qui a mordu — sans lui, une pause douteuse ne
+            # se prouve pas.
+            logger.info("forfait en pause (famille %s, porteur %s) : etat=%r seuil=%s "
+                        "fenetres=%s → jusqu'à %s", famille, porteur, rapport.get("etat"),
+                        plafond, fenetres, quand)
             user_subscriptions.marquer_statut(
                 porteur, famille, user_subscriptions.PLAFOND, limit_reset_at=quand,
                 epuise=refuse, utilisation=max(charges) if charges else None,

@@ -52,13 +52,12 @@ argument MCP** ; la table de routes est **figée** (`docs/architecture.md`, `doc
 
 ## Auth, rôles, coffre, REST & version servie
 
-JWT Logto **ES384**, discovery RFC 9728, façade DCR ; au-dessus des orgs, l'étage **tenant** (ADR 0052 : un partenaire
+JWT Logto **ES384**, discovery RFC 9728 qui annonce l'émetteur Logto, client MCP inscrit chez Logto par **CIMD** (Logto ≥ 1.44 exigé) ; au-dessus des orgs, l'étage **tenant** (ADR 0052 : un partenaire
 sert oto sous sa marque) · ⚠️ **on n'étend plus le tenant** : ni capacité, route, table,
 colonne, rang de cascade, marque ou réglage par tenant neufs — un besoin « par tenant » se traite par instance ou
-par org, retirer reste permis ; gelé par `tests/test_tenant_ne_s_etend_plus.py` (`docs/tenants.md` §Convention). ⚠️ Logto prod/preprod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **ce qui SIGNE n'est pas ce qu'on
-ANNONCE** : l'`issuer` (donc `LOGTO_ENDPOINT`, donc la vérification) est gravé sur `.ninja`, mais les endpoints
-publiés aux clients suivent `LOGTO_PUBLIC_ENDPOINT` — `auth.oto.cx` en prod, sinon un utilisateur autorisé sur
-`mcp.oto.cx` se connecte sur `.ninja` (`docs/auth-logto.md`) · ⚠️ **un env-liste s'ÉTEND, ne se
+par org, retirer reste permis ; gelé par `tests/test_tenant_ne_s_etend_plus.py` (`docs/tenants.md` §Convention). ⚠️ Logto prod/preprod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **on n'annonce que ce qui SIGNE** :
+le PRM porte l'`issuer` (`LOGTO_ENDPOINT` + `/oidc`), jamais un autre domaine du même Logto — l'`iss` de RFC 9207
+et la métadonnée RFC 8414 divergeraient sinon ; « openid » sans `resource` = jeton opaque, 401 (`docs/auth-logto.md`) · ⚠️ **un env-liste s'ÉTEND, ne se
 remplace jamais** (`MCP_AUDIENCE_ALT`, `OTO_MCP_CORS_ORIGINS`, `MAILER_FROM_DOMAINS`, SPF, redirect URIs), chaque env
 ayant la sienne (`docs/auth-logto.md`, `docs/tenants.md`).
 Paliers `member < admin < super_admin` ; clé résolue à chaque appel par le **walker unique** `access.walk_cascade`
@@ -78,8 +77,7 @@ bougent pas parce qu'il n'y en a aucun** (forfaits plats par org) · ⚠️ **pa
 pas à une org ; c'est l'admin de **tenant**, sur les comptes du sien (`docs/comptes-en-pause.md`).
 **Désactiver un tenant** = `oto_admin_tenant op=disable` (REST `POST /api/admin/tenants/{slug}/disablement`),
 **jamais** vider son `issuer` : l'état `tenants.disabled_at` est lu à chaque requête par la garde d'identité unique
-(`garde_identite.refus`, sub canonique, toutes portes : REST, MCP, upload signé ; la façade OAuth lit le registre,
-rechargé par le geste), et le geste révoque les jetons `oto_` de ses comptes et suspend ses orgs (origine marquée, `enable` ne lève que celles-là) · ⚠️ un ancien identifiant de NOTRE annuaire redirigé vers un compte du tenant est
+(`garde_identite.refus`, sub canonique, toutes portes : REST, MCP, upload signé), et le geste révoque les jetons `oto_` de ses comptes et suspend ses orgs (origine marquée, `enable` ne lève que celles-là) · ⚠️ un ancien identifiant de NOTRE annuaire redirigé vers un compte du tenant est
 coupé aussi — retirer l'émetteur ne le voyait pas (`docs/tenants.md` §Désactiver un tenant).
 `/api/*` sous le même `JWTVerifier` que `/mcp` ; `GET /openapi.json` **dérivé** du registre de capacités ; un jeton
 `oto_` peut naître **porté** · ⚠️ **CORS : aucune liste dans le code**, chaque instance déclare `OTO_MCP_CORS_ORIGINS`
@@ -133,14 +131,15 @@ base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis p
   le parquet sert lookups et bulk · ⚠️ `categorie_entreprise` est celle du **groupe** (`docs/sirene-stock.md`).
 - **Datastore** (ADR 0016) : PG/JSONB natif, tools `data_*` + REST `/api/datastore/*` (100 % dérivée), découpé par
   coutures (`db/datastore_ns` = le tableau, `db/datastore` = les lignes, `datastore/core` compose) · ⚠️ **une pose de
-  schéma remplace**, éditer = `data_patch_schema` · ⚠️ **une colonne se DÉCLARE avant de s'écrire** (oto#124) : à
-  partir du **21 octobre 2026** une colonne non déclarée est refusée sur tous les tableaux (`unknown_column`,
-  `OTO_COLONNE_NON_DECLAREE_REFUSEE_LE`), l'existant gelé par `scripts/figer_colonnes.py`, un tableau neuf naît
-  avec son schéma (`data_create_datastore(schema=…)`, `POST /api/datastores`) · ⚠️ **le format déclaré fait
-  contrat partout, plus aucun réglage** (oto#124) : options, forme des valeurs, couches, sous-records fermés,
-  refusés à partir du **21 octobre 2026** (`datastore/validation_complete.py`, `OTO_VALIDATION_COMPLETE_LE`,
-  préavis daté d'ici là) ; **on juge ce que le geste ÉCRIT**, jamais ce que la ligne porte ; `unknown_columns`
-  refusé, retiré du stocké par `scripts/retirer_unknown_columns.py` APRÈS la date · ⚠️ **écrire la couche
+  schéma remplace**, éditer = `data_patch_schema` · ⚠️ **une colonne se DÉCLARE avant de s'écrire** (oto#124) : une
+  colonne non déclarée est refusée sur tous les tableaux (`unknown_column`, `datastore/colonnes_non_declarees.py`),
+  un lot refusé ENTIER ; l'existant a été gelé par `scripts/figer_colonnes.py` (le geste d'une base née avant la
+  règle), un tableau neuf naît avec son schéma (`data_create_datastore(schema=…)`, `POST /api/datastores`) ·
+  ⚠️ **le format déclaré fait contrat partout, plus aucun réglage** (oto#124) : options, forme des valeurs,
+  couches, sous-records fermés sont refusés (`datastore/validation_complete.py`) ; **on juge ce que le geste
+  ÉCRIT**, jamais ce que la ligne porte ; `unknown_columns` refusé à la pose · ⚠️ **AJOUTER sur une clé métier
+  déjà portée est refusé** sans `upsert=true` (409 `business_key_exists`, oto#141) ; la DÉSIGNER (`id=`, `key=`)
+  modifie sa ligne · ⚠️ **écrire la couche
   `origine` se DÉCLARE**
   (`origine_override=true`, les deux faces + au mint d'un upload signé) : la poser sans le dire est refusé — ce
   n'est pas un droit à obtenir · ⚠️ **une colonne peut EXIGER sa provenance** (`required_layers: ["comment"]`, oto#75) : la valeur non
@@ -233,7 +232,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `org-context.md` — session / maison / consultation ; jeton de délégation borné à l'org de son travail
 - `ownership.md` — `can_access`/`can_govern`, partages
 - `tool-visibility.md` — denylist, `PROTECTED_TOOLS`
-- `auth-logto.md` — Logto, DCR, jetons `oto_`
+- `auth-logto.md` — Logto, inscription CIMD, jetons `oto_`
 - `tenants.md` — l'identité au-dessus des orgs
 - `comptes-en-pause.md` — neutraliser un compte sans le détruire : un seul état, aucune
   résurrection automatique
@@ -258,6 +257,9 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   recette versionnée, pages appelées par le corps d'`oto_call`, reçu en comptes, `for_each` sur
   les lignes d'un tableau, dérive surveillée ; un agent hébergé la lance comme tout client
   (identité et org de son travail)
+- `waterfall.md` — 6 connecteurs `waterfall_email|phone|company|person|people|tech` : cascade des fournisseurs connectés,
+  arrêtée au premier trouvé ; ordre = appel > réglage `steps` de la carte > défaut, clés de l'appelant d'abord ;
+  `<ns>_act(op="update_rows")` = la même cascade sur les lignes d'un tableau, écrite en retour
 - `datastore.md` — spine PG `data_*`, OAuth Google
 - `donnees-par-reference.md` — rien de personnel ni d'URL extérieure en argument :
   le receveur Apollo, les `*_push_rows`

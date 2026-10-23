@@ -5,14 +5,13 @@ l'enveloppe dans un objet qui la nomme — `{"row": {…}}` — et crée une col
 appelée `row`, contenant toute la ligne.
 
 ⚠️ **Aucune garde ne mordait, et la réponse était indiscernable d'une écriture réussie.**
-Mesuré : sur un tableau SOUPLE — le régime par défaut — même le relevé hors-schéma reste
-muet (`off_schema_keys` rend `[]` hors mode strict). Le piège a produit deux verdicts
-faux au cours d'une seule mesure : l'agent croit avoir écrit, et rien ne le contredit.
+Le piège a produit deux verdicts faux au cours d'une seule mesure : l'agent croit avoir
+écrit, et rien ne le contredit.
 
 **Le critère est l'ABSENCE TOTALE de correspondance, pas la présence d'une clé inconnue.**
-Ajouter une colonne libre à un tableau schématisé reste un droit du contrat 0016 ;
-refuser cela durcirait un contrat servi. Ce qui n'a aucun sens, c'est une ligne qui ne
-touche **pas une seule** des colonnes déclarées.
+Une clé inconnue est refusée par sa propre garde (`colonnes_non_declarees`, oto#124) ;
+celle-ci nomme l'accident à la création : une ligne qui ne touche **pas une seule** des
+colonnes déclarées, refusée en disant que le corps EST la ligne.
 
 ⚠️ **Mesuré avant d'être posé, sur la base servie** : 67 980 lignes de tableaux à
 colonnes déclarées, **une seule** ne correspondait à rien — sur un tableau de 1 986
@@ -25,15 +24,15 @@ from __future__ import annotations
 import pytest
 
 from oto_mcp.datastore.controles import ControlesMixin
+from oto_mcp.datastore.errors import ColonneNonDeclaree
 from oto_mcp.datastore.hors_schema import enveloppe_probable
 
 SCHEMA = {"fields": [{"key": "siren", "type": "text"}, {"key": "nom", "type": "text"}]}
 
 
 class _Store(ControlesMixin):
-    off_schema = set(); off_format_preavis = set(); off_geles = {}; off_notices = set()
+    off_geles = {}; off_notices = set()
     off_erased = []; off_rejected = []; off_ignored = []; off_non_rapprochables = {}
-    off_non_declarees = set()
     dernier_tableau = None
 
     def _trace(self, *a, **k):
@@ -53,22 +52,31 @@ def test_l_enveloppe_est_REFUSEE_a_la_creation():
 def test_un_PATCH_n_est_PAS_touche():
     """⚠️ La borne qui rend la garde juste. Un patch vise une ligne EXISTANTE par son
     `id` et peut légitimement ne toucher qu'une colonne libre — l'y refuser casserait
-    un geste courant pour attraper un accident qui n'arrive qu'à la création."""
-    _Store()._check_row(SCHEMA, {"row": {"siren": "1"}})      # ne lève pas
+    un geste courant pour attraper un accident qui n'arrive qu'à la création. La
+    colonne `row`, non déclarée, y est refusée par SA garde — pas comme enveloppe."""
+    with pytest.raises(ColonneNonDeclaree) as e:
+        _Store()._check_row(SCHEMA, {"row": {"siren": "1"}})
+    assert "`row`" in str(e.value) and "The body IS the row" not in str(e.value)
 
 
-def test_une_colonne_LIBRE_reste_un_droit():
-    """Contrat 0016 : une clé non déclarée crée une colonne libre, et c'est ce qui
-    permet d'explorer un tableau avant de le typer. La garde ne vise que l'absence
-    TOTALE de correspondance."""
-    _Store()._check_row(SCHEMA, {"siren": "1", "libre": "x"}, creation=True)
+def test_une_colonne_LIBRE_n_est_pas_une_enveloppe():
+    """La garde ne vise que l'absence TOTALE de correspondance : une ligne qui touche
+    une colonne déclarée n'est pas une enveloppe. Sa clé non déclarée est refusée par
+    la garde des colonnes, qui la nomme."""
+    assert enveloppe_probable(SCHEMA, {"siren": "1", "libre": "x"}) is False
+    with pytest.raises(ColonneNonDeclaree) as e:
+        _Store()._check_row(SCHEMA, {"siren": "1", "libre": "x"}, creation=True)
+    assert "`libre`" in str(e.value) and "The body IS the row" not in str(e.value)
 
 
 def test_un_tableau_LIBRE_n_est_jamais_juge():
     """Sans colonne déclarée, il n'y a rien à quoi comparer : inventer un refus sur une
-    absence d'information serait pire que le silence."""
+    absence d'information serait pire que le silence. La colonne non déclarée y est
+    refusée par sa propre garde."""
     assert enveloppe_probable({"fields": []}, {"quoi": "x"}) is False
-    _Store()._check_row({"fields": []}, {"quoi": "x"}, creation=True)
+    with pytest.raises(ColonneNonDeclaree) as e:
+        _Store()._check_row({"fields": []}, {"quoi": "x"}, creation=True)
+    assert "The body IS the row" not in str(e.value)
 
 
 @pytest.mark.parametrize("data", [{}, {"_id": "x"}, None, "pas un dict"])

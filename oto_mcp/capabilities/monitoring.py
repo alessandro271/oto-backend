@@ -214,7 +214,7 @@ def _summary(ctx: ResolvedCtx, inp: SummaryInput) -> dict:
     if inp.days > RESUME_JOURS_MAX:
         raise AuthzDenied(400, "days_too_large",
                           f"`days` vaut au plus {RESUME_JOURS_MAX} ({inp.days} demandé) : "
-                          "la rétention du journal ne va pas au-delà.")
+                          "fenêtre la plus large d'un résumé.")
     return db.tool_call_stats(since_days=inp.days, org_id=inp.org_id,
                               sub=_resolve_sub(inp.sub))
 

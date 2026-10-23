@@ -148,9 +148,12 @@ def etat_servi(etat: dict, org_id: Optional[int] = None) -> dict:
     ⚠️ Avec `org_id`, le défaut proposé écarte les familles servies dont l'org n'a
     pas déposé la clé EXIGÉE : les proposer, c'est proposer un refus
     `model_key_required` à la pose. Lu seulement quand des familles sont servies — la
-    lecture du réglage est froide, et un état sans famille n'a rien à écarter."""
+    lecture du réglage est froide, et un état sans famille n'a rien à écarter. Une org
+    routée vers la ferme (`farm_routed`) voit écartée sa famille ferme tant qu'elle
+    n'a pas déposé SA clé — une clé partagée n'y suffit pas (`_cle_exigee._manque`)."""
     familles = list(etat.get("families") or [])
-    sans_cle = (_cle_exigee.manquantes(org_id, familles)
+    sans_cle = (_cle_exigee.manquantes(org_id, familles,
+                                       routee=bool(etat.get("farm_routed")))
                 if org_id is not None and familles else [])
     return {**etat, "families": familles,
             "models": runner_models.catalogue(familles, sans_cle)}

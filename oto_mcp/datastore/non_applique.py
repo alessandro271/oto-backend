@@ -3,20 +3,11 @@
 Des faits qu'un schéma laisse croire et que le moteur ne tient pas — dits au moment où
 ils comptent, à la pose, jamais six semaines plus tard :
 
-- **`options` de COLONNE, d'ici au 21/10/2026, sur un tableau qui ne faisait pas
-  contrat de son format.** La validation complète s'y applique à cette date
-  (`validation_complete`, oto#124) ; d'ici là, une valeur hors liste est ÉCRITE avec
-  un préavis daté à l'écriture, et `options_not_enforced` le dit à la pose. À partir
-  de la date, la liste est respectée partout et ce relevé s'éteint de lui-même
-  (dérivé de `validation_active`). Le relevé d'ÉCRITURE `hors_options` est retiré le
-  05/10/2026 : le préavis dit la même chose, avec la liste permise, la date et le
-  geste ;
 - **un champ `type: json` n'est pas interrogeable en profondeur** — stocké et rendu
   tel quel, ni filtrable ni agrégeable au-delà du premier niveau (`json_fields_depth`).
 
-⚠️ **Tout est DÉRIVÉ des fonctions qui décident** (`validation_active`,
-`top_level_options`, `lifecycle_of`), jamais d'une copie de leur logique. Ce module
-existe précisément parce qu'une liste avait divergé du code.
+⚠️ **Tout est DÉRIVÉ des fonctions qui décident** (`status_field`, `pattern_of`…),
+jamais d'une copie de leur logique. Ce module existe précisément parce qu'une liste avait divergé du code.
 
 Ce qu'il ne tient pas :
 - **les clés que la plateforme ne lit pas du tout** → `vocabulaire.py` : ici, la clé
@@ -31,58 +22,10 @@ from typing import Optional
 from .declaration import (
     _fields,
     status_field,
-    top_level_options,
-    validation_active,
     _walk_fields,
 )
-from .cycle_de_vie import (abandon_state_of, claimable_of, lifecycle_of,
+from .cycle_de_vie import (abandon_state_of, claimable_of,
                            max_claims_of, terminal_states)
-
-# ── Options déclarées mais pas encore appliquées (#319, oto#124) ──────────────
-
-
-def _options_already_enforced(schema: Optional[dict]) -> set:
-    """Les champs dont les valeurs sont DÉJÀ contraintes autrement que par `options`.
-
-    ⚠️ Aujourd'hui il n'y en a qu'un : le champ `role="status"` porteur d'un
-    `lifecycle`, dont les états sont refusés hors liste MÊME quand `validation_active`
-    est faux (vérifié : un état inconnu lève, sans `strict`). L'avertir serait un FAUX
-    POSITIF — et un avertissement qui crie à tort est celui qu'on apprend à ignorer,
-    donc celui qui ruine les deux autres.
-
-    Dérivé de `lifecycle_of`/`status_field`, jamais d'un nom en dur : le mécanisme de
-    cycle de vie est en cours de retrait (#317) et cette exclusion s'éteindra d'
-    elle-même le jour où il partira."""
-    if lifecycle_of(schema) is None:
-        return set()
-    sf = status_field(schema) or {}
-    key = sf.get("key")
-    return {str(key)} if key else set()
-
-
-def options_not_enforced(schema: Optional[dict]) -> list[str]:
-    """Les champs dont les `options` sont déclarées mais inertes — à la POSE.
-
-    Pendant de #316, au moment qui compte : quand on écrit le schéma, pas six semaines
-    plus tard en constatant les valeurs libres."""
-    if validation_active(schema):
-        return []
-    deja = _options_already_enforced(schema)
-    return sorted(c for c in top_level_options(schema) if c not in deja)
-
-
-def options_not_enforced_warning(champs: list[str]) -> Optional[str]:
-    if not champs:
-        return None
-    from .validation_complete import date_de_bascule
-    noms = ", ".join(f"`{c}`" for c in champs)
-    quand = date_de_bascule().isoformat()
-    return (f"options déclarées, appliquées à partir du {quand} : {noms} — ce tableau "
-            "ne faisait pas contrat de son format ; jusqu'à cette date, une valeur hors "
-            "liste est encore écrite, avec un préavis daté dans `notices`. À partir "
-            "d'elle, le format déclaré fait contrat sur TOUS les tableaux (plus aucun "
-            "réglage) : une valeur hors liste sera refusée. Si une valeur légitime "
-            "manque à la liste, étends les `options` maintenant.")
 
 
 def json_fields_depth(schema: Optional[dict]) -> list[str]:

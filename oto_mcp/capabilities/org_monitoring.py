@@ -43,8 +43,9 @@ _ID = {"id": "org_id"}
 # Deux invariants valent pour TOUTES les lentilles de ce module, et ils décident
 # de ce qu'un chiffre veut dire :
 #
-# ① **Rétention `OTO_JOURNAL_RETENTION_DAYS` jours, 90 par défaut** — portée par le
-#    timer `oto-journal-archive`, qui EXPORTE le mois au froid S3 puis le supprime.
+# ① **Rétention en ligne `OTO_JOURNAL_RETENTION_DAYS` jours, 30 par défaut** (90
+#    jusqu'au 22/10/2026) — portée par le timer `oto-journal-archive`, qui EXPORTE
+#    chaque mois clos au froid S3, lisible à la demande, puis le supprime.
 #    ⚠️ Jusqu'au 2026-08-28 la fenêtre effective était de ~30 jours et personne ne
 #    l'avait décidé : le boot purgeait à 30 j sans archiver, donc plus court que la
 #    politique écrite, qu'il vidait d'avance (ADR 0065 lot 0, oto-backend#426). Un
@@ -688,6 +689,11 @@ def _console(ctx: ResolvedCtx, inp: OrgMonitoringInput) -> dict:
 class BillableCallRow(BaseModel):
     """Un appel tel qu'un consommateur de FACTURATION en a besoin — et rien de plus."""
     call_id: int
+    # L'identifiant d'appel stable (`tool_calls.call_uid`) : celui que portent les
+    # mouvements de crédits d'un appel (`call_uid`, et `call_id` de leur `meta`). C'est
+    # par lui qu'un grand livre apparie un mouvement à l'appel qui l'a consommé. `None`
+    # = ligne antérieure à la colonne.
+    call_uid: Optional[str] = None
     tool: Optional[str] = None
     created_at: Optional[str] = None
     # Items réellement traités. `None` = ce tool ne trace pas de compte, à lire
@@ -834,7 +840,8 @@ def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
     return {
         # Projection EXPLICITE, pas un `**row` : la lentille reste étroite même
         # si la requête gagne des colonnes demain.
-        "calls": [{"call_id": r["id"], "tool": r["tool"], "created_at": r["created_at"],
+        "calls": [{"call_id": r["id"], "call_uid": r.get("call_uid"), "tool": r["tool"],
+                   "created_at": r["created_at"],
                    "quantity": r.get("quantity"), "key_mode": r.get("key_mode"),
                    "job_id": r.get("job_id"), "found": r.get("found"),
                    "run_id": r.get("run_id")}

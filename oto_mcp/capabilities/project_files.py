@@ -4,7 +4,10 @@ MCP-only : la face REST (upload multipart + list + delete) vit dans `api.routes`
 (corps binaire, hors couche capacité ADR 0009). Ici on donne à Claude la LECTURE
 de ce qui est attaché au projet — titre/description/résumé + une URL de
 téléchargement signée — et la SUPPRESSION (purger un doc périmé sans surface
-humaine ; miroir du DELETE REST). L'upload reste dashboard-only (multipart).
+humaine ; miroir du DELETE REST). L'ajout n'est pas ici : `oto_import
+target=project_file` (un fichier que le serveur atteint) et `oto_upload_url
+target=project_file` (un fichier poussé par PUT signé), plus l'upload multipart du
+tableau de bord.
 """
 from __future__ import annotations
 
@@ -67,7 +70,8 @@ CAPABILITIES += [
             "the project). op=list → each file with filename + title/description/summary "
             "+ a signed download_url to fetch it (read access). op=delete + file_id → "
             "remove an outdated document (write access; deletes the stored object too). "
-            "Upload is dashboard-only (multipart)."
+            "To add one: `oto_import target=project_file` (a file the server can reach) "
+            "or `oto_upload_url target=project_file` (a file you push)."
         ),
         mcp="oto_project_files",
     ),

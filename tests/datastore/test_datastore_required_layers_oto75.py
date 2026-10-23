@@ -227,17 +227,6 @@ def test_un_schema_DEJA_EN_BASE_ne_fait_pas_exploser_une_ecriture():
     assert dsv2.validate_row(vieux, {"q": "x"}, written={"q"}) == []
 
 
-def test_la_regle_ne_s_ARME_que_sur_sa_propre_declaration():
-    """`validation_active` arme la validation ENTIÈRE (types, requis, composites
-    fermés). L'élargir ferait basculer dans ce régime, du jour au lendemain, les
-    tableaux qui portent DÉJÀ l'attribut — sur des règles qu'ils n'ont jamais
-    demandées. La garde s'arme donc seule, comme le cycle de vie."""
-    assert dsv2.validation_active(_SCHEMA) is False
-    assert dsv2.validate_row(_SCHEMA, {"qualif": "x"}, written={"qualif"})
-    # et elle ne réveille rien d'autre : le type n'est pas opposable ici
-    assert dsv2.validate_row(_SCHEMA, {"ref": 12}, written={"ref"}) == []
-
-
 def test_le_deploiement_ANNONCE_qu_il_l_execute():
     """La sonde d'`enforced` : la clé qui a vécu trois schémas sans lecteur est la
     première qu'un client doit pouvoir opposer au serveur qui lui répond."""

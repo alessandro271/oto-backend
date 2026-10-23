@@ -9,8 +9,11 @@ Split out of the tool modules to keep them under 500 lines. Five rules live here
 - **an empty key is refused BEFORE the client**: passed empty, `PayfitClient`
   would resolve `PAYFIT_API_KEY` from the SERVER's environment and work on a
   different company than the one whose key is set;
-- **no write is wired**: every write op returns the named refusal
-  `payfit_write_not_wired`, without resolving the key or calling PayFit (24/09/2026);
+- **a write lives in `payfit_act`** (wired 21/10/2026, refused since 24/09/2026): an
+  MCP client authorizes TOOLS, not ops, and "always allow" on a reader must never
+  record an absence in payroll. The old write ops of the readers stay in their enum
+  and answer the named refusal `op_moved`, which names the `payfit_act` op — without
+  resolving the key or calling PayFit;
 - **a document only goes out with the org's named consent** (`documents: true`
   in its `payfit` policy): a PDF or a file cannot be filtered, so it stays
   locked until the org has opened it, and opening it lifts no mask from the
@@ -27,7 +30,6 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
-from . import ecriture_non_cablee
 
 if TYPE_CHECKING:
     from oto.tools.payfit import PayfitClient
@@ -89,20 +91,35 @@ def refuse_unknown_op(op: str, *allowed: str) -> McpError:
 
 
 # ---------------------------------------------------------------------------
-# Writes: NOT WIRED, ever (decision of 24/09/2026)
+# Writes: in `payfit_act`, never as an op of a reader
 # ---------------------------------------------------------------------------
 
-def not_wired(op: str, action: str, **what: Any) -> McpError:
-    """The refusal of ANY PayFit write: nothing is sent, whatever the argument.
-    The ability to write does not exist in the connector until it is decided —
-    no org switch, no activation by an org_admin. Neither the key nor the
-    client is touched: the refusal depends on nothing. Common shape for read-only
-    connectors: `ecriture_non_cablee.refus`.
+ACT_TOOL = "payfit_act"
 
-    `what` describes the action to the agent. The caller only puts identifiers,
-    dates and labels in it — never a value masked by default (NIR, IBAN, absence
-    reason), which would end up in the call log."""
-    return ecriture_non_cablee.refus(_NAME, "PayFit", op, action, **what)
+
+def ecritures_permises(scopes: list) -> list:
+    """The `payfit_act` ops a key's scopes allow — read from the connector's
+    access-level declaration (`providers/payfit.ACCESS_LEVELS`), the single place
+    that says which scope each op requires."""
+    from ..providers import payfit as declaration
+
+    portes = set(scopes)
+    return [op for op, exige in declaration.ACCESS_LEVELS["tools"][ACT_TOOL].items()
+            if set(exige) <= portes]
+
+
+def moved(op: str, act_op: str) -> McpError:
+    """The refusal of a reader's old write op: the write exists, in `payfit_act`.
+    Nothing is sent and neither the key nor the client is touched — the agent
+    replays the call on the tool its client will ask the person to confirm."""
+    return McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message=(f"Refusal `op_moved`: op={op!r} is a WRITE, and PayFit writes live in "
+                 f"their own tool — call `{ACT_TOOL}(op=\"{act_op}\", …)` with the same "
+                 "arguments. Nothing was sent to PayFit."),
+        data={"code": "op_moved", "retryable": False, "op": op,
+              "tool": ACT_TOOL, "act_op": act_op},
+    ))
 
 
 # ---------------------------------------------------------------------------

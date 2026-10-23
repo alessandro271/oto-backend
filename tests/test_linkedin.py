@@ -6,7 +6,7 @@ qui doit le dire (ADR 0010 §Amendement 2026-08-10, oto-backend#279) :
 - `linkedin_aiark_*` — de la **donnée achetée au crédit** (search, export, mobile,
   reverse) : aucun compte connecté, facturée par enregistrement rendu.
 
-Aucun des deux ne prend le nom NU `linkedin_*` : `linkedin_unipile_chat` n'a pas
+Aucun des deux ne prend le nom NU `linkedin_*` : `linkedin_unipile` (la messagerie) n'a pas
 d'équivalent AI Ark, `linkedin_aiark_person(op="mobile")` pas d'équivalent Unipile —
 router silencieusement entre eux produirait des trous que l'agent lirait comme des
 absences de résultat.
@@ -48,9 +48,10 @@ def test_linkedin_connector_is_gone():
 def test_no_tool_keeps_the_bare_linkedin_prefix(all_tools):
     """Le nom nu ne doit désigner NI l'un ni l'autre fournisseur — sinon il laisse
     croire à une surface LinkedIn canonique qui n'existe pas."""
+    fournisseurs = ("linkedin_unipile", "linkedin_aiark")
     bare = {t for t in all_tools
-            if t.startswith("linkedin_")
-            and not t.startswith(("linkedin_unipile_", "linkedin_aiark_"))}
+            if t.startswith("linkedin_") and t not in fournisseurs
+            and not t.startswith(tuple(f"{f}_" for f in fournisseurs))}
     assert bare == set()
 
 

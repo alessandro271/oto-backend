@@ -5,8 +5,8 @@
 le 2026-08-27, et une croissance passée de 9 600 à ~90 000 lignes/jour en deux semaines
 (×10, tiré par une campagne de runner). La lecture, elle, a été réparée le même jour par
 un index — mais une table qui ne fait que croître finit toujours par coûter ailleurs
-(sauvegardes, vacuum, restauration). D'où : on garde 90 jours en ligne, le reste part en
-froid sur l'Object Storage avant d'être effacé.
+(sauvegardes, vacuum, restauration). D'où : on garde 30 jours en ligne (90 jusqu'au
+22/10/2026), le reste part en froid sur l'Object Storage avant d'être effacé.
 
 **Pourquoi ce n'est PAS une simple purge de logs.** Cette table est à double emploi :
 c'est le journal d'observabilité, ET la source de vérité des exécutions — un run n'est
@@ -17,7 +17,7 @@ ils pèsent ~3 % du volume, les garder indéfiniment est bon marché.
 ⚠️ Conséquence assumée : un run dont les appels ordinaires ont été archivés garde son
 ouverture, sa clôture et son issue, mais son « dernier signe de vie » retombe sur sa date
 d'ouverture (`last_seen_at` se dérive du dernier appel rattaché). Sans effet sur un run
-clos ; un run resté ouvert et vieux de 90 jours est de toute façon lu comme silencieux.
+clos ; un run resté ouvert au-delà de la rétention est de toute façon lu comme silencieux.
 
 **Une page de run archivé le DIT** (#665, arbitrage du 23/09/2026, option B). Le run
 reste listé avec ses bornes ; son corps, lui, est parti. Pour que sa page ne retombe
@@ -84,6 +84,13 @@ import boto3
 import psycopg
 from botocore.exceptions import ClientError
 from psycopg.rows import dict_row
+
+# La rétention a UNE déclaration, dans le backend (`oto_mcp/maintenance.py`) : ce script
+# tourne depuis l'arbre du tag, qui la porte (cf. `archive_connector_acl.py`).
+_RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _RACINE not in sys.path:
+    sys.path.insert(0, _RACINE)
+from oto_mcp.maintenance import journal_retention_days  # noqa: E402
 
 # Les faits qui RECONSTRUISENT un run : jamais archivés, jamais supprimés. Toucher à
 # cette liste, c'est décider d'oublier des exécutions — pas d'alléger un log.
@@ -464,8 +471,8 @@ def main() -> int:
                              "permet d'exercer le chemin réel — export, upload, vérification — "
                              "sans engager la moitié irréversible ; à blanc on ne prouve rien.")
     parser.add_argument("--retention-days", type=int,
-                        default=int(os.environ.get("OTO_JOURNAL_RETENTION_DAYS", "90")),
-                        help="fenêtre gardée en ligne (défaut 90, ou OTO_JOURNAL_RETENTION_DAYS)")
+                        default=journal_retention_days(),
+                        help="fenêtre gardée en ligne (OTO_JOURNAL_RETENTION_DAYS, défaut 30)")
     parser.add_argument("--pause", type=float, default=DELETE_PAUSE_S,
                         help=f"secondes entre deux lots de suppression (défaut {DELETE_PAUSE_S}) : "
                              "étale le WAL et laisse suivre l'autovacuum")

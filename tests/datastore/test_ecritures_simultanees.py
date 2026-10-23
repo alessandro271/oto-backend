@@ -32,6 +32,8 @@ SUB = "sub-concurrence"
 # L'ancien chemin perdait à CHAQUE départ simultané. Un défaut qui ne perdrait qu'un tour
 # sur deux passerait trente tours sans perte une fois sur un milliard.
 TOURS = 30
+#: Les colonnes écrites par les bancs, déclarées : une colonne non déclarée est refusée.
+SCHEMA = {"fields": [{"key": k} for k in ("a", "b", "c", "journal", "statut", "note")]}
 
 
 class Conflit(Exception):
@@ -55,6 +57,7 @@ def _table(ligne: dict | None = None, rid: str = "r1") -> tuple[str, int]:
     from oto_mcp import db
     ns = "conc-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    db.set_datastore_schema(ns_id, SCHEMA)
     db.datastore_insert_row(ns_id, rid, dict(ligne or {}))
     return ns, ns_id
 

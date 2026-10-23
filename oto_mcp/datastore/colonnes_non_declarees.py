@@ -1,26 +1,18 @@
-"""Écrire dans une colonne NON DÉCLARÉE ne la créera plus (oto#124) — le préavis daté.
+"""Écrire dans une colonne NON DÉCLARÉE est REFUSÉ, sur tous les tableaux (oto#124).
 
 Une écriture qui nommait une colonne que le schéma ne déclare pas la créait à la volée :
 le schéma d'un tableau s'étendait au fil des écritures, sans geste dédié. Arbitré le
 07/09/2026 (« ça fait n'importe quoi dans les flottes d'agents »), précisé le 05/10 :
 **une seule règle, plus de modes**. Une colonne inconnue est REFUSÉE, sur TOUS les
-tableaux, quel que soit `unknown_columns` ; pour écrire dans une colonne nouvelle, on la
-déclare d'abord (`data_patch_schema`). Un tableau SANS schéma voit ses colonnes FIGÉES à
-la bascule : `scripts/figer_colonnes.py` lui déclare celles qu'il porte ce jour-là, puis
-il suit la règle commune.
+tableaux ; pour écrire dans une colonne nouvelle, on la déclare d'abord
+(`data_patch_schema`). En vigueur depuis le 21/10/2026, après un préavis daté ; les
+colonnes que portaient les tableaux ont été déclarées pour eux avant la bascule
+(`scripts/figer_colonnes.py`).
 
-Rejouée sur 40 jours de journal, la garde aurait refusé 3 653 écritures (07/09), et un
-refus répété pousse une ligne vers l'abandon : **avertir d'abord, refuser à une date
-annoncée** — le mécanisme des autres bascules datées (`upsert_implicite`), pas un
-de plus.
-
-- **Avant la date** : l'écriture passe, la colonne est créée, et la réponse porte dans
-  `notices` UNE phrase par geste (union sur un lot) : les colonnes, la date, le geste.
-  Ça vaut pour TOUS les réglages, `create` compris, tableau sans schéma compris.
-- **À partir d'elle** : `ColonneNonDeclaree` — `400 unknown_column` côté REST et
-  réception d'upload, `INVALID_PARAMS` côté MCP —, rien n'est écrit. Un lot (et un
-  import découpé en tranches) est jugé ENTIER avant sa première ligne : le lot n'étant
-  pas atomique, le juger ligne à ligne laisserait sa première moitié écrite.
+`ColonneNonDeclaree` — `400 unknown_column` côté REST et réception d'upload,
+`INVALID_PARAMS` côté MCP —, rien n'est écrit. Un lot (et un import découpé en tranches)
+est jugé ENTIER avant sa première ligne : le lot n'étant pas atomique, le juger ligne à
+ligne laisserait sa première moitié écrite.
 
 Le prédicat est UN : `non_declarees`, sur ce que le geste POSE — jamais sur la ligne
 fusionnée. Un patch qui touche une colonne déclarée d'une ligne portant des colonnes
@@ -30,63 +22,20 @@ n'est plus posée.
 
 ⚠️ **Ce que ce module ne touche PAS** : la validation complète du FORMAT (`options` de
 premier niveau, structure des types, couches inconnues, fermeture des sous-records,
-gardes de pose de `claimable`) — c'est `validation_complete`, sa propre bascule datée
-au même jour (oto#124, 05/10). Le réglage `unknown_columns` qui les réunissait est
-retiré : plus aucun réglage.
-
-**Le refus tombe À LA DATE, dans le code** : rien n'est à déployer le jour J. Le réglage
-`OTO_COLONNE_NON_DECLAREE_REFUSEE_LE` déplace la date sans déployer.
+gardes de pose de `claimable`) — c'est `validation_complete`.
 """
 from __future__ import annotations
 
-import os
 import re
-from datetime import date as _date
 from typing import Any, Iterable, Optional
 
 from .couches import split_layer
 from .declaration import _fields
 from .errors import ColonneNonDeclaree
 
-#: La date à partir de laquelle une colonne non déclarée est REFUSÉE. Une seule
-#: constante : le texte servi en est DÉRIVÉ, pour que ce qu'on annonce soit ce qu'on
-#: refusera. Le même jour que la bascule d'`upsert` (oto#141).
-COLONNE_NON_DECLAREE_REFUSEE_LE = _date(2026, 10, 21)
-
-#: Déplace la date sans déployer (`YYYY-MM-DD`). Une valeur illisible LÈVE, elle ne
-#: retombe pas sur le défaut (cf. `champs_reserves.date_reglee`).
-ENV_COLONNE_NON_DECLAREE_REFUSEE_LE = "OTO_COLONNE_NON_DECLAREE_REFUSEE_LE"
-
-#: Ce qu'un refus ou un avertissement cite avant d'abréger.
+#: Ce qu'un refus cite avant d'abréger.
 _CITEES = 8
 _REFERENTIEL_CITE = 15
-
-
-def date_du_refus() -> _date:
-    """La date en vigueur : le réglage s'il est posé, le défaut du code sinon."""
-    from .champs_reserves import date_reglee
-
-    return date_reglee(ENV_COLONNE_NON_DECLAREE_REFUSEE_LE,
-                       os.environ.get(ENV_COLONNE_NON_DECLAREE_REFUSEE_LE),
-                       COLONNE_NON_DECLAREE_REFUSEE_LE)
-
-
-def _aujourdhui() -> _date:
-    """Le jour qui juge le refus (UTC). Un point d'appui à part, pour que les bancs
-    fixent le jour de CETTE bascule sans toucher à l'horloge ni aux autres."""
-    from .champs_reserves import jour_utc
-
-    return jour_utc()
-
-
-def refus_arme(aujourdhui: Optional[_date] = None) -> bool:
-    """Une colonne non déclarée est-elle refusée, AUJOURD'HUI (jour UTC) ?"""
-    return (aujourdhui or _aujourdhui()) >= date_du_refus()
-
-
-def _quand() -> str:
-    # Date ISO : le texte servi est en anglais (décision du 03/09/2026).
-    return date_du_refus().isoformat()
 
 
 # ── le prédicat ──────────────────────────────────────────────────────────────
@@ -129,16 +78,19 @@ def non_declarees_du_lot(schema: Optional[dict], rows: Iterable[Any]) -> list[st
     Une clé pointée ou par rang (`site_web.comment`, `contacts[0].email`) vise la
     colonne de sa BASE : elle compte comme non déclarée si sa base l'est. Les clés
     techniques (`_id`, `_revision`…) ne sont pas des colonnes ; leurs refus propres
-    viennent ensuite, ligne par ligne. Un `null` sur une colonne non déclarée l'EFFACE,
-    il n'en crée pas, et un `{}` n'est pas une valeur (oto#165, écarté avant d'écrire) :
-    ni l'un ni l'autre n'est compté (même règle que `non_declarees`)."""
+    viennent ensuite, ligne par ligne, comme celui d'un nom vide ou blanc, qui n'est pas
+    un nom de colonne (#231, `points._refuse_dotted_names`) : le déclarer serait
+    impossible. Un `null` sur une colonne non déclarée l'EFFACE, il n'en crée pas, et un
+    `{}` n'est pas une valeur (oto#165, écarté avant d'écrire) : ni l'un ni l'autre
+    n'est compté (même règle que `non_declarees`)."""
     connues = declarees(schema)
     out: set = set()
     for data in rows:
         if not isinstance(data, dict):
             continue
         for cle, valeur in data.items():
-            if not isinstance(cle, str) or cle.startswith("_") or cle in connues:
+            if (not isinstance(cle, str) or not cle.strip() or cle.startswith("_")
+                    or cle in connues):
                 continue
             base = _BASE.split(cle, 1)[0]
             if base in connues or valeur is None or valeur == {}:
@@ -163,23 +115,9 @@ def _geste(colonnes: list[str]) -> str:
             f"then write")
 
 
-def avertissement(colonnes: list[str]) -> Optional[str]:
-    """L'avertissement servi AVANT la date : les colonnes, la date, le geste."""
-    if not colonnes:
-        return None
-    pluriel = len(colonnes) > 1
-    return (f"{_noms(colonnes)}: column{'s' if pluriel else ''} not "
-            f"declared in this table's schema — "
-            f"{'they were' if pluriel else 'it was'} created. "
-            f"From {_quand()} on, writing to an "
-            f"undeclared column will be REFUSED (`unknown_column`), on every "
-            f"table, instead of creating it. To write to a new column, "
-            f"{_geste(colonnes)}.")
-
-
 def refus(schema: Optional[dict], colonnes: list[str], *,
           lot: bool = False) -> ColonneNonDeclaree:
-    """Le refus À PARTIR de la date : les colonnes, le référentiel, le geste.
+    """Le refus : les colonnes, le référentiel, le geste.
 
     ⚠️ Aucune destination n'est DEVINÉE (#678) : pointer la colonne « la plus proche »
     enverrait la valeur dans une colonne juste. Seule exception, qui ne devine rien
@@ -212,33 +150,24 @@ def refus(schema: Optional[dict], colonnes: list[str], *,
     portee = "this batch is refused ENTIRELY, " if lot else ""
     return ColonneNonDeclaree(
         [f"{_noms(colonnes)}: column{'s' if pluriel else ''} not "
-         f"declared — {portee}nothing was written. Since "
-         f"{_quand()}, writing to a column no longer creates it, on any table. "
+         f"declared — {portee}nothing was written. Writing to a column does not "
+         f"create it, on any table. "
          f"{referentiel} Write under a declared name; or, if the column is intended, "
          f"{_geste(colonnes)}. ⚠️ Do not retry under a variant of the same name: "
          f"it would be refused the same way."],
         details=details)
 
 
-def controler(schema: Optional[dict], posees: Optional[dict],
-              releve: set) -> None:
-    """Le geste pose-t-il une colonne non déclarée ? À partir de la date, REFUS ; avant,
-    la colonne rejoint `releve` (l'avertissement se compose une fois par geste, union
-    sur un lot — `avertissement`)."""
+def controler(schema: Optional[dict], posees: Optional[dict]) -> None:
+    """Le geste pose-t-il une colonne non déclarée ? REFUS."""
     colonnes = non_declarees(schema, posees)
-    if not colonnes:
-        return
-    if refus_arme():
+    if colonnes:
         raise refus(schema, colonnes)
-    releve.update(colonnes)
 
 
 def juger_le_lot(schema: Optional[dict], rows: Iterable[Any]) -> None:
-    """À partir de la date, un lot qui poserait une colonne non déclarée est refusé
-    ENTIER, avant sa première écriture. Sans effet avant la date : chaque ligne relève
-    ses colonnes au passage (`controler`)."""
-    if not refus_arme():
-        return
+    """Un lot qui poserait une colonne non déclarée est refusé ENTIER, avant sa
+    première écriture."""
     colonnes = non_declarees_du_lot(schema, rows)
     if colonnes:
         raise refus(schema, colonnes, lot=True)
@@ -249,52 +178,28 @@ def juger_le_lot(schema: Optional[dict], rows: Iterable[Any]) -> None:
 _GESTE_EN = ("To write a NEW column, declare it first — `data_patch_schema(datastore=…, "
              "fields=[{\"key\": \"<column>\", \"type\": …}])` — then write.")
 
-
-def description_ecriture() -> str:
-    """L'annonce servie dans la description de `data_write` et des faces REST, DÉRIVÉE
-    de la date. Composée au démarrage : avant la date, le préavis — qui reste VRAI si
-    le process franchit la date sans redémarrer ; démarré après, la règle au présent."""
-    if refus_arme():
-        return ("⚠️ **A write into a column the schema does NOT declare is REFUSED** "
-                "(`unknown_column`), on every table "
-                f"— nothing is written, a batch is refused WHOLE. {_GESTE_EN}")
-    return (f"⚠️ **From {date_du_refus().isoformat()} on, a write into a column the "
-            "schema does NOT declare is REFUSED** (`unknown_column`) instead of "
-            "creating it — on every table, tables without a schema included (their "
-            "existing columns are declared for them before that date); a batch is "
-            "refused WHOLE. Until then the column "
-            f"is still created and the response warns in `notices`. {_GESTE_EN}")
-
-
-#: Composée une fois, au démarrage (cf. `description_ecriture`).
-DESCRIPTION_ECRITURE = description_ecriture()
+#: L'annonce servie dans la description de `data_write` et des faces REST.
+DESCRIPTION_ECRITURE = ("⚠️ **A write into a column the schema does NOT declare is REFUSED** "
+                        "(`unknown_column`), on every table "
+                        f"— nothing is written, a batch is refused WHOLE. {_GESTE_EN}")
 
 
 def description_schema() -> str:
     """Ce que `data_set_schema` et `data_patch_schema` disent de la règle : déclarer une
     colonne est le SEUL moyen d'en ajouter une."""
-    quand = ("" if refus_arme() else
-             f" from {date_du_refus().isoformat()} on (until then it is still created, "
-             "with a warning in `notices`)")
-    return ("⚠️ A column the schema does NOT declare is REFUSED at write"
-            f"{quand}, on EVERY table: declaring a column "
-            "(`data_patch_schema(fields=[{\"key\": …}])`) is the ONLY way to add one.")
+    return ("⚠️ A column the schema does NOT declare is REFUSED at write, on EVERY "
+            "table: declaring a column (`data_patch_schema(fields=[{\"key\": …}])`) is "
+            "the ONLY way to add one.")
 
 
 def description_creation() -> str:
     """Ce que `data_create_datastore` et `POST /api/datastores` disent du paramètre
-    `schema` : un tableau NAÎT sans colonne, donc, à partir de la date, sa première
-    écriture est refusée tant qu'on ne lui en a pas déclaré. Le déclarer à la création
-    est le geste normal pour un tableau qu'on va remplir — DÉRIVÉ de la date, comme les
-    autres annonces de ce module."""
-    if refus_arme():
-        regle = ("⚠️ **A new table is born with NO column, and a write into a column the "
-                 "schema does not declare is REFUSED** (`unknown_column`)")
-    else:
-        regle = (f"⚠️ **From {date_du_refus().isoformat()} on, a write into a column the "
-                 "schema does not declare is REFUSED** (`unknown_column`) — and a new "
-                 "table is born with NO column")
-    return (f"{regle}: its first write is refused until columns are declared. To "
+    `schema` : un tableau NAÎT sans colonne, donc sa première écriture est refusée tant
+    qu'on ne lui en a pas déclaré. Le déclarer à la création est le geste normal pour un
+    tableau qu'on va remplir."""
+    return ("⚠️ **A new table is born with NO column, and a write into a column the "
+            "schema does not declare is REFUSED** (`unknown_column`): its first write is "
+            "refused until columns are declared. To "
             "create a table you are going to FILL, pass `schema` — the SAME object as "
             "`data_set_schema` (`{\"fields\": [{\"key\": …, \"type\": …}], \"key\"?: …}`, "
             "same closed vocabulary, same validation): the table is born with it, in ONE "

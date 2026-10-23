@@ -1,5 +1,5 @@
-"""What the messaging tools of the non-LinkedIn channels (`whatsapp_chat`, `telegram_chat`,
-`instagram_chat`) serve: the Unipile page, reshaped so that an agent reads it at face value.
+"""What the messaging readers of the non-LinkedIn channels (`whatsapp`, `telegram`,
+`instagram`) serve: the Unipile page, reshaped so that an agent reads it at face value.
 
 The raw page misled agents in four ways (WhatsApp signals of 25/09 to 05/10/2026):
 
@@ -138,7 +138,7 @@ def page_de_fils(page: Any, limit: int) -> Any:
             f"a full page ({len(out['items'])} threads) and NO cursor: Unipile does not "
             "paginate this channel's thread list, so the older threads are NOT reachable "
             "by op='list'. This is not the whole inbox. Read an older thread by its "
-            "`chat_id`, or open one by `recipient_id`.")
+            "`chat_id`.")
     return out
 
 

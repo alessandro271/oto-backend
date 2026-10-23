@@ -111,7 +111,7 @@ def _app_par_jeton(statuts: dict, defaut: int = 401, *, verifie: bool = True):
     ("GET", "/p/d/abc", False, "sensible"),
     ("POST", "/o/u/abc", False, "sensible"),
     ("POST", "/oauth/register", False, "anonyme"),
-    ("GET", "/oauth/authorize", False, "sensible"),
+    ("GET", "/api/mcp/auth_callback", False, "sensible"),
     ("GET", "/api/zoho/oauth/callback", False, "sensible"),
     ("POST", "/api/hooks/42", False, "webhook"),
     ("POST", "/api/hooks/42", True, "webhook"),

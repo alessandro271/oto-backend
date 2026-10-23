@@ -24,7 +24,6 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import config, file_source, upload_tokens
-from ..datastore import colonnes_non_declarees as cnd
 from ..datastore import schema as dsv2
 from ..datastore import upsert_implicite as upi
 from ._authz import SUB_ONLY
@@ -296,7 +295,8 @@ class ImportInput(BaseModel):
         "file_id}` (your Google account; a native Sheet exports its first tab as CSV), "
         "`{kind:\"project_file\", project_id, file_id}`, `{kind:\"gmail\", "
         "message_id, filename}`, a messaging attachment's `source` as read (`{kind:"
-        "\"unipile\", channel, url}`), or a file YOU produced: `{kind:\"content\", "
+        "\"unipile\", channel, url}`), a recording's `source` as read (`{kind:"
+        "\"transit\", ref}`), or a file YOU produced: `{kind:\"content\", "
         f"filename, base64}}` (or `text` instead of `base64`), {_EN_LIGNE_KO} KB at most. With "
         "`target=\"project_file\"`, the file is filed in the project as is."))
     target: Literal["datastore", "project_file"] = "datastore"
@@ -311,8 +311,7 @@ class ImportInput(BaseModel):
     declare_columns: bool = Field(default=True, description=(
         "Declare headers that match no column as text columns (label = header); for "
         "NDJSON, keys no column declares, typed from their values. Existing columns are "
-        "never changed. Off, a column the schema does not declare is refused from "
-        + cnd.date_du_refus().isoformat() + " on."))
+        "never changed. Off, a column the schema does not declare is refused."))
     resume_from: Optional[int] = Field(default=None, description=(
         "From a previous receipt, when the file did not fit one call. Needs "
         "`source_sha256`."))
@@ -338,6 +337,9 @@ class ImportOutput(BaseModel):
     source: dict = Field(description=(
         "`{kind, name, mime, bytes, sha256, url?}` — `url` without its query string"))
     datastore: Optional[str] = None
+    file_id: Optional[int] = Field(default=None, description=(
+        "project_file only: the file created, as `oto_project_files` lists it"))
+    project_id: Optional[int] = Field(default=None, description="project_file only")
     inserted: Optional[int] = None
     updated: Optional[int] = None
     count: Optional[int] = Field(default=None, description="rows written by this call")
@@ -435,8 +437,10 @@ def _import(ctx: ResolvedCtx, inp: ImportInput) -> dict:
         if inp.target == "project_file":
             if not inp.filename:
                 target["filename"] = rf.filename
-            return {**upload_tokens.materialize(sub, target, rf.data, rf.mime),
-                    "source": src_info}
+            row = upload_tokens.deposer_fichier_projet(sub, target, rf.data, rf.mime)
+            return {"ok": True, "kind": "project_file", "file_id": row["id"],
+                    "project_id": row["project_id"], "filename": row["filename"],
+                    "bytes": len(rf.data), "source": src_info}
         fmt = _format_of(rf, inp.format)
         _refuse_html(rf, inp.source)
         sep = _SEPARATOR.get(inp.separator or "") or (
@@ -506,7 +510,7 @@ CAPABILITIES += [
                           "(`doublons`, `existantes`) — nothing written when judged "
                           "before the first slice, else `resume_from`"),
             DeclaredError(400, "unknown_column",
-                          "(oto#124, from its date) the file carries a column the "
+                          "(oto#124) the file carries a column the "
                           "table's schema does not declare and `declare_columns` did "
                           "not declare it: `details.colonnes` names it, nothing written"),
         ),

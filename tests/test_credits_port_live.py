@@ -3,12 +3,15 @@ commerce : qui passe, puis ce que le stockage porte, sur une vraie base.
 
 Le point le plus cher est le CURSEUR : relu jusqu'à la fin, il ne manque aucun
 mouvement, y compris celui d'une transaction encore ouverte quand une plus récente a
-déjà validé.
+déjà validé. Son pendant est `as_of`, l'horizon des DATES : rien de daté d'avant ne
+peut plus apparaître ; et `settled_as_of`, celui des APPELS : toute réservation posée
+avant est close.
 """
 from __future__ import annotations
 
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -206,6 +209,317 @@ def test_le_curseur_ne_sert_pas_au_dela_d_une_transaction_encore_ouverte(live):
         lente.close()
     lus, _ = _lire_jusqu_a(2, du_payeur, apres)
     assert [m["idempotency_key"] for m in lus] == ["lente", "rapide"]
+
+
+# ── as_of : l'horizon des dates ──────────────────────────────────────────────
+
+def _as_of(apres=None) -> datetime:
+    page = _appel("service.credits.movements", after=apres, limit=1000)
+    assert page["as_of"] is not None, "le banc lit toutes les sessions (superutilisateur)"
+    return datetime.fromisoformat(page["as_of"])
+
+
+def _attendre(condition, delai_s: float = 120) -> bool:
+    """Vrai dès que `condition()` l'est, faux passé `delai_s`. L'horizon est partagé
+    avec les suites voisines (cf. `_lire_jusqu_a`) : un mouvement de CETTE base que
+    leur transaction retient au curseur retient aussi `as_of`. Un retard, jamais un
+    recul."""
+    fin = time.monotonic() + delai_s
+    while not condition():
+        if time.monotonic() >= fin:
+            return False
+        time.sleep(0.5)
+    return True
+
+
+def _ouvrir_et_attendre(dsn: str):
+    """Une transaction ouverte, qui n'a fait que LIRE (aucun xid encore), et son
+    début ; puis le temps qu'il passe nettement sous l'instant de lecture."""
+    import psycopg
+    conn = psycopg.connect(dsn)
+    debut = conn.execute("SELECT now()").fetchone()[0]
+    time.sleep(2.5)
+    return conn, debut
+
+
+def test_une_page_vide_dit_un_as_of_proche_de_maintenant(live):
+    _, fin = _tout_lire()
+    page = _appel("service.credits.movements", after=fin)
+    assert page["movements"] == [] and page["next_cursor"] == fin
+    assert page["as_of"].endswith("+00:00")
+    assert _as_of(fin) <= datetime.now(timezone.utc)
+    avant = datetime.now(timezone.utc)
+    assert _attendre(lambda: _as_of(fin) >= avant - timedelta(seconds=3))
+
+
+def test_une_transaction_ouverte_retient_as_of_puis_le_relache(live):
+    """Elle n'a fait que lire : sans xid, elle ne retient pas le curseur, mais elle
+    peut encore écrire un mouvement daté de son DÉBUT — c'est là qu'`as_of` s'arrête,
+    tant qu'elle court, et pas plus tard."""
+    lente, debut = _ouvrir_et_attendre(_dsn())
+    try:
+        assert _as_of() <= debut
+        assert _as_of() <= debut, "tenu tant qu'elle court"
+    finally:
+        lente.close()
+    assert _attendre(lambda: _as_of() > debut)
+
+
+def test_un_mouvement_ecrit_plus_tard_par_une_transaction_ouverte_reste_au_dessus(live):
+    """Le piège : une transaction ouverte AVANT la lecture, sans xid au moment de la
+    lecture, écrit ensuite un mouvement daté de son début (`created_at = NOW()`). Un
+    horizon tiré des seules transactions qui portent un xid l'aurait promis complet."""
+    payeur = f"org:{_org()}"
+    lente, debut = _ouvrir_et_attendre(_dsn())
+    try:
+        promis = _as_of()
+        assert promis <= debut
+        lente.execute("INSERT INTO credit_movements (payer, kind, amount, idempotency_key) "
+                      "VALUES (%s, 'deposit', 1, 'tardif')", (payeur,))
+        lente.commit()
+    finally:
+        lente.close()
+    lus, _ = _lire_jusqu_a(1, lambda m: m["payer"] == payeur)
+    assert datetime.fromisoformat(lus[0]["created_at"]) >= promis
+
+
+def test_as_of_ne_recule_jamais_quel_que_soit_le_curseur(live):
+    payeur = f"org:{_org()}"
+    vus = [_as_of()]
+    lente, _ = _ouvrir_et_attendre(_dsn())
+    try:
+        vus += [_as_of(), _as_of()]
+        lente.execute("INSERT INTO credit_movements (payer, kind, amount, idempotency_key) "
+                      "VALUES (%s, 'deposit', 1, 'monotone')", (payeur,))
+        _appel("service.credits.movement.post", payer=payeur, amount=2, reason="r",
+               idempotency_key="apres")
+        vus += [_as_of(), _as_of()]
+        lente.commit()
+    finally:
+        lente.close()
+    _, fin = _tout_lire()
+    for apres in (None, fin, None, fin):
+        vus.append(_as_of(apres))
+    assert vus == sorted(vus)
+
+
+def test_une_transaction_d_une_autre_base_ne_retient_as_of_que_par_le_curseur(
+        live, pg_dsn):
+    """Une autre base ne peut pas écrire ici : sa transaction qui ne fait que LIRE ne
+    retient rien. Celle qui porte un xid retient l'horizon du serveur entier, donc le
+    curseur — et `as_of` avec lui, au plus ancien mouvement d'ici qu'il retient."""
+    import psycopg
+    nom = "oto_test_" + uuid.uuid4().hex[:8]
+    root = psycopg.connect(pg_dsn, autocommit=True)
+    root.execute(f'CREATE DATABASE "{nom}"')
+    try:
+        ailleurs, debut = _ouvrir_et_attendre(pg_dsn.rsplit("/", 1)[0] + "/" + nom)
+        try:
+            assert _attendre(lambda: _as_of() > debut), "une lecture ailleurs ne retient rien"
+            ailleurs.execute("SELECT pg_current_xact_id()")
+            payeur = f"org:{_org()}"
+            ecrit = _appel("service.credits.movement.post", payer=payeur, amount=1,
+                           reason="r", idempotency_key="retenu")["movement"]
+            time.sleep(2.5)
+            lus, apres = _tout_lire(None, lambda m: m["payer"] == payeur)
+            assert lus == [], "retenu au curseur par le xid d'ailleurs"
+            assert _as_of(apres) <= datetime.fromisoformat(ecrit["created_at"])
+        finally:
+            ailleurs.close()
+        assert _lire_jusqu_a(1, lambda m: m["payer"] == payeur)[0]
+        assert _attendre(lambda: _as_of() > datetime.fromisoformat(ecrit["created_at"]))
+    finally:
+        root.execute(f'DROP DATABASE IF EXISTS "{nom}" WITH (FORCE)')
+        root.close()
+
+
+def test_une_session_au_debut_illisible_rend_as_of_nul(live, monkeypatch):
+    """Sans `pg_read_all_stats`, la session d'un autre rôle n'expose ni son état ni
+    son début : elle peut être une transaction ouverte, et rien ne la date. Le cœur ne
+    promet rien plutôt qu'un horizon faux — la page, elle, est servie."""
+    import psycopg
+    from urllib.parse import urlparse
+    from oto_mcp.db import _conn as dbconn
+    role = "oto_test_asof_" + uuid.uuid4().hex[:8]
+    with _connect() as conn:
+        conn.execute(f"CREATE ROLE {role} LOGIN PASSWORD 'x'")
+        conn.execute(f"GRANT SELECT ON credit_movements, credit_holds TO {role}")
+    lente = psycopg.connect(_dsn())
+    lente.execute("SELECT 1")
+    pool_avant = dbconn._pool
+    try:
+        u = urlparse(_dsn())
+        monkeypatch.setenv("DATABASE_URL", u._replace(
+            netloc=f"{role}:x@{u.hostname}:{u.port}").geturl())
+        dbconn._pool = None
+        page = _appel("service.credits.movements", limit=1000)
+        assert page["as_of"] is None
+        assert page["settled_as_of"] is None, "nul avec as_of"
+        assert page["movements"], "la page reste servie"
+    finally:
+        if dbconn._pool is not None:
+            dbconn._pool.close()
+        dbconn._pool = pool_avant
+        monkeypatch.undo()
+        lente.close()
+        with _connect() as conn:
+            conn.execute(f"DROP OWNED BY {role}")
+            conn.execute(f"DROP ROLE {role}")
+
+
+# ── settled_as_of : l'horizon des appels réglés ──────────────────────────────
+
+def _horizons(apres=None) -> tuple[datetime, datetime]:
+    page = _appel("service.credits.movements", after=apres, limit=1000)
+    assert page["as_of"] is not None, "le banc lit toutes les sessions (superutilisateur)"
+    return (datetime.fromisoformat(page["as_of"]),
+            datetime.fromisoformat(page["settled_as_of"]))
+
+
+def _settled_as_of(apres=None) -> datetime:
+    return _horizons(apres)[1]
+
+
+@pytest.mark.parametrize("clore", ["regler", "liberer"])
+def test_une_reservation_ouverte_la_veille_tient_settled_as_of_jusqu_a_sa_cloture(
+        live, clore):
+    """Le cas d'une soumission asynchrone : posée le jour J, elle attend sa relève (ou
+    son échéance de 24 h) sans écrire de mouvement. `as_of` a passé J+1 — aucun
+    MOUVEMENT de J ne peut plus apparaître —, mais l'appel de J n'est pas réglé :
+    `settled_as_of` reste au début de la réservation. Réglée ou libérée, il remonte à
+    `as_of` — une fois le règlement servi : l'horizon est celui du serveur entier."""
+    call_uid = f"veille-{uuid.uuid4().hex[:8]}"
+    assert db_credits.reserver(
+        call_uid=call_uid, payer=f"org:{_org()}", connector="fullenrich",
+        function="submit", unit="credits", scale_version=1, quantity=1, reserved=3,
+        deadline_s=24 * 3600, forcer=True).posee
+    try:
+        with _connect() as conn:
+            posee = datetime.fromisoformat(conn.execute(
+                "UPDATE credit_holds SET created_at = NOW() - interval '25 hours' "
+                "WHERE call_uid = %s RETURNING created_at", (call_uid,)
+            ).fetchone()["created_at"]).replace(tzinfo=timezone.utc)
+        lendemain = datetime.combine(posee.date() + timedelta(days=1), datetime.min.time(),
+                                     tzinfo=timezone.utc)
+        assert _attendre(lambda: _horizons()[0] > lendemain)
+        as_of, regle = _horizons()
+        assert as_of > lendemain
+        assert regle == posee < lendemain, "l'appel de J n'est pas réglé"
+    finally:
+        if clore == "regler":
+            assert db_credits.regler(call_uid, montant=None, quantite=None, meta={})
+        else:
+            assert db_credits.liberer(call_uid)
+    assert _attendre(lambda: (lambda h: h[1] == h[0])(_horizons()))
+    as_of, regle = _horizons()
+    assert regle == as_of > lendemain
+
+
+def test_un_reglement_que_l_horizon_retient_tient_settled_as_of(live, pg_dsn):
+    """La réservation est réglée, sa transaction validée, mais un xid plus ancien — d'une
+    autre base : `_SESSIONS_ECRIVANTES` ne le voit pas, `as_of` passe la réservation —
+    retient son mouvement au-dessus de l'horizon du curseur : il n'est pas servi.
+    L'appel ne compte comme réglé qu'une fois son mouvement servi."""
+    import psycopg
+    nom = "oto_test_" + uuid.uuid4().hex[:8]
+    root = psycopg.connect(pg_dsn, autocommit=True)
+    root.execute(f'CREATE DATABASE "{nom}"')
+    call_uid = f"retenu-{uuid.uuid4().hex[:8]}"
+
+    def du_reglement(m):
+        return m["call_uid"] == call_uid
+
+    try:
+        ailleurs = psycopg.connect(pg_dsn.rsplit("/", 1)[0] + "/" + nom)
+        try:
+            ailleurs.execute("SELECT pg_current_xact_id()")
+            assert db_credits.reserver(
+                call_uid=call_uid, payer=f"org:{_org()}", connector="fullenrich",
+                function="submit", unit="credits", scale_version=1, quantity=1,
+                reserved=3, deadline_s=3600, forcer=True).posee
+            with _connect() as conn:
+                posee = datetime.fromisoformat(conn.execute(
+                    "SELECT created_at FROM credit_holds WHERE call_uid = %s",
+                    (call_uid,)).fetchone()["created_at"]).replace(tzinfo=timezone.utc)
+            time.sleep(1.1)
+            assert db_credits.regler(call_uid, montant=None, quantite=None, meta={})
+            time.sleep(2.5)
+            assert _tout_lire(None, du_reglement)[0] == [], "retenu par le xid d'ailleurs"
+            as_of, regle = _horizons()
+            assert as_of > posee, "aucune transaction de cette base ne retient as_of"
+            assert regle <= posee, "le règlement n'est pas servi : l'appel n'est pas réglé"
+        finally:
+            ailleurs.close()
+        assert _lire_jusqu_a(1, du_reglement)[0]
+        assert _attendre(lambda: _settled_as_of() > posee)
+    finally:
+        root.execute(f'DROP DATABASE IF EXISTS "{nom}" WITH (FORCE)')
+        root.close()
+
+
+def _une_reservation_validee_en_retard_ne_fait_pas_reculer(dsn: str) -> None:
+    """Le piège : une transaction ouverte AVANT la lecture pose ensuite une réservation,
+    datée de son DÉBUT (`created_at = NOW()`), et la valide après. Si la lecture ne la
+    comptait pas, `settled_as_of` aurait été servi au-dessus de ce début, puis
+    reculerait dessous."""
+    call_uid = f"tardive-{uuid.uuid4().hex[:8]}"
+    vus = [_settled_as_of()]
+    lente, debut = _ouvrir_et_attendre(dsn)
+    try:
+        vus += [_settled_as_of(), _settled_as_of()]
+        assert vus[-1] <= debut, "la transaction ouverte tient settled_as_of à son début"
+        lente.execute(
+            "INSERT INTO credit_holds (call_uid, payer, connector, function, unit, "
+            "scale_version, quantity, reserved, deadline) VALUES (%s, %s, 'fullenrich', "
+            "'submit', 'credits', 1, 1, 3, NOW() + interval '1 day')",
+            (call_uid, f"org:{_org()}"))
+        vus.append(_settled_as_of())
+        lente.commit()
+        vus += [_settled_as_of(), _settled_as_of()]
+    finally:
+        lente.close()
+    try:
+        assert db_credits.reservation(call_uid)["state"] == "open"
+        assert vus == sorted(vus), "settled_as_of ne recule jamais"
+        assert vus[-1] <= debut, "tenu, une fois validée, par la réservation elle-même"
+    finally:
+        assert db_credits.liberer(call_uid)
+    assert _attendre(lambda: _settled_as_of() > debut)
+
+
+def test_settled_as_of_ne_recule_pas_devant_une_reservation_validee_en_retard(live):
+    _une_reservation_validee_en_retard_ne_fait_pas_reculer(_dsn())
+
+
+def test_le_role_qui_ne_peut_que_reserver_est_compte_lui_aussi(live):
+    """Un rôle qui peut poser une réservation sans pouvoir écrire un mouvement : sa
+    transaction ouverte ne retient pas `as_of`, mais elle retient `settled_as_of` —
+    `_SESSIONS_ECRIVANTES` le compte."""
+    from urllib.parse import urlparse
+    role = "oto_test_hold_" + uuid.uuid4().hex[:8]
+    with _connect() as conn:
+        conn.execute(f"CREATE ROLE {role} LOGIN PASSWORD 'x'")
+        conn.execute(f"GRANT INSERT ON credit_holds TO {role}")
+    try:
+        u = urlparse(_dsn())
+        _une_reservation_validee_en_retard_ne_fait_pas_reculer(
+            u._replace(netloc=f"{role}:x@{u.hostname}:{u.port}").geturl())
+    finally:
+        with _connect() as conn:
+            conn.execute(f"DROP OWNED BY {role}")
+            conn.execute(f"DROP ROLE {role}")
+
+
+def test_le_contrat_sert_settled_as_of_requis_et_nullable():
+    from oto_mcp import openapi
+    doc = openapi.build()
+    schema = (doc["paths"]["/api/service/credits/movements"]["get"]["responses"]["200"]
+              ["content"]["application/json"]["schema"])
+    if "$ref" in schema:
+        schema = doc["components"]["schemas"][schema["$ref"].rsplit("/", 1)[1]]
+    assert {"as_of", "settled_as_of"} <= set(schema["required"])
+    assert schema["properties"]["settled_as_of"]["anyOf"] == [{"type": "string"},
+                                                              {"type": "null"}]
 
 
 def test_un_curseur_illisible_est_refuse_nommement(live):

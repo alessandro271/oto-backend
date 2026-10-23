@@ -223,7 +223,7 @@ la phrase effacerait :
 
 - une collection reconnue **non** vide, ou un compteur **non nul** ;
 - une **notice** truthy — `note`, `hint`, `warning(s)`, `notices`, `error(s)`,
-  `partial(_errors)`, `hors_schema`, plus les **familles** `*truncat*`, `*tronqu*`,
+  `partial(_errors)`, plus les **familles** `*truncat*`, `*tronqu*`,
   `*warning*`, `*avertissement*` (le suffixe est trop productif pour une liste
   fermée : `_etablissements_truncated`, `{champ}_truncated` en clé dynamique chez
   unipile, `texte_tronque`, `truncated_results`, `filtre_ca_avertissement`).

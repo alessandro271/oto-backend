@@ -396,8 +396,7 @@ def refuser_les_mots_mal_places(schema: Optional[dict], user_data: Optional[dict
 # (trois signaux, #407/#408/#409, sur une cause qui n'était pas la leur). L'écriture
 # a fait ce qu'on lui demandait ; c'est ce qu'elle en a DIT qui manquait.
 #
-# Même patron que `hors_schema` (#294) et `hors_options` (#319) : on n'empêche rien,
-# on nomme. Et on nomme la VALEUR PERDUE — sans elle il n'y a rien à rétablir.
+# On n'empêche rien, on nomme. Et on nomme la VALEUR PERDUE — sans elle il n'y a rien à rétablir.
 #
 # ══ #608 (28/08/2026) : LA CHAÎNE VIDE N'EST PAS UNE VALEUR ═══════════════════
 #
@@ -492,8 +491,7 @@ def _porte_un_null(neuf: Any) -> bool:
 
 
 def sans_les_nulls_sans_effet(user_data: Optional[dict],
-                              en_place: Callable[[], Optional[dict]],
-                              schema: Optional[dict]) -> Optional[dict]:
+                              en_place: Callable[[], Optional[dict]]) -> Optional[dict]:
     """Retire d'une écriture les `null` qui n'effacent RIEN (oto#182).
 
     La lecture sert à `null` toute colonne déclarée sans valeur en place. Un agent qui
@@ -505,11 +503,10 @@ def sans_les_nulls_sans_effet(user_data: Optional[dict],
     écrit. Sur une valeur EN PLACE, il reste l'effacement nommé, inchangé : ce filtre ne décide rien de ce qu'efface un `null`, il retire seulement
     ceux qui n'ont rien à effacer.
 
-    ⚠️ **Colonnes DÉCLARÉES seulement.** La lecture ne sert à `null` que le déclaré : un
-    écho ne peut viser que lui. Une colonne HORS schéma écrite à `null` garde son
-    comportement — elle naît en base et le relevé la nomme, ou le tableau la refuse —,
-    sinon une faute de frappe écrite à `null` disparaîtrait sans refus ni relevé
-    (`test_hors_schema_tous_chemins.py`, rouge sur la première version de ce filtre).
+    ⚠️ **Colonne non déclarée comprise** (oto-backend#1292). Un `null` n'y est pas
+    refusé, parce qu'il efface (`colonnes_non_declarees`) ; sans valeur en place, il
+    n'efface rien, et l'écrire ferait NAÎTRE la colonne à `null` en base, hors schéma
+    (la forme relevée en production le 31/08, `test_hors_schema_tous_chemins.py`).
 
     ⚠️ **Un vide ASSUMÉ (`@empty`) est une valeur en place** (oto#140, J2) : sa valeur
     est `""`, mais son marqueur dit « cherché, rien ». Un `null` dessus l'efface, marqueur
@@ -521,9 +518,8 @@ def sans_les_nulls_sans_effet(user_data: Optional[dict],
     Une écriture en couches garde ce qui accompagne sa valeur nulle
     (`{"valeur": null, "comment": …}` → `{"comment": …}`).
     """
-    declarees = set(dsv2.cles_declarees(schema))
     candidats = [cle for cle, neuf in (user_data or {}).items()
-                 if cle in declarees and cle not in _META_COLS and _porte_un_null(neuf)]
+                 if cle not in _META_COLS and _porte_un_null(neuf)]
     if not candidats:
         return user_data
     donnees = en_place() or {}

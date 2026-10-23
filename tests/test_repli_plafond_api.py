@@ -122,11 +122,12 @@ def _cle_org(org_id, *, connector=_API, exigee=True, deposee=True):
         CR.set_credential("org", str(org_id), connector, "sk-test-secret")
 
 
-def _repli(org, *, worker="w-api", depot=_API, org_ids=None):
+def _repli(org, *, worker="w-api", depot=_API, org_ids=None, ferme=False):
     from oto_mcp import db
     from oto_mcp.capabilities import _abonnement
     return db.repli_disponible(org, org_ids, worker, depot,
-                               _abonnement.DEFAUT_LIMITE_PCT, lease_seconds=60)
+                               _abonnement.DEFAUT_LIMITE_PCT, lease_seconds=60,
+                               ferme=ferme)
 
 
 def _etat(job_id):
@@ -239,6 +240,31 @@ def test_repli_pool_integralement_plafonne(live):
     repli = row["payload"]["_plateforme"]["repli"]
     assert repli["mode"] == "pool"
     assert repli["reason"] == "paused_limit"
+
+
+def test_la_ferme_prend_le_repli_d_un_pool_plafonne_d_une_org_non_routee_avec_sa_cle(live):
+    """Le worker de ferme sert le repli d'une org NON routée qui a sa clé d'org
+    `anthropic` (21/10/2026) : c'est sur cette clé que le repli se paie."""
+    oid = _org("p4f", "p4f-dem", "p4f-preteur", mode="pool")
+    _abonne("p4f-preteur", statut="paused_limit", reset=_futur(), pret_a=[oid])
+    jid = _travail(oid, "p4f-dem")
+    _cle_org(oid)
+
+    row = _repli(oid, worker="w-ferme", ferme=True)
+
+    assert row is not None, "la ferme a laissé le repli d'une org qui a sa clé d'org"
+    assert row["id"] == jid
+    assert row["payload"]["model_family"] == "anthropic"
+
+
+def test_la_ferme_ne_prend_pas_le_repli_d_une_org_non_routee_sans_cle(live):
+    oid = _org("p4g", "p4g-dem", "p4g-preteur", mode="pool")
+    _abonne("p4g-preteur", statut="paused_limit", reset=_futur(), pret_a=[oid])
+    jid = _travail(oid, "p4g-dem")
+
+    assert _repli(oid, worker="w-ferme", ferme=True) is None
+    etat = _etat(jid)
+    assert (etat["status"], etat["attempts"]) == ("pending", 0)
 
 
 # ── 5. pool mélangé (un plafonné, un déconnecté) → jamais de repli ─────────

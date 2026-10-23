@@ -212,12 +212,31 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > un run (un `.xlsx`) passe EN LIGNE par `{"kind":"content","filename":…,"base64":…}` (ou
 > `text` pour de l'UTF-8), borné à `file_source.CONTENT_MAX_BYTES` (256 Ko, vérifié sur la
 > longueur encodée avant décodage) : au-delà, le PUT signé d'`oto_upload_url`.
-> **Le retour** : une pièce jointe reçue sur une messagerie hébergée (`linkedin_unipile_chat`,
-> `whatsapp_chat`, `telegram_chat`, `instagram_chat`, `op="read"`, une LECTURE) porte une
+> **Le retour** : une pièce jointe reçue sur une messagerie hébergée (`linkedin_unipile`,
+> `whatsapp`, `telegram`, `instagram`, `op="read"`, une LECTURE) porte une
 > `source` `{"kind":"unipile","channel":…,"url":…}` — l'URL que sert Unipile, qui exige la
 > clé. `file_source` la résout avec le client du compte OPÉRÉ du canal et refuse une URL
 > hors de `https://<dsn>/v2/<ce compte>/…` (une clé partagée lirait sinon la pièce d'un
 > autre compte) ; redirection refusée, flux borné par `max_bytes`, budget de 90 s.
+> **Le transit — une référence courte au lieu d'une URL signée (21/10/2026).** Un agent qui
+> recopiait l'URL présignée d'un enregistrement d'appel (600 à 1 000 caractères, jeton de
+> session compris) dans `transcription_create(source={kind:"url"})` l'altérait parfois :
+> refus 403 ou 400 de l'hébergeur, sans rien qui dise pourquoi. Un outil qui sert un fichier
+> qu'un autre consommera le dépose désormais EN TRANSIT (`oto_mcp/transit.py`, seul
+> fabricant : `transit.deposer` → `media_store.upload_transit`, sous
+> `tmp/<préfixe>/<sub>/<empreinte>`, purgé en un jour) et rend une `source`
+> `{"kind":"transit","ref":"<préfixe>/<32 hex>"}` — `threecx_recording` (l'URL signée
+> seulement sur demande, `link=true`, pour écouter), `aircall_calls`
+> `op="recording"|"voicemail"`, `allo` `op="recording"`. `file_source` la relit dans le stockage (`transit.lire` →
+> `media_store.lire_objet`), donc tout consommateur d'une `source` en hérite. Garde :
+> **l'owner est l'appelant par construction** — la référence ne le porte pas, la clé se
+> recompose avec le `sub` de l'appel, celui du dépôt ; une référence d'un autre utilisateur
+> désigne une clé absente et reçoit le refus d'une référence expirée (les distinguer dirait
+> qu'un fichier existe) ; forme stricte (`<préfixe>/<32 hex>`, préfixe de la liste fermée
+> `media_store.PREFIXES_TRANSIT`) — ni `..`, ni `/` de tête, ni préfixe arbitraire. Et une URL
+> refusée en 400/403 le dit : « link altered or expired — re-read / re-fetch ». Les noms de
+> fichier ne sont plus `quote`-és dans une clé (boto ré-encodait le `%` : `%255B`) mais
+> réduits à des caractères sûrs (`media_store.nom_sur`).
 
 > **Livraison d'un projet COMPLET vers l'org d'un client (otomata-private#52).**
 > `oto_resource` : share/unshare acceptent un principal **org** (`org_id`, sans exigence
@@ -371,7 +390,7 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 >   le slug existant (ne casse pas l'URL déjà distribuée). Le dispatch traite `anonymous`/`secret` sur le même
 >   chemin (`access_mode in ("anonymous","secret")`).
 > - **`org`** : JWT Logto, **épingle l'org** ; le sous-domaine est enregistré comme **resource Logto**
->   (`auth.facade.ensure_api_resource`) + verifier **multi-audience** + PRM **host-aware**.
+>   (`auth.annuaire.ensure_api_resource`) + verifier **multi-audience** + PRM **host-aware**.
 >
 > **Host-routing** (`subdomain_project.HostDispatch`, monté `root_app` dans `server.main`) : une **2ᵉ app
 > FastMCP sans auth** (`anon_mcp = mcp`, **réutilise l'instance no-auth module-level** — ne PAS en
@@ -443,6 +462,30 @@ garde que le dossier : `write` sur le projet ; partagé par tous ceux qui voient
 projet. Posé SEUL, le rang ne touche ni `updated_at` ni le fil d'activité : ranger la
 sidebar n'est pas modifier le projet, et « récemment modifié » le remonterait à chaque
 glisser.
+
+## Rang d'affichage d'un lien — `rank_link` (2026-10-21)
+
+**Le besoin.** Le même que pour les projets, un cran plus bas : les tableaux d'un projet se
+listent dans l'ordre des liens (`label`, puis `target_ref` comparé en TEXTE — « 10 » avant
+« 9 »), qui n'est ni l'ordre des noms affichés ni celui que l'équipe veut lire.
+
+**La forme.** Colonne `project_links.position` (DOUBLE PRECISION, NULL = non rangé), posée
+par `oto_project op=rank_link target_type=… target_ref=… position=<nombre>` (`target_ref`
+tel que `op=get` le rend ; `identity_ref` pour un binding de connecteur précis), retirée par
+`clear_position=true` — l'un des deux, fini (`invalid_position` sinon, rien d'écrit) ; un
+lien introuvable est refusé (`link_not_found`, 404). Servie dans les liens d'`op=get` et
+d'`op=list include=["links"]`. Les liens d'un même type se listent rangés d'abord, par
+rang, puis comme avant : tant qu'aucun rang n'est posé, l'ordre ne change pas.
+
+**Pourquoi une op, et pas `position` sur `op=link`.** `op=link` est un upsert qui contrôle
+que la cible est dans la portée du projet et lisible par l'appelant, remonte
+`projects.updated_at` et écrit `project.link` au fil. Ranger un lien n'est rien de tout
+cela : `rank_link` n'écrit que le rang. À l'inverse, reposer un lien (`op=link`, un
+dossier de procédure par exemple) ne touche pas son rang.
+
+**Ce que ce n'est pas.** Aucune règle d'accès : `write` sur le projet, partagé par tous ceux
+qui voient le projet. Vaut pour tout type de lien ; une liste de tableaux est le premier
+usage. `op=copy` ne reporte pas les rangs (la copie repart dans l'ordre par défaut).
 
 ## Périmètre d'URL d'un projet — `excluded_url_prefixes` (#605, 2026-08-29)
 

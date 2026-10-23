@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from .. import credentials_store, db, providers, tenancy, tenant_vault
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN, TENANT_ADMIN_OF
+from ._refus_de_pose import REFUS_DE_VERIFICATION, refus_de_pose
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -108,8 +109,8 @@ def _set_key(ctx: ResolvedCtx, inp: TenantKeySetInput) -> dict:
         secret, meta_champs = credentials_store.preparer_pose(
             credentials_store.TENANT, slug, inp.provider, account, inp.api_key, inp.fields)
     except ValueError as e:
-        raise AuthzDenied(400, getattr(e, "code", str(e)),
-                          getattr(e, "message", "Credential incomplet ou vide."))
+        # Saisie refusée (400) ou non vérifiable chez le fournisseur (503).
+        raise refus_de_pose(e)
     # Pas d'org de contexte pour une clé de tenant : la cardinalité se lit au défaut
     # de la plateforme (`connectors.cardinality`), pas à une surcharge d'org.
     try:
@@ -151,6 +152,7 @@ CAPABILITIES += [
                      "connectors only; serves every org of the tenant that has no "
                      "closer key). Single-key connectors: `api_key`; multi-field: "
                      "`fields`; remote bridges: `base_url`."),
+        errors=REFUS_DE_VERIFICATION,
         rest=RestBinding("PUT", "/api/admin/tenants/{slug}/keys/{provider}"),
     ),
     Capability(

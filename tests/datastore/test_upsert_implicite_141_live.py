@@ -1,5 +1,5 @@
 """AJOUTER n'est pas DÉSIGNER : la fusion sur la clé métier se demande (`upsert`,
-oto#141) — le préavis daté.
+oto#141).
 
 **Le fait.** Sur un tableau à clé métier, une écriture SANS `id` dont la valeur de clé
 existait déjà mettait la ligne à jour en silence — ligne seule, lot, REST, upload. Et
@@ -8,14 +8,12 @@ pour trois lignes écrites, sans un mot.
 
 **Arbitré le 30/09/2026, précisé le 01/10.** Désigner (`id=`, `key=` nommé, tableau
 fermé) modifie la ligne de la clé, sans `upsert`. AJOUTER (ni `id` ni `key=`) sur une
-clé présente est REFUSÉ (`business_key_exists`) à partir de `UPSERT_IMPLICITE_REFUSE_LE`
-sauf `upsert=true` ; d'ici là la ligne fusionne et la réponse l'avertit, datée. Deux
-lignes d'un même appel à la même clé suivent cette règle dans les deux cas. Un lot rend
-chaque fusion dans `fusions`, `ids` aligné rang pour rang.
+clé présente est REFUSÉ (`business_key_exists`) sauf `upsert=true`. Deux lignes d'un
+même appel à la même clé suivent cette règle dans les deux cas. Un lot rend chaque
+fusion dans `fusions`, `ids` aligné rang pour rang.
 
-Chaque face est jouée AVANT (la veille, gréée par le `conftest`) et APRÈS (la date
-reculée par le RÉGLAGE, jamais l'horloge), contre un vrai PostgreSQL : on lit la BASE,
-pas seulement ce que l'appel a bien voulu rendre.
+Chaque face est jouée contre un vrai PostgreSQL : on lit la BASE, pas seulement ce que
+l'appel a bien voulu rendre.
 """
 from __future__ import annotations
 
@@ -28,7 +26,6 @@ from starlette.testclient import TestClient
 
 from oto_mcp.datastore import upsert_implicite as upi
 
-PASSEE = "2026-01-01"
 SUB = "usr_upsert141"
 SCHEMA = {"key": "siren", "fields": [{"key": "siren", "type": "text"},
                                      {"key": "nom", "type": "text"}]}
@@ -50,44 +47,20 @@ def _h() -> dict:
     return {"Authorization": f"Bearer {SUB}"}
 
 
-@pytest.fixture
-def apres(monkeypatch):
-    monkeypatch.setenv(upi.ENV_UPSERT_IMPLICITE_REFUSE_LE, PASSEE)
+# ── le texte servi (sans base) ───────────────────────────────────────────────
 
-
-# ── la date, le réglage, le texte servi (sans base) ──────────────────────────
-
-def test_un_reglage_illisible_leve_au_lieu_de_retomber_sur_le_defaut(monkeypatch):
-    monkeypatch.setenv(upi.ENV_UPSERT_IMPLICITE_REFUSE_LE, "21 octobre")
-    with pytest.raises(ValueError, match=upi.ENV_UPSERT_IMPLICITE_REFUSE_LE):
-        upi.refus_arme()
-
-
-def test_la_veille_rien_n_est_arme_et_le_reglage_deplace_la_date(monkeypatch):
-    assert not upi.refus_arme()
-    monkeypatch.setenv(upi.ENV_UPSERT_IMPLICITE_REFUSE_LE, PASSEE)
-    assert upi.refus_arme()
-
-
-def test_le_texte_servi_est_derive_de_la_date(monkeypatch):
-    avant = upi.description_ecriture()
-    assert "from 2026-10-21 on, ADDING a row" in avant and "Until then both still" in avant
-    assert "DESIGNATE" in avant and "`key=`" in avant
-    assert "`upsert=true`" in avant and "`fusions`" in avant
-    assert "until 2026-10-21" in upi.description_parametre()
-    monkeypatch.setenv(upi.ENV_UPSERT_IMPLICITE_REFUSE_LE, "2027-03-02")
-    assert "from 2027-03-02 on" in upi.description_ecriture()
-    assert "from 2027-03-02 on" in upi.description_cle_schema()
-    monkeypatch.setenv(upi.ENV_UPSERT_IMPLICITE_REFUSE_LE, PASSEE)
-    apres = upi.description_ecriture()
-    assert "ADDING a row whose key value already exists is REFUSED" in apres
-    assert "Until then" not in apres
-    assert "until" not in upi.description_cle_schema()
+def test_le_texte_servi_dit_la_regle_au_present():
+    ecriture = upi.DESCRIPTION_ECRITURE
+    assert "ADDING a row whose key value already exists is REFUSED" in ecriture
+    assert "DESIGNATE" in ecriture and "`key=`" in ecriture
+    assert "`upsert=true`" in ecriture and "`fusions`" in ecriture
+    for texte in (ecriture, upi.description_parametre(), upi.description_cle_schema()):
+        assert "2026-10-21" not in texte and "until" not in texte.lower(), texte
 
 
 def test_la_description_servie_ne_promet_plus_l_upsert_de_toute_ecriture():
     """La phrase d'origine (« EVERY write carrying that key value then UPSERTs on it »)
-    est remplacée par la règle datée, sur `data_set_schema`, `data_write` et
+    est remplacée par la règle, sur `data_set_schema`, `data_write` et
     `data_patch_schema` — le texte servi pilote l'agent."""
     import asyncio
 
@@ -100,11 +73,11 @@ def test_la_description_servie_ne_promet_plus_l_upsert_de_toute_ecriture():
     for nom in ("data_set_schema", "data_write"):
         desc = asyncio.run(mcp.get_tool(nom)).description
         assert "UPSERTs on it" not in desc and "<<" not in desc, nom
-        assert "`upsert=true`" in desc and "2026-10-21" in desc, nom
+        assert "`upsert=true`" in desc and "REFUSED" in desc, nom
         assert "DESIGNATE" in desc and "ADD" in desc, nom
     assert "existing_violations" in asyncio.run(mcp.get_tool("data_set_schema")).description
     patch = next(c for c in columns.CAPABILITIES if c.key == "me.datastore.patch_schema")
-    assert "`upsert=true`" in patch.description and "2026-10-21" in patch.description
+    assert "`upsert=true`" in patch.description and "REFUSED" in patch.description
 
 
 def test_juger_le_lot_nomme_les_doublons_et_les_lignes_en_place():
@@ -263,35 +236,12 @@ def test_les_doublons_du_lot_se_jugent_sur_le_texte_que_rend_la_base(live):
     assert db.datastore_textes_de_cle([]) == []
 
 
-# ── AVANT la date : rien ne change, mais c'est dit ───────────────────────────
+# ── désigner, fusionner ──────────────────────────────────────────────────────
 
-def test_avant_la_ligne_seule_fusionne_et_l_avertissement_est_date(client, data_write):
-    for face in ("mcp", "rest"):
-        ns, ns_id, ids = _table(lignes=EN_PLACE)
-        ligne = {"siren": "222", "nom": "B bis"}
-        if face == "mcp":
-            rep = data_write(datastore=ns, row=ligne)
-        else:
-            r = _ligne(client, ns, ligne)
-            assert r.status_code == 201, r.text
-            rep = r.json()
-        assert rep["_id"] == ids["222"], face
-        notice = next(n for n in rep["notices"] if "will be refused" in n)
-        assert "From 2026-10-21 on" in notice and "ADDS" in notice
-        assert f"`id={ids['222']}`" in notice and "`upsert=true`" in notice
-        assert "`key='siren'`" in notice
-        base = _base(ns_id)
-        assert list(base) == ["222"] and base["222"]["nom"] == "B bis", face
-
-
-@pytest.mark.parametrize("quand", ["avant", "apres"])
-def test_la_ligne_seule_qui_designe_par_key_modifie_sans_upsert(
-        client, data_write, monkeypatch, quand):
+def test_la_ligne_seule_qui_designe_par_key_modifie_sans_upsert(client, data_write):
     """`key=` = la clé déclarée : la ligne est DÉSIGNÉE — une valeur en place la
-    modifie, sans `upsert` et sans un mot, avant comme après la date ; une valeur
-    neuve la crée. Une autre colonne reste refusée, REST compris."""
-    if quand == "apres":
-        monkeypatch.setenv(upi.ENV_UPSERT_IMPLICITE_REFUSE_LE, PASSEE)
+    modifie, sans `upsert` et sans un mot ; une valeur neuve la crée. Une autre colonne
+    reste refusée, REST compris."""
     ns, ns_id, ids = _table(lignes=EN_PLACE)
     rep = data_write(datastore=ns, row={"siren": "222", "nom": "M"}, key="siren")
     assert rep["_id"] == ids["222"]
@@ -308,63 +258,22 @@ def test_la_ligne_seule_qui_designe_par_key_modifie_sans_upsert(
     assert sorted(base) == ["222", "777"] and base["222"]["nom"] == "R"
 
 
-def test_avant_upsert_true_fusionne_sans_avertissement(client, data_write):
-    for face in ("mcp", "rest"):
-        ns, ns_id, ids = _table(lignes=EN_PLACE)
-        ligne = {"siren": "222", "nom": "B bis"}
-        if face == "mcp":
-            rep = data_write(datastore=ns, row=ligne, upsert=True)
-        else:
-            r = _ligne(client, ns, ligne, "?upsert=true")
-            assert r.status_code == 201, r.text
-            rep = r.json()
-        assert rep["_id"] == ids["222"]
-        assert not any("will be refused" in n for n in rep.get("notices") or []), face
-        assert _base(ns_id)["222"]["nom"] == "B bis"
-
-
-@pytest.mark.parametrize("upsert, key, attendus", [
-    (False, None, {"ADDED rows", "same call"}),   # ajout : la clé en base ET le doublon
-    (False, "siren", {"same call"}),            # désignation : le doublon seul
-    (True, None, set()),
-    (True, "siren", set()),
-], ids=["ajout", "designation", "ajout-upsert", "designation-upsert"])
-def test_avant_le_lot_rend_fusions_et_ids_alignes(client, data_write, upsert, key,
-                                                   attendus):
-    for face in ("mcp", "rest"):
-        ns, ns_id, en_place = _table(lignes=EN_PLACE)
-        if face == "mcp":
-            rep = data_write(datastore=ns, rows=LOT, upsert=upsert, key=key)
-        else:
-            corps = {"rows": LOT, "upsert": upsert, **({"key": key} if key else {})}
-            r = _lot(client, ns, corps)
-            assert r.status_code == 200, r.text
-            rep = r.json()
-        _verifier_lot_fusionne(rep, en_place, _base(ns_id))
-        avertis = [n for n in rep.get("notices") or [] if "this batch will be refused" in n]
-        assert {m for m in ("ADDED rows", "same call")
-                if any(m in n for n in avertis)} == attendus, face
-        assert len(avertis) == len(attendus), face
-        assert all("From 2026-10-21 on" in n and "`siren`" in n for n in avertis)
-
-
-def test_avant_l_upload_signe_rend_fusions_sans_identifiant(live):
+def test_l_upload_signe_rend_fusions_sans_identifiant(live):
     """L'accusé d'un upload est lu par un porteur de lien ANONYME (oto#86) : `fusions`
     y dit les rangs, jamais l'identifiant interne d'une ligne."""
     from oto_mcp import upload_tokens
     ns, ns_id, _ = _table(lignes=EN_PLACE)
     corps = "\n".join(json.dumps(r) for r in LOT).encode()
     cible = {"kind": "datastore", "ns_id": ns_id, "namespace": ns, "format": "ndjson",
-             "key": "siren"}
+             "key": "siren", "upsert": True}
     rep = upload_tokens.materialize(SUB, cible, corps, "application/x-ndjson")
     assert (rep["inserted"], rep["updated"]) == (2, 2)
     assert rep["fusions"] == [{"rang": 2, "dans_rang": 1, "cle": {"siren": "111"}},
                               {"rang": 3, "dans_rang": None, "cle": {"siren": "222"}}]
-    assert any("this batch will be refused" in n for n in rep["notices"])
     assert sorted(_base(ns_id)) == ["111", "222", "333"]
 
 
-def test_avant_l_import_en_tranches_garde_les_rangs_du_fichier(live, monkeypatch):
+def test_l_import_en_tranches_garde_les_rangs_du_fichier(live, monkeypatch):
     """Découpé en tranches de 2, le fichier garde SES rangs, et `dans_rang` traverse
     les tranches : la ligne 3 fusionne dans la ligne 1, posée par la tranche d'avant."""
     import time
@@ -373,24 +282,20 @@ def test_avant_l_import_en_tranches_garde_les_rangs_du_fichier(live, monkeypatch
     monkeypatch.setattr(upload_tokens, "IMPORT_SLICE", 2)
     ns, ns_id, en_place = _table(lignes=EN_PLACE)
     rows = [{"siren": "111"}, {"siren": "444"}, {"siren": "111"}, {"siren": "222"}]
-    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": ns, "key": "siren"}
+    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": ns, "key": "siren",
+             "upsert": True}
     rep = upload_tokens.import_rows(SUB, cible, rows, deadline=time.monotonic() + 60)
     a = _base(ns_id)["111"]["_id"]
     assert rep["done"] and (rep["inserted"], rep["updated"]) == (2, 2)
     assert rep["fusions"] == [
         {"rang": 3, "dans_rang": 1, "id": a, "cle": {"siren": "111"}},
         {"rang": 4, "dans_rang": None, "id": en_place["222"], "cle": {"siren": "222"}}]
-    # Deux phrases, une par fait, et non une par tranche : le doublon (ligne 3 → 1) et
-    # l'ajout sur une clé en base (ligne 4).
-    avertis = [n for n in rep["notices"] if "this batch will be refused" in n]
-    assert len(avertis) == 2
-    assert any("same call" in n for n in avertis) and any("ADDED rows" in n for n in avertis)
 
 
-# ── APRÈS la date : les refus ────────────────────────────────────────────────
+# ── les refus ────────────────────────────────────────────────────────────────
 
-def test_apres_la_ligne_seule_est_refusee_et_nomme_la_ligne_en_place(
-        client, data_write, apres):
+def test_la_ligne_seule_est_refusee_et_nomme_la_ligne_en_place(
+        client, data_write):
     ns, ns_id, ids = _table(lignes=EN_PLACE)
     ligne = {"siren": "222", "nom": "B bis"}
     msg = _refus_mcp(data_write, datastore=ns, row=ligne)
@@ -406,7 +311,7 @@ def test_apres_la_ligne_seule_est_refusee_et_nomme_la_ligne_en_place(
     assert _base(ns_id)["222"]["nom"] == "B"
 
 
-def test_apres_upsert_true_fusionne_et_une_cle_neuve_se_cree(client, data_write, apres):
+def test_upsert_true_fusionne_et_une_cle_neuve_se_cree(client, data_write):
     ns, ns_id, ids = _table(lignes=EN_PLACE)
     assert data_write(datastore=ns, row={"siren": "222", "nom": "M"},
                       upsert=True)["_id"] == ids["222"]
@@ -426,8 +331,8 @@ def test_apres_upsert_true_fusionne_et_une_cle_neuve_se_cree(client, data_write,
     ([{"siren": "333"}, {"siren": "222"}], None,
      "Row 2: siren '222' already designates row"),
 ], ids=["doublon interne, ajout", "doublon interne, designation", "clé en base, ajout"])
-def test_apres_le_lot_est_refuse_entier_avant_sa_premiere_ligne(
-        client, data_write, apres, lot, key, attendu):
+def test_le_lot_est_refuse_entier_avant_sa_premiere_ligne(
+        client, data_write, lot, key, attendu):
     ns, ns_id, _ = _table(lignes=EN_PLACE)
     msg = _refus_mcp(data_write, datastore=ns, rows=lot, key=key)
     r = _lot(client, ns, {"rows": lot, **({"key": key} if key else {})})
@@ -441,7 +346,7 @@ def test_apres_le_lot_est_refuse_entier_avant_sa_premiere_ligne(
     assert sorted(_base(ns_id)) == ["222"]
 
 
-def test_apres_le_lot_qui_designe_modifie_les_lignes_en_place(client, data_write, apres):
+def test_le_lot_qui_designe_modifie_les_lignes_en_place(client, data_write):
     """`key=` nommé : une clé en base est la ligne VISÉE — modifiée sans `upsert`,
     sans avertissement ; une clé neuve est créée."""
     for face in ("mcp", "rest"):
@@ -461,19 +366,21 @@ def test_apres_le_lot_qui_designe_modifie_les_lignes_en_place(client, data_write
         assert sorted(base) == ["222", "333"] and base["222"]["nom"] == "B ter"
 
 
-def test_apres_le_lot_avec_upsert_fusionne_et_rend_fusions(client, data_write, apres):
+@pytest.mark.parametrize("key", [None, "siren"], ids=["ajout", "designation"])
+def test_le_lot_avec_upsert_fusionne_et_rend_fusions(client, data_write, key):
     for face in ("mcp", "rest"):
         ns, ns_id, en_place = _table(lignes=EN_PLACE)
         if face == "mcp":
-            rep = data_write(datastore=ns, rows=LOT, upsert=True)
+            rep = data_write(datastore=ns, rows=LOT, upsert=True, key=key)
         else:
-            r = _lot(client, ns, {"rows": LOT, "upsert": True})
+            r = _lot(client, ns, {"rows": LOT, "upsert": True, **({"key": key} if key else {})})
             assert r.status_code == 200, r.text
             rep = r.json()
         _verifier_lot_fusionne(rep, en_place, _base(ns_id))
+        assert not any("refus" in n for n in rep.get("notices") or []), face
 
 
-def test_apres_l_upload_signe_est_refuse_sans_nommer_de_ligne(live, apres):
+def test_l_upload_signe_est_refuse_sans_nommer_de_ligne(live):
     from oto_mcp import upload_tokens
     ns, ns_id, ids = _table(lignes=EN_PLACE)
     corps = "\n".join(json.dumps(r) for r in LOT).encode()
@@ -504,7 +411,7 @@ def test_apres_l_upload_signe_est_refuse_sans_nommer_de_ligne(live, apres):
     assert (rep["inserted"], rep["updated"]) == (0, 4) and len(rep["fusions"]) == 4
 
 
-def test_apres_l_import_est_refuse_avant_sa_premiere_tranche(live, apres, monkeypatch):
+def test_l_import_est_refuse_avant_sa_premiere_tranche(live, monkeypatch):
     import time
 
     from oto_mcp import upload_tokens
@@ -520,7 +427,7 @@ def test_apres_l_import_est_refuse_avant_sa_premiere_tranche(live, apres, monkey
     assert sorted(_base(ns_id)) == ["222"]
 
 
-def test_apres_le_put_signe_rend_409_et_le_mint_scelle_upsert(live, apres, monkeypatch):
+def test_le_put_signe_rend_409_et_le_mint_scelle_upsert(live, monkeypatch):
     """De bout en bout : la frappe (`POST /api/me/upload-url`) scelle `upsert` et la clé
     NOMMÉE dans le jeton, la réception (`PUT /api/upload/{token}`) les lit — un ajout
     sans eux rend 409, une désignation (`key`) ou un `upsert` modifie la ligne."""
@@ -544,7 +451,7 @@ def test_apres_le_put_signe_rend_409_et_le_mint_scelle_upsert(live, apres, monke
     assert _base(ns_id)["222"]["nom"] == "PUT"
 
 
-def test_apres_un_tableau_ferme_vise_par_sa_cle_sans_upsert(client, data_write, apres):
+def test_un_tableau_ferme_vise_par_sa_cle_sans_upsert(client, data_write):
     """`key_required` ne change pas : sur un tableau fermé, la valeur de clé EST la
     désignation (son refus de création le conseille) — ni refus, ni avertissement."""
     ns, ns_id, ids = _table(FERME, lignes=EN_PLACE)
@@ -556,7 +463,7 @@ def test_apres_un_tableau_ferme_vise_par_sa_cle_sans_upsert(client, data_write, 
     assert _base(ns_id)["222"]["nom"] == "G"
 
 
-def test_apres_une_course_perdue_sans_upsert_est_refusee(data_write, apres, monkeypatch):
+def test_une_course_perdue_sans_upsert_est_refusee(data_write, monkeypatch):
     """La clé arrive ENTRE le lookup et l'insert : l'index la refuse, et la course
     perdue suit la même règle que le lookup — refus nommé, rien d'écrit."""
     from oto_mcp import db

@@ -14,8 +14,6 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-# oto#124 : le format déclaré fait contrat partout (ex-`unknown_columns: "report"`).
-pytestmark = pytest.mark.usefixtures("validation_complete_partout")
 
 SUB = "usr_reemission_204"
 MARQUEUR = "oto.vide_assume"

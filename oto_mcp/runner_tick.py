@@ -63,11 +63,15 @@ def next_due(expr: str, tz: str,
 
 
 def _occurrence_sautee(t: dict, issue: str = db.REFUSE_SUSPENDED) -> None:
-    """Trace d'une échéance consommée sans rien enfiler — org suspendue, ou procédure
-    archivée : un journal, et une livraison `refused_*` (sans créneau) visible sur la
-    page de l'agent, comme pour un webhook refusé."""
-    cause = ("procédure archivée" if issue == db.REFUSE_PROCEDURE_ARCHIVED
-             else f"org {t['org_id']} suspendue")
+    """Trace d'une échéance consommée sans rien enfiler — org suspendue, procédure
+    archivée, ou agent sans modèle : un journal, et une livraison `refused_*` (sans
+    créneau) visible sur la page de l'agent, comme pour un webhook refusé."""
+    if issue == db.REFUSE_PROCEDURE_ARCHIVED:
+        cause = "procédure archivée"
+    elif issue == db.REFUSE_NO_MODEL:
+        cause = runner_models.motif_sans_famille(t.get("model"))
+    else:
+        cause = f"org {t['org_id']} suspendue"
     log.warning("déclencheur %s : %s, échéance %s sautée",
                 t["id"], cause, t.get("next_due"))
     with db._connect() as conn:
@@ -109,6 +113,14 @@ def _tick() -> int:
                 continue
         except Exception as e:  # noqa: BLE001 — voir ci-dessus
             log.warning("déclencheur %s : état de la procédure illisible (%s)", t["id"], e)
+        # Agent SANS MODÈLE (21/10/2026) : son travail n'aurait aucune famille, donc
+        # aucun worker ne le servirait — la réservation l'arrêterait (`_SANS_MODELE`).
+        # On n'enfile pas : l'échéance est consommée, la livraison refusée et motivée
+        # (`refused_no_model`). Le déclencheur n'est PAS éteint : déclarer un modèle
+        # suffit à ce que l'échéance suivante parte.
+        if runner_models.motif_sans_famille(t.get("model")):
+            _occurrence_sautee(t, db.REFUSE_NO_MODEL)
+            continue
         payload = {
             "procedure": t["procedure"],
             "project_id": t["project_id"],
@@ -142,8 +154,7 @@ def _tick() -> int:
             **_limites_du_run.charge(t.get("max_tokens"), t.get("max_run_seconds")),
             "trigger_id": t["id"],
             # Le modèle DÉCLARÉ et sa famille — la famille route le travail vers un
-            # worker qui la sert (`claim_next_job`). Sans modèle : rien ne part, et
-            # n'importe quel worker le prend sur le sien, comme avant.
+            # worker qui la sert (`claim_next_job`). Sans modèle, on n'arrive pas ici.
             **runner_models.charge(t.get("model")),
         }
         # ⚠️ PÉRIMER AVANT D'ENFILER. Ce qui restait en attente pour ce
@@ -175,7 +186,7 @@ def _tick() -> int:
         try:
             raison_kw["raison"] = _abonnement.raison_de_peremption(
                 t.get("sub"), t["org_id"], runner_models.famille(t.get("model")),
-                db.runner_arme(t["org_id"]))
+                db.runner_arme(t["org_id"]), modele=t.get("model"))
         except Exception as e:  # noqa: BLE001 — un diagnostic manqué garde le texte générique
             log.warning("déclencheur %s : diagnostic de péremption illisible (%s) — "
                         "texte générique conservé", t["id"], e)

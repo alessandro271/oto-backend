@@ -3,7 +3,8 @@ en récupérer les OCTETS côté serveur (oto-backend#60).
 
 Un agent MCP n'a pas de système de fichiers : il ne peut pas désigner un PDF par un
 chemin disque. Ce module résout une **référence typée** vers le contenu binaire d'un
-fichier qu'oto sait atteindre — pièce Gmail, fichier Drive, URL, fichier d'un projet —
+fichier qu'oto sait atteindre — pièce Gmail, fichier Drive, URL, fichier d'un projet,
+fichier déposé en transit par un outil —
 pour qu'un tool (upload Pennylane, etc.) l'ingère sans passer par le disque.
 
 Couche backend-core (ADR 0004) : imports lazy des clients connecteurs, résolution
@@ -136,6 +137,21 @@ def _reste(deadline: Optional[float]) -> Optional[float]:
     return reste
 
 
+def _refus_http(status: int) -> str:
+    """The refusal of a URL answered with an error. A signed link (a storage URL with
+    its signature and token in the query) answers 400 or 403 once ALTERED — one
+    character lost or changed when copied from one call to another — or EXPIRED: the
+    message says so, and that the fix is to fetch the link again, never to retry it."""
+    if status in (400, 403):
+        return (f"source url: the server refused the link (HTTP {status}) — link altered "
+                "or expired: re-read the recording / re-fetch the URL from the tool that "
+                "served it, and pass it unchanged; prefer a short `source` when that tool "
+                "returns one.")
+    if status == 404:
+        return "source url: nothing at this URL (HTTP 404)."
+    return f"source url: the server answered HTTP {status}."
+
+
 def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False,
               deadline: Optional[float] = None) -> ResolvedFile:
     # Périmètre du projet (#605) : un fichier lu à une URL est une page lue. Et le
@@ -168,7 +184,8 @@ def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False,
                     _check_url(nxt)
                     url = nxt
                     continue
-                r.raise_for_status()
+                if r.status_code >= 400:
+                    raise FileSourceError(_refus_http(r.status_code))
                 declared = r.headers.get("content-length")
                 if declared and int(declared) > max_bytes:
                     raise FileSourceError(
@@ -363,6 +380,20 @@ def _from_unipile(src: dict, max_bytes: int) -> ResolvedFile:
     return ResolvedFile(b"".join(chunks), nom, mime or "application/octet-stream")
 
 
+def _from_transit(src: dict, max_bytes: int) -> ResolvedFile:
+    """Un fichier qu'un outil a déposé EN TRANSIT pour l'appelant (`oto_mcp/transit.py`),
+    désigné par la référence courte que cet outil a rendue — relu dans le stockage
+    objet, jamais par une URL recopiée. La garde (owner = appelant, forme stricte,
+    préfixes fermés) et le refus d'une référence expirée sont ceux de `transit.lire`."""
+    from . import transit
+    try:
+        data, nom, mime = transit.lire(src.get("ref"), max_bytes=max_bytes)
+    except transit.TransitError as e:
+        raise FileSourceError(str(e)) from None
+    nom = nom or "file" + (mimetypes.guess_extension(mime) or "")
+    return ResolvedFile(data, nom, mime)
+
+
 def _from_content(src: dict, max_bytes: int) -> ResolvedFile:
     """Un fichier PRODUIT par l'agent (un .xlsx d'un run, un CSV), passé dans l'appel :
     `base64` pour du binaire, `text` pour de l'UTF-8 — exactement l'un des deux.
@@ -408,7 +439,7 @@ _RESOLVERS = {"drive": _from_drive, "gmail": _from_gmail}
 # Les résolveurs qui bornent la taille EUX-MÊMES, avant de matérialiser les octets.
 _RESOLVERS_BORNES = {"url": _from_url, "project_file": _from_project_file,
                      "http": _from_http, "content": _from_content,
-                     "unipile": _from_unipile}
+                     "unipile": _from_unipile, "transit": _from_transit}
 
 
 def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
@@ -417,7 +448,7 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
     """Résout une référence de fichier côté oto vers ses octets + métadonnées.
 
     `source` = dict `{"kind": "drive"|"gmail"|"url"|"project_file"|"http"|"content"|
-    "unipile", …}` :
+    "unipile"|"transit", …}` :
       - drive        : `{file_id, account?}`
       - gmail        : `{message_id, filename, index?, account?}`
       - url          : `{url}` (http/https, redirections refusées)
@@ -427,6 +458,8 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
                        ≤ `CONTENT_MAX_BYTES`)
       - unipile      : `{channel, url}` (pièce jointe d'un message, telle que le lecteur
                        de la messagerie la rend dans `attachments[].source`)
+      - transit      : `{ref}` (fichier déposé en transit par un outil pour l'appelant,
+                       la `source` que cet outil rend ; purgé en un jour)
     Lève `FileSourceError` si `kind` manque/inconnu, source illisible, ou taille
     dépassée. Borne la taille à `max_bytes` (charge en RAM). `deadline` (horloge
     monotone) borne le téléchargement d'une URL de bout en bout, sauts compris."""
@@ -442,7 +475,7 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
         if fn is None:
             raise FileSourceError(
                 f"source `kind`={kind!r} inconnu (attendu : drive, gmail, url, project_file, "
-                "http, content, unipile).")
+                "http, content, unipile, transit).")
         try:
             rf = fn(source)
         except FileSourceError:

@@ -39,7 +39,8 @@ def _ligne_avec_relique():
     ns = "t-" + uuid.uuid4().hex[:6]
     db.create_datastore("user", "sub-test", ns)
     st = _store()
-    st.set_schema(ns, {"key": "siren", "fields": [{"key": "siren", "type": "text"}]})
+    st.set_schema(ns, {"key": "siren", "fields": [{"key": "siren", "type": "text"},
+                                                  {"key": "contact1_nom", "type": "text"}]})
     rid = st.append_row(ns, {"siren": "1"})["_id"]
     with _connect() as c:
         c.execute("UPDATE datastore_rows SET data = data || %s::jsonb WHERE row_id=%s",

@@ -90,8 +90,17 @@ _DECLARATIONS: tuple[str, ...] = (
     # Neighbour of `pennylane`: same Finance category, and the order governs
     # the catalog display.
     "finkare",
+    # Neighbour of `pennylane`/`finkare` (Finance): e-invoicing, read-only — wired
+    # 2026-10-22. The person signs in with jefacture.com (OAuth, platform application).
+    "jefacture",
     "slack",
     "fullenrich",
+    "waterfall_email",
+    "waterfall_phone",
+    "waterfall_company",
+    "waterfall_person",
+    "waterfall_people",
+    "waterfall_tech",
     # Neighbour of `fullenrich` by trade (enrichment); also carries the Clay
     # table webhooks (write), see `providers/clay.py`.
     "clay",
@@ -143,6 +152,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "outlook",
     "outlook_calendar",
     "teams",
+    "onenote",
+    "entra",
     "promptwatch",
     # --- per-user sessions (outside resolve_api_key, dedicated storage) ------
     "crunchbase",
@@ -324,6 +335,10 @@ _DECLARATIONS: tuple[str, ...] = (
     # The documents a company keeps indexed in Zeendoc (supplier invoices…): a
     # Zeendoc user's login and password and the cabinet id travel together.
     "zeendoc",
+    # --- telephony — wired 2026-10-20 ----------------------------------------
+    # Neighbour of `aircall` by situation: a team's calls and texts with their AI
+    # summaries, its contacts CRM and Power Dialer queue, on one Allo API key.
+    "allo",
     # --- KEY carriers, no tools (kind="credential") --------------------------
     # The model key an org deposits for its scheduled agents. They serve
     # no tool: the worker consumes it on the org's behalf.

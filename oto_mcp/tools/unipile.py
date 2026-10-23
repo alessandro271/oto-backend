@@ -32,7 +32,7 @@ from .. import access, db, providers, session_org, status_hints
 from ..connectors import flow as connector_flow
 from ..connectors import verify as connector_verify
 from . import unipile_messagerie
-from .lecture import ENVOI, OpsDepreciees, en_transition
+from .lecture import ACTE, LECTURE
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ _TEXTUAL_FIELDS = ("text", "original_text")
 # — a micro-backoff that self-paces the burst without hammering (hammering degrades into timeouts
 # then triggers a checkpoint/disconnects the account). + company-profile cache (most
 # constrained route, ~100/window) = 0 upstream calls, 0 quota. PROCESS-LOCAL guards (single loop).
-_CHAT_LIST_MAX = 25      # max page of `linkedin_unipile_chat op=list` (#873, LinkedIn)
+_CHAT_LIST_MAX = 25      # max page of `linkedin_unipile op=list` (#873, LinkedIn)
 _ENGAGEMENT_DEFAULT = 100  # people returned by `linkedin_unipile_post op=engagement`
 _ENGAGEMENT_MAX = 500      #  ... and its upper bound (oto#177)
 _ENGAGEMENT_BUDGET_S = 20  # max duration of the page loop (never a call that freezes)
@@ -932,105 +932,96 @@ def _verify(fields: dict, config: dict | None = None) -> None:
             "via the dashboard's hosted-auth (unipile_connect_start).")
 
 
-# --- reads and writes live in DIFFERENT tools (oto-backend#1189) ----------------------
+# --- a connector's TWO tools: `<ns>` reads, `<ns>_act` acts (17/10/2026, 21/10/2026) ----
 # An MCP client (claude.ai, ChatGPT) authorizes TOOLS, never operations: "always allow"
-# on `whatsapp_chat` to read used to allow sending a message to a third party too,
-# without a confirmation. So everything that acts AT a third party or IN THE PERSON'S
-# NAME has a tool of its own (Gmail's shape: `gmail` reads or drafts, `gmail_act`
-# acts), declared `ENVOI`. The transition of the old ops (`OpsDepreciees`,
-# `en_transition`) is shared with the other messaging readers: `tools/lecture.py`.
-
-
-# The LinkedIn readers and the writer that serves their send ops.
-_OPS_CHAT = OpsDepreciees("linkedin_unipile_chat", "linkedin_unipile_send",
-                          ("send", "update", "react"))
-_OPS_POST = OpsDepreciees("linkedin_unipile_post", "linkedin_unipile_publish",
-                          ("create", "comment", "react"))
-_OPS_RESEAU = OpsDepreciees("linkedin_unipile_network", "linkedin_unipile_invite",
-                            ("invite", "handle", "cancel"))
+# on a tool that reads must never allow a message to a third party. So every messaging
+# connector serves a PAIR (`tools/lecture.py`, Gmail's shape): `<ns>` reads (`LECTURE`),
+# `<ns>_act` acts — sends, reacts, changes a thread (`ACTE`, the tool the client asks to
+# confirm). The old names (`whatsapp_chat`, `whatsapp_send`, `linkedin_unipile_chat`,
+# `linkedin_unipile_send`…) refuse, naming the call to make
+# (`outils_retires.RENOMMAGES`).
+#
+# LinkedIn has ONE acting tool, `linkedin_unipile_act` (21/10/2026): messages, posts,
+# invitations and the acts on a member all live there, each under its own named op
+# (`react_message` is not `react_post`). The readers — `linkedin_unipile` (messaging),
+# `_post`, `_network`, `_profile`, `_search`… — only read; an old acting op called on
+# them is refused, naming its new call (`outils_retires.OPS_DEPLACEES`).
 
 
 def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
-    """Register the Unipile messaging tools of a channel, resolved on the user's
-    <channel> account (no-fallback): `{c}_chat(op=list|read)` READS, `{c}_send` SENDS
-    (#1189 — two tools, because a client authorizes a tool, not an op; `{c}_chat(op=
-    "send")` is served by `{c}_send` until `deprecations.RETRAIT_OPS_ENVOI`). Unipile
-    messaging (`/chats`) is channel-agnostic → a single code for all channels. Called
-    by tools/{whatsapp,telegram,instagram}.py.
+    """Register the Unipile messaging PAIR of a channel, resolved on the user's
+    <channel> account (no-fallback): `{c}(op=list|read)` READS, `{c}_act(op=send)` SENDS
+    — two tools, because a client authorizes a tool, not an op (`tools/lecture.py`).
+    Unipile messaging (`/chats`) is channel-agnostic → a single code for all channels.
+    Called by tools/{whatsapp,telegram,instagram}.py.
 
-    The channel stays in the NAME (that is what makes it findable by the agent); the
-    reading verbs move to `op` — same shape as `linkedin_unipile_chat`, which is the
-    same capability on the same connector (ADR 0047 §Amendment)."""
+    The channel IS the name (that is what makes it findable by the agent); the verbs
+    are `op` — same shape as `linkedin_unipile` / `linkedin_unipile_act`, the same
+    capability on the same connector (ADR 0047 §Amendment)."""
     cl = channel.lower()
     prov = channel.upper()
-    envoi = f"{cl}_send"
-    depreciees = OpsDepreciees(f"{cl}_chat", envoi, ("send",), garde_op=False)
+    acteur = f"{cl}_act"
 
     def _bad(msg: str) -> McpError:
         return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
-    @mcp.tool(
-        name=envoi,
-        annotations=ENVOI,
-        description=(
-            f"⚠️ SENDS a {channel} message (DM) via Unipile, from the person's own "
-            "account — it leaves at once, there is no draft.\n\n"
-            "`chat_id` → replies in an existing thread (from "
-            f"`{cl}_chat(op=\"list\")`); otherwise `recipient_id` → opens a new thread "
-            "with that contact. `text` is the message."),
-    )
-    def _send(text: str,
-              chat_id: Optional[str] = None,
-              recipient_id: Optional[str] = None) -> dict:
-        # Refused BEFORE any credential resolution: a send without a destination
-        # never reaches the client.
-        if not text:
-            raise _bad(f"{envoi} requires text")
-        if chat_id is None and recipient_id is None:
-            raise _bad(f"{envoi} requires chat_id (reply) or recipient_id (new thread)")
-        return unipile_client(prov).send_message(text, chat_id=chat_id,
-                                                 attendee_id=recipient_id)
-
-    @en_transition(mcp, depreciees, description=(
-        f"{channel} messaging (DM) via Unipile.\n\n"
+    @mcp.tool(name=cl, annotations=LECTURE, description=(
+        f"Reads {channel} messaging via Unipile: 1-to-1 AND group conversations. "
+        f"Sending is `{acteur}`.\n\n"
         "`op`:\n"
         "- **\"list\"** (default): the conversations, newest first, in `items` "
         f"(`limit` 1-{unipile_messagerie.LISTE_MAX}). A `cursor` is returned only when "
         "Unipile paginates the channel (WhatsApp does not: a full page carries "
-        "`truncated`). Each 1-to-1 thread is enriched with the counterpart's name "
-        "(`attendee_name`); `with_names=False` turns this enrichment off (one API call "
-        "fewer).\n"
-        "- **\"read\"**: the messages of a thread (`chat_id` from op=\"list\"). A message "
-        "Unipile passed on without text nor attachment carries `content_unavailable`. "
-        "Each attachment carries a `source`: pass it to `oto_import` (target="
-        "\"project_file\") to file it, or to any tool taking a `source` — the server "
-        "fetches the file, never through the conversation."))
-    def _chat(op: Literal["list", "read", "send"] = "list",
+        "`truncated`). Group threads are listed alongside the 1-to-1 ones (`is_group`, "
+        "named by the group's `name`) and read the same way. Each 1-to-1 thread is "
+        "enriched with the counterpart's name (`attendee_name`); `with_names=False` "
+        "turns this enrichment off (one API call fewer).\n"
+        "- **\"read\"**: the messages of a thread, 1-to-1 or group (`chat_id` from "
+        "op=\"list\"). A message Unipile passed on without text nor attachment carries "
+        "`content_unavailable`. Each attachment carries a `source`: pass it to "
+        "`oto_import` (target=\"project_file\") to file it, or to any tool taking a "
+        "`source` — the server fetches the file, never through the conversation."))
+    def _lire(op: Literal["list", "read"] = "list",
               chat_id: Optional[str] = None,
-              text: Optional[str] = None,
-              recipient_id: Optional[str] = None,
               limit: Optional[int] = None,
               cursor: Optional[str] = None,
               with_names: bool = True) -> dict:
-        if op in depreciees.ops:
-            return depreciees.servir(op, _send, text=text, chat_id=chat_id,
-                                     recipient_id=recipient_id)
-        client = unipile_client(prov)
         if op == "list":
             refus = unipile_messagerie.borne_de_liste(limit)
             if refus:
                 raise _bad(refus)
             page = limit if limit is not None else 20
             return unipile_messagerie.page_de_fils(
-                client.list_chats(limit=page, cursor=cursor,
-                                  with_attendee_names=with_names), page)
+                unipile_client(prov).list_chats(limit=page, cursor=cursor,
+                                                with_attendee_names=with_names), page)
         if op == "read":
             if chat_id is None:
                 raise _bad("op='read' requires chat_id")
             return unipile_messagerie.references_des_pieces(
-                unipile_messagerie.page_de_messages(client.list_messages(
+                unipile_messagerie.page_de_messages(unipile_client(prov).list_messages(
                     chat_id, limit=limit if limit is not None else 30)), cl)
-        raise _bad("op must be 'list' or 'read'")
+        raise _bad(f"op must be 'list' or 'read' — sending is `{acteur}`.")
+
+    @mcp.tool(name=acteur, annotations=ACTE, description=(
+        f"⚠️ SENDS a {channel} message via Unipile, from the person's own account — it "
+        f"leaves at once, there is no draft. Reading is `{cl}`.\n\n"
+        "`op`:\n"
+        "- **\"send\"** (default): sends `text`. `chat_id` → replies in an existing "
+        f"thread, 1-to-1 or group (from `{cl}(op=\"list\")`); otherwise `recipient_id` → "
+        "opens a new thread with that contact."))
+    def _agir(text: str,
+              op: Literal["send"] = "send",
+              chat_id: Optional[str] = None,
+              recipient_id: Optional[str] = None) -> dict:
+        # Refused BEFORE any credential resolution: a send without a text or a
+        # destination never reaches the client.
+        if not text:
+            raise _bad(f"{acteur} op='send' requires text")
+        if chat_id is None and recipient_id is None:
+            raise _bad(f"{acteur} op='send' requires chat_id (reply) or recipient_id "
+                       "(new thread)")
+        return unipile_client(prov).send_message(text, chat_id=chat_id,
+                                                 attendee_id=recipient_id)
 
 
 def register(mcp: FastMCP) -> None:
@@ -1256,24 +1247,20 @@ def register(mcp: FastMCP) -> None:
 
     # ---- members & companies: read a profile, their activity, act on it ---
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def linkedin_unipile_profile(
         op: Literal["person", "company", "me", "posts", "comments", "reactions",
-                    "followers", "following", "endorse", "action"] = "person",
+                    "followers", "following"] = "person",
         identifier: Optional[str] = None,
         sections: str = "*",
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
         fields: Optional[list[str]] = None,
         text_max_chars: Optional[int] = _TEXT_EXCERPT_CHARS,
-        skill_endorsement_id: Optional[int] = None,
-        api: Optional[str] = None,
-        action: Optional[str] = None,
-        hiring_project_id: Optional[str] = None,
-        stage: Optional[str] = None,
-        list_id: Optional[str] = None,
     ) -> dict:
-        """A LinkedIn member or company: read their profile, their activity, act on it.
+        """A LinkedIn member or company: read their profile and their activity. Acting
+        on a member (endorsing a skill, a Sales Navigator / Recruiter action) is
+        `linkedin_unipile_act` (op="endorse" / "update_member").
 
         `identifier` = **public slug** (`marie-dupont`) or **URN** (`ACoAA…`). NOT the
         numeric `member_id` from `linkedin_unipile_search`: the v2 API rejects it
@@ -1304,14 +1291,10 @@ def register(mcp: FastMCP) -> None:
         - **"reactions"**: posts a member has liked.
         - **"followers"** / **"following"**: followers of the connected account, or of a
           member via `identifier`. Paginated.
-        - **"endorse"**: endorses a skill (`skill_endorsement_id` =
-          `endorsement_id` of a skill returned by op="person").
-        - **"action"**: premium action on a member (Sales Navigator lead save
-          / Recruiter pipeline). Requires `api` + `action`.
 
         Args:
             op: person (default) | company | me | posts | comments | reactions |
-                followers | following | endorse | action.
+                followers | following.
             identifier: public slug or URN of the member / company. Required
                 except op="me"; optional for followers/following (default = you).
             sections: op="person" — sections to include ("*" = all), comma
@@ -1327,14 +1310,6 @@ def register(mcp: FastMCP) -> None:
             fields: op="posts"/"comments" — field projection (slims heavily).
             text_max_chars: op="posts"/"comments" — text length of each item
                 (default 600; `None` = full text).
-            skill_endorsement_id: op="endorse" — id of the skill to endorse.
-            api: op="action" — 'sales_navigator' or 'recruiter'.
-            action: op="action" — sales_navigator → 'saveLead'; recruiter →
-                'addCandidateToPipeline' | 'addApplicantToPipeline' |
-                'changeCandidatePipeline' | 'rejectApplicant'.
-            hiring_project_id: op="action" — required for recruiter pipeline actions.
-            stage: op="action" — recruiter pipeline: 'UNCONTACTED' | 'CONTACTED' | 'REPLIED'.
-            list_id: op="action" — target Sales Navigator list (optional for saveLead).
         """
         sub = _actor_key()
 
@@ -1379,38 +1354,22 @@ def register(mcp: FastMCP) -> None:
             return unipile_client().list_following(user_id=identifier, cursor=cursor,
                                                     limit=limit)
 
-        if op == "endorse":
-            return unipile_client().endorse_profile(
-                _need(identifier, "identifier", op),
-                _need(skill_endorsement_id, "skill_endorsement_id", op))
-
-        if op == "action":
-            return unipile_client().member_action(
-                _need(identifier, "identifier", op),
-                _need(api, "api", op), _need(action, "action", op),
-                hiring_project_id=hiring_project_id, stage=stage, list_id=list_id)
-
         raise _bad("op must be 'person', 'company', 'me', 'posts', 'comments', "
-                   "'reactions', 'followers', 'following', 'endorse' or 'action'")
+                   "'reactions', 'followers' or 'following' — acting on a member is "
+                   "`linkedin_unipile_act`.")
 
     # ---- messaging -------------------------------------------------------
 
-    @en_transition(mcp, _OPS_CHAT)
-    def linkedin_unipile_chat(
-        op: Literal["list", "read", "send", "attendees", "contacts", "update",
-                    "react"] = "list",
+    @mcp.tool(name="linkedin_unipile", annotations=LECTURE)
+    def linkedin_unipile(
+        op: Literal["list", "read", "attendees", "contacts"] = "list",
         chat_id: Optional[str] = None,
-        message_id: Optional[str] = None,
-        text: Optional[str] = None,
-        recipient_id: Optional[str] = None,
-        action: Optional[str] = None,
-        value: Optional[bool | str] = None,
-        reaction: Optional[str] = None,
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
         with_names: bool = True,
     ) -> dict:
-        """LinkedIn messaging (DM) via Unipile.
+        """Reads LinkedIn messaging (DM) via Unipile. Sending, reacting and changing a
+        thread — like every act on LinkedIn — is `linkedin_unipile_act`.
 
         `op`:
         - **"list"** (default): the conversations, paginated (`limit` + `cursor`) —
@@ -1440,17 +1399,10 @@ def register(mcp: FastMCP) -> None:
         Args:
             op: list (default) | read | attendees | contacts.
             chat_id: thread id (read, attendees).
-            message_id, text, recipient_id, action, value, reaction: the deprecated ops'
-                arguments — those of `linkedin_unipile_send`.
             limit: page size (list, read, contacts).
             cursor: pagination (list, contacts).
             with_names: op="list" — enrichment of counterpart names.
         """
-        if op in _OPS_CHAT.ops:
-            return _OPS_CHAT.servir(op, linkedin_unipile_send, op=op, text=text,
-                                    chat_id=chat_id, recipient_id=recipient_id,
-                                    message_id=message_id, reaction=reaction,
-                                    action=action, value=value)
         client = unipile_client()
 
         if op == "list":
@@ -1475,11 +1427,14 @@ def register(mcp: FastMCP) -> None:
         if op == "contacts":
             return client.list_attendees(cursor=cursor, limit=limit)
 
-        raise _bad("op must be 'list', 'read', 'attendees' or 'contacts'")
+        raise _bad("op must be 'list', 'read', 'attendees' or 'contacts' — sending, "
+                   "reacting and changing a thread is `linkedin_unipile_act`.")
 
-    @mcp.tool(annotations=ENVOI)
-    def linkedin_unipile_send(
-        op: Literal["send", "update", "react"] = "send",
+    @mcp.tool(name="linkedin_unipile_act", annotations=ACTE)
+    def linkedin_unipile_act(
+        op: Literal["send", "update", "react_message", "publish_post", "comment_post",
+                    "react_post", "invite", "accept_invitation", "decline_invitation",
+                    "cancel_invitation", "endorse", "update_member"] = "send",
         text: Optional[str] = None,
         chat_id: Optional[str] = None,
         recipient_id: Optional[str] = None,
@@ -1487,32 +1442,85 @@ def register(mcp: FastMCP) -> None:
         reaction: Optional[str] = None,
         action: Optional[str] = None,
         value: Optional[bool | str] = None,
+        post_id: Optional[str] = None,
+        provider_id: Optional[str] = None,
+        message: Optional[str] = None,
+        invitation_id: Optional[str] = None,
+        shared_secret: Optional[str] = None,
+        identifier: Optional[str] = None,
+        skill_endorsement_id: Optional[int] = None,
+        api: Optional[str] = None,
+        hiring_project_id: Optional[str] = None,
+        stage: Optional[str] = None,
+        list_id: Optional[str] = None,
     ) -> dict:
-        """⚠️ ACTS in LinkedIn messaging (DM) from the person's own account: sends a
-        message, reacts to one, or changes a thread's state. A message leaves at once —
-        there is no draft. Reading the threads is `linkedin_unipile_chat`.
+        """⚠️ ACTS on LinkedIn from the person's own account — the other members see it,
+        at once, with no draft: a message, a post, a comment, a reaction, an invitation,
+        an endorsement. Reading is `linkedin_unipile` (messaging), `linkedin_unipile_post`,
+        `linkedin_unipile_network`, `linkedin_unipile_profile`.
 
-        `op`:
+        `op` — messaging (DM):
         - **"send"** (default): sends `text`. `chat_id` → replies in an existing thread;
           otherwise `recipient_id` (the recipient's provider id) → opens a new thread.
-        - **"react"**: reacts to a message with a native emoji (e.g. '👍') — the
-          counterpart sees it. `message_id` = id of a message from
-          `linkedin_unipile_chat(op="read")`; `chat_id` is **required on the v2 API**,
+        - **"react_message"**: reacts to a MESSAGE with a native emoji (`reaction`, e.g.
+          '👍') — the counterpart sees it. `message_id` = id of a message from
+          `linkedin_unipile(op="read")`; `chat_id` is **required on the v2 API**,
           ignored in v1.
         - **"update"**: changes a thread's state — `action` ∈ setReadStatus |
           setMuteStatus | setArchiveStatus | setPinnedStatus | setLabel | getInviteLink;
           `value` = boolean for the statuses, string for setLabel, omitted for
           getInviteLink. ⚠️ setReadStatus can show the counterpart that you read them.
 
+        `op` — posts, published publicly in the person's name:
+        - **"publish_post"**: publishes a post (`text`).
+        - **"comment_post"**: comments on a post (`post_id`, `text`).
+        - **"react_post"**: reacts to a POST (`post_id`) — `value`: LIKE (default) |
+          PRAISE | EMPATHY | INTEREST | APPRECIATION | ENTERTAINMENT.
+          `post_id` = social_id (`urn:li:…`) from `linkedin_unipile_post` or
+          `linkedin_unipile_profile(op="posts")`.
+
+        `op` — invitations:
+        - **"invite"**: sends a connection request. `provider_id` = the `provider_id` of
+          a `linkedin_unipile_search` / `linkedin_unipile_profile` result; `message` =
+          note ≤300 characters.
+        - **"accept_invitation"** / **"decline_invitation"**: answers a RECEIVED
+          invitation — `invitation_id` AND `shared_secret` from the SAME item of
+          `linkedin_unipile_network(op="invitations", direction="received")`.
+        - **"cancel_invitation"**: withdraws a SENT invitation (`invitation_id` of a
+          `direction="sent"` item).
+
+        `op` — a member (`identifier` = public slug or URN):
+        - **"endorse"**: endorses a skill (`skill_endorsement_id` = `endorsement_id` of
+          a skill from `linkedin_unipile_profile(op="person")`).
+        - **"update_member"**: premium action — `api` = 'sales_navigator' (`action`
+          'saveLead', optional `list_id`) or 'recruiter' (`action`
+          'addCandidateToPipeline' | 'addApplicantToPipeline' |
+          'changeCandidatePipeline' | 'rejectApplicant', `hiring_project_id`, `stage`
+          'UNCONTACTED' | 'CONTACTED' | 'REPLIED').
+
         Args:
-            op: send (default) | react | update.
-            text: op="send" — message content.
-            chat_id: thread id (send-in-a-thread, update, react v2).
+            op: see above (default "send").
+            text: send / publish_post / comment_post — the content.
+            chat_id: thread id (send-in-a-thread, update, react_message v2).
             recipient_id: op="send" — recipient's provider id (new thread).
-            message_id: op="react" — id of the targeted message.
-            reaction: op="react" — the emoji.
-            action: op="update" — the thread action (see list above).
-            value: op="update" — value associated with the action.
+            message_id: op="react_message" — id of the targeted message.
+            reaction: op="react_message" — the emoji.
+            action: op="update" — the thread action; op="update_member" — the premium
+                action.
+            value: op="update" — value of the thread action; op="react_post" — the
+                reaction type (default LIKE).
+            post_id: comment_post / react_post — the post's social_id.
+            provider_id: op="invite" — recipient's LinkedIn provider id.
+            message: op="invite" — accompanying note (≤300 characters).
+            invitation_id: accept_invitation / decline_invitation / cancel_invitation.
+            shared_secret: accept_invitation / decline_invitation — LinkedIn token of
+                the same item (required).
+            identifier: endorse / update_member — the member.
+            skill_endorsement_id: op="endorse" — id of the skill to endorse.
+            api: op="update_member" — 'sales_navigator' or 'recruiter'.
+            hiring_project_id: op="update_member" — recruiter pipeline actions.
+            stage: op="update_member" — recruiter pipeline stage.
+            list_id: op="update_member" — target Sales Navigator list (saveLead).
         """
         # Every refusal below comes BEFORE the client is built: an incomplete act never
         # reaches LinkedIn.
@@ -1528,7 +1536,7 @@ def register(mcp: FastMCP) -> None:
             cid, act = _need(chat_id, "chat_id", op), _need(action, "action", op)
             return unipile_client().patch_chat(cid, act, value=value)
 
-        if op == "react":
+        if op == "react_message":
             mid = _need(message_id, "message_id", op)
             rea = _need(reaction, "reaction", op)
             client = unipile_client()
@@ -1538,7 +1546,50 @@ def register(mcp: FastMCP) -> None:
                 return client.react_message(mid, rea, chat_id=chat_id)
             return client.react_message(mid, rea)
 
-        raise _bad("op must be 'send', 'update' or 'react'")
+        if op == "publish_post":
+            txt = _need(text, "text", op)
+            return unipile_client().create_post(txt)
+
+        if op == "comment_post":
+            pid, txt = _need(post_id, "post_id", op), _need(text, "text", op)
+            return unipile_client().comment_post(pid, txt)
+
+        if op == "react_post":
+            pid = _need(post_id, "post_id", op)
+            if value is not None and not isinstance(value, str):
+                raise _bad("op='react_post': `value` is a reaction type (LIKE, PRAISE…)")
+            return unipile_client().react_post(pid, value=value or "LIKE")
+
+        if op == "invite":
+            pid = _need(provider_id, "provider_id", op)
+            return unipile_client().send_invitation(pid, message=message)
+
+        if op in ("accept_invitation", "decline_invitation"):
+            iid = _need(invitation_id, "invitation_id", op)
+            secret = _need(shared_secret, "shared_secret", op)
+            return unipile_client().handle_invitation(
+                iid, secret, "accept" if op == "accept_invitation" else "decline")
+
+        if op == "cancel_invitation":
+            iid = _need(invitation_id, "invitation_id", op)
+            return unipile_client().cancel_invitation(iid)
+
+        if op == "endorse":
+            ident = _need(identifier, "identifier", op)
+            skill = _need(skill_endorsement_id, "skill_endorsement_id", op)
+            return unipile_client().endorse_profile(ident, skill)
+
+        if op == "update_member":
+            ident, quel = _need(identifier, "identifier", op), _need(api, "api", op)
+            geste = _need(action, "action", op)
+            return unipile_client().member_action(
+                ident, quel, geste,
+                hiring_project_id=hiring_project_id, stage=stage, list_id=list_id)
+
+        raise _bad("op must be 'send', 'update', 'react_message', 'publish_post', "
+                   "'comment_post', 'react_post', 'invite', 'accept_invitation', "
+                   "'decline_invitation', 'cancel_invitation', 'endorse' or "
+                   "'update_member'")
 
     # ---- posts -----------------------------------------------------------
 
@@ -1614,14 +1665,11 @@ def register(mcp: FastMCP) -> None:
                            "read, it no longer advances. Nothing else to ask for.")
         return out
 
-    @en_transition(mcp, _OPS_POST)
+    @mcp.tool(annotations=LECTURE)
     def linkedin_unipile_post(
-        op: Literal["feed", "get", "engagement", "create", "comment",
-                    "react"] = "feed",
+        op: Literal["feed", "get", "engagement"] = "feed",
         post_id: Optional[str] = None,
-        text: Optional[str] = None,
         kind: Literal["comments", "reactions"] = "comments",
-        value: str = "LIKE",
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
         offset: int = 0,
@@ -1629,7 +1677,9 @@ def register(mcp: FastMCP) -> None:
         fields: Optional[list[str]] = None,
         text_max_chars: Optional[int] = _TEXT_EXCERPT_CHARS,
     ) -> dict:
-        """LinkedIn posts: your home feed, a post, its engagement.
+        """LinkedIn posts: your home feed, a post, its engagement. Publishing, commenting
+        and reacting is `linkedin_unipile_act` (op="publish_post" / "comment_post" /
+        "react_post").
 
         `op`:
         - **"feed"** (default): your LinkedIn home, read LIVE — one page per call,
@@ -1657,8 +1707,6 @@ def register(mcp: FastMCP) -> None:
         Args:
             op: feed (default) | get | engagement.
             post_id: post's social_id (get, engagement).
-            text, value: the deprecated ops' arguments — those of
-                `linkedin_unipile_publish`.
             kind: op="engagement" — 'comments' (default) or 'reactions'.
             limit: op="feed" — posts requested for this page (default 20);
                 op="engagement" — people to return at most (default 100, max 500).
@@ -1674,9 +1722,6 @@ def register(mcp: FastMCP) -> None:
             text_max_chars: op="feed" — text length of each post (default 600;
                 `None` = full text).
         """
-        if op in _OPS_POST.ops:
-            return _OPS_POST.servir(op, linkedin_unipile_publish, op=op, text=text,
-                                    post_id=post_id, value=value)
         if op == "feed":
             return _feed(unipile_client(), limit, cursor, fields, text_max_chars)
 
@@ -1694,64 +1739,21 @@ def register(mcp: FastMCP) -> None:
             return _engagement(client, kind, _need(post_id, "post_id", op),
                                comment_id, offset, want)
 
-        raise _bad("op must be 'feed', 'get' or 'engagement'")
-
-    @mcp.tool(annotations=ENVOI)
-    def linkedin_unipile_publish(
-        op: Literal["create", "comment", "react"] = "create",
-        text: Optional[str] = None,
-        post_id: Optional[str] = None,
-        value: str = "LIKE",
-    ) -> dict:
-        """⚠️ PUBLISHES on LinkedIn, publicly, in the person's name: a post, a comment
-        on a post, or a reaction to a post. It is visible at once — there is no draft.
-        Reading posts is `linkedin_unipile_post`.
-
-        `op`:
-        - **"create"** (default): publishes a post from the connected account (`text`).
-        - **"comment"**: comments on a post (`post_id`, `text`) — social selling.
-        - **"react"**: reacts to a post (`post_id`) — `value`: LIKE | PRAISE | EMPATHY |
-          INTEREST | APPRECIATION | ENTERTAINMENT.
-
-        Args:
-            op: create (default) | comment | react.
-            text: op="create"/"comment" — the content.
-            post_id: op="comment"/"react" — post's social_id (`urn:li:…`, from
-                `linkedin_unipile_post` or `linkedin_unipile_profile(op="posts")`).
-            value: op="react" — the reaction type (default LIKE).
-        """
-        # Every refusal comes BEFORE the client is built: nothing incomplete is published.
-        if op == "create":
-            txt = _need(text, "text", op)
-            return unipile_client().create_post(txt)
-
-        if op == "comment":
-            pid, txt = _need(post_id, "post_id", op), _need(text, "text", op)
-            return unipile_client().comment_post(pid, txt)
-
-        if op == "react":
-            pid = _need(post_id, "post_id", op)
-            return unipile_client().react_post(pid, value=value)
-
-        raise _bad("op must be 'create', 'comment' or 'react'")
+        raise _bad("op must be 'feed', 'get' or 'engagement' — publishing is "
+                   "`linkedin_unipile_act`.")
 
     # ---- network: connections & invitations -------------------------------
 
-    @en_transition(mcp, _OPS_RESEAU)
+    @mcp.tool(annotations=LECTURE)
     def linkedin_unipile_network(
-        op: Literal["relations", "invitations", "invite", "handle",
-                    "cancel"] = "relations",
+        op: Literal["relations", "invitations"] = "relations",
         direction: Literal["received", "sent"] = "received",
-        provider_id: Optional[str] = None,
-        invitation_id: Optional[str] = None,
-        shared_secret: Optional[str] = None,
-        message: Optional[str] = None,
-        action: Literal["accept", "decline"] = "accept",
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
         fields: Optional[list] = None,
     ) -> dict:
-        """Your LinkedIn network: 1st-degree connections and invitations.
+        """Your LinkedIn network: 1st-degree connections and invitations. Inviting,
+        answering or withdrawing an invitation is `linkedin_unipile_act`.
 
         `op`:
         - **"relations"** (default): your 1st-degree connections — to target/export your
@@ -1788,19 +1790,12 @@ def register(mcp: FastMCP) -> None:
         Args:
             op: relations (default) | invitations.
             direction: op="invitations" — 'received' (default) or 'sent'.
-            provider_id, invitation_id, shared_secret, message, action: the deprecated
-                ops' arguments — those of `linkedin_unipile_invite`.
             cursor: pagination (relations, invitations) — always the one
                 returned by the previous call, never built by hand.
             limit: page size.
             fields: op="relations" — field projection (`member_id` always
                 kept; key absent from the whole page = refusal).
         """
-        if op in _OPS_RESEAU.ops:
-            return _OPS_RESEAU.servir(op, linkedin_unipile_invite, op=op,
-                                      provider_id=provider_id, message=message,
-                                      invitation_id=invitation_id,
-                                      shared_secret=shared_secret, action=action)
         client = unipile_client()
 
         if op == "relations":
@@ -1812,56 +1807,8 @@ def register(mcp: FastMCP) -> None:
                                            limit=limit if limit is not None else 50,
                                            cursor=cursor)
 
-        raise _bad("op must be 'relations' or 'invitations'")
-
-    @mcp.tool(annotations=ENVOI)
-    def linkedin_unipile_invite(
-        op: Literal["invite", "handle", "cancel"] = "invite",
-        provider_id: Optional[str] = None,
-        message: Optional[str] = None,
-        invitation_id: Optional[str] = None,
-        shared_secret: Optional[str] = None,
-        action: Literal["accept", "decline"] = "accept",
-    ) -> dict:
-        """⚠️ ACTS on LinkedIn connection invitations, in the person's name: sends one,
-        answers one, or withdraws one — the other member sees it. Listing the
-        invitations is `linkedin_unipile_network(op="invitations")`.
-
-        `op`:
-        - **"invite"** (default): sends a connection request (2nd/3rd-degree outreach).
-          `provider_id` = the `provider_id` field of a `linkedin_unipile_search`
-          / `linkedin_unipile_profile` result; `message` = note ≤300 characters.
-        - **"handle"**: accepts or declines a RECEIVED invitation. `invitation_id` AND
-          `shared_secret` come from the SAME item of
-          `linkedin_unipile_network(op="invitations", direction="received")`;
-          `action` = 'accept' (default) or 'decline'.
-        - **"cancel"**: withdraws a SENT invitation (pending) — `invitation_id` of a
-          `direction="sent"` item.
-
-        Args:
-            op: invite (default) | handle | cancel.
-            provider_id: op="invite" — recipient's LinkedIn provider id.
-            message: op="invite" — accompanying note (≤300 characters).
-            invitation_id: op="handle"/"cancel" — invitation id.
-            shared_secret: op="handle" — LinkedIn token of the same item (required).
-            action: op="handle" — 'accept' (default) or 'decline'.
-        """
-        # Every refusal comes BEFORE the client is built: an incomplete act never
-        # reaches LinkedIn.
-        if op == "invite":
-            pid = _need(provider_id, "provider_id", op)
-            return unipile_client().send_invitation(pid, message=message)
-
-        if op == "handle":
-            iid = _need(invitation_id, "invitation_id", op)
-            secret = _need(shared_secret, "shared_secret", op)
-            return unipile_client().handle_invitation(iid, secret, action)
-
-        if op == "cancel":
-            iid = _need(invitation_id, "invitation_id", op)
-            return unipile_client().cancel_invitation(iid)
-
-        raise _bad("op must be 'invite', 'handle' or 'cancel'")
+        raise _bad("op must be 'relations' or 'invitations' — acting on an invitation "
+                   "is `linkedin_unipile_act`.")
 
     # ---- account: premium slate (Recruiter / Sales Navigator) -------------
 

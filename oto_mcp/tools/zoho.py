@@ -186,6 +186,7 @@ for _c in ("zoho", "zohodesk", "zohoanalytics"):
         # asked — `consent_region` refuses any other one.
         fixed=lambda sub, _c=_c: (
             {"data_center": r} if (r := zoho_oauth.app_region(_c, sub)) else {}),
+        warnings=lambda sub, _c=_c: zoho_oauth.app_warnings(_c, sub),
         params=(connector_flow.FlowParam(
             name="data_center", label="Region of your Zoho account", default="eu",
             help="the OAuth app and the token are bound to their data center",

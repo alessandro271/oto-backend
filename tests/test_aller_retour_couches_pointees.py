@@ -100,10 +100,11 @@ def test_aller_retour_par_le_LOT_le_chemin_de_l_import(table):
     """Le chemin de l'export/réimport du tableau de bord (#687) : c'est le LOT qui
     porte les imports, donc c'est là que l'aller-retour doit se refermer aussi."""
     st, ns, ns_id = table
-    st.write_rows(ns, [{"siren": "1", "site_web": {"valeur": "a.fr",
+    st.write_rows(ns, [{"siren": "1", "site_web": {"valeur": "https://a.fr",
                                                   "comment": "trouvé au registre"}}])
     lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
-    st.write_rows(ns, [{k: v for k, v in _tel_quel(lu).items() if k != "_id"}])
+    st.write_rows(ns, [{k: v for k, v in _tel_quel(lu).items() if k != "_id"}],
+                  key="siren")
     assert _sans_horodatage(st.list_rows(ns, versions=AVEC_ORIGINE)[0]) == _sans_horodatage(lu)
     assert not any("." in c for c in _colonnes(ns_id))
 
@@ -136,32 +137,20 @@ def test_les_TROIS_PORTES_referment_l_aller_retour(table):
     portes refusaient et une acceptait ; le remède ne vaut que s'il est à toutes
     (trois depuis le retrait du remplacement `upsert_row`, oto#156)."""
     st, ns, ns_id = table
-    st.append_row(ns, {"siren": "1", "site_web": {"valeur": "a.fr", "comment": "c"}})
+    st.append_row(ns, {"siren": "1", "site_web": {"valeur": "https://a.fr", "comment": "c"}})
     lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     nu = {k: v for k, v in _tel_quel(lu).items() if k != "_id"}
 
     st.append_row(ns, _tel_quel(lu))                              # append (promu update)
     st.update_row(ns, lu["_id"], {"site_web": lu["site_web"],
                                   "site_web.comment": lu["site_web.comment"]})
-    st.write_rows(ns, [nu])
+    st.write_rows(ns, [nu], key="siren")
 
     assert st.list_rows(ns, versions=AVEC_ORIGINE)[0]["site_web.comment"] == "c"
     assert not any("." in c for c in _colonnes(ns_id))
 
 
 # ── « Colonne réelle » : du geste, de la LIGNE, ou du SCHÉMA ─────────────────
-
-def test_annotation_seule_sur_une_colonne_DE_LA_LIGNE(table):
-    """L'annotation posée seule, sur une colonne que seule la LIGNE porte. Le tableau
-    ne la déclare pas et l'écriture ne la nomme pas — c'est la ligne qui l'atteste."""
-    st, ns, ns_id = table
-    row = st.append_row(ns, {"siren": "1", "libre": "en place"})   # hors schéma, souple
-    st.update_row(ns, row["_id"], {"libre.comment": "posé après coup"})
-    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
-    assert lu["libre"] == "en place", "la valeur n'a pas bougé"
-    assert lu["libre.comment"] == "posé après coup"
-    assert "libre.comment" not in _colonnes(ns_id)
-
 
 def test_annotation_seule_sur_une_colonne_DU_SCHEMA(table):
     """Le rattrapage de socle (#326) : annoter une colonne DÉCLARÉE que la ligne n'a
@@ -182,7 +171,7 @@ def test_une_annotation_INCONNUE_est_refusee(table):
     from oto_mcp.datastore.core import RowValidationError
     st, ns, ns_id = table
     with pytest.raises(RowValidationError) as e:
-        st.append_row(ns, {"siren": "1", "site_web": "a.fr",
+        st.append_row(ns, {"siren": "1", "site_web": "https://a.fr",
                            "site_web.inexistant": "x"})
     msg = str(e.value)
     assert "is not a column name" in msg
@@ -231,7 +220,7 @@ def test_deux_adresses_de_la_MEME_annotation_se_refusent(table):
     st, ns, ns_id = table
     with pytest.raises(RowValidationError) as e:
         st.append_row(ns, {"siren": "1",
-                           "site_web": {"valeur": "a.fr", "comment": "imbriqué"},
+                           "site_web": {"valeur": "https://a.fr", "comment": "imbriqué"},
                            "site_web.comment": "pointé"})
     msg = str(e.value)
     assert "site_web.comment" in msg and "`site_web`" in msg, "les DEUX sont nommés"
@@ -245,7 +234,7 @@ def test_une_ecriture_EN_COUCHES_passe_toujours(table):
     et rendre le datastore inutilisable là où il sert le plus."""
     st, ns, ns_id = table
     st.write_rows(ns, [{"siren": "1",
-                        "site_web": {"valeur": "a.fr", "comment": "site"}}])
+                        "site_web": {"valeur": "https://a.fr", "comment": "site"}}])
     assert _colonnes(ns_id) == {"siren", "site_web"}
 
 
@@ -285,7 +274,7 @@ def test_un_CSV_d_export_se_reimporte_et_referme_l_aller_retour(table):
     une colonne littérale. Ici il retrouve son annotation, et rien de plus."""
     from oto_mcp import upload_tokens as ut
     st, ns, ns_id = table
-    st.append_row(ns, {"siren": "1", "site_web": {"valeur": "a.fr",
+    st.append_row(ns, {"siren": "1", "site_web": {"valeur": "https://a.fr",
                                                   "comment": "vérifié"}})
     lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     entetes = [k for k in lu if not k.startswith("_")]
@@ -298,7 +287,7 @@ def test_un_CSV_d_export_se_reimporte_et_referme_l_aller_retour(table):
 
     res = ut.materialize("sub-points",
                          {"kind": "datastore", "ns_id": ns_id, "datastore": ns,
-                          "format": "csv", "key": "siren"}, csv, None)
+                          "format": "csv", "key": "siren", "cle_passee": True}, csv, None)
 
     assert "entetes_traduits" not in res, "rien à traduire : c'était une annotation"
     # ⚠️ LIMITE ACTÉE (oto#182, 13/09/2026) : la lecture sert à `null` une colonne déclarée
@@ -321,6 +310,9 @@ def test_un_CSV_a_en_tetes_ordinaires_est_traduit_ET_ANNONCE(table):
     écriture, rouvert côté import."""
     from oto_mcp import upload_tokens as ut
     st, ns, ns_id = table
+    # L'upload signé ne déclare rien : la colonne traduite est déclarée d'abord.
+    st.set_schema(ns, {**SCHEMA, "fields": [*SCHEMA["fields"],
+                                            {"key": "N_SIREN", "type": "text"}]})
     res = ut.materialize("sub-points",
                          {"kind": "datastore", "ns_id": ns_id, "datastore": ns,
                           "format": "csv", "key": "siren"},
@@ -359,24 +351,3 @@ def test_la_ligne_n_est_LUE_QUE_si_un_nom_pointe_reste_irresolu():
     out = ranger_les_couches(schema, {"libre.comment": "c"}, colonnes_en_place=_lire)
     assert lectures == [1], "là, et seulement là, il fallait consulter la ligne"
     assert out == {"libre": {"comment": "c"}}
-
-
-def test_annoter_un_OBJET_METIER_est_refuse_pour_LA_BONNE_RAISON(table):
-    """⚠️ Un refus qui nomme la mauvaise cause coûte une demi-journée à qui le lit.
-
-    Ici la colonne EXISTE — le refus du cas 3 (« `brut` n'est aucune colonne ») serait
-    faux. Ce qui bloque est ailleurs : le geste écrit un objet métier, et poser une
-    annotation à côté l'envelopperait dans `valeur`. Le refus le dit, et donne la forme
-    qui marche vraiment."""
-    from oto_mcp.datastore.core import RowValidationError
-    st, ns, ns_id = table
-    with pytest.raises(RowValidationError) as e:
-        st.append_row(ns, {"siren": "1", "brut": {"a": 1, "b": 2},
-                           "brut.comment": "x"})
-    msg = str(e.value)
-    assert "is no column" not in msg, "la colonne existe : ne pas mentir"
-    assert "is not made of layers" in msg
-    assert '"brut": {"valeur"' in msg, "la forme qui marche est nommée"
-
-    st.append_row(ns, {"siren": "1", "brut": {"valeur": {"a": 1}, "comment": "x"}})
-    assert st.list_rows(ns, versions=AVEC_ORIGINE)[0]["brut.comment"] == "x"

@@ -40,7 +40,9 @@ from __future__ import annotations
 import logging
 import urllib.parse
 from contextlib import contextmanager
-from typing import Optional
+from typing import NamedTuple, Optional
+
+import requests
 
 from ..mcp_errors import McpError
 from .. import access, credentials_store, group_store, providers, session_org
@@ -88,14 +90,30 @@ SCOPES = {
 CONNECTORS = tuple(SCOPES)
 
 
+# What the consent asks ON TOP of the level, to read WHICH Zoho organization was consented
+# (`check_org`): CRM `GET /crm/v7/org` → `ZohoCRM.org.READ`; Desk `GET
+# /api/v1/organizations` → `Desk.basic.READ` (already in `full`); Analytics lists its orgs
+# with `ZohoAnalytics.metadata.read`, already asked. Kept OUT of the access levels on
+# purpose: a level says which TOOLS are served — `Desk.basic.READ` in `read` would serve
+# `zohodesk_departments` there. Exact list frozen by `test_les_scopes_du_consentement_sont_figes`.
+VERIFICATION_SCOPES = {
+    "zoho": ("ZohoCRM.org.READ",),
+    "zohodesk": ("Desk.basic.READ",),
+    "zohoanalytics": (),
+}
+
+
 def consent_scopes(connector: str, level: str) -> tuple[str, ...]:
-    """The scopes a consent asks for at `level`. A connector without levels has only
-    `full`, its `SCOPES`."""
+    """The scopes a consent asks for at `level` — those of the level (a connector without
+    levels has only `full`, its `SCOPES`), then the verification scopes it lacks."""
     if access_levels.declared(connector) is not None:
-        return access_levels.scopes_for(connector, level)
-    if level != access_levels.FULL:
+        du_niveau = tuple(access_levels.scopes_for(connector, level))
+    elif level != access_levels.FULL:
         raise ZohoOAuthError(f"{connector} declares no access level `{level}`.")
-    return SCOPES[connector]
+    else:
+        du_niveau = SCOPES[connector]
+    return du_niveau + tuple(s for s in VERIFICATION_SCOPES[connector]
+                             if s not in du_niveau)
 
 
 def consent_level(connector: str, org_id: Optional[int], group_id: Optional[int]) -> str:
@@ -124,6 +142,22 @@ class ZohoOAuthError(ValueError):
     """Acquisition failure — message WITHOUT secrets (cf. `zoho.auth`, incident #284)."""
 
 
+class ZohoOrgMismatch(ZohoOAuthError):
+    """The Zoho organization consented is not the one the app expects (`zoho_org_id`):
+    the token is revoked, nothing is stored. `consented` names what was consented, so the
+    member sees they signed in to the wrong Zoho account."""
+
+    def __init__(self, consented: str):
+        self.consented = consented
+        super().__init__(f"The Zoho organization consented ({consented}) is not the one "
+                         "this application expects: sign in to the right Zoho account.")
+
+
+class ZohoOrgUnverifiable(ZohoOAuthError):
+    """`zoho_org_id` is set but the consented organization could not be read: refused
+    (and revoked) rather than stored unchecked — the check exists because it is set."""
+
+
 class ZohoRegionMissing(ZohoOAuthError):
     """No region for the consent: neither the app nor the request carries one. Named
     (`zoho_region_missing`) because the fix is a gesture — fill in the region —, never
@@ -142,7 +176,13 @@ def editor_app(connector: str, data_center: str) -> dict:
     the way, and `resolve_app` is what says so."""
     if not (data_center or "").strip():
         return {}
-    return credentials_store.get_editor_app(connector, data_center) or {}
+    app = credentials_store.get_editor_app(connector, data_center)
+    return EditorApp(app) if app else {}
+
+
+class EditorApp(dict):
+    """The fields of oto's PUBLISHER app — any Zoho organization may consent to it, by
+    design: `check_org` has nothing to compare it with."""
 
 
 class DedicatedApp(dict):
@@ -294,11 +334,19 @@ def app_region(connector: str, sub: str) -> str:
     return _applicable_app(connector, sub)[1]
 
 
+def app_warnings(connector: str, sub: str) -> list[str]:
+    """`connect.warnings`: `[ORG_UNVERIFIED]` when the applicable app was BROUGHT (team,
+    org, member) without the Zoho organization it expects — any Zoho account could then
+    consent to it, and the consent goes through unchecked (`check_org`)."""
+    return [ORG_UNVERIFIED] if _applicable_app(connector, sub)[2] else []
+
+
 @lecture_d_appel
-def _applicable_app(connector: str, sub: str) -> tuple[bool, str]:
-    """`(app_ready, region)` in ONE pass, read once per call (`lecture_d_appel`): the
-    listing asks both for each of the three Zoho connectors (oto-backend#1148). Never a
-    secret in the answer — only whether an app exists and the region it carries.
+def _applicable_app(connector: str, sub: str) -> tuple[bool, str, bool]:
+    """`(app_ready, region, org unverified)` in ONE pass, read once per call
+    (`lecture_d_appel`): the listing asks all three for each of the three Zoho connectors
+    (oto-backend#1148). Never a secret in the answer — whether an app exists, the region
+    it carries, and whether it names the Zoho organization it expects.
 
     `has_app` asks the RESOLUTION whether an app was brought: on a member who brought
     none — the common case — the failed cascade builds its diagnostic (reachable
@@ -314,7 +362,8 @@ def _applicable_app(connector: str, sub: str) -> tuple[bool, str]:
     # An app dedicated by the team or the org: its presence without decrypting, then
     # its region (the one query that decrypts, only when such an app exists).
     if credentials_store.dedicated_app_owners(connector, org, group):
-        return True, _region_of(dedicated_app(connector, org, group))
+        dediee = dedicated_app(connector, org, group)
+        return True, _region_of(dediee), not expected_org(dediee)
     groups = group_store.list_groups_for_user(sub, org) if org is not None else []
     sonde = access.preloaded_presence_probe(sub, org=org, groups=groups)
     a_portee = next(chain_shadow.resolution_rungs(
@@ -323,12 +372,124 @@ def _applicable_app(connector: str, sub: str) -> tuple[bool, str]:
     if a_portee is not None:
         byo = app_fields(connector, sub, org=org, group=group)
         if byo.get("client_id") and byo.get("client_secret"):
-            return True, _region_of(byo)
-    return _has_editor_app(connector), ""
+            return True, _region_of(byo), not expected_org(byo)
+    return _has_editor_app(connector), "", False
 
 
 def _region_of(app: dict) -> str:
     return (app.get("data_center") or "").strip().lower()
+
+
+# --- the consented organization (`zoho_org_id`) ------------------------------------
+#
+# Any Zoho account can consent to any server-based app: the consent screen says which
+# app, never which organization it was meant for. An app brought by a team therefore
+# names the organization it expects (`zoho_org_id`, non-secret field of the key or of the
+# dedicated app), and the callback compares it to what the NEW token reads.
+
+ORG_UNVERIFIED = "zoho_org_unverified"
+
+
+def expected_org(app: dict) -> str:
+    return str(app.get("zoho_org_id") or "").strip()
+
+
+class ConsentedOrg(NamedTuple):
+    """A Zoho organization the new token reaches. `ids` = every identifier COMPARED to
+    `zoho_org_id` (any of them is accepted); `shown_id` = the ONE shown to an admin, the
+    identifier the field's help has them look up — CRM: the `zgid`, the "Org ID" of
+    Setup → Company Details (the number after `org` in the CRM URL, `domain_name` without
+    its prefix), `id` if Zoho sends no `zgid`; Desk: `id`; Analytics: `org_id`."""
+    ids: frozenset[str]
+    name: str
+    shown_id: str
+
+
+class OrgCheck(NamedTuple):
+    """What `check_org` says of a consent that may be stored. `warning` = `None` or
+    `ORG_UNVERIFIED`; `consented` = the organizations read in warning mode, so the return
+    of the consent SHOWS which one was consented (nothing of it is kept) — empty when
+    nothing was read (publisher app, expected org found, or a read that failed)."""
+    warning: Optional[str] = None
+    consented: tuple[ConsentedOrg, ...] = ()
+
+
+def check_org(connector: str, data_center: str, tokens: dict, app: dict) -> OrgCheck:
+    """Before anything is stored. Publisher app (oto's): nothing to compare, nothing read.
+    A brought app that names no organization: the consent goes through, SIGNALED
+    (`ORG_UNVERIFIED`), with the organizations the token reaches when they can be read
+    (`_read_to_show`: a failed read refuses nothing). Expected organization among those
+    consented: `OrgCheck()`. Mismatch or unreadable: the token is REVOKED at Zoho and
+    `ZohoOrgMismatch` / `ZohoOrgUnverifiable` is raised."""
+    if isinstance(app, EditorApp):
+        return OrgCheck()
+    attendue = expected_org(app)
+    if not attendue:
+        return OrgCheck(ORG_UNVERIFIED, _read_to_show(connector, data_center, tokens, app))
+    try:
+        orgs = consented_orgs(connector, data_center, tokens, app)
+    except Exception as e:  # noqa: BLE001 — network, scope, unexpected shape
+        revoke(data_center, tokens)
+        raise ZohoOrgUnverifiable(
+            "The consented Zoho organization could not be read "
+            f"({type(e).__name__}): nothing was stored, restart the connection.") from e
+    if any(attendue in o.ids for o in orgs):
+        return OrgCheck()
+    revoke(data_center, tokens)
+    raise ZohoOrgMismatch(", ".join(o.name for o in orgs if o.name) or "unknown")
+
+
+def _read_to_show(connector: str, data_center: str, tokens: dict,
+                  app: dict) -> tuple[ConsentedOrg, ...]:
+    """Warning mode: the consented organizations, read only to SHOW them — no admin of
+    the app has an account in the member's Zoho organization to look its ID up. Nothing
+    hangs on this read: a failure revokes nothing, refuses nothing, keeps the warning
+    alone, and is LOGGED under its name (`zoho_consented_org_unread`, exception type
+    only — never a token nor a response body)."""
+    try:
+        return tuple(consented_orgs(connector, data_center, tokens, app))
+    except Exception as e:  # noqa: BLE001 — logged, the consent goes on with its warning
+        logger.warning("zoho_consented_org_unread: %s (connector=%s)",
+                       type(e).__name__, connector)
+        return ()
+
+
+def consented_orgs(connector: str, data_center: str, tokens: dict,
+                   app: dict) -> list[ConsentedOrg]:
+    """The organizations the new token reaches (`ConsentedOrg`). Every identifier Zoho
+    shows an admin counts (CRM: `id`, `zgid`, `domain_name`)."""
+    dc = normalize_region(data_center)
+    if connector == "zohoanalytics":
+        return [ConsentedOrg(frozenset({o["org_id"]}), o.get("name") or "", str(o["org_id"]))
+                for o in analytics_orgs({**app, **tokens, "data_center": dc})]
+    entete = {"Authorization": f"Zoho-oauthtoken {tokens['access_token']}"}
+    if connector == "zoho":
+        from ..tools.zoho import _DC_DOMAINS as crm
+        r = requests.get(f"{crm[dc][0]}/crm/v7/org", headers=entete, timeout=20)
+        r.raise_for_status()
+        return [ConsentedOrg(
+                    frozenset(str(o.get(k)) for k in ("id", "zgid", "domain_name") if o.get(k)),
+                    o.get("company_name") or "", str(o.get("zgid") or o.get("id") or ""))
+                for o in r.json().get("org") or []]
+    from ..tools.zohodesk import _DC_DOMAINS as desk
+    r = requests.get(f"{desk[dc][0]}/api/v1/organizations", headers=entete, timeout=20)
+    r.raise_for_status()
+    return [ConsentedOrg(frozenset({str(o["id"])}), o.get("companyName") or "", str(o["id"]))
+            for o in r.json().get("data") or [] if o.get("id")]
+
+
+def revoke(data_center: str, tokens: dict) -> None:
+    """Revoke the refresh token just issued — the consent is refused, nothing of it must
+    stay usable at Zoho. Failure is LOGGED under its name (`zoho_revocation_failed`),
+    never raised: the refusal itself must still reach the member. The token in the BODY,
+    never the URL (#284)."""
+    try:
+        r = requests.post(f"{_ACCOUNTS[normalize_region(data_center)]}/oauth/v2/token/revoke",
+                          data={"token": tokens.get("refresh_token") or ""}, timeout=20)
+        if r.status_code != 200:
+            logger.warning("zoho_revocation_failed: HTTP %s", r.status_code)
+    except Exception as e:  # noqa: BLE001 — logged, the refusal goes on
+        logger.warning("zoho_revocation_failed: %s", type(e).__name__)
 
 
 def _has_editor_app(connector: str) -> bool:

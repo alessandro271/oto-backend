@@ -131,8 +131,10 @@ def test_le_lot_upsert_sur_la_cle_metier_declaree(client):
     assert (rep["inserted"], rep["updated"], rep["count"]) == (2, 0, 2)
     assert rep["key"] == "siren" and len(rep["ids"]) == 2
     assert rep["ns_id"] == ns_id and rep["datastore"] == ns
-    # Ré-envoi : la ligne retrouvée par sa clé est FUSIONNÉE, la neuve est créée.
-    r2 = _lot(client, ns, {"rows": [{"siren": "2", "nom": "B bis"}, {"siren": "3", "nom": "C"}]})
+    # Ré-envoi avec `upsert` : la ligne retrouvée par sa clé est FUSIONNÉE, la neuve
+    # est créée (sans `upsert`, un ajout sur une clé en place est refusé, oto#141).
+    r2 = _lot(client, ns, {"rows": [{"siren": "2", "nom": "B bis"}, {"siren": "3", "nom": "C"}],
+                           "upsert": True})
     assert r2.status_code == 200, r2.text
     assert (r2.json()["inserted"], r2.json()["updated"]) == (1, 1)
     base = _base(ns_id)
@@ -142,7 +144,7 @@ def test_le_lot_upsert_sur_la_cle_metier_declaree(client):
 
 def test_le_lot_dedoublonne_sur_la_cle_passee_a_l_appel(client):
     """Sans clé déclarée, `key` du corps dédoublonne — le cas exact du rapport."""
-    ns, ns_id = _table()
+    ns, ns_id = _table({"fields": SCHEMA["fields"]})
     corps = {"rows": [{"siren": "9", "nom": "X"}], "key": "siren"}
     assert _lot(client, ns, corps).json()["inserted"] == 1
     r = _lot(client, ns, {"rows": [{"siren": "9", "nom": "Y"}], "key": "siren"})
@@ -168,7 +170,7 @@ def test_donnees_d_origine_pose_l_origine_et_le_reimport_ne_la_touche_pas(client
     assert dsv2.unwrap(origine) == "DUPONT"
     assert dsv2.layer_value(origine, "comment") == "fichier du 05/08"
     # Ré-import, valeur changée : le courant bouge, l'origine reste figée — et c'est dit.
-    r2 = _lot(client, ns, {"rows": [{"siren": "1", "nom": "Dupont SAS"}]},
+    r2 = _lot(client, ns, {"rows": [{"siren": "1", "nom": "Dupont SAS"}], "upsert": True},
               query="?donnees_d_origine=true")
     assert r2.status_code == 200, r2.text
     assert r2.json()["updated"] == 1
@@ -191,7 +193,7 @@ def test_un_mot_refuse_refuse_le_lot_entier_rien_n_est_ecrit(client):
 
 
 def test_une_ligne_refusee_est_nommee_et_le_refus_dit_ou_reprendre(
-        client, validation_complete_partout):
+        client):
     ns, ns_id = _table(SCHEMA)
     r = _lot(client, ns, {"rows": [{"siren": "1", "effectif": 3},
                                    {"siren": "2", "effectif": "beaucoup"}]})

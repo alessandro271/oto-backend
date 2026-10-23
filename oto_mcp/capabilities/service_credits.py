@@ -13,7 +13,10 @@ Ce que le commerce y trouve :
   un autre contenu est un 409 `idempotency_conflict` ;
 - le SOLDE d'un payeur ;
 - le CURSEUR des mouvements (`GET …/movements?after=`), dans l'ordre où leurs
-  transactions sont devenues visibles : relu jusqu'à la fin, il n'en manque aucun.
+  transactions sont devenues visibles : relu jusqu'à la fin, il n'en manque aucun ; et
+  sur chaque page `as_of`, l'horizon sous lequel aucun mouvement ne peut plus
+  apparaître (une période qui s'achève avant est complète une fois le flux lu), et
+  `settled_as_of`, celui sous lequel tout appel est réglé ou libéré.
 
 Un payeur est `org:<id>` ou `user:<sub>`, et doit exister. Mêmes règles que
 `service_commerce` : REST seules (`mcp=None`), gardées par `COMMERCE_SERVICE`.
@@ -186,6 +189,31 @@ class CreditMovements(BaseModel):
     n'est encore visible."""
     movements: list[CreditMovement]
     next_cursor: Optional[str] = None
+    as_of: Optional[str] = Field(
+        description="ISO 8601 instant, on every page (empty ones included). Every "
+                    "movement served after this read, beyond the movements already "
+                    "visible, has `created_at` >= `as_of`: once a page shorter than "
+                    "`limit` has been read (the end of the feed), no movement dated "
+                    "before `as_of` can still appear, so a period ending at or before "
+                    "`as_of` is complete. Held at the start of the oldest open "
+                    "transaction that can still write a movement, or at the oldest "
+                    "committed movement the cursor still holds back, otherwise close "
+                    "to the read time; it never goes backwards. `null` when the core "
+                    "cannot see every open transaction of its database (its database "
+                    "role lacks `pg_read_all_stats`, or a prepared transaction is "
+                    "pending): completeness cannot be judged on that read.")
+    settled_as_of: Optional[str] = Field(
+        description="ISO 8601 instant, on every page, read in the same snapshot as "
+                    "`as_of`: the earliest of `as_of` and the start (`created_at`) of "
+                    "the oldest reservation, every payer included, still OPEN or "
+                    "settled by a movement the cursor still holds back. Every call that "
+                    "reserved before it is settled, released or expired, and its "
+                    "movement, if any, is served by the feed (on this page or the next "
+                    "ones). A reservation waiting for an asynchronous "
+                    "result or for its deadline holds it at its start, without the "
+                    "reader knowing the deadline. To judge the calls of a period "
+                    "settled, compare its end with `settled_as_of`, not `as_of`. It "
+                    "never goes backwards. `null` whenever `as_of` is.")
 
 
 def _curseur(m: dict) -> str:
@@ -224,9 +252,11 @@ def _balance(ctx: ResolvedCtx, inp: CreditBalanceInput) -> dict:
 
 def _movements(ctx: ResolvedCtx, inp: CreditMovementsInput) -> dict:
     xid, id_ = _lire_curseur(inp.after)
-    page = [_mouvement(m) for m in db_credits.mouvements_apres(xid, id_, inp.limit)]
+    lu = db_credits.page_de_mouvements(xid, id_, inp.limit)
+    page = [_mouvement(m) for m in lu["mouvements"]]
     return {"movements": page,
-            "next_cursor": page[-1]["cursor"] if page else inp.after}
+            "next_cursor": page[-1]["cursor"] if page else inp.after,
+            "as_of": _iso(lu["as_of"]), "settled_as_of": _iso(lu["settled_as_of"])}
 
 
 CAPABILITIES += [
@@ -271,6 +301,7 @@ CAPABILITIES += [
                description="[service commerce] Movements of every payer after the opaque "
                            "cursor `after`, in the order their transactions became "
                            "visible (default 500, at most 1000). Read up to the end, it "
-                           "misses none.",
+                           "misses none; `as_of` tells up to when a period is "
+                           "complete, `settled_as_of` up to when its calls are settled.",
                rest=RestBinding("GET", "/api/service/credits/movements")),
 ]

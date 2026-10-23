@@ -1,10 +1,10 @@
-"""Les PRÉRÉGLAGES de fournisseur d'un webhook — Lemlist (`body_secret`) et `none`.
+"""Les PRÉRÉGLAGES d'un webhook — `body_secret` (Lemlist, cal.com…) et `none`.
 
 Une source prouve qui elle est d'une des quelques manières génériques ; un
 fournisseur n'est qu'un préréglage (`runner_hook.PREREGLAGES`). Ce fichier tient
 les propriétés des deux schémas ajoutés le 06/10/2026 :
 
-1. **`body_secret` (Lemlist)** : la source ne sait pas poser d'en-tête, elle renvoie
+1. **`body_secret`** (ex-`lemlist`, renommé le 20/10/2026) : la source ne sait pas poser d'en-tête, elle renvoie
    notre `otoh_` dans son corps. Il est vérifié, puis RETIRÉ avant que l'agent ne
    voie le corps ; une retentative du même `_id` ne refait pas de déroulé.
 2. **Chacun sa porte** : le porteur en en-tête n'ouvre pas un agent qui l'attend
@@ -46,8 +46,8 @@ def porte(monkeypatch):
     t = {"id": 5, "org_id": ORG, "sub": "alexis", "procedure": "lemlist-replies",
          "tools": ["a"], "input": "go", "enabled": True, "kind": "webhook",
          "payload_mode": "inline", "payload_fields": None, "max_per_hour": None,
-         "fraicheur_s": None, "model": None, "project_id": None, "max_steps": None,
-         "label": None, "hook_auth": "lemlist", "max_per_day": None,
+         "fraicheur_s": None, "model": "claude-sonnet-5", "project_id": None, "max_steps": None,
+         "label": None, "hook_auth": "body_secret", "max_per_day": None,
          "hook_slug": "h_privee"}
     vu["trigger"] = t
 
@@ -102,7 +102,16 @@ def test_l_API_de_pose_sert_EXACTEMENT_le_registre():
     """Un préréglage ajouté au registre mais pas à la pose serait inatteignable ;
     l'inverse, une valeur posable que la route ne sait pas juger."""
     servis = typing.get_args(RT.HookAuthInput.model_fields["hook_auth"].annotation)
-    assert set(servis) == set(runner_hook.HOOK_AUTHS)
+    # L'ancien nom n'est admis par le schéma que pour être refusé en le nommant.
+    assert set(servis) - {runner_hook.ANCIEN_NOM_BODY_SECRET} == \
+        set(runner_hook.HOOK_AUTHS)
+
+
+def test_l_ANCIEN_nom_lemlist_n_est_plus_un_prereglage():
+    """Ni alias ni traduction : les lignes stockées sont réécrites par la révision
+    `0071_hook_auth_body_secret`, et rien ne lit plus l'ancien nom."""
+    assert runner_hook.ANCIEN_NOM_BODY_SECRET not in runner_hook.PREREGLAGES
+    assert not hasattr(runner_hook, "canonique") and not hasattr(runner_hook, "ALIAS")
 
 
 def test_un_mode_inconnu_se_lit_PORTEUR():
@@ -110,7 +119,7 @@ def test_un_mode_inconnu_se_lit_PORTEUR():
     assert runner_hook.prereglage(None).nom == runner_hook.BEARER
 
 
-# ── 1. Lemlist : le secret dans le CORPS ──────────────────────────────────────
+# ── 1. `body_secret` : le secret dans le CORPS ──────────────────────────────────────
 
 def test_lemlist_le_bon_secret_dans_le_corps_ENFILE(porte):
     out = runner_hook.declencher(5, None, _lemlist(), "lemlist",
@@ -160,7 +169,17 @@ def test_lemlist_par_l_id_NUMERIQUE_d_un_agent_a_adresse_privee_est_refuse(porte
 
 # ── 2. chacun SA porte ────────────────────────────────────────────────────────
 
-def test_le_porteur_en_EN_TETE_n_ouvre_pas_un_agent_lemlist(porte):
+def test_une_ligne_encore_LEMLIST_ne_s_ouvre_plus(porte):
+    """Une ligne que la révision `0071_hook_auth_body_secret` n'aurait pas réécrite
+    reste FERMÉE (le même 404 qu'un agent inconnu) : aucun préréglage ne porte plus
+    l'ancien nom, rien ne l'ouvre en le traduisant."""
+    porte["trigger"]["hook_auth"] = "lemlist"
+    with pytest.raises(runner_hook.HookRefus) as e:
+        runner_hook.declencher(5, None, _lemlist(), "lemlist", par_adresse_privee=True)
+    assert e.value.statut == 404
+
+
+def test_le_porteur_en_EN_TETE_n_ouvre_pas_un_agent_body_secret(porte):
     with pytest.raises(runner_hook.HookRefus) as e:
         runner_hook.declencher(5, JETON, {}, "curl", par_adresse_privee=True)
     assert e.value.statut == 404
@@ -274,11 +293,22 @@ def base(monkeypatch):
     return etat
 
 
-def test_passer_en_lemlist_emet_un_porteur_NEUF_et_efface_la_signature(base):
-    out = _auth(hook_auth="lemlist")
+def test_passer_en_body_secret_emet_un_porteur_NEUF_et_efface_la_signature(base):
+    out = _auth(hook_auth="body_secret")
     assert out["hook_secret"].startswith("otoh_")
     assert base["hash"] == runner_hook.hacher(out["hook_secret"])
-    assert base["enc"] is None and out["trigger"]["hook_auth"] == "lemlist"
+    assert base["enc"] is None and out["trigger"]["hook_auth"] == "body_secret"
+
+
+def test_poser_l_ANCIEN_nom_lemlist_est_REFUSE_en_le_nommant(base):
+    """Refusé, jamais traduit en silence : le refus nomme le nom d'aujourd'hui, et
+    la ligne ne bouge pas."""
+    avant = dict(base["ligne"])
+    with pytest.raises(AuthzDenied) as e:
+        _auth(hook_auth="lemlist")
+    assert e.value.code == "hook_auth_renamed" and e.value.status == 400
+    assert "body_secret" in e.value.message
+    assert base["ligne"] == avant and base["hash"] == "h0"
 
 
 def test_none_SANS_adresse_privee_en_RECOIT_une(base):
@@ -312,8 +342,8 @@ def test_le_plafond_d_un_agent_none_ne_se_RETIRE_pas(base):
     assert base["ligne"]["max_per_day"] == 40
 
 
-def test_la_rotation_du_porteur_marche_sur_lemlist_PAS_sur_none(base):
-    _auth(hook_auth="lemlist")
+def test_la_rotation_du_porteur_marche_sur_body_secret_PAS_sur_none(base):
+    _auth(hook_auth="body_secret")
     out = _appel(op="rotate_secret", trigger_id=5)
     assert out["hook_secret"].startswith("otoh_")
     _auth(hook_auth="none")
@@ -359,7 +389,7 @@ def test_rotate_address_PAR_L_OUTIL_est_refuse_sur_none(base):
 
 def test_un_agent_AUTHENTIFIE_sert_son_adresse_en_clair(base):
     assert RT._avec_hook(ORG, dict(base["ligne"]))["hook_url"].endswith("/api/hooks/h_privee")
-    assert not _auth(hook_auth="lemlist").get("hook_url")
+    assert not _auth(hook_auth="body_secret").get("hook_url")
 
 
 # ── 6. Sentry : ni l'adresse ni le corps d'un webhook ne partent ──────────────

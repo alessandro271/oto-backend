@@ -23,6 +23,13 @@ only) and `wttj_moves` (a job's pipeline history).
 (`su_organizations_r`) that a client account does not get: it is not served, the
 token's list of organizations already carries their name and reference.
 
+A candidate's resume comes back as `resume_url`, a CDN URL WTTJ signs for 30 minutes,
+plus `resume_link`, an oto address that does not expire with it: on each click the
+server asks WTTJ for the candidate again and redirects to a fresh `resume_url`
+(`tools/wttj_resume.py`, route `GET /api/wttj/resume/{token}`). The raw `resume_url`
+is kept: an agent that downloads the file right away needs it, and it is what WTTJ
+returned. Nothing is stored by oto.
+
 ⚠️ This module WRITES into the client's ATS: `wttj_candidate` op="create"/"update"
 (update MOVES a candidate by `job_stage_id` or archives them) and `wttj_comment`.
 The default `op` is always a read, and a missing required argument
@@ -39,6 +46,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access, output_projection
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
+from . import wttj_resume
 
 #: Where the account holder gets their token.
 OU_OBTENIR_LA_CLE = ("ask WTTJ via help.welcometothejungle.com "
@@ -108,6 +116,23 @@ def _listed(key: str, rows, *, bodies: tuple[str, ...], always: tuple[str, ...],
     out = {key: rows, "page": page or 1, "per_page": per_page, "count": len(rows)}
     if notice:
         out["projection"] = notice
+    return out
+
+
+def _with_resume_links(rows: list) -> list:
+    """Adds `resume_link` — the durable link to give a human — next to each
+    `resume_url`, sealed for the caller's account, org and team (those under which the
+    key was just resolved). A row without a resume gets none."""
+    if not any(isinstance(r, dict) and r.get("resume_url") for r in rows):
+        return rows
+    sub = access.current_user_sub_or_raise()
+    org, group = access.current_org(sub), access.current_group(sub)
+    out = []
+    for row in rows:
+        ref = row.get("reference") if isinstance(row, dict) else None
+        if isinstance(ref, str) and ref and row.get("resume_url"):
+            row = {**row, "resume_link": wttj_resume.mint(sub, org, group, ref)}
+        out.append(row)
     return out
 
 
@@ -240,6 +265,7 @@ def register(mcp: FastMCP) -> None:
           `email`, `archived`, dates. Sorting view: `cover_letter` comes back as
           `cover_letter_length`; `fields=["*"]` returns full rows.
         - **"get"**: one candidate (`candidate_reference`), with its stage and tags.
+          Give a human `resume_link` (durable); `resume_url` expires in 30 min.
         - **"create"** — ⚠️ WRITES: add a candidate to a job at a stage.
           Required: `organization_reference`, `job_reference`, `job_stage_id`
           (from `wttj_job(op="get")`), `email`, `firstname`, `lastname`.
@@ -270,13 +296,17 @@ def register(mcp: FastMCP) -> None:
                 job, email=email, job_stage_id=job_stage_id, archived=archived,
                 created_after=created_after, updated_after=updated_after,
                 stage=True, page=page, per_page=per_page))
+            if isinstance(rows, list):
+                rows = _with_resume_links(rows)
             return _listed("candidates", rows, bodies=_CANDIDATE_BODIES,
                            always=("reference", "stage_id"), fields=fields,
                            page=page, per_page=per_page)
         if op == "get":
             ref = _need(candidate_reference, "candidate_reference", op)
-            return {"candidate": _run(lambda: _client().get_candidate(
-                ref, stage=True, tags=True))}
+            found = _run(lambda: _client().get_candidate(ref, stage=True, tags=True))
+            if isinstance(found, dict):
+                found, = _with_resume_links([found])
+            return {"candidate": found}
         if op == "create":
             _refuse_ignored(op, "use op='update' to modify an existing candidate",
                             candidate_reference=candidate_reference, patch=patch)

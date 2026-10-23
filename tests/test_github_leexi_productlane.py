@@ -37,7 +37,7 @@ EXPECTED = {
     "productlane": {"productlane_threads", "productlane_contacts",
                     "productlane_companies", "productlane_roadmap",
                     "productlane_changelogs", "productlane_docs",
-                    "productlane_tags", "productlane_workspace"},
+                    "productlane_tags", "productlane_workspace", "productlane_act"},
     "github": {"github_repos", "github_files", "github_issues", "github_pulls",
                "github_orgs", "github_actions", "github_search"},
 }
@@ -200,8 +200,8 @@ def test_la_diffusion_de_changelog_est_en_dry_run_par_defaut():
     abonnés, Slack), sans annulation ni rappel possible."""
     fake = _Fake()
     with _with("oto.tools.productlane.client.ProductlaneClient", fake):
-        out = _call("productlane", "productlane_changelogs",
-                    op="broadcast", changelog_id="c1", email=True)
+        out = _call("productlane", "productlane_act",
+                    op="broadcast_changelog", changelog_id="c1", email=True)
     assert out["dry_run"] is True
     assert "email" in out["canaux"]
     # et surtout : RIEN n'est parti
@@ -211,7 +211,7 @@ def test_la_diffusion_de_changelog_est_en_dry_run_par_defaut():
 def test_la_diffusion_part_vraiment_quand_on_le_demande():
     fake = _Fake()
     with _with("oto.tools.productlane.client.ProductlaneClient", fake):
-        _call("productlane", "productlane_changelogs", op="broadcast",
+        _call("productlane", "productlane_act", op="broadcast_changelog",
               changelog_id="c1", email=True, dry_run=False)
     assert [c[0] for c in fake.calls] == ["broadcast_changelog"]
 
@@ -220,7 +220,7 @@ def test_la_diffusion_sans_canal_est_refusee_avant_tout_appel():
     fake = _Fake()
     with _with("oto.tools.productlane.client.ProductlaneClient", fake):
         with pytest.raises(McpError, match="at least one channel"):
-            _call("productlane", "productlane_changelogs", op="broadcast",
+            _call("productlane", "productlane_act", op="broadcast_changelog",
                   changelog_id="c1", dry_run=False)
     assert fake.calls == []
 
@@ -254,7 +254,7 @@ def test_aucun_autre_outil_nest_en_dry_run_par_defaut():
             props = (getattr(tool, "parameters", None) or {}).get("properties", {})
             if props.get("dry_run", {}).get("default") is True:
                 porteurs.add(nom)
-    assert porteurs == {"productlane_changelogs", "github_actions"}
+    assert porteurs == {"productlane_act", "github_actions"}
 
 
 # --- « une pull request EST une issue » -------------------------------------------

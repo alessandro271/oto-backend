@@ -3,7 +3,7 @@ sub de NOTRE tenant.
 
 Deux chemins postent un `sub` à notre Logto en supposant qu'il y désigne un
 utilisateur : le miroir d'enforcement MFA (`mfa_mirror`) et la lecture de l'email
-autoritatif (`oauth_facade.logto_user_primary_email`). Depuis L2, un compte d'un
+autoritatif (`annuaire.logto_user_primary_email`). Depuis L2, un compte d'un
 tenant tiers porte un sub **qualifié** (`slug:sub`) qui n'existe pas dans notre
 annuaire.
 
@@ -32,7 +32,7 @@ from __future__ import annotations
 import pytest
 
 from oto_mcp import mfa_mirror, tenancy
-from oto_mcp.auth import facade as oauth_facade
+from oto_mcp.auth import annuaire
 from oto_mcp.capabilities.orgs import mfa as orgs_mfa
 from oto_mcp.capabilities._types import ResolvedCtx
 from oto_mcp.db import users
@@ -154,9 +154,9 @@ def test_org_mfa_get_vaut_zero_sans_tenant_tiers(org_mixte, monkeypatch):
 # ─── 3. le chemin de l'email : erreur nommée, pas un appel réseau ─────────────
 
 def test_email_primaire_leve_sur_un_sub_qualifie(registre_avec_un_tiers, monkeypatch):
-    _reseau_interdit(monkeypatch, oauth_facade)
+    _reseau_interdit(monkeypatch, annuaire)
     with pytest.raises(tenancy.ForeignTenantDirectory) as ei:
-        oauth_facade.logto_user_primary_email(_ETRANGER)
+        annuaire.logto_user_primary_email(_ETRANGER)
     # Le message doit nommer le tenant et dire ce qui manque, pas « utilisateur
     # inconnu » : c'est toute la valeur du garde-fou.
     assert "partenaire" in str(ei.value) and "management" in str(ei.value)
@@ -167,15 +167,14 @@ def test_reconcile_ignore_un_compte_dun_tenant_tiers(registre_avec_un_tiers,
     """L'unique appelant (fusion de comptes) n'a rien à réconcilier : l'email
     autoritatif d'un compte tiers vit dans SON annuaire. On le dit en une ligne, sans
     toucher la base — ce chemin est sur le trajet chaud d'`upsert_user`."""
-    _reseau_interdit(monkeypatch, oauth_facade)
+    _reseau_interdit(monkeypatch, annuaire)
     monkeypatch.setattr(users, "_connect", lambda *a, **k: pytest.fail(
         "aucune requête DB ne doit partir"))
     with caplog.at_level("WARNING", logger=users.logger.name):
         assert users.reconcile_tenant_migration(_ETRANGER) is False
     # Le log dit le tenant ET ce qui manque — pas « lookup Logto échoué », qui
     # laisserait croire à une panne. ⚠️ Ce qui manque n'est plus « le credential » :
-    # un tenant dont nous hébergeons l'annuaire peut en déclarer un (façade DCR,
-    # oto-backend#909). Ce qui reste fermé, c'est le ROUTAGE d'un acte visant un
+    # un tenant dont nous hébergeons l'annuaire peut en déclarer un (oto-backend#909). Ce qui reste fermé, c'est le ROUTAGE d'un acte visant un
     # utilisateur — décision que personne n'a prise.
     assert "ignorée" in caplog.text and "partenaire" in caplog.text
     assert "aucun acte de management visant un UTILISATEUR" in caplog.text

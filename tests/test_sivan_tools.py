@@ -58,7 +58,8 @@ def test_registry_entry():
 def test_six_tools_served_with_descriptions():
     tools = _tools()
     assert set(tools) == {"sivan_companies", "sivan_salaries", "sivan_events",
-                          "sivan_badged_events", "sivan_absences", "sivan_timesheets"}
+                          "sivan_badged_events", "sivan_absences", "sivan_timesheets",
+                          "sivan_timesheets_summary"}
     assert all(t.description for t in tools.values())
 
 
@@ -113,6 +114,13 @@ def test_timesheets(client):
     _fn("sivan_timesheets")(start="2026-10-01", end="2026-10-15",
                             salaries_ids=["s1"])
     client.list_timesheets.assert_called_once_with(
+        "2026-10-01", "2026-10-15", salaries_ids=["s1"])
+
+
+def test_timesheets_summary(client):
+    _fn("sivan_timesheets_summary")(start="2026-10-01", end="2026-10-15",
+                                    salaries_ids=["s1"])
+    client.list_timesheets_summary.assert_called_once_with(
         "2026-10-01", "2026-10-15", salaries_ids=["s1"])
 
 

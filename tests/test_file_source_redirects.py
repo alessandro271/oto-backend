@@ -140,3 +140,18 @@ def test_without_deadline_behaviour_is_unchanged(monkeypatch):
     _serve(monkeypatch, {"https://a.example/f.csv": b"email\nx@y\n"})
     rf = fs.resolve({"kind": "url", "url": "https://a.example/f.csv"})
     assert rf.data == b"email\nx@y\n"
+
+
+@pytest.mark.parametrize("status", [400, 403])
+def test_a_refused_signed_link_says_altered_or_expired(monkeypatch, status):
+    _serve(monkeypatch, {"https://a.example/f": httpx.Response(status)})
+    with pytest.raises(fs.FileSourceError,
+                       match=rf"HTTP {status}\) — link altered or expired: re-read the "
+                             "recording / re-fetch the URL"):
+        fs.resolve({"kind": "url", "url": "https://a.example/f"})
+
+
+def test_another_http_error_is_a_named_refusal(monkeypatch):
+    _serve(monkeypatch, {"https://a.example/f": httpx.Response(500)})
+    with pytest.raises(fs.FileSourceError, match="HTTP 500"):
+        fs.resolve({"kind": "url", "url": "https://a.example/f"})

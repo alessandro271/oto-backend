@@ -18,19 +18,18 @@ from oto_mcp.datastore import violations_existantes as dsve
 # --- le chemin se lit en tête du refus : chaque famille fixée -------------------------
 
 @pytest.mark.parametrize("schema,ligne,attendu", [
-    # type d'un sous-champ de liste (`_conformite_scalaire`) — armé par `strict`
-    ({"unknown_columns": "report", "fields": [{"key": "contacts", "type": "list", "of": {"type": "object", "fields": [
+    # type d'un sous-champ de liste (`_conformite_scalaire`)
+    ({"fields": [{"key": "contacts", "type": "list", "of": {"type": "object", "fields": [
         {"key": "email", "type": "email"}]}}]},
      {"contacts": [{"email": "ok@x.fr"}, {"email": "pas un mail"}]}, "contacts[].email"),
-    # attribut non déclaré dans un composite d'un tableau `strict`
-    ({"unknown_columns": "report", "fields": [{"key": "contacts", "type": "list", "of": {
+    # attribut non déclaré dans un composite déclaré
+    ({"fields": [{"key": "contacts", "type": "list", "of": {
         "type": "object", "fields": [{"key": "email", "type": "text"}]}}]},
      {"contacts": [{"email": "a", "perso": "b"}]}, "contacts[].perso"),
     # type déclaré hors `validation_active` (`types_trahis`, l'autre forme)
     ({"fields": [{"key": "n", "type": "number"}]}, {"n": "abc"}, "n"),
-    # options, sur un tableau dont la validation est active
-    ({"unknown_columns": "report", "fields": [{"key": "statut", "type": "enum",
-                                  "options": ["a", "b"]}]},
+    # options de premier niveau (oto#124)
+    ({"fields": [{"key": "statut", "type": "enum", "options": ["a", "b"]}]},
      {"statut": "zz"}, "statut"),
     # borne, et une clé qui porte une espace
     ({"fields": [{"key": "Nom complet", "type": "text", "max_length": 3}]},
@@ -41,13 +40,6 @@ from oto_mcp.datastore import violations_existantes as dsve
 ])
 def test_chaque_famille_de_refus_nomme_son_chemin(schema, ligne, attendu):
     assert dsve.juger_ligne(schema, ligne) == {attendu: dsve.AU_GESTE}
-
-
-def test_ce_que_le_moteur_ne_refuse_pas_ne_se_compte_pas():
-    """Des options de premier niveau sur un tableau souple sont indicatives (#319) :
-    le relevé ne les compte pas, puisqu'aucune écriture ne sera refusée pour elles."""
-    schema = {"fields": [{"key": "statut", "type": "enum", "options": ["a", "b"]}]}
-    assert dsve.juger_ligne(schema, {"statut": "zz"}) == {}
 
 
 def test_required_when_BLOQUE_la_ligne_et_se_dit_bloquant():
@@ -76,24 +68,29 @@ def test_le_garde_couvre_chaque_cran_que_le_moteur_fait_respecter():
 
 
 def test_un_schema_qui_n_arme_rien_ne_balaie_pas():
-    assert not dsve.arme({"fields": [{"key": "notes", "type": "text",
-                                      "label": "Notes"}]})
+    """Le format déclaré fait contrat dès qu'une colonne est déclarée (oto#124) : seul un
+    schéma sans colonne n'arme rien."""
+    assert not dsve.arme({"fields": []})
     assert not dsve.arme(None)
 
 
 # --- à la pose, sur une vraie base ----------------------------------------------------
 
 def _tableau(lignes: list[dict]):
+    """Un tableau dont les colonnes des lignes sont déclarées SANS type ni règle — le
+    banc pose ensuite le format qu'il éprouve sur l'existant."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
     db.create_datastore("user", "sub-479", ns)
     st = make_store("sub-479")
+    st.set_schema(ns, {"fields": [{"key": k} for k in sorted({k for l in lignes
+                                                               for k in l})]})
     st.write_rows(ns, lignes)
     return st, ns
 
 
-def test_interdire_un_sous_champ_que_N_lignes_portent_rend_N(live, validation_complete_partout):
+def test_interdire_un_sous_champ_que_N_lignes_portent_rend_N(live):
     """Le banc de l'issue : poser une interdiction sur un sous-champ de liste que N
     lignes portent rend `existing_violations` = N, avec leurs identifiants."""
     st, ns = _tableau(
@@ -157,7 +154,7 @@ def test_rien_a_juger_ne_rend_pas_de_releve(live):
                                                             "type": "number"}]})
     assert "existing_violations" not in out
     st, ns = _tableau([{"notes": 1}])
-    out = st.set_schema(ns, {"fields": [{"key": "notes", "type": "text"}]})
+    out = st.set_schema(ns, {"fields": []})
     assert "existing_violations" not in out
     assert "existing_violations_scope" not in out
 

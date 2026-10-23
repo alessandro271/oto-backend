@@ -2,19 +2,21 @@
 """Fige les colonnes des tableaux : déclare celles que les lignes PORTENT sans que le
 schéma les déclare (oto#124).
 
-À partir du 21/10/2026 (`datastore/colonnes_non_declarees.py`), une écriture qui pose
-une colonne non déclarée est REFUSÉE, sur tous les tableaux. Sans ce gel, la garde
-atterrirait sur un existant déjà hors règle : mesuré le 04/10/2026, 524 couples
+Une écriture qui pose une colonne non déclarée est REFUSÉE, sur tous les tableaux
+(`datastore/colonnes_non_declarees.py`, depuis le 21/10/2026). Sans ce gel, la garde
+atterrit sur un existant déjà hors règle : mesuré le 04/10/2026, 524 couples
 tableau/colonne non déclarés sur 53 tableaux à schéma, et 75 tableaux sans schéma du
-tout — chacun verrait refuser des écritures sur des colonnes qui y vivent depuis
-longtemps, sans que personne n'ait rien changé ce jour-là. L'ordre est donc :
-**relever, déclarer l'existant, puis armer** — jamais l'inverse.
+tout — chacun voit refuser des écritures sur des colonnes qui y vivent depuis
+longtemps. L'ordre est donc : **relever, déclarer l'existant, puis armer**.
 
-⚠️ **La base est PARTAGÉE entre préproduction et production.** Lancé À LA MAIN, depuis
-le commit qui l'apporte une fois déployé — ce n'est pas une migration de boot. **À blanc
-par défaut** : sans `--appliquer`, il liste tableau par tableau ce qu'il ferait, et
-n'écrit rien. **À relancer juste avant la bascule** : une colonne créée pendant le
-préavis doit être gelée elle aussi. Idempotent.
+**Joué sur la base partagée préproduction/production le 20/10/2026.** Il reste le geste de toute AUTRE base née avant la règle
+— une instance dédiée, qui a sa propre base (`docs/instance-cible.md`) : sans lui, ses
+tableaux refusent l'écriture des colonnes qu'ils portent sans les déclarer. Une base
+neuve n'en a pas besoin (aucun tableau).
+
+⚠️ Lancé À LA MAIN — ce n'est pas une migration de boot. **À blanc par défaut** : sans
+`--appliquer`, il liste tableau par tableau ce qu'il ferait, et n'écrit rien.
+Idempotent.
 
     # 1. à blanc : lire le rapport
     ./.venv/bin/python -m scripts.figer_colonnes [--tableau <ns_id> …]

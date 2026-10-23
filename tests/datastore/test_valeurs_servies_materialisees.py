@@ -132,7 +132,13 @@ def test_toute_reecriture_de_data_recalcule(tableau, ordre):
 
 
 def test_les_chemins_du_store_remplissent_aussi(tableau):
-    store, ns, ns_id = tableau
+    """Sur un tableau à lui, qui déclare la colonne écrite : celui du module n'en
+    déclare aucune, et ses recherches ne doivent pas en dépendre."""
+    from oto_mcp import db
+    store, _, _ = tableau
+    ns = "tvs-" + uuid.uuid4().hex[:6]
+    ns_id = db.create_datastore("user", SUB, ns)
+    store.set_schema(ns, {"fields": [{"key": "titre", "type": "text"}]})
     ecrite = store.append_row(ns, {"titre": "Ligne du store"})
     rid = ecrite.get("_id") or ecrite.get("id")
     assert "ligne du store" in _colonnes(ns_id, rid)["t"].lower()

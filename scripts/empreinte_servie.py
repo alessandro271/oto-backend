@@ -80,9 +80,21 @@ def _monter() -> list:
     et un `--diff` comparerait deux choses sans rapport. Vécu le 29/08 : le premier
     relevé annonçait quinze outils modifiés par une PR qui n'en touchait aucun."""
     sys.path.insert(0, str(RACINE))
+    import contextvars
+
     from oto_mcp import server
 
-    return asyncio.run(server._build_mcp("noauth").list_tools())
+    # Le relevé est celui d'un appelant ANONYME, quel que soit l'état du processus
+    # hôte : sans le compte de dev (`OTO_MCP_DEV_SUB`) ni identité laissée dans un
+    # contexte par un banc précédent. Sinon le listing lit la base au nom de ce sub
+    # (niveaux d'accès, comptes multiples) et le relevé dépend de l'ordre des tests.
+    dev_sub = os.environ.pop("OTO_MCP_DEV_SUB", None)
+    try:
+        return contextvars.Context().run(
+            asyncio.run, server._build_mcp("noauth").list_tools())
+    finally:
+        if dev_sub is not None:
+            os.environ["OTO_MCP_DEV_SUB"] = dev_sub
 
 
 def portee() -> dict:

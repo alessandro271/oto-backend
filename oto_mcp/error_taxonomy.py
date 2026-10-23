@@ -151,6 +151,28 @@ def outil_de_signature(exc) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _op_deplacee(exc) -> Optional["outils_retires.Retrait"]:
+    """The WRITTEN refusal of an `op` a still-served tool gave to its `<ns>_act`
+    (`outils_retires.OPS_DEPLACEES`), or None. The signature refuses it as an unknown
+    literal (`literal_error` on `op`); FastMCP 3 titles the error `call[<tool>]`, the
+    function's name — that is the tool's canonical name, whatever a tenant prefix."""
+    err = next((e for e in _chain(exc) if isinstance(e, ValidationError)), None)
+    if err is None:
+        return None
+    m = _TITRE_D_OUTIL.match(err.title or "")
+    if not m:
+        return None
+    try:
+        for d in err.errors():
+            if (d.get("type") == "literal_error" and tuple(d.get("loc") or ()) == ("op",)
+                    and isinstance(d.get("input"), str)):
+                return outils_retires.op_deplacee(m.group(1), d["input"])
+    # noqa: SILENT — unexpected pydantic shape: the generic refusal naming the key stays
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def _arg_error_message(exc, parametres: Optional[list] = None) -> str:
     """"Invalid arguments" that NAMES the faulty key — parity with the REST face.
 
@@ -488,8 +510,12 @@ def classify(exc, parametres: Optional[list] = None) -> ErrorInfo:
             # treated as internal non-retryable.
             return ErrorInfo("internal", False, msg or "Internal server error.")
 
-    # (2) Rejected arguments (the LLM passed bad parameters) — NAMING the key.
+    # (2) Rejected arguments (the LLM passed bad parameters) — NAMING the key. An op
+    # that moved to `<ns>_act` names its new call (`outils_retires.OPS_DEPLACEES`).
     if _is_arg_validation_error(exc):
+        deplacee = _op_deplacee(exc)
+        if deplacee is not None:
+            return ErrorInfo("invalid_input", False, deplacee.message, deplacee.hint)
         return ErrorInfo("invalid_input", False, _arg_error_message(exc, parametres))
 
     # (2b) fastmcp dispatch refusal: the tool is registered server-side but not

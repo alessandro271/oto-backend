@@ -36,17 +36,20 @@ _GID = {"id": "group_id"}
 _SECRETS = ("client_id", "client_secret")
 
 
-def _zoho_config(data_center: Optional[str]) -> dict:
-    """A Zoho app is registered in ONE data center: the region is part of the app."""
+def _zoho_config(inp) -> dict:
+    """A Zoho app is registered in ONE data center: the region is part of the app. The
+    Zoho organization it is meant for, optional, is checked at each consent."""
     try:
-        return {"data_center": zoho_oauth.normalize_region(data_center)}
+        config = {"data_center": zoho_oauth.normalize_region(inp.data_center)}
     except zoho_oauth.ZohoOAuthError as e:
         raise AuthzDenied(400, "invalid_oauth_app", str(e))
+    org = (inp.zoho_org_id or "").strip()
+    return {**config, "zoho_org_id": org} if org else config
 
 
 # The connectors whose consent flow reads a dedicated app → the config check of their
 # flow. A connector enters here with its reader (`zoho_oauth.app_fields`), never before.
-_READERS: dict[str, Callable[[Optional[str]], dict]] = {
+_READERS: dict[str, Callable[..., dict]] = {
     c: _zoho_config for c in zoho_oauth.CONNECTORS}
 
 
@@ -59,6 +62,7 @@ class OrgOAuthAppSetInput(OrgOAuthAppInput):
     client_id: str
     client_secret: str
     data_center: Optional[str] = None
+    zoho_org_id: Optional[str] = None
 
 
 class GroupOAuthAppInput(BaseModel):
@@ -70,6 +74,7 @@ class GroupOAuthAppSetInput(GroupOAuthAppInput):
     client_id: str
     client_secret: str
     data_center: Optional[str] = None
+    zoho_org_id: Optional[str] = None
 
 
 class OAuthAppState(BaseModel):
@@ -83,6 +88,7 @@ class OAuthAppState(BaseModel):
     group_id: Optional[int] = None
     configured: bool
     data_center: Optional[str] = None
+    zoho_org_id: Optional[str] = None
     read_set_at: Optional[str] = None
     read_set_by: Optional[str] = None
     read_fingerprints: dict[str, str] = {}
@@ -115,6 +121,7 @@ def _state(scope: str, owner_id: int, name: str, org_id: int,
     label = credentials_store.dedicated_app_label(scope, owner_id)
     fields, set_at = app["fields"], app.get("set_at")
     return {**out, "configured": True, "data_center": fields.get("data_center"),
+            "zoho_org_id": fields.get("zoho_org_id"),
             "read_set_at": set_at if isinstance(set_at, (str, type(None)))
             else set_at.isoformat(),
             "read_set_by": app.get("set_by"),
@@ -127,7 +134,7 @@ def _state(scope: str, owner_id: int, name: str, org_id: int,
 def _set(scope: str, owner_id: int, name: str, inp, sub: str) -> None:
     fields = {"client_id": inp.client_id.strip(),
               "client_secret": inp.client_secret.strip(),
-              **_READERS[name](inp.data_center)}
+              **_READERS[name](inp)}
     if not (fields["client_id"] and fields["client_secret"]):
         raise AuthzDenied(400, "invalid_oauth_app", "client_id and client_secret required.")
     credentials_store.set_dedicated_app(scope, owner_id, name, fields, set_by=sub)
@@ -197,7 +204,9 @@ CAPABILITIES += [
         authz=ORG_ADMIN_OF("org_id"), errors=_ERREURS_POSE + _ORG_ERR,
         description="[org admin] Set or rotate the OAuth app your org dedicates to the "
                     "consents of a connector (`client_id`, `client_secret`, and for Zoho "
-                    "`data_center`). Read by the consent only, never served as a key.",
+                    "`data_center`, optionally `zoho_org_id`: the Zoho organization each "
+                    "consent is checked against). Read by the consent only, never served "
+                    "as a key.",
         rest=RestBinding("PUT", _ORG, _ID),
     ),
     Capability(

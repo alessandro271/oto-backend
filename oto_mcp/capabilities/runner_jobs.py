@@ -267,8 +267,10 @@ class Job(BaseModel):
             "attempts that fail differently are not three attempts that fail the "
             "same way, and a job that SUCCEEDS on its third try kept no trace at "
             "all of the two that didn't (the success clears `last_error`), which "
-            "is the quietest way an incident disappears. `[]` is a real empty "
-            "(nothing failed); null means the column was not read."))
+            "is the quietest way an incident disappears. A job stopped for good at "
+            "the claim, or expired untaken, writes its reason here too (`attempt: 0` = "
+            "never taken). `[]` is a real empty (nothing failed); null means the "
+            "column was not read."))
     result: Optional[JobResult] = None
     due_at: Optional[str] = None
     created_at: Optional[str] = None
@@ -718,7 +720,7 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
             if payeur is not None and ferme:
                 # La ferme fait tourner Claude Code, dont nous ne mesurons pas chaque
                 # appel : elle ne reçoit jamais une clé que nous refacturons.
-                return _refuser_sans_cle(job, appelant, _FERME_SANS_CLE_D_ORG)
+                return _refuser_sans_cle(job, appelant, _cle_exigee.RAISON_FERME)
             if payeur is not None and not metre:
                 # Un worker qui ne mesure pas chaque appel ne reçoit pas notre clé —
                 # mais l'org y a droit : le travail retourne à la file, sans compter
@@ -751,6 +753,13 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
             # clé, le travail tournerait sur la clé de l'ENVIRONNEMENT du worker :
             # payée par nous, mesurée nulle part. Arrêté, la raison dit les deux issues.
             return _refuser_sans_cle(job, appelant, _cle_exigee.raison_sans_acces(depot))
+    if not cle and depose and (org_key_only or _cle_exigee.cle_exigee(job["org_id"], depot)):
+        # ⚠️ DÉPOSÉE MAIS ILLISIBLE (21/10/2026) : la ligne du coffre existe, et sa
+        # lecture n'a rien rendu. Les deux refus d'en dessous diraient « elle n'en a
+        # pas déposé » — faux, et c'est l'org qu'on enverrait chercher une clé qu'elle
+        # a. Un doute sur le coffre : ni servi, ni arrêté, raison écrite.
+        return _doute_du_coffre(job, appelant, depot,
+                                _CLE_DEPOSEE_ILLISIBLE.format(depot=depot))
     if not cle and org_key_only:
         # ⚠️ Un worker SANS clé de plateforme : le remettre sans clé, c'est un
         # travail qui échouera chez le fournisseur — ou, pire, qui trouvera une
@@ -974,22 +983,26 @@ def _refuser_sans_cle(job: dict, appelant: str, raison: str) -> dict:
     return {**job, "delegation_refusee": raison, "delegated_token": None}
 
 
-def _doute_du_coffre(job: dict, appelant: str, depot: str) -> None:
+def _doute_du_coffre(job: dict, appelant: str, depot: str,
+                    raison: Optional[str] = None) -> None:
     """Le coffre n'a pas répondu à la réservation : on ne sait ni quelle clé sert
     cette org, ni si elle en a une. Rien n'est servi — notre clé pourrait payer sans
     mesure — et rien n'est arrêté — une raison écrite sur un doute serait fausse. Le
-    travail retourne à la file sans compter la tentative."""
-    db.rendre_a_la_file(job["id"], appelant,
+    travail retourne à la file sans compter la tentative.
+
+    `raison` : ce que le doute porte, quand on en sait plus (`_CLE_DEPOSEE_ILLISIBLE`)."""
+    db.rendre_a_la_file(job["id"], appelant, raison or
                         f"coffre illisible à la réservation (clé `{depot}`) — réessai")
     logger.warning("travail %s (org %s) : coffre illisible pour la clé `%s` — rendu à la "
                    "file, ni servi ni arrêté", job.get("id"), job.get("org_id"), depot)
     return None
 
 
-_FERME_SANS_CLE_D_ORG = (
-    "cette organisation est servie par la ferme (Claude Code), qui ne tourne que sur la "
-    "clé Anthropic de l'organisation elle-même. Elle n'en a pas déposé : dépose-la "
-    "(Connecteurs), ou fais retirer l'option ferme pour tourner sur la clé partagée.")
+_CLE_DEPOSEE_ILLISIBLE = (
+    "clé `{depot}` déposée par l'organisation, mais illisible au coffre à la "
+    "réservation — travail ni exécuté ni arrêté, réessai. Si cela dure, redépose la "
+    "clé (Connecteurs).")
+
 
 _ATTEND_UN_WORKER_QUI_MESURE = (
     "en attente d'un worker qui mesure chaque appel au modèle : la clé partagée n'est "

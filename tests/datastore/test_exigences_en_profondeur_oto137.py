@@ -63,11 +63,10 @@ def test_max_items_ARME_la_validation():
         {"key": "tags", "type": "list", "max_items": 3, "of": {"type": "text"}}]})
 
 
-def test_des_options_de_COLONNE_n_arment_toujours_pas():
-    """⚠️ Délibéré (#319) : sur un tableau souple, les options d'une colonne sont
-    indicatives, et `non_applique` le dit. Les armer basculerait d'un coup tous les
-    tableaux souples qui en portent."""
-    assert not dsv2.validation_active(
+def test_des_options_de_COLONNE_sont_jugees_partout():
+    """oto#124 : le format déclaré fait contrat sur tout tableau à colonnes — les
+    options d'une colonne comprises."""
+    assert dsv2.validation_active(
         {"fields": [{"key": "statut", "type": "text", "options": ["a", "b"]}]})
 
 
@@ -135,7 +134,8 @@ def test_l_element_ECRIT_reste_juge():
     apres = {"contacts": [{"role": "RH", "nom": "Alice"},
                           {"role": "DAF", "email": "d@x.fr"}]}
     errs = dsv2.validate_row(_A_CLE, apres, written={"contacts"}, en_place=_AVANT)
-    assert errs and "contacts[1].nom" in errs[0], errs
+    # `email` n'est pas déclaré : le sous-record fermé le refuse aussi (oto#124).
+    assert any("contacts[1].nom" in e for e in errs), errs
 
 
 def test_un_element_NEUF_est_juge():

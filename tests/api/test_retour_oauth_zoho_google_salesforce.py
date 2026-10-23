@@ -92,6 +92,31 @@ def test_zoho_succes_ne_sert_que_la_forme_neuve(monkeypatch):
     assert q["connector"] == ["zohodesk"] and q["connect"] == ["connected"]
 
 
+def test_zoho_retour_par_defaut_sur_la_route_des_connecteurs(monkeypatch):
+    """Sans front tiers dans le state — lisible ou non —, le retour suit le défaut
+    commun (`oauth_flow.return_url`, chemin `/connectors`), comme Google et Salesforce.
+    Il composait `/console/connectors` à la main : aucune route du dashboard ne le sert,
+    et le retour (`connect=`, `warning=`) n'était lu nulle part."""
+    monkeypatch.setenv("OTO_APP_URL", "https://dashboard.example")
+    handler = _endpoint(zoho_routes, ZOHO_CALLBACK)
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "verify_state", lambda s: None)
+    illisible = urllib.parse.urlsplit(_location(asyncio.run(
+        handler(_get(ZOHO_CALLBACK, "state=bad")))))
+    parsed = {"sub": "u1", "org": 5, "group": None, "connector": "zoho",
+              "data_center": "eu", "level": "full", "return_app": ""}
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "verify_state", lambda s: parsed)
+    monkeypatch.setattr(zoho_routes.roles, "is_org_member", lambda sub, org: True)
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "app_fields", lambda *a, **k: {})
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "exchange_code",
+                        lambda *a, **k: {"refresh_token": "rt"})
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "persist", lambda *a, **k: None)
+    succes = urllib.parse.urlsplit(_location(asyncio.run(
+        handler(_get(ZOHO_CALLBACK, "code=c&state=s")))))
+    for lieu in (illisible, succes):
+        assert (lieu.scheme, lieu.netloc, lieu.path) == (
+            "https", "dashboard.example", "/connectors")
+
+
 def test_zoho_retour_rejoue_l_org_l_equipe_et_le_niveau_du_state(monkeypatch):
     """Le retour, appelé par Zoho sans session, résout l'app sous l'org ET l'équipe
     SIGNÉES au départ — pas sous l'équipe maison du compte — et range le niveau demandé :

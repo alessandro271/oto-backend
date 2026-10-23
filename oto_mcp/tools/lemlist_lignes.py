@@ -20,7 +20,7 @@ from fastmcp import FastMCP
 from .. import access, session_org
 from ..datastore import par_reference as pr
 from ..datastore.identite import AdresseJson as Adresse
-from .lemlist import _campagne_introuvable, _lead_deja_pris
+from .lemlist import _campagne_introuvable, _lead_deja_pris, _texte
 
 #: The names of `lemlist_create_lead` → the lemlist field. A `field_mapping`
 #: key outside this table goes through as is: lemlist files any unknown key
@@ -42,18 +42,6 @@ CHAMPS = {
 IDENTITE = ("email", "linkedinUrl", "phone")
 
 POUSSE, DOUBLON, ECHEC = "pushed", "duplicate", "failed"
-
-
-def _texte(v) -> Optional[str]:
-    """A cell's value as lemlist accepts it: a string. A list of
-    scalars is joined; an object is not guessed at (None)."""
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, (str, int, float)):
-        return str(v)
-    if isinstance(v, list) and all(isinstance(x, (str, int, float)) for x in v):
-        return ", ".join(str(x) for x in v)
-    return None
 
 
 def construire_lead(ligne: dict, mapping: dict[str, str]) -> tuple[dict, Optional[str]]:

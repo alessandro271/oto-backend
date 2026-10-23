@@ -50,7 +50,7 @@ def _declencheur(**kw):
     base = {"id": 5, "org_id": 2, "cron": "5 6 * * *", "tz": "Europe/Paris",
             "next_due": "2026-08-14 04:05:00", "procedure": "veille",
             "project_id": None, "tools": ["data_write"], "input": None,
-            "label": None, "max_steps": None}
+            "label": None, "max_steps": None, "model": "claude-sonnet-5"}
     base.update(kw)
     return base
 

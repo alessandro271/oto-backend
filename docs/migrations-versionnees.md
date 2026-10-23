@@ -200,8 +200,8 @@ politique de rétention en double, c'était une politique qui en annulait une au
 silence, et la plus courte gagnait.
 
 Depuis le lot 0, la rétention du journal a **un seul propriétaire** : l'archive, qui
-exporte puis supprime, à `OTO_JOURNAL_RETENTION_DAYS` (90 par défaut, la même variable
-des deux côtés). Le boot ne purge plus rien ; la moitié « runs devenus orphelins » de
+exporte puis supprime, à `OTO_JOURNAL_RETENTION_DAYS` (90 par défaut alors, 30 depuis le
+22/10/2026 ; la même variable des deux côtés). Le boot ne purge plus rien ; la moitié « runs devenus orphelins » de
 `prune_tool_calls` est passée dans la commande de maintenance, à la même borne.
 
 **Ce que ça change en volumétrie, et pourquoi ce n'est pas un problème de latence** : le
@@ -422,7 +422,7 @@ n'aurait de toute façon su qu'ajouter des colonnes, et c'est déjà le travail 
 | `alembic.ini` | l'emplacement des révisions. **Aucun DSN** |
 | `oto_mcp/db/migrations/env.py` | la connexion, lue dans `DATABASE_URL` comme le pool applicatif, et le **verrou consultatif** |
 | `oto_mcp/db/migrations/versions/` | une révision par changement |
-| `tests/test_migrations_registre.py` | la file reste unique : un seul point de départ — la référence (§5.4) —, une seule fin, chaque révision décrite, aucune révision retirée qui revienne |
+| `tests/test_migrations_registre.py` | la file reste unique : un seul point de départ — la référence (§5.4) —, une seule fin, chaque révision décrite, aucune révision retirée qui revienne ; une révision neuve se nomme par date et heure et la file suit l'heure (§5.5) |
 | `oto_mcp/db/_version_alembic.py` | la version d'une base **neuve**, posée par le démarrage (§5.2) ; la référence du registre et le refus nommé d'une base plus ancienne (§5.4) |
 | `tests/test_boot_pose_la_version.py` | les cas du §5.2 et le refus du §5.4, sur vraie base |
 
@@ -439,7 +439,7 @@ base est celle de `DATABASE_URL`, lue par `env.py`.
 ```bash
 oto-mcp migrer upgrade head --sql   # l'essai à blanc : imprime, n'écrit rien
 oto-mcp migrer upgrade head         # applique
-oto-mcp migrer revision -m "ce que ça fait"
+oto-mcp migrer revision --rev-id "$(date -u +%Y%m%d_%H%M)_<sujet>" -m "ce que ça fait"  # §5.5
 oto-mcp migrer current              # où en est CETTE base
 ```
 
@@ -585,6 +585,8 @@ le démarrage ni la commande ne le font à votre place : la révision et la comm
 | `0067_runner_jobs_declencheurs` | vivante | un index partiel des travaux d'un déclencheur : `idx_runner_jobs_declencheurs (org_id, due_at) WHERE payload->>'trigger_id' ~ '^[0-9]+$'` (`runner_jobs.INDEX_DECLENCHEURS`) — le résumé de la page Agents et le temps gagné, qui balayaient toute la file (775 ms à froid, 86 616 lignes écartées, 18/10/2026). CONCURRENTLY sous le verdict commun : construit par la révision sous le seuil (~87 000 lignes ce jour-là) ; au-delà, **geste manuel** (`oto-mcp maintenance index-concurrents 0067`), la révision rejouée le constate. `ShareUpdateExclusiveLock` sur `runner_jobs`, rien de bloqué. **Ordre indifférent.** Retour arrière : `DROP INDEX CONCURRENTLY` |
 | `0068_credits` | vivante | le budget d'unités (`db/schema/credits.py::CREDITS`) : `credit_scales`/`credit_scale_lines` (barème versionné), `credit_payer_modes`, `credit_balances`, `credit_holds`, `credit_movements` (curseur `xid8`). Tables neuves, aucun montant en monnaie. `AccessExclusiveLock` sur les tables neuves, FK brève sur `orgs`, `lock_timeout` 5 s. **Ordre indifférent** (le démarrage pose le même fragment ; rien ne les lit avant le moteur du budget). Retour arrière : `DROP TABLE`, après relève du curseur par le commerce (`docs/credits-au-moment-de-l-appel.md`) |
 | `0069_projects_position` | vivante | le rang d'affichage d'un projet : `projects.position DOUBLE PRECISION`, nullable sans défaut (`db/projects.py::DDL_COLONNE_POSITION`, docs/projects.md §Rang d'affichage). `AccessExclusiveLock` bref sur `projects` (catalogue seul, aucune réécriture), `lock_timeout` 5 s. **Ordre indifférent** (le démarrage pose le même DDL sous garde de catalogue ; l'ancien code ignore la colonne). Retour arrière : `DROP COLUMN` (les rangs posés se perdent) |
+| `0071_hook_auth_body_secret` | vivante | le préréglage webhook `lemlist` renommé `body_secret` (même preuve, nom générique) : `UPDATE runner_triggers SET hook_auth = 'body_secret' WHERE hook_auth = 'lemlist'`, porteur et adresse intacts. Le code ne connaît plus `lemlist` (ni préréglage ni alias, pose refusée `hook_auth_renamed`) : une ligne non réécrite serait fermée (404, la garde SQL filtre par nom). `RowExclusiveLock` sur les seules lignes visées, `lock_timeout` 5 s. **Après le tag, aussitôt la bascule faite** (l'ancien code ne connaît pas `body_secret`, le nouveau plus `lemlist`). Retour arrière : l'inverse exact (`body_secret` → `lemlist`) |
+| `0072_triggers_hook_sources` | vivante | les webhooks qu'oto inscrit chez la source d'un agent (`oto_trigger op=connect_source`) : `runner_triggers.hook_sources JSONB`, nullable sans défaut (`db/runner_triggers.py::DDL_COLONNE_HOOK_SOURCES`, docs/runner-et-automatisations.md §Brancher une source). NULL = rien d'inscrit. `AccessExclusiveLock` bref sur `runner_triggers` (catalogue seul, aucune réécriture), `lock_timeout` 5 s. **Ordre indifférent** (le démarrage pose le même DDL sous garde de catalogue ; l'ancien code ignore la colonne). Retour arrière : `DROP COLUMN` — débrancher d'abord (`disconnect_source`) : sans la colonne, oto ne sait plus retirer ce qu'il a inscrit chez la source |
 
 Les bases vivantes ce jour-là : la base partagée prod/préprod, en `0042`, et une instance
 dédiée (prod et préprod), en `0041`. `0042` vit tant que cette instance ne l'a pas reçue.
@@ -710,6 +712,25 @@ Le premier squash, le 06/10/2026 : quarante révisions retirées (`0001` à `004
 `0041_recherche_valeurs_servies`, dernier tag qui les porte `v1.441.0`. Bancs :
 `tests/test_migrations_registre.py`, `tests/test_boot_pose_la_version.py`,
 `tests/deploy/test_migrations_cible_1163.py`.
+
+### 5.5 Une révision neuve se nomme par date et heure (21/10/2026)
+
+Une révision neuve s'identifie `AAAAMMJJ_HHMM_<sujet>` : l'heure **UTC** de son écriture,
+puis un sujet en `[a-z0-9_]`, **32 caractères au plus** (`alembic_version.version_num` est
+un `VARCHAR(32)`). Son fichier porte le même nom (`file_template = %%(rev)s`), et
+`--rev-id` le donne à la création (§5, la commande). Les révisions numérotées d'avant
+(jusqu'à `0072_triggers_hook_sources`) gardent leur nom ; la liste n'en reçoit plus.
+
+Pourquoi : la règle « le numéro suivant, pris au moment du commit d'après main » faisait
+choisir le même numéro à deux sessions parallèles, et le conflit ne se voyait qu'au
+rebase. Une heure ne se réserve pas.
+
+Deux révisions écrites en parallèle sur la même précédente font **deux têtes** : le
+registre les refuse (`test_une_seule_tete`). Le geste n'est pas `alembic merge` : on
+**raccroche la plus récente à l'autre** (son `down_revision`, et sa ligne « Précédente »),
+pour que la file reste une ligne et suive l'heure (`test_la_file_suit_l_heure`). Si l'une
+est déjà appliquée sur une base vivante, c'est l'autre qu'on raccroche, et on la renomme
+à l'heure du raccrochage si elle était plus ancienne.
 
 ## 6. Références
 

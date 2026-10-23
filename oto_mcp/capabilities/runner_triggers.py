@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
-               _modele)
+               _modele, _source_du_hook)
 from .. import (db, hook_filter, hook_slack, org_store, ownership, roles, runner_hook,
                 runner_models, runner_tick, session_visibility, tool_alias,
                 tool_registry)
@@ -87,7 +87,12 @@ class TriggerInput(BaseModel):
                 # PARTAGER un agent avec des membres de son org (`_acces_agent`) :
                 # le lister, l'accorder, le retirer. Réservé au propriétaire et aux
                 # admins ; `shares` se lit par quiconque voit l'agent.
-                "shares", "share", "unshare"]
+                "shares", "share", "unshare",
+                # BRANCHER une source (Lemlist) : le serveur fabrique le porteur et
+                # l'inscrit lui-même chez la source, avec la clé de la source dans
+                # l'org — il ne passe par personne (`_source_du_hook`). Le débrancher
+                # retire ces inscriptions chez la source (20/10/2026).
+                "connect_source", "disconnect_source"]
     trigger_id: Optional[int] = None
     trigger_ids: Optional[list[int]] = Field(None, description=(
         f"update, IN BULK (≤ {_LOT_MAX}): file these agents under `folder` in one call — "
@@ -207,6 +212,25 @@ class TriggerInput(BaseModel):
         "op=share: `editor` (default) may change, enable, disable the agent and "
         "clear its queue; `viewer` only reads it. Neither may delete it, share it "
         "or change its webhook door — owner and org admins only."))
+    # connect_source —
+    source: Optional[Literal["lemlist"]] = Field(default=None, description=(
+        "op=connect_source: the sender to wire to this webhook agent. oto mints the "
+        "agent's token and registers the webhook AT the sender itself, with the "
+        "sender's key that resolves for you in this org (yours, your team's or the "
+        "org's — never a shared platform key) — the token is never "
+        "returned, logged or passed to anyone. Switches the agent to "
+        "`hook_auth=body_secret` and gives it a private address if it has none."))
+    events: Optional[list[str]] = Field(default=None, description=(
+        "op=connect_source: the sender's event names, one webhook each (Lemlist: "
+        "`emailsReplied`, `linkedinReplied`, `linkedinInviteAccepted`…). Required: "
+        "no default, subscribing to everything would start the agent on every "
+        "email open. At most 10."))
+    campaign_id: Optional[str] = Field(default=None, description=(
+        "op=connect_source, optional: only this campaign's events (Lemlist "
+        "`cam_…`). Omitted = every campaign."))
+    is_first: Optional[bool] = Field(default=None, description=(
+        "op=connect_source, optional: only the first occurrence of each event per "
+        "lead."))
     #: `deliveries` : combien de livraisons rendre.
     limit: Optional[int] = None
     with_input: Optional[bool] = Field(
@@ -306,7 +330,7 @@ class Trigger(BaseModel):
     #: L'URL à donner à la source. Servie sur un déclencheur webhook, jamais le
     #: secret — celui-ci n'existe en clair qu'au retour de `create`/`rotate_secret`.
     hook_url: Optional[str] = None
-    #: Le PRÉRÉGLAGE — `bearer` | `standard_webhooks` | `lemlist` | `slack` | `none` (la
+    #: Le PRÉRÉGLAGE — `bearer` | `standard_webhooks` | `body_secret` | `slack` | `none` (la
     #: preuve que la source doit apporter, `runner_hook.PREREGLAGES`). En `none`,
     #: `hook_url` est servie MASQUÉE : l'adresse y est le credential.
     hook_auth: Optional[str] = None
@@ -318,6 +342,9 @@ class Trigger(BaseModel):
     hook_filter: Optional[dict] = None
     #: L'agent a-t-il une adresse privée ? (Elle est dans `hook_url`.)
     private_address: Optional[bool] = None
+    #: Les webhooks qu'oto a inscrits chez la source (`connect_source`) :
+    #: `[{source, remote_id, event, campaign_id}]`. Jamais le porteur.
+    hook_sources: Optional[list[dict]] = None
     #: Ce que ce déclencheur a reçu sur 24 h : reçues, refusées, la dernière.
     #: `0` est un vrai zéro, jamais une absence de mesure.
     deliveries_24h: Optional[int] = None
@@ -392,7 +419,8 @@ class Delivery(BaseModel):
     received_at: Optional[str] = None
     #: `queued` | `delayed` (lissé) | `refused_paused` | `refused_secret` |
     #: `refused_too_large` | `refused_stale` (signature valide, horodatage hors
-    #: fenêtre — un rejeu ou une horloge dérivée). Un refus garde son MOTIF : c'est lui qui rend une
+    #: fenêtre — un rejeu ou une horloge dérivée) | `refused_no_model` (l'agent ne
+    #: déclare aucun modèle : rien n'est enfilé). Un refus garde son MOTIF : c'est lui qui rend une
     #: source mal branchée réparable plutôt que mystérieuse.
     #: ⚠️ Figé à la RÉCEPTION : `queued` = « acceptée, travail enfilé », jamais
     #: « encore en attente ». Ce que le travail est devenu depuis, c'est `job_status`.
@@ -458,6 +486,12 @@ class TriggerOut(BaseModel):
     #: `rotate_secret`, et par RIEN D'AUTRE. Il n'est pas stocké : seul son haché
     #: l'est. Perdu, il se remplace ; il ne se relit jamais.
     hook_secret: Optional[str] = None
+    #: `connect_source` / `disconnect_source` / `delete` : les webhooks inscrits ou
+    #: retirés chez la source, et ceux qu'oto n'a PAS pu retirer (à retirer chez
+    #: la source à la main, ou à rejouer). Jamais le porteur.
+    connected: Optional[list[dict]] = None
+    disconnected: Optional[list[dict]] = None
+    remote_cleanup_failed: Optional[list[dict]] = None
     #: `take_over` seulement : qui possédait l'agent avant la reprise, et combien
     #: de travaux en attente sont passés au nouveau propriétaire.
     previous_owner: Optional[str] = None
@@ -827,7 +861,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # elle, le travail serait arrêté à la réservation. Le dire ICI, au moment où
         # l'on peut encore la déposer, plutôt qu'à la première occurrence. Seule la
         # famille DE CE MODÈLE compte (14/09/2026) — pas toutes celles exigées.
-        _cle_exigee.exiger_a_la_pose(ctx.org_id, famille)
+        _cle_exigee.exiger_a_la_pose(ctx.org_id, famille, etat)
         # Un modèle d'ABONNEMENT (OTO-130) ne se pose que sur SON propre agent, et
         # que si la connexion est ouverte : posé sans elle, l'agent aurait l'air
         # programmé sans jamais tourner. À la création, le propriétaire EST
@@ -948,6 +982,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         if not t or (t.get("kind") or "schedule") != "webhook":
             raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
         _exiger_la_porte(ctx, t)
+        _source_du_hook.exiger_aucune_source(t)
         if runner_hook.prereglage(t.get("hook_auth")).schema == runner_hook.NONE:
             # Sans preuve, l'adresse EST le credential : la neuve ne doit pas
             # passer par un outil. Elle se renouvelle sur l'écran de l'agent.
@@ -975,6 +1010,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             # genre » pour un appelant qui n'a pas à le savoir.
             raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
         _exiger_la_porte(ctx, t)
+        _source_du_hook.exiger_aucune_source(t)
         if not runner_hook.prereglage(t.get("hook_auth")).porte_le_porteur:
             # Un porteur neuf sur un agent en mode signature (ou sans preuve)
             # serait refusé à la porte : le fabriquer ferait croire à une rotation
@@ -993,6 +1029,22 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         return {"trigger": _avec_hook(ctx.org_id,
                                       db.get_trigger(inp.trigger_id, ctx.org_id)),
                 "hook_secret": secret}
+
+    if inp.op in ("connect_source", "disconnect_source"):
+        t = db.get_trigger(inp.trigger_id, ctx.org_id)
+        if not t or (t.get("kind") or "schedule") != "webhook":
+            raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+        # Brancher CHANGE la porte (mode, porteur, adresse) : propriétaire ou admin.
+        _exiger_la_porte(ctx, t)
+        if inp.op == "connect_source":
+            rendu = _source_du_hook.connecter(
+                ctx, t, source=inp.source, events=inp.events,
+                campaign_id=inp.campaign_id, is_first=inp.is_first)
+        else:
+            rendu = _source_du_hook.deconnecter(ctx, t)
+        return {"trigger": _avec_hook(ctx.org_id,
+                                      db.get_trigger(inp.trigger_id, ctx.org_id)),
+                **rendu}
 
     if inp.op == "deliveries":
         # Org-scopé par la requête : un déclencheur d'une autre org rend une liste
@@ -1083,11 +1135,18 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     if inp.op == "delete":
         # Supprimer est un geste de PROPRIÉTAIRE : un éditeur le modifie, il ne le
         # fait pas disparaître.
-        _acces_agent.exiger(ctx, db.get_trigger(inp.trigger_id, ctx.org_id),
-                            _acces_agent.GOUVERNER)
+        t = db.get_trigger(inp.trigger_id, ctx.org_id)
+        _acces_agent.exiger(ctx, t, _acces_agent.GOUVERNER)
+        # Une source branchée garderait sinon un webhook vers une adresse morte —
+        # que plus personne ne saurait retirer, puisque la ligne disparaît. Ce qui
+        # résiste est RENDU : à retirer chez la source.
+        restees = (_source_du_hook.deconnecter(ctx, t)["remote_cleanup_failed"]
+                   if t and t.get("hook_sources") else None)
         if not db.delete_trigger(inp.trigger_id, ctx.org_id):
             raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
-        return {"ok": True}
+        # Le reçu d'avant (`{"ok": true}`) ne change pas pour un agent jamais branché.
+        return {"ok": True, **({"remote_cleanup_failed": restees}
+                               if restees is not None else {})}
 
     # update — partiel ; toute retouche du cadencement (cron OU tz) revalide et
     # recalcule l'échéance avec les valeurs EFFECTIVES (jamais l'une sans l'autre).
@@ -1222,7 +1281,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Un agent posé sans modèle avant le 24/09/2026 ne se rallume pas sans en
         # déclarer un : il tournerait sur le modèle du worker, donc sur notre clé.
         _modele.exige_un_modele(famille_pose)
-        _cle_exigee.exiger_a_la_pose(ctx.org_id, famille_pose)
+        _cle_exigee.exiger_a_la_pose(ctx.org_id, famille_pose, etat)
         # Même garde qu'à la création, sur le propriétaire STOCKÉ : rallumer
         # l'agent d'un collègue posé sur un abonnement ferait payer son forfait
         # pour le travail d'un autre — sauf s'il l'a prêté (`_pose_pour`).
@@ -1408,7 +1467,10 @@ def _partager(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
 
 class HookAuthInput(BaseModel):
     trigger_id: int
-    hook_auth: Literal["bearer", "standard_webhooks", "lemlist", "slack", "none"] = Field(
+    # `lemlist` : l'ANCIEN nom de `body_secret`, admis par le schéma pour être
+    # REFUSÉ en le nommant (`hook_auth_renamed`), jamais traduit en silence.
+    hook_auth: Literal["bearer", "standard_webhooks", "body_secret", "lemlist",
+                       "slack", "none"] = Field(
         description=(
         "How the sender proves who it is. `bearer`: the sender posts "
         "`Authorization: Bearer otoh_…`, a secret the platform generates. "
@@ -1416,15 +1478,18 @@ class HookAuthInput(BaseModel):
         "(`whsec_…` — Granola, Svix, Resend, Clerk…) in the headers `webhook-id`, "
         "`webhook-timestamp`, `webhook-signature`; the bearer is then REFUSED for "
         "this agent, and a retry of an already-accepted `webhook-id` does not "
-        "start a second run. `lemlist`: Lemlist cannot set a header; give it the "
-        "agent's `otoh_…` token as the hook's `secret` — it comes back in every "
-        "body, is checked, and is REMOVED before the agent sees the body; a retry "
-        "of the same activity `_id` does not start a second run. `slack`: the "
-        "Request URL of a Slack app's Event Subscriptions — Slack signs with the "
-        "app's Signing Secret (`X-Slack-Signature`); the `url_verification` "
-        "challenge is answered, bot messages (the agent's own included), edits "
-        "and joins start no run, and a retried `event_id` does not start a second "
-        "one. `none`: NO proof "
+        "start a second run. `body_secret`: for a sender that can neither set a "
+        "header nor sign (Lemlist, cal.com, no-code forms…): it puts the agent's "
+        "`otoh_…` token in a top-level `secret` field of each JSON body — in "
+        "Lemlist, the hook's `secret`. It is checked, then REMOVED before the "
+        "agent sees the body; when the body carries a top-level `_id`, a retry of "
+        "the same `_id` does not start a second run. `lemlist` is its former name "
+        "and is REFUSED (`hook_auth_renamed`): ask for `body_secret`. "
+        "`slack`: the Request URL of a Slack app's Event Subscriptions — Slack "
+        "signs with the app's Signing Secret (`X-Slack-Signature`); the "
+        "`url_verification` challenge is answered, bot messages (the agent's own "
+        "included), edits and joins start no run, and a retried `event_id` does "
+        "not start a second one. `none`: NO proof "
         "at all — anyone who has the agent's private address can start it. Needs a "
         "`max_per_day` cap; mints a NEW private address, returned once as "
         "`hook_url` (served masked everywhere else); the agent is told its input "
@@ -1473,6 +1538,13 @@ def _valide_l_authentification(inp: HookAuthInput, actuel: Optional[dict]) -> No
     """Refusé à la POSE plutôt qu'accepté inerte : un secret sur un agent au
     porteur ne servirait à rien, et un agent en mode signature SANS secret aurait
     l'air branché en refusant tout."""
+    if inp.hook_auth == runner_hook.ANCIEN_NOM_BODY_SECRET:
+        raise AuthzDenied(
+            400, "hook_auth_renamed",
+            f"`{runner_hook.ANCIEN_NOM_BODY_SECRET}` s'appelle désormais "
+            f"`{runner_hook.BODY_SECRET}` : même preuve (le porteur `otoh_` dans le "
+            f"champ `secret` du corps), nom générique. Pose "
+            f"`hook_auth={runner_hook.BODY_SECRET}`.")
     if not actuel or (actuel.get("kind") or "schedule") != "webhook":
         # Même 404 qu'un agent inconnu : un agent programmé n'a pas de porte.
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
@@ -1539,16 +1611,18 @@ def _hook_auth_sync(ctx: ResolvedCtx, inp: HookAuthInput) -> dict:
     actuel = db.get_trigger(inp.trigger_id, ctx.org_id)
     _valide_l_authentification(inp, actuel)
     _exiger_la_porte(ctx, actuel)
+    _source_du_hook.exiger_aucune_source(actuel)
     mode_avant = actuel.get("hook_auth") or runner_hook.BEARER
+    mode = inp.hook_auth
     porteur = adresse_neuve = None
-    vise = runner_hook.prereglage(inp.hook_auth)
+    vise = runner_hook.prereglage(mode)
     if vise.signe:
         enveloppe = (runner_hook.chiffrer_secret_de_signature(
                          inp.trigger_id, inp.signing_secret)
                      if inp.signing_secret else None)
-        db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, inp.hook_auth,
+        db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, mode,
                               secret_enc=enveloppe)
-        if mode_avant != inp.hook_auth:
+        if mode_avant != mode:
             db.poser_secret_de_hook(inp.trigger_id, ctx.org_id, None)
         logger.warning("webhook %s (org %s) : authentification par SIGNATURE posée "
                        "par %s%s", inp.trigger_id, ctx.org_id, ctx.sub,
@@ -1566,25 +1640,25 @@ def _hook_auth_sync(ctx: ResolvedCtx, inp: HookAuthInput) -> dict:
         # l'adresse déjà servie en clair.
         adresse = runner_hook.nouvelle_adresse()
         db.poser_adresse_de_hook(inp.trigger_id, ctx.org_id, adresse)
-        if mode_avant != inp.hook_auth:
-            db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, inp.hook_auth,
+        if mode_avant != mode:
+            db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, mode,
                                   effacer_le_secret=True)
             db.poser_secret_de_hook(inp.trigger_id, ctx.org_id, None)
         adresse_neuve = _url_du_hook(adresse)
         logger.warning("webhook %s (org %s) : SANS PREUVE (`none`) par %s — porteur "
                        "et secret de signature effacés, adresse neuve émise",
                        inp.trigger_id, ctx.org_id, ctx.sub)
-    elif mode_avant != inp.hook_auth:
+    elif mode_avant != mode:
         # Vers un préréglage qui s'ouvre avec NOTRE porteur (en-tête ou corps) : un
         # porteur NEUF à chaque changement — l'ancien n'a été montré qu'une fois,
         # et la source devra de toute façon recevoir celui-ci.
-        db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, inp.hook_auth,
+        db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, mode,
                               effacer_le_secret=True)
         porteur, hache = runner_hook.nouveau_secret()
         db.poser_secret_de_hook(inp.trigger_id, ctx.org_id, hache)
         logger.warning("webhook %s (org %s) : passé en `%s` par %s — secret de "
                        "signature effacé, porteur neuf émis", inp.trigger_id,
-                       ctx.org_id, inp.hook_auth, ctx.sub)
+                       ctx.org_id, mode, ctx.sub)
     t = db.get_trigger(inp.trigger_id, ctx.org_id) or actuel
     return _avec_mon_acces(ctx, {"trigger": _avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t)),
                                  "hook_secret": porteur, "hook_url": adresse_neuve})
@@ -1777,6 +1851,27 @@ CAPABILITIES += [
             DeclaredError(403, "trigger_owner_or_admin_required",
                           "`rotate_secret`, `rotate_address` ou `private_address=true` "
                           "sur le webhook d'un autre, sans être admin de l'org"),
+            DeclaredError(409, "source_connected",
+                          "`rotate_secret` or `rotate_address` on an agent a sender is "
+                          "wired to: re-run `connect_source`, or `disconnect_source` first"),
+            DeclaredError(400, "unknown_source", "`connect_source` without a known `source`"),
+            DeclaredError(400, "events_required", "`connect_source` without `events`"),
+            DeclaredError(400, "too_many_events", "`connect_source` with more than 10 `events`"),
+            DeclaredError(400, "credential_unavailable",
+                          "`connect_source`: no key of the sender resolves for the caller "
+                          "in this org"),
+            DeclaredError(503, "public_url_unset",
+                          "`connect_source`: the server does not know its public address, "
+                          "the sender could not reach the agent"),
+            DeclaredError(502, "source_registration_failed",
+                          "the sender refused a registration: nothing changed on the agent"),
+            DeclaredError(502, "source_cleanup_failed",
+                          "`connect_source` failed after registering, and the sender "
+                          "refused to remove what was registered: the message names the "
+                          "webhook ids to remove by hand"),
+            DeclaredError(409, "trigger_changed",
+                          "`connect_source`/`disconnect_source`: the agent changed or was "
+                          "deleted meanwhile; nothing kept, retry"),
             DeclaredError(403, "trigger_edit_forbidden",
                           "l'agent est visible mais pas à toi de le modifier (partagé en "
                           "lecture), ou de le supprimer/partager (propriétaire et admins)"),
@@ -1819,6 +1914,16 @@ CAPABILITIES += [
             "org becomes the owner — the agent then acts as THEM, and its queued jobs "
             "move with it; an agent switched ON on your personal subscription is "
             "refused unless they can run it — disable it first, they re-enable it). "
+            "op=connect_source (webhook agent, owner or org admin; `source=lemlist`, "
+            "`events=[…]`, optional `campaign_id`, `is_first`): oto registers the "
+            "webhook AT the sender with a fresh token it never returns — the agent "
+            "is wired end to end in one call, no secret pasted anywhere. Calling it "
+            "again re-wires (new token, new registrations, old ones removed): that is "
+            "how a wired agent rotates. While wired, `rotate_secret`, "
+            "`rotate_address` and an auth-mode change are REFUSED "
+            "(`source_connected`). op=disconnect_source removes the registrations at "
+            "the sender; `delete` does it too. Both return `remote_cleanup_failed` "
+            "for any the sender would not remove. "
             "ACCESS: an agent belongs to its owner and runs AS them. list/get only "
             "return agents you own, that are shared with you, or all of them for an "
             "org admin; each carries `my_access` (owner/admin/editor/viewer), "
@@ -1873,6 +1978,12 @@ CAPABILITIES += [
         authz=ORG_MEMBER,
         mcp=None,   # un secret ne passe pas en argument d'outil
         errors=(
+            DeclaredError(409, "source_connected",
+                          "a sender is wired to the agent (`connect_source`): changing "
+                          "its auth mode would cut it off — `disconnect_source` first"),
+            DeclaredError(400, "hook_auth_renamed",
+                          "`lemlist`, l'ancien nom de `body_secret` : refusé, poser "
+                          "`body_secret`"),
             DeclaredError(400, "invalid_signing_secret",
                           "le secret n'a pas la forme attendue par le mode "
                           "(`whsec_` + base64, ou l'hexadécimal d'un Signing Secret Slack)"),
@@ -1897,14 +2008,16 @@ CAPABILITIES += [
             "`Authorization: Bearer otoh_…`, generated by the platform. "
             "`standard_webhooks`: the sender signs with its own `whsec_…` secret "
             "(Granola, Svix, Resend, Clerk…); the bearer is then refused and "
-            "retries of an accepted `webhook-id` are deduplicated. `slack`: the "
-            "agent is a Slack app's Event Subscriptions Request URL, verified with "
-            "the app's Signing Secret; the challenge is answered and bot messages, "
-            "edits and joins start no run. `lemlist`: the "
-            "`otoh_…` token travels as the `secret` field of the body (Lemlist "
-            "cannot set headers) and is stripped before the agent sees it. `none`: "
+            "retries of an accepted `webhook-id` are deduplicated. `body_secret`: the "
+            "`otoh_…` token travels as the top-level `secret` field of the body (for "
+            "a sender that can neither set a header nor sign: Lemlist, cal.com, "
+            "no-code forms…) and is stripped before the agent sees it; `lemlist`, "
+            "its former name, is refused (`hook_auth_renamed`). "
+            "`slack`: the agent is a Slack app's Event Subscriptions Request URL, "
+            "verified with the app's Signing Secret; the challenge is answered and "
+            "bot messages, edits and joins start no run. `none`: "
             "no proof, opt-in, only with a `max_per_day` cap; it mints a new "
-            "private address, returned once. Switching to `bearer` or `lemlist` erases the signing secret and "
+            "private address, returned once. Switching to `bearer` or `body_secret` erases the signing secret and "
             "returns a fresh `hook_secret`, once. REST only: a raw secret never goes through a "
             "tool call. Only the agent's owner or an org admin may change it: the "
             "agent runs as its owner."),

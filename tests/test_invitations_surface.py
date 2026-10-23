@@ -179,13 +179,13 @@ def test_nominal_url_skips_magic_link_for_third_party_front(monkeypatch):
     seulement le lien nu — sinon échec de connexion silencieux pour l'invité."""
     def _boom(*a, **k):
         raise AssertionError("magic_url ne doit pas être appelé sous un front tiers")
-    monkeypatch.setattr(oi.oauth_facade, "magic_url", _boom)
+    monkeypatch.setattr(oi.annuaire, "magic_url", _boom)
     url = oi._nominal_url("TOK1234", "invitee@org.test", front_base="https://app.acme.test")
     assert url == "https://app.acme.test/invitation/TOK1234"
 
 
 def test_nominal_url_keeps_magic_link_for_oto(monkeypatch):
-    monkeypatch.setattr(oi.oauth_facade, "magic_url", lambda url, email: f"{url}?otl=stub")
+    monkeypatch.setattr(oi.annuaire, "magic_url", lambda url, email: f"{url}?otl=stub")
     assert oi._nominal_url("TOK1234", "invitee@org.test").endswith("?otl=stub")
 
 

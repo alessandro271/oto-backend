@@ -29,7 +29,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from .. import db, tenancy, tool_alias
-from ..auth import facade
+from ..auth import annuaire
 from . import tenant_admins, tenant_desactivation, tenant_grants, tenant_keys
 from ._authz import ADMIN_BY_OP, PLATFORM_ADMIN, SUPER_ADMIN, TENANT_ADMIN_OF
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding, cap_limit
@@ -84,13 +84,6 @@ class TenantRow(BaseModel):
         description="Accès d'ADMINISTRATION de l'annuaire de ce tenant, tels que "
                     "DÉCLARÉS : `token_endpoint`, `api_endpoint`, et `credential` (le "
                     "NOM du couple de variables d'environnement, jamais sa valeur). "
-                    "`redirect_uris` (optionnel) : les URLs de rappel EXACTES d'un client "
-                    "hébergé que la façade d'enregistrement accepte sur les hosts de ce "
-                    "tenant seulement — jamais un motif. `refresh_tokens` (optionnel, "
-                    "booléen `true` seul accepté, éteint par défaut) : le tenant choisit "
-                    "que l'autorisation RELAYÉE de ses hosts demande le consentement sans "
-                    "lequel ses clients (Codex…) ne reçoivent aucun jeton de "
-                    "rafraîchissement. "
                     "Vide = annuaire non administrable par la plateforme.")
 
     disabled_at: Optional[str] = Field(
@@ -113,16 +106,14 @@ class TenantRow(BaseModel):
     directory_admin: bool = Field(
         default=False,
         description="Ce process peut administrer l'annuaire de ce tenant : accès "
-                    "DÉCLARÉ **et** credential présent dans son environnement. false "
-                    "⟹ la façade d'enregistrement refuse les rappels de ses clients "
-                    "au lieu de promettre une création qu'elle ne fait pas.")
+                    "DÉCLARÉ **et** credential présent dans son environnement.")
     refresh_tokens_effectif: bool = Field(
         default=False,
-        description="Opt-in aux jetons de rafraîchissement tel que CE process "
-                    "l'APPLIQUE à l'autorisation relayée de ce tenant. "
-                    "`logto_mgmt.refresh_tokens` est le DÉCLARÉ : `\"true\"` en chaîne "
-                    "(ou `1`) s'y affiche mais reste ÉTEINT — seul le booléen JSON `true` "
-                    "allume, et seulement une fois chargé (`op=reload`, par process).")
+        description="Toujours `false` : l'opt-in aux jetons de rafraîchissement ne "
+                    "s'appliquait qu'à l'autorisation RELAYÉE par la façade, retirée "
+                    "(les clients MCP s'inscrivent chez Logto par CIMD). Gardé pour le "
+                    "contrat de la console d'administration, qui l'épingle ; à retirer "
+                    "quand elle ne le lit plus.")
     tool_prefix_effectif: Optional[str] = Field(
         default=None, description="Préfixe d'outils réellement APPLIQUÉ par ce process "
                                   "— null alors que `tool_prefix` est posé signifie "
@@ -202,7 +193,6 @@ def _live_registry() -> dict:
         # décrivent le même tenant.
         live.setdefault(entry.slug, {"issuer": entry.issuer, "hosts": list(entry.hosts),
                                      "jwks_uri": entry.jwks_uri,
-                                     "oauth_client_id": entry.oauth_client_id,
                                      "tool_prefix": entry.tool_prefix,
                                      "entry": entry})
     return live
@@ -221,15 +211,9 @@ def _decorate(row: dict, live: dict) -> dict:
     row["tool_prefix_effectif"] = (
         tool_alias.normalize_prefix((entry or {}).get("tool_prefix")) or None)
     # Déclaré ≠ utilisable : l'accès d'annuaire peut être posé en base sans que la clé
-    # soit injectée dans CE process. C'est le diagnostic qui manquait à #909 — sans
-    # lui, un refus d'enregistrement ne se rattache à rien de visible.
-    directory = facade.directory_for_tenant((entry or {}).get("entry"))
-    row["directory_admin"] = bool(directory and facade._credential_present(directory))
-    # L'opt-in aux jetons de rafraîchissement tel qu'il S'APPLIQUE (registre chargé,
-    # `tenancy._normalize_refresh_tokens`) : la déclaration brute ci-dessus peut montrer
-    # `"true"`, que le chargement écarte — l'opérateur lirait « allumé » un drapeau éteint.
-    row["refresh_tokens_effectif"] = bool(
-        getattr((entry or {}).get("entry"), "refresh_tokens", False))
+    # soit injectée dans CE process (#909).
+    directory = annuaire.directory_for_tenant((entry or {}).get("entry"))
+    row["directory_admin"] = bool(directory and annuaire._credential_present(directory))
     return row
 
 
@@ -405,9 +389,7 @@ CAPABILITIES += [
             "[platform admin] Tenant tracking (identity tier, ADR 0052). op=list → one "
             "row per declared tenant: issuer + jwks + hosts + oauth client + dashboard "
             "url, the tool-name prefix shown to its accounts (`tool_prefix` declared "
-            "vs `tool_prefix_effectif` actually applied), the refresh-token opt-in "
-            "(`logto_mgmt.refresh_tokens` declared vs `refresh_tokens_effectif` actually "
-            "applied — only the JSON boolean `true` turns it on), whether it is LOADED in this "
+            "vs `tool_prefix_effectif` actually applied), whether it is LOADED in this "
             "process's issuer registry (declared but not restarted ⇒ its tokens are "
             "still rejected), orgs (via orgs.tenant_id), "
             "accounts (via sub qualification), active accounts + MCP calls over `days` "

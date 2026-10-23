@@ -221,7 +221,7 @@ class AccuseDeDepot(BaseModel):
     entetes_traduits: Optional[dict[str, str]] = Field(None, description=(
         "`datastore` CSV : en-têtes renommés (un point ne peut pas figurer dans un nom "
         "de colonne) — ancien → nouveau"))
-    # Les relevés d'écriture (`hors_schema`, `hors_options`…) du
+    # Les relevés d'écriture (`valeurs_ecartees`, `notices`…) du
     # datastore s'ajoutent tels quels : ce sont ceux de toute écriture de lignes.
     model_config = {"extra": "allow"}
 
@@ -261,13 +261,12 @@ _REFUS_DE_LA_RECEPTION = (
                   "`datastore` : une ligne est refusée par le stockage — `detail` dit "
                   "laquelle et pourquoi"),
     DeclaredError(409, "business_key_exists",
-                  "`datastore`, jeton frappé sans `upsert` (oto#141, à partir de sa "
-                  "date) : des lignes du fichier partagent une valeur de clé, ou — "
+                  "`datastore`, jeton frappé sans `upsert` (oto#141) : des lignes du fichier partagent une valeur de clé, ou — "
                   "frappé sans `key`, le fichier AJOUTE — en portent une que le "
                   "tableau a déjà. `detail` les nomme, rien n'est écrit ; frapper un "
                   "jeton avec `key` (désigner) ou `upsert=true` (fusionner)"),
     DeclaredError(400, "unknown_column",
-                  "`datastore` (oto#124, à partir de sa date) : le fichier pose une "
+                  "`datastore` (oto#124) : le fichier pose une "
                   "colonne que le schéma du tableau ne déclare pas. `detail` la nomme, "
                   "rien n'est écrit ; la déclarer (`PATCH …/schema`) puis renvoyer"),
     DeclaredError(413, "image_too_large", "`image` : au-delà de 2 Mo"),

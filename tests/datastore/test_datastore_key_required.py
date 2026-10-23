@@ -85,6 +85,9 @@ def banc(monkeypatch):
                  "data": dict(data)} if data is not None else None)
 
     monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key", find)
+    # Le lot juge ses clés avant d'écrire (oto#141) : le texte de chaque valeur.
+    monkeypatch.setattr(dsm.db, "datastore_textes_de_cle",
+                        lambda valeurs: [str(v) for v in valeurs])
     monkeypatch.setattr(dsm.db, "datastore_get_row", get_row)
     monkeypatch.setattr(dsm.db, "datastore_insert_row", insert)
     monkeypatch.setattr(dsm.db, "datastore_merge_row_locked",

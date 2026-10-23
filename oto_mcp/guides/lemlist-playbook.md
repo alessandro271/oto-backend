@@ -98,8 +98,8 @@ défaut** : ils restent appelables, mais il faut les activer
 - `lemlist_campaign_start` — déroule la séquence pour tous les leads lancés.
 - `lemlist_launch_lead` — sort UN lead de la revue manuelle. C'est le geste d'envoi le
   plus courant.
-- `lemlist_inbox_send` — email / LinkedIn / WhatsApp **directs** : ni campagne, ni
-  séquence, ni revue devant eux. Le message part.
+- `lemlist_act` (`op=send_email|send_linkedin|send_whatsapp`) — email / LinkedIn /
+  WhatsApp **directs** : ni campagne, ni séquence, ni revue devant eux. Le message part.
 - `lemlist_campaign_auto_review` — n'envoie rien lui-même, mais fait partir tout lead
   **ajouté ensuite**. Avec lui, `lemlist_create_lead` devient un envoi.
 
@@ -170,7 +170,7 @@ vient de la doc lemlist, pas d'un essai.
    `visitorWebsite`, `visitorCountry`, `visitorDuration` (secondes) ; `contact`
    seulement quand lemlist a nommé le visiteur.
 5. **Ou à chaque visite** : `lemlist_webhook(op="add", event_type="signalRegistered")`
-   vers l'adresse d'un agent dont l'authentification webhook est `lemlist`, avec
+   vers l'adresse d'un agent dont l'authentification webhook est `body_secret`, avec
    son jeton `otoh_` en `secret`. `signalRegistered` part pour TOUTES les watch lists
    de l'équipe : vérifie le type avant d'agir.
 6. **Pousser vers une campagne** : `push_to_campaign` + `campaign_id` + `persona_id`

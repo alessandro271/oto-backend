@@ -6,7 +6,7 @@ your Instagram account is connected through a hosted flow; the tool touches ONLY
 
 ## usage — read and reply from your account
 
-`instagram_chat(op=list|read)` reads, `instagram_send` sends — two tools, so that allowing reads never allows sending (`instagram_chat(op=send)` is deprecated, served until 10/12/2026). you act as yourself, under your own account.
+`instagram(op=list|read)` reads your conversations — one-to-one AND group ones (`is_group`) —, `instagram_act(op=send)` sends: two tools, so that allowing reads never allows sending (your client asks you to confirm `instagram_act`). you act as yourself, under your own account.
 - "read my unread Instagram DMs"
 - "reply to [handle]"
 - "summarize my conversation with [handle]"

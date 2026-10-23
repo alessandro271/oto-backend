@@ -30,10 +30,6 @@ import uuid
 
 import pytest
 
-# oto#124 : le format déclaré fait contrat partout (ex-`unknown_columns: "report"`).
-pytestmark = pytest.mark.usefixtures("validation_complete_partout")
-
-
 SCHEMA = {"key": "siren", "fields": [{"key": "siren", "type": "text"},
                      {"key": "contact2_nom", "type": "text"}]}
 
@@ -64,7 +60,8 @@ def test_le_LOT_refuse_la_cle_pointee(table):
     `contact2_nom.comment` est désormais une ADRESSE d'annotation valide, et elle est
     rangée. Ce qui reste refusé — et qui est le vrai défaut de production — c'est
     l'adresse dont la colonne n'existe nulle part : rien n'atteste `contact9_nom`, donc
-    la clé ne désigne rien et fabriquerait la colonne littérale."""
+    la clé ne désigne rien et fabriquerait la colonne littérale. Le lot la juge sur sa
+    BASE, colonne non déclarée : refusé entier avant sa première ligne (oto#124)."""
     from oto_mcp.datastore.core import RowValidationError
     st, ns, ns_id = table
 
@@ -72,7 +69,7 @@ def test_le_LOT_refuse_la_cle_pointee(table):
         st.write_rows(ns, [{"siren": "552032534",
                             "contact9_nom.comment": "site — probable"}])
 
-    assert "is no column" in str(e.value)
+    assert "`contact9_nom`" in str(e.value) and "not declared" in str(e.value)
     assert "contact9_nom.comment" not in _colonnes(ns_id), "rien n'est écrit"
 
     # Et le pendant : la colonne DÉCLARÉE, elle, se range — c'est l'aller-retour.

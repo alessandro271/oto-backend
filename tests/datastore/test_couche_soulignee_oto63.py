@@ -28,9 +28,11 @@ import uuid
 import pytest
 
 from oto_mcp.datastore import layers as dsl
-from oto_mcp.datastore.schema import couche_mal_ecrite, off_schema_refusal
+from oto_mcp.datastore.colonnes_non_declarees import controler
+from oto_mcp.datastore.errors import ColonneNonDeclaree
+from oto_mcp.datastore.schema import couche_mal_ecrite
 
-SCHEMA = {"key": "ref", "unknown_columns": "reject",
+SCHEMA = {"key": "ref",
           "fields": [{"key": "ref", "type": "text"},
                      {"key": "effectif", "type": "text"}]}
 DECLAREES = {"ref", "effectif"}
@@ -64,12 +66,18 @@ def test_rien_d_AUTRE_n_est_reconnu(cle):
 
 # ── les trois refus, et le geste de réparation de chacun ─────────────────────
 
+def _refus(posees: dict) -> ColonneNonDeclaree:
+    with pytest.raises(ColonneNonDeclaree) as e:
+        controler(SCHEMA, posees)
+    return e.value
+
+
 def test_couche_mal_ecrite_le_refus_NOMME_la_colonne():
-    msgs, details = off_schema_refusal(SCHEMA, {"effectif_comment": "x"})
-    assert len(msgs) == 1
-    assert "`effectif.comment`" in msgs[0]
-    assert "LAYER" in msgs[0]
-    assert details.get("expected_column") == "effectif.comment", details
+    refus = _refus({"effectif_comment": "x"})
+    assert len(refus.errors) == 1
+    assert "`effectif.comment`" in refus.errors[0]
+    assert "LAYER" in refus.errors[0]
+    assert refus.details.get("expected_column") == "effectif.comment", refus.details
 
 
 def test_colonne_inconnue_sous_une_couche_BIEN_ecrite_dit_l_autre_geste():
@@ -99,14 +107,14 @@ def test_colonne_inconnue_sous_une_couche_BIEN_ecrite_dit_l_autre_geste():
 def test_une_colonne_franchement_inconnue_garde_son_refus_SEC():
     """Aucune des deux reconnaissances ne s'applique : le message d'origine, qui ne
     suggère aucune destination — parce qu'il n'y en a pas."""
-    msgs, details = off_schema_refusal(SCHEMA, {"totalement_inconnu": "x"})
-    assert "no declared column has this name" in msgs[0]
-    assert details == {}
+    refus = _refus({"totalement_inconnu": "x"})
+    assert "not declared" in refus.errors[0]
+    assert "expected_column" not in refus.details
 
 
 def test_la_forme_JUSTE_n_est_pas_refusee():
     """L'autre moitié : `effectif.comment` est la forme correcte, elle passe."""
-    assert off_schema_refusal(SCHEMA, {"effectif.comment": "x"}) == ([], {})
+    controler(SCHEMA, {"effectif.comment": "x"})
 
 
 # ── volet 1 : la réservation montre la forme qu'on écrit ─────────────────────

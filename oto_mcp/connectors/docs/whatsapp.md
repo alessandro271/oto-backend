@@ -6,7 +6,7 @@ your WhatsApp is connected as a **linked device** — like WhatsApp Web, but the
 
 ## usage — read and reply from your account
 
-`whatsapp_chat(op=list|read)` reads, `whatsapp_send` sends — two tools, so that allowing reads never allows sending (`whatsapp_chat(op=send)` is deprecated, served until 10/12/2026). you act as yourself, under your own account.
+`whatsapp(op=list|read)` reads your conversations — one-to-one AND group ones (`is_group`) —, `whatsapp_act(op=send)` sends: two tools, so that allowing reads never allows sending (your client asks you to confirm `whatsapp_act`). you act as yourself, under your own account.
 - "read my latest WhatsApp conversations"
 - "reply to [contact]: let's meet Thursday at 2pm"
 - "summarize the thread with [contact] since Monday"

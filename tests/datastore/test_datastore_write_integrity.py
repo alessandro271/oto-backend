@@ -36,8 +36,6 @@ import uuid
 
 import pytest
 
-# oto#124 : le format déclaré fait contrat partout (ex-`unknown_columns: "report"`).
-pytestmark = pytest.mark.usefixtures("validation_complete_partout")
 
 
 # Le tableau des signaux, réduit à ce qui porte les règles : la clé métier `siren`

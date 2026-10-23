@@ -15,6 +15,7 @@ one instance = one key × one language × one vocabulary; a project attaches to 
 ## usage — a recording becomes a project page (asynchronous)
 
 - "transcribe the visit dropped on the project" → `transcription_create(source={"kind":"project_file","project_id":…,"file_id":…}, _project=…)` — the ids come from `oto_project_files op=list`
+- "transcribe this call" → the tool that reads the recording returns a short `source` (`{"kind":"transit","ref":…}`, kept one day): pass it as is, never a copied signed url — such a url breaks when one character changes
 - `vocabulary` (optional) supplements, for this recording, the instance's vocabulary (proper names, site materials); `vocabulary_replace=true` uses it alone. 100 words at most in total, the instance takes precedence
 - the file is read server-side, never carried through the conversation (100 MB at most, up to 3 h of audio; a project file remains limited to 25 MB at upload)
 - **the call does not block**: it immediately returns `{job_id, status:"pending"}` — a 30 min recording takes 20 s to 5 min to transcribe, as a background task
@@ -24,7 +25,7 @@ one instance = one key × one language × one vocabulary; a project attaches to 
 ## usage — from a program (REST API, `oto_…` token)
 
 - the audio itself: `curl -H "Authorization: Bearer $OTO_TOKEN" -F file=@reunion.ogg -F vocabulary="Voxtral, Otomata" https://mcp.oto.cx/api/me/projects/<id>/transcriptions/upload` → `202 {job_id, status:"pending"}`
-- a file oto already knows how to reach: `POST /api/me/projects/<id>/transcriptions` with `{"source":{"kind":"project_file","file_id":…}}` (or `url`, `drive`, `gmail`)
+- a file oto already knows how to reach: `POST /api/me/projects/<id>/transcriptions` with `{"source":{"kind":"project_file","file_id":…}}` (or `transit`, `url`, `drive`, `gmail`)
 - re-read `GET /api/me/transcriptions/<job_id>`: on `done`, in addition to the page, `transcript` returns the speaker turns as data — `[{speaker, start, end, text}]`, in seconds
 
 ## note — what the connector corrects, and what it does not do

@@ -357,9 +357,22 @@ def test_le_tick_emporte_le_modele_ET_sa_famille(monkeypatch):
     assert charge["model_family"] == "anthropic", "sans famille, rien ne route"
 
 
-def test_un_agent_sans_modele_enfile_le_travail_d_AVANT(monkeypatch):
-    charge = _tick_avec(monkeypatch, model=None)
-    assert "model" not in charge and "model_family" not in charge
+def test_un_agent_sans_modele_n_enfile_plus_rien(monkeypatch):
+    """Inversé le 21/10/2026 : le travail d'AVANT (sans famille) n'était servable par
+    personne. L'occurrence est refusée et motivée (`test_declencheur_sans_modele.py`)."""
+    sautees = []
+    t = {"id": 5, "org_id": 2, "cron": "5 6 * * *", "tz": "Europe/Paris",
+         "next_due": "2026-09-12 04:05:00", "procedure": "veille", "model": None}
+    monkeypatch.setattr(runner_tick.db, "due_triggers", lambda limit=50: [t])
+    monkeypatch.setattr(runner_tick.db, "consume_due", lambda i, vu, p: True)
+    monkeypatch.setattr(runner_tick.org_suspension, "etat", lambda org: None)
+    monkeypatch.setattr(runner_tick.procedure_retiree, "archivee", lambda *a: None)
+    monkeypatch.setattr(runner_tick, "_occurrence_sautee",
+                        lambda t, issue: sautees.append(issue))
+    monkeypatch.setattr(runner_tick.db, "enqueue_job",
+                        lambda *a, **k: pytest.fail("rien ne doit être enfilé"))
+    assert runner_tick._tick() == 0
+    assert sautees == ["refused_no_model"]
 
 
 # ── 3. le transport — une file enfilée à la main ──────────────────────────────

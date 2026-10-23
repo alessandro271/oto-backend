@@ -102,6 +102,9 @@ class Flow:
     # Zoho region of the app set by their team. The front shows them instead of asking —
     # the start refuses any other value. `None` = nothing ever bound.
     fixed: Optional[Callable[[str], dict]] = None
+    # Named codes the card shows about the requester's applicable app, e.g.
+    # `zoho_org_unverified`: the app names no Zoho organization, any account can consent.
+    warnings: Optional[Callable[[str], list]] = None
 
 
 _FLOWS: dict[str, Flow] = {}
@@ -111,7 +114,8 @@ def declare(connector: str, *, start: Callable[..., FlowStart],
             params: tuple[FlowParam, ...] = (), label: str = "Connect",
             callback_path: str = "",
             app_ready: Optional[Callable[[str], bool]] = None,
-            fixed: Optional[Callable[[str], dict]] = None) -> None:
+            fixed: Optional[Callable[[str], dict]] = None,
+            warnings: Optional[Callable[[str], list]] = None) -> None:
     """Declare this connector's connection flow. Called at MODULE level (like
     `status_hints.register_state`): it is a pure declaration, it must be readable
     at import, without waiting for the FastMCP mount."""
@@ -124,7 +128,7 @@ def declare(connector: str, *, start: Callable[..., FlowStart],
     _FLOWS[connector] = Flow(connector=connector, start=start,
                              params=tuple(params), label=label,
                              callback_path=callback_path, app_ready=app_ready,
-                             fixed=fixed)
+                             fixed=fixed, warnings=warnings)
 
 
 def supports(connector: str) -> bool:
@@ -250,3 +254,17 @@ def fixed(connector: str, sub: str) -> dict:
     permis = {p.name: {v for v, _ in p.options} for p in f.params}
     return {k: v for k, v in valeurs.items()
             if k in permis and (not permis[k] or v in permis[k])}
+
+
+def warnings(connector: str, sub: str) -> list[str]:
+    """Named codes about this user's applicable app — `[]` if none. Authenticated
+    projection only. Fail-open, LOGGED: a warning that cannot be read must not turn the
+    connection screen into an error screen; the consent still checks what it checks."""
+    f = _FLOWS.get(connector)
+    if not f or f.warnings is None or not sub:
+        return []
+    try:
+        return [str(w) for w in (f.warnings(sub) or [])]
+    except Exception:  # noqa: BLE001
+        logger.warning("warnings failed for %s", connector, exc_info=True)
+        return []

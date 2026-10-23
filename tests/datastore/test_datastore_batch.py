@@ -12,6 +12,11 @@ from oto_mcp.datastore import core as D
 from oto_mcp.datastore import lots as L
 
 
+#: Les colonnes que les bancs écrivent, déclarées sans type ni règle.
+FIELDS = [{"key": k} for k in ("a", "email", "n", "extra", "v", "siren", "nom")]
+SCHEMA = {"fields": FIELDS}
+
+
 class FakeDB:
     """Store en mémoire minimal calquant les fns db.* utilisées par le batch."""
 
@@ -28,6 +33,10 @@ class FakeDB:
             if str(data.get(key_field)) == str(key_value):
                 return rid
         return None
+
+    def datastore_textes_de_cle(self, valeurs):
+        # Le texte que la base rend d'une valeur de clé (`#>> '{}'`) : sans PG, `str`.
+        return [str(v) for v in valeurs]
 
     def datastore_get_row(self, ns_id, row_id):
         return {"row_id": row_id, "data": dict(self.rows.get(row_id, {}))} if row_id in self.rows else None
@@ -47,12 +56,13 @@ class FakeDB:
 def store(monkeypatch):
     fake = FakeDB()
     for name in ("datastore_insert_row", "datastore_find_row_id_by_key",
-                 "datastore_get_row", "datastore_merge_row_locked"):
+                 "datastore_textes_de_cle", "datastore_get_row",
+                 "datastore_merge_row_locked"):
         monkeypatch.setattr(D.db, name, getattr(fake, name))
-    # v2 (ADR 0046) : le batch lit le schéma du datastore (validation/lifecycle
-    # opt-in) — None = soft, comportement 0016 inchangé pour ces tests.
+    # v2 (ADR 0046) : le batch lit le schéma du datastore. Une colonne non déclarée
+    # est refusée (oto#124) : le schéma déclare celles des bancs, sans clé ni règle.
     monkeypatch.setattr(D.db, "get_datastore_by_id",
-                        lambda ns_id: {"id": ns_id, "schema": None})
+                        lambda ns_id: {"id": ns_id, "schema": SCHEMA})
     # _new_id déterministe (sinon Math.random-like) pour des ids stables dans le test.
     seq = {"n": 0}
     def next_id():
@@ -75,8 +85,9 @@ def test_batch_appends_without_key(store):
 
 def test_batch_upserts_on_key(store):
     store._write_rows_to_ns(1, [{"email": "a@x", "n": "A"}], key="email")
-    # même clé → merge (pas de doublon), champs mis à jour + nouveaux fusionnés
-    out = store._write_rows_to_ns(1, [{"email": "a@x", "n": "A2", "extra": 9}], key="email")
+    # même clé + `upsert` → merge (pas de doublon), champs mis à jour + nouveaux fusionnés
+    out = store._write_rows_to_ns(1, [{"email": "a@x", "n": "A2", "extra": 9}], key="email",
+                                  upsert=True)
     assert out["inserted"] == 0 and out["updated"] == 1
     assert list(store._fake.rows.values()) == [{"email": "a@x", "n": "A2", "extra": 9}]
 
@@ -84,22 +95,23 @@ def test_batch_upserts_on_key(store):
 def test_batch_mixed_keyed_and_unkeyed_rows(store):
     # rows sans valeur de clé sont appendées ; celles avec clé dédupliquent
     store._write_rows_to_ns(1, [{"email": "a@x", "v": 1}], key="email")
-    out = store._write_rows_to_ns(1, [{"email": "a@x", "v": 2}, {"v": 3}], key="email")
+    out = store._write_rows_to_ns(1, [{"email": "a@x", "v": 2}, {"v": 3}], key="email",
+                                  upsert=True)
     assert out["inserted"] == 1 and out["updated"] == 1
     assert store._fake.rows["r1"] == {"email": "a@x", "v": 2}   # upserté
     assert any(d == {"v": 3} for d in store._fake.rows.values())  # appendé
 
 
 def test_write_rows_uses_declared_schema_key(store, monkeypatch):
-    monkeypatch.setattr(store, "get_schema", lambda ns: {"fields": [], "key": "siren"})
+    monkeypatch.setattr(store, "get_schema", lambda ns: {"fields": FIELDS, "key": "siren"})
     monkeypatch.setattr(store, "_resolve", lambda ns, write=False: 7)
     store.write_rows("boites", [{"siren": "123", "nom": "X"}])
-    out = store.write_rows("boites", [{"siren": "123", "nom": "Y"}])
+    out = store.write_rows("boites", [{"siren": "123", "nom": "Y"}], upsert=True)
     assert out["key"] == "siren" and out["updated"] == 1 and out["inserted"] == 0
 
 
 def test_explicit_key_overrides_schema(store, monkeypatch):
-    monkeypatch.setattr(store, "get_schema", lambda ns: {"key": "siren"})
+    monkeypatch.setattr(store, "get_schema", lambda ns: {"fields": FIELDS, "key": "siren"})
     monkeypatch.setattr(store, "_resolve", lambda ns, write=False: 7)
     out = store.write_rows("t", [{"email": "a@x"}], key="email")
     assert out["key"] == "email"

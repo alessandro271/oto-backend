@@ -95,8 +95,8 @@ def _avec_la_phrase_des_couches(fn):
 
 def _avec_la_regle_de_cle(fn):
     """What the declared business key does on write (oto#141), and the rule on
-    undeclared columns (oto#124), DERIVED from their date — the same sentences as
-    `data_patch_schema` and the REST face."""
+    undeclared columns (oto#124) — the same sentences as `data_patch_schema` and the
+    REST face."""
     return _inserer(fn, {
         _MARQUE_CLE_METIER: upsert_implicite.description_cle_schema(),
         _MARQUE_COLONNES: (colonnes_non_declarees.description_schema() + " "
@@ -111,8 +111,8 @@ def _avec_la_recherche(fn):
 
 
 def _avec_la_creation(fn):
-    """What creation says about the birth schema (oto#124), DERIVED from the date —
-    the same sentence as the REST face (`POST /api/datastores`)."""
+    """What creation says about the birth schema (oto#124) — the same sentence as the
+    REST face (`POST /api/datastores`)."""
     return _inserer(fn, {_MARQUE_COLONNES: colonnes_non_declarees.description_creation()})
 
 
@@ -1173,12 +1173,6 @@ def register(mcp: FastMCP) -> None:
         it is cut short it says so (`readonly_forced_bilan`: "25 of N") — the count
         you read there is then a floor. The full history, whole values, is the row
         history: `data_row_history`.
-
-        CHECK `notices` after a write: until the dates announced above, a column
-        the schema does not declare, or a value its declared format refuses, is
-        still WRITTEN and named there, dated — that is how you catch a renamed
-        field you kept writing under its old name, or a value outside `options`.
-        Absent = everything you wrote is in the declared format.
 
         ⚠️ The datastore must EXIST first (create it with `data_create_datastore`);
         writing to an unknown datastore raises "datastore inconnu" — it is NOT

@@ -9,9 +9,10 @@ and employee rate); affiliation belongs to ONE EMPLOYMENT CONTRACT. Reading the 
 say who is affiliated: `affiliatedContractIds` says it in one direction,
 `healthInsuranceContractIds` of a `payfit_contract(fr=True)` in the other.
 
-**No write is wired** (24/09/2026): `op="affiliate"` and
-`op="regularize"` return the named refusal `payfit_write_not_wired`
-(`payfit_garde.not_wired`), with no key and no call to PayFit.
+**The writes are `payfit_act`'s** (21/10/2026): `op="affiliate"` and
+`op="regularize"` answer the named refusal `op_moved` (`payfit_garde.moved`), which
+names `payfit_act(op="set_affiliation")` / `op="request_regularization"`, with no
+key and no call to PayFit.
 
 The tax documents (`income_tax`) and automatic pension enrolment documents (`auto_enrolment`)
 are **British**. There is **no French equivalent**: no DSN, no
@@ -25,8 +26,8 @@ from typing import Literal, Optional
 from fastmcp import FastMCP
 
 from . import payfit_socle as S
-from .payfit_garde import (_client, need, not_wired, refuse_ignored, refuse_unknown_op,
-                           run, serve_document)
+from .payfit_garde import (_client, moved, need, refuse_ignored, refuse_unknown_op, run,
+                           serve_document)
 
 
 def register(mcp: FastMCP) -> None:
@@ -52,17 +53,18 @@ def register(mcp: FastMCP) -> None:
           population code, option, contribution base and method, employer and
           employee rates, and `affiliatedContractIds` (the employment contracts
           attached to it).
-        - **"affiliate"** and **"regularize"**: NOT WIRED — never write. They
-          answer the named refusal `payfit_write_not_wired`, saying what they would
-          have done; nothing is sent to PayFit. One employee's affiliation reads
-          from `payfit_contract(op="get", fr=True)`.
+        - **"affiliate"** and **"regularize"**: MOVED — they answer the named
+          refusal `op_moved`; nothing is sent. Call
+          `payfit_act(op="set_affiliation")` / `op="request_regularization"`.
+          One employee's affiliation reads from `payfit_contract(op="get",
+          fr=True)`.
 
         Args:
             op: list (default) | affiliate | regularize.
             kind: health (default) | provident.
             contract_id / insurance_contract_ids / employee_is_exempted /
-                effective_date: op="affiliate"/"regularize" only — not wired,
-                nothing is sent.
+                effective_date: ignored — op="affiliate"/"regularize" are refused
+                (`op_moved`).
             fields: op="list" — keep only these keys per row (`idContrat` always
                 kept); omitted or `["*"]` = the full view.
         """
@@ -77,16 +79,9 @@ def register(mcp: FastMCP) -> None:
             return S.rows((env or {}).get("contracts"), "contracts", "idContrat",
                           fields=fields)
         if op == "affiliate":
-            famille = ("health insurance (mutuelle)" if kind == "health"
-                       else "death and disability cover (prévoyance)")
-            raise not_wired(op, f"replaced the contract's {famille} affiliation",
-                            contract_id=contract_id,
-                            insurance_contract_ids=insurance_contract_ids)
+            raise moved(op, "set_affiliation")
         if op == "regularize":
-            raise not_wired(op, "requested a health insurance regularization",
-                            contract_id=contract_id,
-                            insurance_contract_ids=insurance_contract_ids,
-                            effective_date=effective_date)
+            raise moved(op, "request_regularization")
         raise refuse_unknown_op(op, "list", "affiliate", "regularize")
 
     @mcp.tool()

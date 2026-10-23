@@ -30,6 +30,12 @@ CONNECTOR = _c(
         CredentialField("refresh_token", "Refresh Token", secret=True,
                         required=False,
                         help="1000.xxxxx.yyyyy — leave empty if you connect via Zoho"),
+        # OPTIONAL, non-secret: the Zoho organization this app is meant for. Checked at
+        # each consent (`auth/zoho.py::check_org`) — without it, any Zoho account can
+        # consent to the app, and the consent goes through signaled.
+        CredentialField("zoho_org_id", "Expected Zoho organization ID", secret=False,
+                        required=False,
+                        help="the Org ID shown in Zoho CRM (Setup → Company Details)"),
         CredentialField("data_center", "Data center (com, eu, in, au, jp, ca)",
                         secret=False, help="eu"),
     ),

@@ -39,7 +39,7 @@ tests = [
   "tests/test_contrat_front.py",
   "tests/test_contrat_consommateurs_966.py",
   "tests/api/test_api_routes_table_frozen.py",
-  "tests/auth/test_facade_routes_table_frozen.py",
+  "tests/auth/test_decouverte_routes_table_frozen.py",
   "tests/test_tenant_defini_dans_le_contrat_775.py",
   "tests/api/test_routes_lourdes_declarees_1145.py",
   "tests/test_tools_client_methods_exist.py",
@@ -137,18 +137,18 @@ chemins = [
   "oto_mcp/access/**",
   "oto_mcp/auth/__init__.py",
   "oto_mcp/auth/anon.py",
-  "oto_mcp/auth/authorize_consent.py",
-  "oto_mcp/auth/facade.py",
+  "oto_mcp/auth/annuaire.py",
+  "oto_mcp/auth/decouverte.py",
   "oto_mcp/auth/flow.py",
   "oto_mcp/auth/hooks.py",
   "oto_mcp/auth/pkce.py",
   "oto_mcp/auth/platform_worker.py",
-  "oto_mcp/auth/relay*.py",
   "oto_mcp/auth/service_identity.py",
   "oto_mcp/auth/token_scopes.py",
   "oto_mcp/middleware/**",
   "oto_mcp/org_store/**",
   "oto_mcp/credentials_store.py",
+  "oto_mcp/anthropic_cle.py",
   "oto_mcp/cles_plateforme_format.py",
   "oto_mcp/tenancy.py",
   "oto_mcp/session_org.py",
@@ -601,6 +601,7 @@ sources = [
   "oto_mcp/file_*.py",
   "oto_mcp/csv_*.py",
   "oto_mcp/media_store.py",
+  "oto_mcp/transit.py",
   "oto_mcp/upload_tokens.py",
   "oto_mcp/capabilities/uploads.py",
   "oto_mcp/api/uploads.py",
@@ -611,7 +612,8 @@ sources = [
   "oto_mcp/tools/images_base64.py",
   "oto_mcp/formula_backfill_worker.py",
 ]
-tests = ["tests/**/test_file*.py", "tests/**/test_upload*.py", "tests/**/test_csv*.py", "tests/**/test_media*.py"]
+tests = ["tests/**/test_file*.py", "tests/**/test_upload*.py", "tests/**/test_csv*.py", "tests/**/test_media*.py",
+         "tests/test_transit.py"]
 
 [[volet]]
 nom = "recherche"
@@ -685,3 +687,11 @@ tests = ["tests/**/test_apollo*.py"]
 nom = "procédure de diagramme"
 sources = ["oto_mcp/procedure_diagram.py", "oto_mcp/tools/procedure_app.py"]
 tests = ["tests/**/test_procedure_diagram*.py", "tests/test_procedure_app.py"]
+
+[[volet]]
+nom = "waterfalls"
+# Un domaine pour six connecteurs (`waterfall_email|phone|company|person|people|tech`) : la
+# famille « connecteur » le rate, son nom n'est celui d'aucun.
+sources = ["oto_mcp/waterfall/**", "oto_mcp/tools/waterfall.py",
+           "oto_mcp/tools/waterfall_lignes.py"]
+tests = ["tests/**/test_waterfall*.py"]

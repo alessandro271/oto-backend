@@ -21,8 +21,8 @@ puts messages on the wire, not on writing in general. FOUR tools do so
 or arm it, and all four are hidden by default
 (`DEFAULT_HIDDEN_TOOLS`, self-activatable): `lemlist_campaign_start` (lemlist
 runs the sequence for all launched leads), `lemlist_launch_lead` (a lead
-leaves review), `lemlist_inbox_send` (the three direct sends, with no campaign
-or review in front of them) and `lemlist_campaign_auto_review`. Everything else — create,
+leaves review), `lemlist_act` (the three direct sends of the inbox, with no
+campaign or review in front of them) and `lemlist_campaign_auto_review`. Everything else — create,
 configure, duplicate, pause, schedule, tidy the CRM — works on a DRAFT
 or on data, and sends nothing.
 
@@ -117,6 +117,46 @@ LEAD_DEJA_PRIS = {
 def _refus(code: str, message: str, **data) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=f"Refus `{code}` : {message}",
                               data={"code": code, "retryable": False, **data}))
+
+
+def _texte(v) -> Optional[str]:
+    """A value as lemlist takes a lead variable: a string (its OpenAPI types the
+    extra keys of `POST /campaigns/{id}/leads/` `additionalProperties: string`).
+    A list of scalars is joined; an object is not guessed at (None)."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (str, int, float)):
+        return str(v)
+    if isinstance(v, list) and all(isinstance(x, (str, int, float)) for x in v):
+        return ", ".join(str(x) for x in v)
+    return None
+
+
+def _variables_du_lead(custom_variables: dict, declarees) -> dict:
+    """`custom_variables` as lemlist takes them, or a named refusal: a key that is
+    a field of the lead (`email`, `firstName`…) would overwrite its argument in the
+    same body, and a value that is not a text has no form lemlist documents."""
+    collisions = sorted(set(custom_variables) & set(declarees))
+    if collisions:
+        raise _refus(
+            "lemlist_custom_variable_collision",
+            f"`custom_variables` names lead fields {collisions}: pass them through "
+            "their own argument (`email`, `first_name`…). Nothing was sent.",
+            keys=collisions)
+    variables, illisibles = {}, []
+    for cle, valeur in custom_variables.items():
+        texte = _texte(valeur)
+        if texte is None:
+            illisibles.append(cle)
+        else:
+            variables[cle] = texte
+    if illisibles:
+        raise _refus(
+            "lemlist_custom_variable_value",
+            f"`custom_variables` {sorted(illisibles)}: a lead variable is a text "
+            "(a number, a boolean or a list of them is written as text); an "
+            "object or null is not. Nothing was sent.", keys=sorted(illisibles))
+    return variables
 
 
 def _campagne_introuvable(exc) -> bool:
@@ -482,7 +522,11 @@ def register(mcp: FastMCP) -> None:
         All lead fields are optional (lemlist accepts phone/LinkedIn-only
         leads), but you'll usually pass at least `email` or `linkedin_url`.
         `custom_variables` merges extra key-value pairs into the lead, used for
-        campaign personalization (e.g. `{{variableName}}` in a template).
+        campaign personalization (e.g. `{{variableName}}` in a template). Each
+        value goes as text (a number or boolean written out, a list joined); an
+        object or null is refused (`lemlist_custom_variable_value`), and so is a
+        key that is a lead field such as `email` or `firstName`
+        (`lemlist_custom_variable_collision`) — pass it through its argument.
 
         Enrichment flags (all default False, each may cost lemlist credits):
         `deduplicate` skips the insert if the email already exists in another
@@ -512,23 +556,22 @@ def register(mcp: FastMCP) -> None:
         `already_in_other_campaign` or `already_in_campaign` — nothing was
         created; count the contact as already taken and move on.
         """
-        lead = {
-            k: v for k, v in {
-                "email": email,
-                "firstName": first_name,
-                "lastName": last_name,
-                "companyName": company_name,
-                "jobTitle": job_title,
-                "linkedinUrl": linkedin_url,
-                "phone": phone,
-                "companyDomain": company_domain,
-                "icebreaker": icebreaker,
-                "timezone": timezone,
-                "contactOwner": contact_owner,
-            }.items() if v is not None
+        champs = {
+            "email": email,
+            "firstName": first_name,
+            "lastName": last_name,
+            "companyName": company_name,
+            "jobTitle": job_title,
+            "linkedinUrl": linkedin_url,
+            "phone": phone,
+            "companyDomain": company_domain,
+            "icebreaker": icebreaker,
+            "timezone": timezone,
+            "contactOwner": contact_owner,
         }
+        lead = {k: v for k, v in champs.items() if v is not None}
         if custom_variables:
-            lead.update(custom_variables)
+            lead.update(_variables_du_lead(custom_variables, champs))
         from oto.tools.common.errors import UpstreamHTTPError
 
         if not campaign_id.startswith("cam_"):
@@ -1335,8 +1378,9 @@ def register(mcp: FastMCP) -> None:
         - `upload_audio`: `lead_id` + `step_id` + `audio` — the audio of a
           `linkedinVoiceNote` step. `audio` is a source dict:
           `{"kind": "url", "url": …}`, `{"kind": "drive", "file_id": …}`,
-          `{"kind": "gmail", "message_id": …, "filename": …}` or
-          `{"kind": "project_file", "project_id": …, "file_id": …}`. The server
+          `{"kind": "gmail", "message_id": …, "filename": …}`,
+          `{"kind": "project_file", "project_id": …, "file_id": …}` or a
+          recording's `source` as read (`{"kind": "transit", "ref": …}`). The server
           fetches it (≤ 20 MB) and forwards the bytes.
         """
         client, is_platform = _client()
@@ -1414,7 +1458,7 @@ def register(mcp: FastMCP) -> None:
             if not (lead_id and step_id and audio):
                 raise _bad(
                     "`lead_id`, `step_id` AND `audio` required — `audio` is a "
-                    'source: {"kind": "url"|"drive"|"gmail"|"project_file", …}')
+                    'source: {"kind": "url"|"drive"|"gmail"|"project_file"|"transit", …}')
             data, filename = _fetch_audio(audio)
             result = client.upload_lead_audio(
                 lead_id, step_id, data, filename=filename)

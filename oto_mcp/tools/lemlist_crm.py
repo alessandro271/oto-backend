@@ -13,7 +13,8 @@ contact is the person in the lemlist CRM, independent of campaigns. This is
 the most costly confusion of this API, and it separates the two modules.
 
 What SENDS here fits in a single tool, hidden by default:
-`lemlist_inbox_send`. Its three routes (`/inbox/email`, `/inbox/linkedin`,
+`lemlist_act` (the connector's acting tool — `<ns>_act`, the one an MCP client asks to
+confirm). Its three routes (`/inbox/email`, `/inbox/linkedin`,
 `/inbox/whatsapp`) are the most immediate sends of the whole connector —
 no campaign, no sequence, no review in front of them: the message goes out. Hence
 the BARE tool, the only grain that `DEFAULT_HIDDEN_TOOLS` knows how to hide.
@@ -37,6 +38,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
+from .lecture import ACTE
 
 
 def _bad(msg: str) -> McpError:
@@ -297,7 +299,7 @@ def register(mcp: FastMCP) -> None:
         page: Optional[int] = None,
     ) -> dict:
         """Read the unified inbox, write drafts, manage labels. Sends nothing —
-        sending is `lemlist_inbox_send`.
+        sending is `lemlist_act`.
 
         Conversations are keyed by CONTACT, all channels merged.
 
@@ -382,9 +384,9 @@ def register(mcp: FastMCP) -> None:
                 "draft_create, draft_update, draft_delete")
         return result
 
-    @mcp.tool()
-    def lemlist_inbox_send(
-        op: Literal["email", "linkedin", "whatsapp"],
+    @mcp.tool(annotations=ACTE)
+    def lemlist_act(
+        op: Literal["send_email", "send_linkedin", "send_whatsapp"],
         message: str,
         send_user_id: str,
         contact_id: Optional[str] = None,
@@ -406,14 +408,14 @@ def register(mcp: FastMCP) -> None:
         mailbox. Get them from `lemlist_team(op="user_channels")`.
 
         Args by op:
-        - `email`: `send_user_id`, `send_user_email`, `send_user_mailbox_id`,
+        - `send_email`: `send_user_id`, `send_user_email`, `send_user_mailbox_id`,
           `message`; optional `contact_id`/`lead_id`, `subject`, `cc`,
           `reply_to_activity_id`.
-        - `linkedin`: `send_user_id`, `lead_id`, `contact_id`, `message`.
-        - `whatsapp`: the same plus `send_user_whatsapp_account_id`.
+        - `send_linkedin`: `send_user_id`, `lead_id`, `contact_id`, `message`.
+        - `send_whatsapp`: the same plus `send_user_whatsapp_account_id`.
         """
         client, is_platform = _client()
-        if op == "email":
+        if op == "send_email":
             _need(send_user_email=send_user_email,
                   send_user_mailbox_id=send_user_mailbox_id)
             result = client.send_inbox_email(
@@ -421,12 +423,12 @@ def register(mcp: FastMCP) -> None:
                 send_user_mailbox_id=send_user_mailbox_id, message=message,
                 contact_id=contact_id, lead_id=lead_id, subject=subject, cc=cc,
                 reply_to_activity_id=reply_to_activity_id)
-        elif op == "linkedin":
+        elif op == "send_linkedin":
             _need(lead_id=lead_id, contact_id=contact_id)
             result = client.send_linkedin_message(
                 send_user_id=send_user_id, lead_id=lead_id,
                 contact_id=contact_id, message=message)
-        elif op == "whatsapp":
+        elif op == "send_whatsapp":
             _need(lead_id=lead_id, contact_id=contact_id,
                   send_user_whatsapp_account_id=send_user_whatsapp_account_id)
             result = client.send_whatsapp_message(
@@ -434,7 +436,8 @@ def register(mcp: FastMCP) -> None:
                 send_user_whatsapp_account_id=send_user_whatsapp_account_id,
                 lead_id=lead_id, contact_id=contact_id, message=message)
         else:
-            raise _bad(f'unknown op "{op}" — expected: email, linkedin, whatsapp')
+            raise _bad(f'unknown op "{op}" — expected: send_email, send_linkedin, '
+                       'send_whatsapp')
         return result
 
     # --- Unsubscribes ------------------------------------------------------------

@@ -25,6 +25,7 @@ GET,HEAD /api/upload/{token} -> upload_form
 OPTIONS /api/upload/{token} -> options_handler
 POST /api/relay/{token} -> relay_receive
 GET,HEAD /api/relay/batch/{token} -> relay_manifest
+GET,HEAD /api/wttj/resume/{token} -> resume_open
 GET,HEAD /p/d/{token} -> public_doc_view
 GET,HEAD,POST /o/u/{token} -> outreach_unsubscribe
 GET,HEAD,POST /o/d/{token} -> digest_unsubscribe
@@ -62,6 +63,7 @@ GET,HEAD /api/instagram_meta/oauth/callback -> callback
 GET,HEAD /api/meta_ads/oauth/callback -> callback
 GET,HEAD /api/microsoft/oauth/callback -> callback
 GET,HEAD /api/ubersuggest/oauth/callback -> callback
+GET,HEAD /api/jefacture/oauth/callback -> callback
 GET,HEAD /api/wordpress/connect/callback -> callback
 POST /api/me/orgs -> _handler
 OPTIONS /api/me/orgs -> options_handler
@@ -815,6 +817,8 @@ POST /api/datastores/{datastore}/rows/update_where -> _handler
 OPTIONS /api/datastores/{datastore}/rows/update_where -> options_handler
 GET,HEAD /api/datastores/{datastore}/rows/{row_id}/history -> _handler
 OPTIONS /api/datastores/{datastore}/rows/{row_id}/history -> options_handler
+GET,HEAD /api/me/waterfalls/{name}/plan -> _handler
+OPTIONS /api/me/waterfalls/{name}/plan -> options_handler
 POST /api/me/automations/fire -> _handler
 OPTIONS /api/me/automations/fire -> options_handler
 POST /api/me/runs/thread -> _handler

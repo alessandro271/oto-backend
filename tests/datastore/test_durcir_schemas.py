@@ -78,14 +78,15 @@ def test_le_reste_va_dans_meta_au_MEME_niveau_et_reste_inerte():
     assert M.durcir(t).vide, "idempotent"
 
 
-def test_unknown_columns_en_tete_reste_pour_son_propre_retrait():
-    """`retirer_unknown_columns` (après le 21/10/2026) le cherche EN TÊTE : rangé dans
-    `meta`, il y resterait mort."""
+def test_unknown_columns_en_tete_est_supprime():
+    """Réglage retiré le 05/10/2026, plus lu nulle part (oto#124) : supprimé en tête,
+    jamais rangé dans `meta` où il resterait mort."""
     plan = M.durcir({"unknown_columns": "reject", "fields": [{"key": "a"}]})
-    assert plan.vide
-    assert plan.schema == {"unknown_columns": "reject", "fields": [{"key": "a"}]}
+    assert plan.schema == {"fields": [{"key": "a"}]}
+    assert [(c, k) for c, k, _ in plan.supprimees] == [("", "unknown_columns")]
+    assert "oto#124" in plan.supprimees[0][2]
     plan = M.durcir({"unknown_columns": "report", "stricte": True})
-    assert plan.schema == {"unknown_columns": "report", "meta": {"stricte": True}}
+    assert plan.schema == {"meta": {"stricte": True}}
     assert plan.deplacees == [("", ["stricte"])]
 
 

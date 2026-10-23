@@ -209,22 +209,6 @@ def _gardes_claimable(schema: dict, lc: dict, *, contraignant: bool) -> list[str
         if isinstance(lc.get("states"), list) else set())
 
 
-def preavis_de_pose(schema: Optional[dict]) -> list[str]:
-    """oto#124 : ce que les gardes de pose de la validation complète REFUSERONT à
-    partir du 21/10/2026 sur ce schéma, et qu'elles laissent passer aujourd'hui —
-    `lifecycle.claimable` sur une colonne non déclarée. Vide hors préavis."""
-    lc = lifecycle_of(schema) if vc.en_preavis(schema) else None
-    if lc is None:
-        return []
-    try:
-        deja = set(_gardes_claimable(schema, lc, contraignant=False))
-        return [e for e in _gardes_claimable(schema, lc, contraignant=True)
-                if e not in deja]
-    # noqa: SILENT — un périmètre illisible est refusé par la pose elle-même
-    except ValueError:
-        return []
-
-
 def _erreurs_d_avance(schema: dict, lc: dict) -> list[str]:
     """`lifecycle.advance` (oto#95) : la suite des passes que la plateforme fait
     parcourir à une ligne relâchée après une écriture. Refusée à la POSE, comme le

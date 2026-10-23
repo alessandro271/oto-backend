@@ -15,9 +15,11 @@ merging would not factor out stay named: `pennylane_transactions`,
 `pennylane_trial_balance`, `pennylane_match`, `pennylane_upload_file`.
 
 Committing writes are **draft-first**: creating an invoice or a
-credit note produces a draft, and **finalizing/sending are separate `op`s** that
+credit note produces a draft, and **finalizing/sending are separate gestures** that
 the agent only calls after human validation (supervision model validated with
-a customer). Lettering (`pennylane_match`) remains exposed: a reversible
+a customer). Sending a document to the customer reaches a third party: it is not an
+`op` of `pennylane_invoice` but of `pennylane_act` (`op="send_invoice"`), the tool an MCP
+client asks to confirm. Lettering (`pennylane_match`) remains exposed: a reversible
 reconciliation link, not an entry.
 
 **Purchasing** is covered to file a supplier invoice from a file
@@ -34,6 +36,7 @@ from fastmcp import FastMCP
 from ..connectors import verify as connector_verify
 
 from .. import file_source
+from .lecture import ACTE
 from .pennylane_socle import _analytique, _bad, _client, _ecrit, _need
 
 
@@ -223,7 +226,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def pennylane_invoice(
         op: Literal["list", "find", "create", "credit_note", "update",
-                    "finalize", "send", "delete", "categories", "categorize"] = "list",
+                    "finalize", "delete", "categories", "categorize"] = "list",
         invoice_id: Optional[int] = None,
         customer_id: Optional[int] = None,
         date: Optional[str] = None,
@@ -268,9 +271,8 @@ def register(mcp: FastMCP) -> None:
           to the "Avoir" template before finalization.
         - "finalize" (`invoice_id`): gives the draft its definitive reference.
           ⚠️ Committing write — after explicit human validation ONLY.
-        - "send" (`invoice_id`): sends the finalized document to the customer by email
-          (the customer's Pennylane email). ⚠️ External send — after explicit human
-          validation ONLY.
+        - Sending the finalized document to the customer is
+          `pennylane_act(op="send_invoice", invoice_id=…)` — another tool.
         - "delete" (`invoice_id`): deletes a DRAFT — cleanup of an obsolete draft
           (replaced, never finalized) before it pollutes the view or is
           finalized by mistake. Pennylane refuses an already FINALIZED document (it must be
@@ -299,8 +301,8 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             op: "list" (default) | "find" | "create" | "credit_note" | "update" |
-                "finalize" | "send" | "delete" | "categories" | "categorize".
-            invoice_id: required for update / finalize / send / delete /
+                "finalize" | "delete" | "categories" | "categorize".
+            invoice_id: required for update / finalize / delete /
                 categories / categorize.
             customer_id: required for create / credit_note.
             date: issue date of the invoice / credit note (YYYY-MM-DD).
@@ -354,9 +356,6 @@ def register(mcp: FastMCP) -> None:
         if op == "finalize":
             return _ecrit(lambda: c.finalize_invoice(_need(invoice_id, "invoice_id", op)),
                           "invoice finalization")
-        if op == "send":
-            return _ecrit(lambda: c.send_invoice(_need(invoice_id, "invoice_id", op)),
-                          "invoice sending")
         if op == "delete":
             return _ecrit(lambda: c.delete_invoice(_need(invoice_id, "invoice_id", op)),
                           "invoice deletion")
@@ -364,7 +363,25 @@ def register(mcp: FastMCP) -> None:
             return _analytique(c, op, "customer_invoice",
                                _need(invoice_id, "invoice_id", op), categories)
         raise _bad("op must be 'list', 'find', 'create', 'credit_note', 'update', "
-                   "'finalize', 'send', 'delete', 'categories' or 'categorize'")
+                   "'finalize', 'delete', 'categories' or 'categorize' — sending is "
+                   "`pennylane_act`")
+
+    @mcp.tool(annotations=ACTE)
+    def pennylane_act(op: Literal["send_invoice"], invoice_id: int) -> dict:
+        """⚠️ ACTS toward a third party from Pennylane: `send_invoice` emails a
+        FINALIZED sales invoice or credit note to the customer (the customer's Pennylane
+        email). External send — after explicit human validation ONLY. Creating,
+        finalizing and reading invoices is `pennylane_invoice`.
+
+        Args:
+            op: "send_invoice".
+            invoice_id: the finalized document.
+        """
+        if op != "send_invoice":
+            raise _bad("op must be 'send_invoice'")
+        c = _client()
+        return _ecrit(lambda: c.send_invoice(_need(invoice_id, "invoice_id", op)),
+                      "invoice sending")
 
     # --- purchases: suppliers + supplier invoices ----------------------------
 

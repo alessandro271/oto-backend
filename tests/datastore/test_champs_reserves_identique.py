@@ -19,10 +19,19 @@ from __future__ import annotations
 
 import pytest
 
+from oto_mcp.datastore import core as dsm
 from oto_mcp.datastore import schema as dsv2
 from oto_mcp.datastore.errors import RowValidationError
 
 from champs_reserves_banc import LIGNE as _LIGNE, banc  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def _textes_de_cle(monkeypatch):
+    """Le lot juge ses doublons de clé sur le texte que la base rend de chaque valeur
+    (oto#141) : sans PG, `str`."""
+    monkeypatch.setattr(dsm.db, "datastore_textes_de_cle",
+                        lambda valeurs: [str(v) for v in valeurs])
 
 
 def test_la_valeur_IDENTIQUE_d_une_readonly_est_un_no_op_qui_garde_le_comment(banc):
@@ -55,7 +64,7 @@ def test_le_lot_accepte_l_identique_sur_une_readonly_et_garde_le_comment(banc):
     st, etat = banc
     st.update_row("viviers", "r1", {"adresse": {"comment": "registre — 2 rue B"}})
     out = st._write_rows_to_ns(7, [{"siren": "552081317", "adresse": "1 rue A",
-                                    "libre": "x"}], key="siren")
+                                    "libre": "x"}], key="siren", cle_passee=True)
     assert out["updated"] == 1
     assert etat["lignes"]["r1"]["adresse"]["comment"] == "registre — 2 rue B"
 
@@ -98,9 +107,10 @@ def test_une_valeur_nue_identique_PRESERVE_les_couches(banc):
     couches = {"valeur": "x", "comment": "c", "link": "https://l", "origine": "o"}
     st.update_row("viviers", "r1", {"libre": "x"})
     assert etat["lignes"]["r1"]["libre"] == couches
-    st.append_row("viviers", {"siren": "552081317", "libre": "x"})
+    st.append_row("viviers", {"siren": "552081317", "libre": "x"}, upsert=True)
     assert etat["lignes"]["r1"]["libre"] == couches
-    st._write_rows_to_ns(7, [{"siren": "552081317", "libre": "x"}], key="siren")
+    st._write_rows_to_ns(7, [{"siren": "552081317", "libre": "x"}], key="siren",
+                         cle_passee=True)
     assert etat["lignes"]["r1"]["libre"] == couches
     # Une valeur DIFFÉRENTE, elle, reste une réécriture : comment/link tombent,
     # origine survit — la règle de #322/#326, inchangée.
@@ -130,7 +140,7 @@ def test_sur_un_schema_legacy_la_cle_identique_est_de_l_ADRESSAGE(banc):
                                  {"key": "adresse", "readonly": True},
                                  {"key": "libre"}]}
     st.append_row("viviers", {"siren": "552081317", "libre": "x",
-                              "adresse": {"comment": "registre — 2 rue B"}})
+                              "adresse": {"comment": "registre — 2 rue B"}}, upsert=True)
     st.update_row("viviers", "r1", {"siren": "552081317", "libre": "y"})
     assert etat["lignes"]["r1"]["libre"] == "y" and etat["creees"] == []
     assert etat["lignes"]["r1"]["adresse"]["comment"] == "registre — 2 rue B"

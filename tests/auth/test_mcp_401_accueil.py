@@ -1,7 +1,7 @@
 """Le 401 de `/mcp` dit ce qu'est oto et comment s'y connecter (oto-backend#1071).
 
 Servi par le VRAI serveur : `server._build_mcp` avec l'authentification, `http_app()`,
-les routes de la façade et les middlewares ASGI de `main`, dans leur ordre. Deux apps
+les routes de la découverte et les middlewares ASGI de `main`, dans leur ordre. Deux apps
 construites côte à côte — avec et sans `McpAccueilMiddleware` — pour prouver que la
 négociation OAuth (statut, `WWW-Authenticate`, découverte) ne bouge pas d'un octet.
 """
@@ -40,10 +40,10 @@ class _Verificateur(TokenVerifier):
 def _app(accueil: bool):
     """L'app authentifiée telle que `main` l'assemble (hors REST, sans objet ici)."""
     from oto_mcp import server
-    from oto_mcp.auth import facade as oauth_facade
+    from oto_mcp.auth import decouverte
     mcp = server._build_mcp("streamable_http", _Verificateur())
     app = mcp.http_app()
-    for route in reversed(oauth_facade.make_routes("https://mcp.oto.cx", "app-banc")):
+    for route in reversed(decouverte.make_routes("https://mcp.oto.cx")):
         app.router.routes.insert(0, route)
     if accueil:
         app.add_middleware(McpAccueilMiddleware)
@@ -56,7 +56,6 @@ def apps():
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
         mp.setenv("LOGTO_ENDPOINT", "https://auth.oto.cx")
-        mp.setenv("OTO_MCP_CLAUDE_APP_ID", "app-banc")
         yield _app(accueil=True), _app(accueil=False)
 
 
@@ -123,7 +122,6 @@ def test_avec_un_jeton_valide_rien_ne_change(apps):
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
         mp.setenv("LOGTO_ENDPOINT", "https://auth.oto.cx")
-        mp.setenv("OTO_MCP_CLAUDE_APP_ID", "app-banc")
         reponses = []
         for accueil in (True, False):
             with TestClient(_app(accueil)) as c:
@@ -143,7 +141,6 @@ def test_avec_un_jeton_valide_rien_ne_change(apps):
 @pytest.mark.parametrize("chemin", [
     "/.well-known/oauth-protected-resource/mcp",
     "/.well-known/oauth-protected-resource",
-    "/.well-known/oauth-authorization-server",
 ])
 def test_les_metadonnees_de_decouverte_sont_inchangees(apps, chemin):
     servie, avant = apps

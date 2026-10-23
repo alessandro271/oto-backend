@@ -4,8 +4,8 @@ Les anciens (`strict`, `unknown_fields`, `key_required`) sont REFUSÉS à la pos
 patch et en paramètre ; `key_required` avec son équivalent exact (`new_rows`).
 `unknown_columns`, qui les avait remplacés le 02/10, est RETIRÉ le 05/10/2026 : plus
 aucun réglage, les colonnes et les valeurs sont toujours vérifiées. Refusé à la pose et
-au patch ; STOCKÉ, il est toléré tant qu'on n'y touche pas, dit à la lecture, et lu
-jusqu'au 21/10/2026 seulement (`validation_complete`).
+au patch ; STOCKÉ, il est toléré tant qu'on n'y touche pas, dit à la lecture comme
+toute clé résiduelle, et lu nulle part.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ CHAMPS = [{"key": "siren", "type": "text"},
           {"key": "statut", "type": "enum", "options": ["a", "b"]}]
 
 PLUS_AUCUN = "plus aucun réglage : les colonnes et les valeurs sont toujours vérifiées"
-#: La même phrase servie en anglais par l'avertissement de lecture (`residus_warning`).
+#: La même phrase servie en anglais par le refus de pose.
 PLUS_AUCUN_EN = "no setting any more: columns and values are always checked"
 
 
@@ -34,8 +34,8 @@ def test_le_seul_reglage_servi_est_new_rows():
     assert R.effectifs(None) == {"new_rows": "create"}
     assert R.effectifs({"unknown_columns": "reject", "new_rows": "reject",
                         "key": "siren", "fields": CHAMPS}) == {"new_rows": "reject"}
-    assert not S.validation_active({"strict": True, "fields": CHAMPS}), \
-        "un ancien réglage stocké n'est plus lu"
+    assert not S.validation_active({"strict": True}), \
+        "un ancien réglage stocké n'arme rien"
     assert not S.creation_refusee({"key": "siren", "key_required": True})
 
 
@@ -43,18 +43,8 @@ def test_new_rows_sans_cle_ne_s_arme_pas():
     assert R.lignes_nouvelles({"new_rows": "reject", "fields": CHAMPS}) == "create"
 
 
-@pytest.mark.parametrize("mode,contrat", [("create", False), ("report", True),
-                                          ("reject", True)])
-def test_avant_la_date_le_reglage_STOCKE_garde_son_effet(mode, contrat):
-    """Pendant le préavis, un tableau réglé `report`/`reject` garde la validation
-    complète qu'il avait — sans quoi il retomberait au préavis."""
-    schema = {"unknown_columns": mode, "fields": CHAMPS}
-    assert S.validation_active(schema) is contrat
-    assert bool(S.validate_row(schema, {"statut": "z"})) is contrat, "options de tête"
-
-
 @pytest.mark.parametrize("mode", ["create", "report", "reject"])
-def test_apres_la_date_le_reglage_stocke_n_est_plus_lu(mode, validation_complete_partout):
+def test_le_reglage_stocke_n_est_pas_lu(mode):
     schema = {"unknown_columns": mode, "fields": CHAMPS}
     assert S.validation_active(schema) is True
     assert S.validate_row(schema, {"statut": "z"}), "la liste fait contrat, partout"
@@ -76,8 +66,8 @@ def test_unknown_columns_STOCKE_et_inchange_passe_et_se_dit_a_la_lecture():
     assert S.validate_schema_def({**patche, "unknown_columns": "reject"}, ancien), \
         "le MODIFIER est un geste : refusé"
     msg = cles_inconnues.residus_warning(ancien)
-    assert "`unknown_columns: 'report'`" in msg and PLUS_AUCUN_EN in msg, msg
-    assert "fermeture du vocabulaire" not in msg, "sa phrase propre, pas celle des résidus"
+    assert "`unknown_columns` (top level)" in msg and "Oto does not read them" in msg, \
+        "une clé résiduelle comme une autre"
 
 
 @pytest.mark.parametrize("schema,attendu", [

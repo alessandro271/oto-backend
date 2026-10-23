@@ -35,6 +35,7 @@ def table(live):
     from oto_mcp import db
     ns = "camp-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", "sub-agent", ns)
+    db.set_datastore_schema(ns_id, {"fields": [{"key": "siren"}, {"key": "statut"}]})
     for i in range(3):
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"5511100{i}", "statut": "a_faire"})
     return ns, ns_id

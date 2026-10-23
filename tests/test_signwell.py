@@ -281,8 +281,8 @@ def test_completed_pdf_forces_url_only():
 @pytest.mark.parametrize("tool,kwargs,mutating", [
     ("signwell_document", dict(op="create", files=FILES, recipients=RECIPIENTS,
                                draft=False, text_tags=True), "create_document"),
-    ("signwell_document", dict(op="send", document_id="doc-1"), "send_document"),
-    ("signwell_document", dict(op="remind", document_id="doc-1"), "send_reminder"),
+    ("signwell_act", dict(op="send_document", document_id="doc-1"), "send_document"),
+    ("signwell_act", dict(op="remind_document", document_id="doc-1"), "send_reminder"),
     ("signwell_document", dict(op="update_recipients", document_id="doc-1",
                                recipients=[{"id": "1", "name": "N", "email": "n@example.com"}]),
      "update_recipients"),

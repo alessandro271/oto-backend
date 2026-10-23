@@ -161,14 +161,13 @@ class AuditExport(BaseModel):
 
     Trois limites subsistent, et aucune n'est réparable par la pagination :
 
-    ⚠️ **La rétention du journal est de `OTO_JOURNAL_RETENTION_DAYS` jours, 90 par
-    défaut** — le timer d'archivage exporte le mois au froid puis le supprime. Au-delà,
-    les lignes n'existent plus ici : un `since` ancien rend une fenêtre VIDE qui
-    ressemble à « aucune activité ». Ce n'est pas une pagination, c'est une
-    disparition. ⚠️ **Avant le 2026-08-28, la fenêtre réelle n'était que d'un mois** :
-    le boot purgeait à 30 jours sans archiver (corrigé par l'ADR 0065 lot 0) — un
-    export portant sur une période antérieure est incomplet, et `total` ne peut pas
-    le dire : il compte ce qui EXISTE, pas ce qui a eu lieu.
+    ⚠️ **Le journal garde 30 jours en ligne** (`OTO_JOURNAL_RETENTION_DAYS`) ; au-delà,
+    chaque mois clos est archivé sur S3, lisible à la demande, puis supprimé d'ici. Un
+    `since` plus ancien rend une fenêtre VIDE ou partielle qui ressemble à « aucune
+    activité » : ce n'est pas une pagination, c'est une disparition. ⚠️ **Avant le
+    2026-08-28**, le boot purgeait à 30 jours sans archiver (corrigé par l'ADR 0065
+    lot 0) : un export portant sur une période antérieure est incomplet, et `total` ne
+    peut pas le dire — il compte ce qui EXISTE, pas ce qui a eu lieu.
 
     ⚠️ **Seuls les appels d'OUTILS MCP sont journalisés** (`kind='mcp'`). Les gestes
     faits au dashboard (poser une clé, changer un rôle) n'y figurent pas : ce journal

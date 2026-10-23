@@ -32,10 +32,6 @@ import uuid
 
 import pytest
 
-# oto#124 : le format déclaré fait contrat partout (ex-`unknown_columns: "report"`).
-pytestmark = pytest.mark.usefixtures("validation_complete_partout")
-
-
 def _store():
     from oto_mcp.datastore.core import make_store
     return make_store("sub-test")

@@ -1,0 +1,104 @@
+"""What a step is: one provider's tool in a cascade (`Step`), the free collect call of
+an asynchronous one (`Collect`), and what a step needs to run."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable, Optional
+
+@dataclass(frozen=True)
+class Collect:
+    """The free collect call of an asynchronous provider: `tool`, its arguments built
+    from the SUBMIT result (None = the submit gave no handle), and whether a collected
+    result is final."""
+    tool: str
+    args: Callable[[object], Optional[dict]]
+    done: Callable[[object], bool]
+
+
+@dataclass(frozen=True)
+class Step:
+    """One provider in a cascade.
+
+    `requires`: alternative groups of normalized inputs — the step runs if ALL the
+    inputs of at least ONE group are present (`(("linkedin_url",), ("email",))` = a
+    LinkedIn URL OR an email). `build` turns the inputs into the tool's arguments;
+    `extract(result, inputs)` reads the SERVED result (of the collect call, for an
+    asynchronous step) and returns the find, or None."""
+    key: str
+    tool: str
+    requires: tuple[tuple[str, ...], ...]
+    build: Callable[[dict], dict]
+    extract: Callable[[object, dict], object]
+    cost: str
+    # What a skipped step tells the caller it needed, when the input keys alone would
+    # not say it (an internal flag is not something a caller can give).
+    needs: str = ""
+    collect: Optional[Collect] = None
+    # Costs the caller nothing (open data, their own session): ranks with their own keys.
+    free: bool = False
+    # What a screen calls the step, when the connector's own label would not tell two
+    # steps apart (the French registry by SIREN, and by name).
+    label: str = ""
+    # What the step brings, in one line, for a screen and a person choosing their order:
+    # what its source sees, and when it is worth its place. Facts the receipts taught,
+    # never a price (that is the instance's own). Every row of every table has one
+    # (`tests/waterfall/test_waterfall_plan.py`); the plan serves it as `explains`.
+    explains: str = ""
+    # A COMPLETION step: it does not compete for the find, it fills ONE field the find
+    # still lacks (`linkedin_url`), after the cascade — see `moteur._run_cascade`.
+    fills: str = ""
+    # ONE row, several ways in (the French registry by SIREN, else by name): the variants
+    # run in order, each when its own inputs are there, until one finds the value. The
+    # receipt says which one answered (`via`). A screen shows one step.
+    variants: tuple["Step", ...] = ()
+    # A find too thin to stop on (Apollo's people search: every last name masked): kept
+    # as the FALLBACK while the cascade looks further, returned only if nothing better
+    # comes. The receipt marks the step `weak`.
+    weak: Optional[Callable[[object], bool]] = None
+    # The step runs on the caller's OWN key only (the shared key does not serve this
+    # gesture: Apollo's phone reveal, a Forager email lookup): on any other key it is
+    # skipped BEFORE the call, and a screen lists it with the ones to connect.
+    own_key_only: bool = False
+    # The tool that turns ONE of this step's (masked) finds into a usable one, billed per
+    # person (Apollo: `apollo_match_person` by id). With `qualify=`, the cascade judges
+    # the free finds first and reveals only those that pass (`vivier._reveal_qualified`).
+    reveal: str = ""
+    # A PAID list that pages (`(parameter, first page)`): under `qualify_min`, its next
+    # pages are bought one by one until `limit` people pass (`vivier._fill_from_pages`).
+    pages: Optional[tuple[str, int]] = None
+    # Neutral facts a screen maps to its own price list (the trunk carries no price):
+    # what the step asks its tool for when the tool bills by what is asked (`asks`:
+    # FullEnrich's `work_emails` / `phones`, Forager's lookup), the most units one call
+    # can bill (`max_units`: a search by name steps over namesakes), and whether it bills
+    # per result returned, up to the call's `limit` (`per_item`).
+    asks: str = ""
+    max_units: Optional[int] = None
+    per_item: bool = False
+
+
+def _payload(issue):
+    """What the step's tool RETURNED, out of its served `ToolResult` (structured content,
+    else the JSON of its first block) — the same reading as the recipes
+    (`redaction.extract_payload`). A tool that returns a list is served wrapped
+    (`{"result": [...]}`): unwrapped here, so an extractor reads what the tool wrote."""
+    from .. import redaction
+    data = redaction.extract_payload(issue.result)
+    if data is None and isinstance(issue.result, (dict, list)):
+        data = issue.result
+    if isinstance(data, dict) and set(data) == {"result"}:
+        data = data["result"]
+    return data
+
+
+def _runnable(step: Step, inputs: dict) -> bool:
+    if step.variants:
+        return any(_runnable(v, inputs) for v in step.variants)
+    return any(all(inputs.get(k) for k in group) for group in step.requires)
+
+
+def _missing(step: Step) -> str:
+    if step.needs:
+        return step.needs
+    if step.variants:
+        return " or ".join(_missing(v) for v in step.variants)
+    return " or ".join("+".join(g) for g in step.requires)

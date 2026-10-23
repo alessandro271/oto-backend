@@ -333,17 +333,13 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     conn.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS jwks_uri TEXT")
     conn.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS hosts JSONB "
                  "NOT NULL DEFAULT '[]'::jsonb")
-    # (lot L3) Le client OAuth que la FAÇADE d'enregistrement sert sur les hosts de
-    # ce tenant. Logto self-hosted ne sait pas enregistrer un client à la volée :
-    # notre façade rend un client_id PRÉPARÉ, et il doit être celui de l'annuaire
-    # vers lequel on envoie l'utilisateur — sinon le client s'authentifie chez l'un
-    # avec l'identité de l'autre. NULL = aucun host servi pour ce tenant.
+    # (lot L3) Le client OAuth qu'une façade d'enregistrement, retirée depuis (le client
+    # s'inscrit chez Logto par CIMD), servait sur les hosts de ce tenant. Plus aucun
+    # lecteur hors de l'affichage d'administration : sa suppression passe par une
+    # révision (`docs/migrations-versionnees.md` §5.3), jamais par ce DDL.
     conn.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS oauth_client_id TEXT")
     # (oto-backend#909) Les accès d'ADMINISTRATION de l'annuaire de ce tenant, quand
     # c'est nous qui l'hébergeons : `{"token_endpoint", "api_endpoint", "credential"}`.
-    # Sans eux, la façade d'enregistrement ne pouvait rien poser sur le host d'un
-    # tenant — et répondait 201 quand même, donc un succès suivi d'un refus à
-    # l'`/authorize`.
     # ⚠️ **Aucun secret ici** : `credential` est le NOM d'un couple de variables
     # d'environnement (`<credential>_ID` / `<credential>_SECRET`) que le process lit à
     # l'appel. La base dit OÙ frapper et SOUS QUEL nom ; la clé reste dans le coffre.
@@ -429,9 +425,6 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # comportement d'avant pour tout agent existant).
     conn.execute("ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS max_per_day INT")
     conn.execute("ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS hook_slug TEXT")
-    # Le FILTRE de livraison d'un webhook (`hook_filter.py`) : `{chemin: [valeurs]}`
-    # qu'une livraison authentifiée doit porter pour lancer un run. NULL = tout passe.
-    conn.execute("ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS hook_filter JSONB")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_runner_triggers_hook_slug "
                  "ON runner_triggers(hook_slug) WHERE hook_slug IS NOT NULL")
     # La DÉDUPLICATION : au plus UNE livraison ACCEPTÉE par identifiant et par
@@ -665,6 +658,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # indifférent entre elles.
     if _colonne_absente(conn, "projects", projects.COLONNE_POSITION):
         conn.execute(projects.DDL_COLONNE_POSITION)
+    # Le rang d'affichage d'un lien de projet — le même que pose la révision `20261021_1615_links_position` : ordre
+    # indifférent entre elles.
+    if _colonne_absente(conn, "project_links", projects.COLONNE_POSITION_LIEN):
+        conn.execute(projects.DDL_COLONNE_POSITION_LIEN)
     # Le dossier d'affichage d'un agent — le même que pose la révision `0065` : ordre
     # indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_FOLDER):
@@ -673,6 +670,14 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_OUTILS_PLATEFORME):
         conn.execute(runner_triggers.DDL_COLONNE_OUTILS_PLATEFORME)
+    # Les webhooks qu'oto a inscrits chez la source d'un agent — la même que pose la
+    # révision `0072` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_HOOK_SOURCES):
+        conn.execute(runner_triggers.DDL_COLONNE_HOOK_SOURCES)
+    # Le filtre de livraison d'un webhook — la même que pose la révision
+    # `20261023_0900_hook_filter` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_HOOK_FILTER):
+        conn.execute(runner_triggers.DDL_COLONNE_HOOK_FILTER)
     # Les surcharges du temps gagné d'une org — la même que pose la révision `0066` :
     # ordre indifférent entre elles.
     if _colonne_absente(conn, "orgs", runner_jobs.COLONNE_TEMPS_GAGNE):

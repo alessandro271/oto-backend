@@ -373,8 +373,7 @@ def _exige(field: dict, *, sous_record: bool) -> bool:
 
 def validation_active(schema: Optional[dict]) -> bool:
     """La validation d'écriture est-elle armée ? — le format déclaré fait contrat
-    (`validation_complete.complete` : sur TOUT tableau à colonnes à partir du 21/10/2026,
-    oto#124 ; d'ici là sur ceux que leur réglage stocké y avait mis), OU au moins une
+    (`validation_complete.complete` : sur TOUT tableau à colonnes, oto#124), OU au moins une
     EXIGENCE déclarée, à n'importe quelle profondeur.
 
     Une exigence, c'est `required`, `required_when`, `max_length`, `pattern` ou
@@ -393,10 +392,8 @@ def validation_active(schema: Optional[dict]) -> bool:
     violait un `required` de sous-champ.
 
     ⚠️ **`options` au PREMIER niveau n'arme pas seule** : elle est jugée par la
-    validation complète, qui s'applique partout à partir du 21/10/2026 (oto#124) ;
-    d'ici là, sur un tableau qui ne la portait pas, une valeur hors liste passe avec un
-    préavis daté (`validation_complete`). Dans un sous-record, elle arme déjà : une
-    liste inerte y serait muette.
+    validation complète (oto#124), qui s'applique à tout tableau à colonnes. Dans un
+    sous-record, elle arme elle-même : une liste inerte y serait muette.
 
     Une cible de COUCHE (`qualification.comment`, #377) est une entrée de la liste des
     champs comme une autre, et arme la validation comme elle."""

@@ -51,7 +51,7 @@ SANS_DEBIT = frozenset({
     "apollo_bulk_enrich_organizations", "apollo_search_people", "apollo_reveal_phone",
     "apollo_reveal_phone_result", "apollo_job_postings", "apollo_contact",
     "apollo_email_accounts", "apollo_email_schedules", "apollo_sequence",
-    "apollo_sequence_contacts", "apollo_email", "apollo_conversation",
+    "apollo_sequence_contacts", "apollo_email", "apollo_act", "apollo_conversation",
     # forager — only the person lookup debits.
     "forager_job_post", "forager_organization", "forager_feedback",
     "forager_autocomplete", "forager_account",
@@ -89,12 +89,11 @@ SANS_DEBIT = frozenset({
     # unipile — the account and its channels: a paid option and operated accounts
     # govern its platform mode, not a debited quota.
     "unipile_connect_start",
-    "linkedin_unipile_account", "linkedin_unipile_chat", "linkedin_unipile_facets",
-    "linkedin_unipile_invite", "linkedin_unipile_job", "linkedin_unipile_network",
-    "linkedin_unipile_post", "linkedin_unipile_profile", "linkedin_unipile_publish",
-    "linkedin_unipile_search", "linkedin_unipile_send",
-    "whatsapp_chat", "whatsapp_send", "telegram_chat", "telegram_send",
-    "instagram_chat", "instagram_send",
+    "linkedin_unipile", "linkedin_unipile_act", "linkedin_unipile_account",
+    "linkedin_unipile_facets", "linkedin_unipile_job",
+    "linkedin_unipile_network", "linkedin_unipile_post", "linkedin_unipile_profile",
+    "linkedin_unipile_search",
+    "whatsapp", "whatsapp_act", "telegram", "telegram_act", "instagram", "instagram_act",
 })
 
 

@@ -2,7 +2,7 @@
 
 Ce qu'elle doit tenir, et pourquoi c'est une lentille à part :
 
-1. **Étroite** : `call_id`, `tool`, `created_at`, `quantity`, `key_mode` — jamais
+1. **Étroite** : `call_id`, `call_uid`, `tool`, `created_at`, `quantity`, `key_mode` — jamais
    `sub`, `email` ni `error`. Un membre lit ce que son org consomme, pas qui a
    fait quoi ; ouvrir `org.monitoring.calls` aux membres aurait donné ça en effet
    de bord d'une page de facturation.
@@ -49,12 +49,13 @@ def _fake(monkeypatch, *, calls, total, suivant=None, until="2026-09-01T10:00:00
 def test_la_lentille_ne_rend_QUE_ce_qu_un_metrage_somme(monkeypatch):
     """Aucune identité, aucun texte d'erreur — même si le store en rendait."""
     _fake(monkeypatch, total=1, calls=[{
-        "id": 9, "tool": "linkedin_aiark_search", "created_at": "2026-09-01T09:00:00.000000Z",
+        "id": 9, "call_uid": "u-9", "tool": "linkedin_aiark_search",
+        "created_at": "2026-09-01T09:00:00.000000Z",
         "quantity": 47, "key_mode": "platform",
         # ce que le store pourrait laisser fuiter, et que la projection doit ignorer
         "sub": "acme:abc", "email": "x@y.z", "error": "boom"}])
     out = om._billable_calls(CTX, om.OrgBillableCallsInput(org_id=7, tool="linkedin_aiark_search"))
-    assert out["calls"] == [{"call_id": 9, "tool": "linkedin_aiark_search",
+    assert out["calls"] == [{"call_id": 9, "call_uid": "u-9", "tool": "linkedin_aiark_search",
                              "created_at": "2026-09-01T09:00:00.000000Z",
                              "quantity": 47, "key_mode": "platform", "job_id": None,
                              "found": None, "run_id": None}]
@@ -72,7 +73,7 @@ def test_la_lentille_rend_le_job_d_un_releve_et_rien_d_autre_des_args(monkeypatc
         "args": {"enrichment_id": "enr-0001"}, "contacts": [{"first_name": "A"}],
         "found_phones": "2"}])
     out = om._billable_calls(CTX, om.OrgBillableCallsInput(org_id=7, tool="fullenrich_result"))
-    assert out["calls"] == [{"call_id": 11, "tool": "fullenrich_result",
+    assert out["calls"] == [{"call_id": 11, "call_uid": None, "tool": "fullenrich_result",
                              "created_at": "2026-09-01T09:05:00.000000Z",
                              "quantity": 14, "key_mode": "platform", "job_id": "enr-0001",
                              "found": trouve, "run_id": None}]
@@ -273,13 +274,15 @@ def test_le_releve_agrege_transmet_les_outils_et_la_fenetre(monkeypatch):
 
 
 def _poser(sub, org_id, *, quand, tool="linkedin_aiark_search", ok=True,
-           quantity=None, key_mode=None, kind="mcp", args=None, run_id=None):
+           quantity=None, key_mode=None, kind="mcp", args=None, run_id=None,
+           call_uid=None):
     from oto_mcp import db
     from oto_mcp.db._conn import _connect
 
     db.insert_tool_call({"sub": sub, "kind": kind, "tool": tool, "ok": ok,
                          "org_id": org_id, "duration_ms": 3, "args": args,
-                         "quantity": quantity, "key_mode": key_mode, "run_id": run_id})
+                         "quantity": quantity, "key_mode": key_mode, "run_id": run_id,
+                         "call_uid": call_uid})
     with _connect() as conn:
         conn.execute(
             "UPDATE tool_calls SET created_at = %s::timestamptz WHERE id = ("
@@ -306,7 +309,8 @@ def test_le_store_rend_le_job_d_un_releve_sans_aucun_autre_argument(live):
         server._TRACED_ARGS)["args"]
     for minute in (1, 2):                          # le MÊME job relevé deux fois
         _poser(sub, org, quand=f"2026-08-20T10:0{minute}:00+00:00",
-               tool="fullenrich_result", quantity=14, key_mode="platform", args=args)
+               tool="fullenrich_result", quantity=14, key_mode="platform", args=args,
+               call_uid=f"uid-releve-{minute}")
     _poser(sub, org, quand="2026-08-20T10:03:00+00:00", tool="fullenrich_enrich_linkedin",
            quantity=3, key_mode="platform",
            args=truncated_args({"contacts": [{"first_name": "Ada", "last_name": "L"}]},
@@ -315,6 +319,8 @@ def test_le_store_rend_le_job_d_un_releve_sans_aucun_autre_argument(live):
     fenetre = {"since": "2026-08-10T00:00:00+00:00", "until": "2026-08-21T00:00:00+00:00"}
     releves = db.list_billable_calls_for_org(org, "fullenrich_result", **fenetre)
     assert releves["total"] == 2
+    # `call_uid` : la clé par laquelle un mouvement de crédits se rapproche de son appel.
+    assert [c["call_uid"] for c in releves["calls"]] == ["uid-releve-2", "uid-releve-1"]
     assert {c["job_id"] for c in releves["calls"]} == {"8f14e45f-ceea-467e-a9b4-2f0e0f8b1c7d"}
     assert [c["found"] for c in releves["calls"]] == [
         {"work_emails": 2, "personal_emails": 0, "phones": 1}] * 2

@@ -225,7 +225,7 @@ def _reset_mfa(ctx: ResolvedCtx, inp: ResetMfaInput) -> dict:
     target = _resolve_target(inp.target)
     if not db.get_user(target):
         raise AuthzDenied(404, "unknown_user", f"Compte {target!r} inconnu.")
-    from ..auth.facade import reset_user_mfa
+    from ..auth.annuaire import reset_user_mfa
     removed = reset_user_mfa(target)
     return {"ok": True, "sub": target, "removed": removed}
 

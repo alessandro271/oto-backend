@@ -223,3 +223,42 @@ def test_l_adaptateur_n_ouvre_le_service_qu_aux_regles_qui_le_lisent():
     for regle in (_authz.SUB_ONLY, _authz.PLATFORM_ADMIN, _authz.SUPER_ADMIN,
                   _authz.BY_OP({"a": _authz.PLATFORM_ADMIN})):
         assert not _authz.accepts_service(regle)
+
+
+# ── Bascule de domaine de l'annuaire : le drain `LOGTO_ENDPOINT_ALT` ──────────
+
+_LOGTO_ALT = "https://annuaire-ancien.exemple.test"
+
+
+def test_sans_drain_seul_le_primaire_est_un_emetteur():
+    assert service_identity.emetteurs() == (_ISSUER,)
+
+
+@pytest.mark.parametrize("iss", [_ISSUER, f"{_LOGTO_ALT}/oidc"])
+def test_pendant_le_drain_chaque_emetteur_authentifie_le_service(cle, sans_compte, monkeypatch,
+                                                                 iss):
+    monkeypatch.setenv("LOGTO_ENDPOINT_ALT", _LOGTO_ALT + "/")
+    sub, err, pose, _ = _auth(_jeton(cle, iss=iss), allow_service=True)
+    assert err is None and sub == f"service:{_CLIENT}"
+    assert pose["roles"] == frozenset({"commerce"})
+
+
+def test_le_second_emetteur_n_est_accepte_que_declare(cle, sans_compte):
+    sub, err, _, _ = _auth(_jeton(cle, iss=f"{_LOGTO_ALT}/oidc"), allow_service=True)
+    assert sub is None and err.status_code == 401 and _erreur(err) == "invalid_token"
+
+
+def test_pendant_le_drain_un_emetteur_tiers_reste_refuse(cle, sans_compte, monkeypatch):
+    monkeypatch.setenv("LOGTO_ENDPOINT_ALT", _LOGTO_ALT)
+    sub, err, _, _ = _auth(_jeton(cle, iss="https://autre.exemple.test/oidc"),
+                           allow_service=True)
+    assert sub is None and err.status_code == 401 and _erreur(err) == "invalid_token"
+
+
+def test_le_jeton_du_drain_est_revalide_contre_son_propre_emetteur(sans_compte, monkeypatch):
+    """Choisi sur l'`iss` revendiqué, le verifier revalide tout : une autre clé reste
+    refusée, même sur l'émetteur du drain."""
+    monkeypatch.setenv("LOGTO_ENDPOINT_ALT", _LOGTO_ALT)
+    autre = JsonWebKey.generate_key("EC", "P-384", is_private=True)
+    sub, err, _, _ = _auth(_jeton(autre, iss=f"{_LOGTO_ALT}/oidc"), allow_service=True)
+    assert sub is None and _erreur(err) == "invalid_token"

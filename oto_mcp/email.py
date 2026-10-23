@@ -296,19 +296,19 @@ def _bouton(app_url: str | None, libelle: str, brand: str | None = None) -> str:
     return _charte.bouton(_charte.marque(brand), app_url, libelle)
 
 
-# Les 4 gabarits transactionnels (texte + locale FR/EN) vivent dans
-# `email_templates.py` — extraits pour tenir sous 500 lignes une fois la
-# version anglaise ajoutée (oto-backend#700). Réexposés ICI pour que
-# `email.send_invite_email` etc. restent des attributs du module `email`
-# (c'est ce que les tests monkeypatchent) — import placé APRÈS `_send`,
-# `_esc` et `_bouton` ci-dessus, dont `email_templates` dépend.
-from .email_templates import (  # noqa: E402,F401 — réexport intentionnel
-    send_invite_email,
-    send_resource_shared_email,
-    send_resource_transferred_email,
-    send_signal_digest_email,
-    send_process_readers_digest_email,
-)
+# Les gabarits vivent dans `email_templates.py` (oto-backend#700), qui importe ce module :
+# import de MODULE, et `email.send_invite_email` etc. (que les tests monkeypatchent) lus À
+# L'APPEL (PEP 562) — `from .email_templates import <nom>` cassait l'entrée par ce module-là.
+from . import email_templates as _gabarits  # noqa: E402
+_GABARITS = ("send_invite_email", "send_resource_shared_email",
+             "send_resource_transferred_email", "send_signal_digest_email",
+             "send_process_readers_digest_email")
+
+
+def __getattr__(nom: str):
+    if nom in _GABARITS:
+        return getattr(_gabarits, nom)
+    raise AttributeError(f"module {__name__!r} has no attribute {nom!r}")
 
 
 # L'image se contraint à la largeur utile de la colonne (`email_brand.LARGEUR_UTILE`)

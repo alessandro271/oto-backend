@@ -46,8 +46,8 @@ class RowValidationError(ValueError):
 
 
 class ColonneNonDeclaree(RowValidationError):
-    """Écriture refusée : elle pose une colonne que le schéma ne déclare pas (oto#124),
-    à partir de la date de `colonnes_non_declarees`.
+    """Écriture refusée : elle pose une colonne que le schéma ne déclare pas (oto#124,
+    `colonnes_non_declarees`).
 
     Sous-classe de `RowValidationError` — c'est un refus de schéma, et toute surface
     qui sait en rendre un rend celui-ci —, mais avec son CODE (`unknown_column`) : un
@@ -125,7 +125,7 @@ class BusinessKeyRequired(ValueError):
 class BusinessKeyExists(ValueError):
     """Écriture SANS `id` refusée parce que sa valeur de clé métier désigne déjà une
     ligne — ou une autre ligne du même lot — et que l'appel n'a pas demandé la fusion
-    (`upsert=true`, oto#141). Armé à la date de `upsert_implicite`.
+    (`upsert=true`, oto#141), en vigueur depuis le 21/10/2026.
 
     Le pendant de `BusinessKeyRequired` : l'un refuse une création qui ne désigne rien
     sur un tableau fermé, celui-ci une création qui désigne quelque chose sans le dire.

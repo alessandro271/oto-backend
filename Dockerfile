@@ -6,15 +6,16 @@
 FROM python:3.12-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends git build-essential \
     && rm -rf /var/lib/apt/lists/*
-RUN python -m venv /venv
-ENV PATH=/venv/bin:$PATH PIP_NO_CACHE_DIR=1
-RUN pip install -U pip wheel
-# Lib connecteurs (oto-core, open source) — depuis git tant que pas sur PyPI.
-# `[browser]` tire o-browser (PyPI) pour le client RemoteBrowser (LinkedIn délégué
-# à o-browser-full, pas de chromium dans cette image).
-RUN pip install "oto-core[browser] @ git+https://github.com/otomata-tech/oto-core.git@main"
-COPY . /src/oto-mcp
-RUN pip install /src/oto-mcp
+# L'installation PAR LE VERROU, celle de la production et de la CI (oto-backend#932) :
+# `uv sync --frozen` pose exactement `uv.lock` — la lib connecteurs à l'épingle de
+# `pyproject.toml`, jamais une branche flottante. La version d'uv est celle de
+# `.github/actions/installer-par-le-verrou/action.yml` (garde :
+# tests/test_image_par_le_verrou.py).
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /bin/uv
+ENV UV_PROJECT_ENVIRONMENT=/venv UV_PYTHON_DOWNLOADS=never UV_NO_CACHE=1
+WORKDIR /src/oto-mcp
+COPY . .
+RUN uv sync --frozen --no-editable
 
 FROM python:3.12-slim AS runtime
 RUN useradd -r -u 10001 otomcp

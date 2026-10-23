@@ -788,6 +788,24 @@ au claim en `job["model_workspace"]`, seulement s'il est posé, par la **même
 lecture** que la clé. Seul un champ déclaré sort de `meta` ; il n'entre dans aucune
 trace. Une clé de workspace s'en passe : champ vide, rien ne part.
 
+⚠️ **La clé est ESSAYÉE chez Anthropic avant d'être écrite** (`oto_mcp/anthropic_cle.py`,
+appelé par `credentials_store.preparer_pose`, point de passage unique des poses
+partagées : org, équipe, tenant, plateforme). `GET /v1/models?limit=1` avec `x-api-key`,
+`anthropic-version` et `anthropic-workspace-id` s'il est saisi — une lecture, aucun jeton
+consommé, délai de 10 s. 200 : la pose se fait. Une clé d'organisation sans workspace
+(HTTP 400 `invalid_request_error` qui nomme l'en-tête, forme attestée par la doc
+Anthropic « Authentication › Select a workspace ») : refus
+`anthropic_workspace_required`, « clé d'organisation Anthropic : renseigner le champ
+Workspace, ou déposer une clé créée dans un workspace ». 401/403, workspace inconnu
+(404) ou autre 4xx : refus `anthropic_key_rejected`, avec la raison. Ces deux refus
+sortent en HTTP 400. Réseau, délai, 429 ou 5xx : refus `anthropic_unreachable` en HTTP
+**503** — ce n'est pas une faute de saisie (`credentials_store.VerificationImpossible`,
+traduite par `capabilities/_refus_de_pose.py` pour les quatre capacités de pose, qui
+déclarent les trois codes) — et **aucun repli** : une clé non vérifiée ne se dépose pas.
+Une pose PARTIELLE (le seul `workspace_id`, sans la clé) est acceptée : la saisie est
+complétée par le coffre, et c'est la clé déjà déposée qui part avec le nouveau workspace. Ni la clé ni le workspace n'entrent dans un message ou un journal. Une
+clé DÉJÀ déposée n'est pas revérifiée : seule la pose l'est.
+
 ⚠️ **Ce que les journaux en voient : rien**, et c'est tenu par des cliquets, pas
 par une promesse. `tool_calls` ne garde aucune réponse (la clé part dans la
 réponse au claim, pas dans ses arguments — le masque de #558/#564 ne la couvre
@@ -851,9 +869,18 @@ puisqu'elle ne juge que la famille déclarée. Deux verrous, comme la clé exig�
 ```
 à la POSE     create (flotte, déclencheur), update enabled=true, update model="",
               launch d'un passage déclaré sans modèle   → 400 model_required, rien n'est écrit
+au DÉCLENCHEMENT (tick, webhook) d'un agent sans modèle → rien n'est enfilé, livraison
+              `refused_no_model` sur la page de l'agent (webhook : 409 `trigger_no_model`)
 à la RÉSERVATION (worker de plateforme)                  → travail `failed` pour de bon,
               raison écrite, rendu en `delegation_refusee`, jeton retiré
 ```
+
+Le verrou du DÉCLENCHEMENT (21/10/2026) : un agent sans modèle (ou au modèle sorti du
+catalogue) enfilait un travail sans famille, que la réservation arrêtait aussitôt.
+Il n'enfile plus : l'échéance est consommée, la livraison refusée avec le motif
+« cet agent ne déclare aucun modèle : il ne sera pas exécuté »
+(`runner_models.motif_sans_famille`). Le déclencheur n'est pas éteint : déclarer un
+modèle suffit pour que la prochaine échéance parte.
 
 Un agent posé sans modèle avant cette date se lit, se range et s'éteint ; il ne se
 rallume qu'en déclarant un modèle (un déclencheur le fait dans le même
@@ -1237,11 +1264,22 @@ change** et aucune colonne n'est ajoutée.
 |---|---|---|---|
 | `bearer` (défaut) | `bearer` | en-tête `Authorization: Bearer otoh_…` | — |
 | `standard_webhooks` | `standard_webhooks` | signature `webhook-*` (ci-dessus) | `webhook-id`, signé |
-| `lemlist` | `body_secret` | le **même** `otoh_`, renvoyé par la source dans le champ `secret` de son corps JSON | `_id` du corps |
+| `body_secret` (ex-`lemlist`) | `body_secret` | le **même** `otoh_`, renvoyé par la source dans le champ `secret` de son corps JSON | `_id` du corps, s'il y en a un |
 | `slack` | `slack_signature` | `X-Slack-Signature: v0=<hex>` + `X-Slack-Request-Timestamp` — HMAC-SHA256 de `v0:{ts}:{corps brut}`, clé = le *Signing Secret* de l'app tel quel (`hook_slack`) | `event_id` du corps, signé |
 | `none` | `none` | **aucune** — choix explicite du propriétaire | — |
 
 - **`body_secret`, pour une source qui ne sait ni poser un en-tête ni signer.**
+  **Le nom est générique** (20/10/2026) : le préréglage s'appelait `lemlist`, la
+  source pour laquelle il a été écrit, alors qu'il sert toute source qui sait
+  mettre un champ `secret` de premier niveau dans son JSON (cal.com, un formulaire
+  no-code…). **Aucun alias** : `lemlist` n'est plus un préréglage, une pose qui le
+  demande est refusée en le nommant (`hook_auth_renamed`, 400, le message donne
+  `body_secret`), et les lignes stockées sont réécrites par la révision Alembic
+  `0071_hook_auth_body_secret` (porteur, adresse et reste de la ligne intacts : la
+  source garde ce qu'elle détient). ⚠️ La garde SQL filtre par NOM : une ligne
+  restée `lemlist` est **fermée** (404) — d'où la révision jouée aussitôt la bascule
+  faite (`docs/migrations-versionnees.md`). La déduplication par `_id` ne joue que
+  si la source en envoie un.
   Lemlist renvoie tel quel, dans chaque corps, le `secret` qu'on lui a donné à la
   création du hook : on lui donne le porteur `otoh_` de l'agent. Il est haché et
   comparé **dans le WHERE**, comme l'en-tête, avec le préfixe exigé. ⚠️ **Il est
@@ -1253,14 +1291,14 @@ change** et aucune colonne n'est ajoutée.
   le porteur. Le rejeu exact est écarté par `_id` ; un corps modifié (autre `_id`,
   autre contenu) passe, comme passerait un porteur d'en-tête fuité. `max_per_day`
   le borne **s'il est posé** — il reste optionnel, comme pour `bearer` : à poser
-  sur tout agent `lemlist` dont le volume est connu. Un porteur fuité se coupe par
+  sur tout agent `body_secret` dont le volume est connu. Un porteur fuité se coupe par
   `rotate_secret`. Seule une livraison ACCEPTÉE compte comme
   doublon : un corps capturé pendant une pause (409) se rejoue UNE fois après la
   reprise — assumé, c'est la même règle que pour une signature.
   `champ_secret` est une clé de premier niveau (c'est elle qu'on retire du
   corps) ; `chemin_id` est un chemin (`a.b`).
 - **Chacun sa porte, en SQL.** `trigger_par_secret(…, hook_auth)` filtre le mode :
-  le porteur montré par l'en-tête n'ouvre pas un agent `lemlist`, le même jeton dans
+  le porteur montré par l'en-tête n'ouvre pas un agent `body_secret`, le même jeton dans
   le corps n'ouvre pas un agent `bearer`. L'ordre des essais (en-tête, corps, rien)
   n'ouvre donc jamais un agent par une preuve qu'il n'a pas choisie. Un champ
   `secret` dans le corps d'un agent au porteur est une donnée comme une autre :
@@ -1289,14 +1327,14 @@ change** et aucune colonne n'est ajoutée.
     l'outil y est refusé (`no_auth_address`) : l'adresse neuve passerait par un
     transcript. Sentry ne reçoit ni le chemin ni le corps d'une requête
     `/api/hooks/*` (`sentry_setup._redact_hook_request` — le corps d'un agent
-    `lemlist` porte aussi son porteur). Le journal d'accès d'uvicorn masque le
+    `body_secret` porte aussi son porteur). Le journal d'accès d'uvicorn masque le
     chemin (`parametres_secrets`) ; ⚠️ celui du **reverse proxy** (dépôt `infra`)
     le garde entier — l'adresse d'un agent `none` y est un credential.
   - `hook_slug` n'est **jamais servi brut**, par aucune capacité (`_avec_hook` et
     `_sans_adresse_brute`, à la sortie d'`oto_trigger` et de `hook-auth`) : un
     `Output` décrit la réponse, il ne la filtre pas.
 - **Pose** : la même capacité REST `runner.trigger.hook_auth`. Passer vers un
-  préréglage qui s'ouvre avec le porteur (`bearer`, `lemlist`) **émet un porteur
+  préréglage qui s'ouvre avec le porteur (`bearer`, `body_secret`) **émet un porteur
   neuf**, rendu une fois — l'ancien n'a été montré qu'une fois et la source doit de
   toute façon recevoir celui-ci. `rotate_secret` marche sur ces deux-là, est refusé
   sur `standard_webhooks` et `none` (il ne fabriquerait rien qui ouvre).
@@ -1307,7 +1345,7 @@ change** et aucune colonne n'est ajoutée.
   de main de vérification) reste du code — une fois par schéma, pas par source
   (Slack l'a été le 20/10/2026, voir plus bas).
 - ⚠️ **Base partagée, fenêtre de déploiement** : l'ancien code ne connaît pas
-  `lemlist` ni `none`. Il les traite en **fermé** — son porteur filtre `bearer`, sa
+  `lemlist` ni `none` (ni, au renommage du 20/10, `body_secret`). Il les traite en **fermé** — son porteur filtre `bearer`, sa
   signature filtre `standard_webhooks` : 404, rien n'enfile. Une ligne posée
   depuis la preprod reste donc fermée côté prod tant que la prod ne porte pas ce
   lot. Deux trous, d'où l'**ordre** : l'ancien `update max_per_day=0` ne connaît
@@ -1379,7 +1417,7 @@ Banc : `tests/test_webhook_slack.py`, dont le **vecteur publié par Slack**.
 Une source branchée une fois envoie TOUT ce qu'elle sait envoyer — une app Slack,
 chaque message de chaque canal où elle est. Sans filtre, le tri coûtait un run entier
 (modèle compris) pour conclure « pas pour moi ». `runner_triggers.hook_filter`
-(JSONB, `oto_mcp/hook_filter.py`), posé par `oto_trigger op=create|update` :
+(JSONB, `oto_mcp/hook_filter.py`, révision `20261023_0900_hook_filter` + démarrage), posé par `oto_trigger op=create|update` :
 
 - forme `{chemin: [valeurs]}` — ET entre les chemins, OU dans une liste, chemin
   absent = pas de correspondance ; chemins lus comme `payload_fields`. Pas
@@ -1396,6 +1434,60 @@ chaque message de chaque canal où elle est. Sans filtre, le tri coûtait un run
   signature `standard_webhooks` : 404, rien n'enfile). Un filtre posé avant que la
   prod porte ce lot n'y est donc pas appliqué — sans danger pour un agent `slack`,
   qui n'ouvre pas du tout côté ancien code.
+
+#### Brancher une source : le serveur inscrit le webhook lui-même (20/10/2026)
+
+En `body_secret`, la source doit détenir le porteur `otoh_` de l'agent. Le donner
+supposait qu'il passe par quelqu'un : rendu une fois à l'écran, copié, collé chez la
+source — ou passé en argument d'outil par un modèle, ce que la règle du dépôt
+interdit. **`oto_trigger op=connect_source`** (`capabilities/_source_du_hook.py`)
+fait tout côté serveur : il fabrique le porteur, l'inscrit chez la source avec la clé
+de la source que l'APPELANT résout dans l'org (`want="byo"` : jamais une clé
+partagée, qui inscrirait le webhook sur le compte d'un autre ; `check_usage=False` :
+configurer ne consomme pas), passe l'agent en `body_secret` (adresse privée posée
+s'il n'en a pas), et ne rend que les identifiants chez la source, dans
+`runner_triggers.hook_sources` (`[{source, remote_id, event, campaign_id}]`, révision
+`0072_triggers_hook_sources` + démarrage). **Le porteur n'apparaît dans aucune
+réponse ni aucun journal** ; un refus du tiers se décrit par son type et son statut,
+jamais par `str(e)`, qui peut recopier la requête.
+
+| source | événements | ce qui est inscrit |
+|---|---|---|
+| `lemlist` | `events=[…]`, **exigé** (un webhook par événement, ≤ 10) | `POST /hooks` : `targetUrl` = l'adresse privée, `secret` = le porteur, `campaignId`/`isFirst` facultatifs (`LemlistClient.add_webhook`/`delete_webhook`, oto-core) |
+
+- **L'ordre fait la sûreté.** Inscrire d'abord, porteur ET adresse neuve encore en
+  mémoire ; une inscription refusée (ou rendue sans identifiant) retire celles déjà
+  faites et **n'écrit rien** : l'agent garde sa porte intacte, adresse comprise —
+  poser l'adresse privée remplace l'adresse numérique, qu'une autre source utilise
+  peut-être. Puis UNE transaction écrit l'adresse, le mode, le haché et les
+  inscriptions (`db.brancher_la_source`). Enfin les inscriptions d'AVANT sont
+  retirées chez la source.
+- **Un échec après l'inscription se compense.** Si la transaction échoue (panne de
+  base) ou ne trouve plus la ligne telle qu'elle a été lue (supprimée, ou rebranchée
+  par un geste concurrent : l'écriture est conditionnée à `hook_sources` inchangé,
+  sinon `409 trigger_changed`), ce qui vient d'être inscrit est **retiré chez la
+  source** : aucun webhook ne reste chez le tiers avec un porteur qu'aucune ligne ne
+  connaît. Si la source refuse ce retrait, l'erreur est **nommée**
+  (`502 source_cleanup_failed`, identifiants distants dans le message) et
+  journalisée en `error` avec ces identifiants, pour un retrait à la main.
+- **L'adresse publique est exigée** : sans `OTO_MCP_PUBLIC_URL`, l'URL d'un agent
+  est relative — inscrite chez un tiers, elle ne répondrait jamais. Refus
+  `503 public_url_unset`, rien d'inscrit.
+- **Rebrancher = la rotation d'un agent branché.** Tant que `hook_sources` n'est pas
+  vide, `rotate_secret`, `rotate_address` et toute pose de mode (REST
+  `hook_auth`) sont refusés en **409 `source_connected`** : ils couperaient la source
+  sans qu'oto puisse lui donner la nouvelle porte.
+- **Débrancher et supprimer retirent chez la source.** `op=disconnect_source` garde
+  le mode et le porteur ; ce que la source refuse de retirer **reste** dans
+  `hook_sources` (oto doit pouvoir le retirer plus tard) et est rendu dans
+  `remote_cleanup_failed`. `delete` fait le même retrait et n'en est jamais bloqué —
+  pas même sans clé de la source : ce qui reste est rendu, avec sa raison, et
+  journalisé. La clé est celle de l'appelant : un admin dont la clé vise un AUTRE
+  compte de la source que celui du branchement verra ses retraits refusés, et rendus.
+- **Porte = propriétaire ou admin** (`_exiger_la_porte`), comme toute retouche de
+  porte : l'agent tourne sous l'identité de son propriétaire.
+- Une source de plus = un client qui sait inscrire et retirer un webhook, et le
+  préréglage par lequel elle prouve (`_source_du_hook.SOURCES`).
 
 #### Deux protections réglées par l'utilisateur
 
@@ -1866,7 +1958,9 @@ qu'on oublie).
 fournisseur annonce l'usage à CHAQUE exécution, pas seulement au refus — deux fenêtres,
 cinq heures et sept jours. La personne est mise en attente dès qu'une fenêtre atteint
 son **plafond de consommation** (`_abonnement.seuil`, ci-dessous), **avant** qu'un
-travail soit refusé ; deux fenêtres saturées attendent la plus lointaine. Un rapport mal
+travail soit refusé ; deux fenêtres saturées attendent la plus lointaine. ⚠️ Un
+`allowed_warning` du fournisseur n'est PAS un refus (`_abonnement.ETATS_SERVABLES`) :
+lu comme tel, il mettait en pause pour sept jours un forfait à quelques %. Un rapport mal
 formé s'ignore et se journalise : il ne fait jamais échouer une conclusion. Seul un
 worker de plateforme est écouté.
 
@@ -2101,6 +2195,14 @@ d'exécution **qui n'existe pas**. Et purger au lieu de marquer remplacerait un
 trou silencieux par un pire — *il effacerait la preuve du premier*. Ces 41
 travaux ont été le seul indice qu'une automatisation ne tournait pas ; purgés à
 mesure, personne n'aurait jamais rien vu.
+
+**La raison nomme la cause** (`_abonnement.raison_de_peremption`), écrite dans
+`last_error` et dans `attempt_errors`. Quand aucun worker vivant ne sert la famille du
+modèle pour cette org (21/10/2026), elle le dit, avec la dernière présence d'un worker
+qui la servait (`runner_platform_depots.last_seen_at`, même règle que `families` de
+`runner_arme`, portée et ferme comprises) : « Aucun worker ne sert la famille
+`mistral` (dernier vu le 18/10/2026 09:12 UTC) », ou « (aucun worker vu) ». Le travail
+d'une famille non servie s'enfile toujours, et aucun déclencheur n'est éteint d'office.
 
 **La perte se lit sur le DÉCLENCHEUR** (`list`/`get` portent `expired_count`,
 `expired_since`, `expired_last`) — là où on la cherche, et non dans une file que
@@ -2396,8 +2498,9 @@ l'outil porte (`tools/lecture.py`, mise en cache au boot par `tool_registry.effe
 - `SIMULATION` (`gmail`, `outlook`) → ses `op` qui lisent (`time_saved.READ_OPS`) sont
   des recherches ; préparer un brouillon ne compte pas (c'est l'envoi qui compte) ;
 - `ACTE` / `ENVOI` → sans `op`, un message ou une action ; avec une `op`, seule une `op`
-  qui atteint un tiers (`time_saved.SEND_OPS` : send, reply, publish, invite…) est un
-  envoi — archiver, mettre à la corbeille, déplacer ne rapportent rien ;
+  qui atteint un tiers (`time_saved.SEND_OPS` : send, reply, publish, invite…, lu sur le
+  VERBE de l'op : `send_email`, `publish_post`) est un envoi — archiver, mettre à la
+  corbeille, déplacer ne rapportent rien ;
 - un outil qui ne déclare RIEN ne rapporte RIEN : on ne déduit jamais une écriture de
   l'absence d'annotation, ni un type du nom de l'outil. Le chiffre grandit à mesure que
   les connecteurs déclarent ce qu'ils font (`<ns>` / `<ns>_act`) ;

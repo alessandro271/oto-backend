@@ -232,13 +232,8 @@ def residus_warning(schema: Any) -> Optional[str]:
     l'auteur : le lecteur doit savoir laquelle de deux clés fait foi (`options`, pas
     l'`enum` d'à côté), l'auteur que la modifier sera refusé."""
     trouvees, font_foi, ombres = [], set(), []
-    # oto#124 : `unknown_columns` stocké a sa propre phrase — il est encore LU jusqu'au
-    # 21/10/2026 et la plateforme le retire elle-même (`scripts/retirer_unknown_columns`).
-    retire = (isinstance(schema, dict) and reglages.UNKNOWN_COLUMNS in schema)
     for niveau, chemin, noeud in parcours(schema):
         for cle in inconnues(niveau, noeud):
-            if retire and not chemin and cle == reglages.UNKNOWN_COLUMNS:
-                continue
             trouvees.append(f"`{nom_du_chemin(chemin)}.{cle}`" if chemin
                             else f"`{cle}` (top level)")
             # Ce qui fait foi : la cousine admise, quand elle est posée À CÔTÉ.
@@ -256,9 +251,7 @@ def residus_warning(schema: Any) -> Optional[str]:
         f"they have NO EFFECT (nobody reads it) — an `options` stored this way "
         f"constrains nothing. Set them next to `meta`." if ombres else None)
     if not trouvees:
-        fin = (reglages.residu_unknown_columns(schema[reglages.UNKNOWN_COLUMNS]) + "."
-               if retire else None)
-        return " ".join(p for p in (phrase_ombres, fin) if p) or None
+        return phrase_ombres
     anciens = [k for k in reglages.ANCIENS if isinstance(schema, dict) and k in schema]
     msg = (f"this schema carries keys that no level allows, set before the "
            f"vocabulary was closed (2026-10-01): {', '.join(trouvees[:8])}"
@@ -271,8 +264,6 @@ def residus_warning(schema: Any) -> Optional[str]:
                 + " — the unknown key next to it is a leftover, whatever it says.")
     if anciens:
         msg += f" For {', '.join(f'`{k}`' for k in anciens)}: {reglages.residu(schema)}."
-    if retire:
-        msg += " " + reglages.residu_unknown_columns(schema[reglages.UNKNOWN_COLUMNS]) + "."
     if phrase_ombres:
         msg += " " + phrase_ombres
     return msg

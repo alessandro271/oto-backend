@@ -19,10 +19,6 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-# oto#124 : le format déclaré fait contrat partout (ex-`unknown_columns: "report"`).
-pytestmark = pytest.mark.usefixtures("validation_complete_partout")
-
-
 class _Claims:
     def __init__(self, sub: str):
         self.claims = {"sub": sub, "email": f"{sub}@couches.invalid", "name": sub}
@@ -92,15 +88,19 @@ SCHEMA_FLOTTE = {
 }
 
 
-@pytest.fixture(params=["sans_schema", "schema_flotte"])
+#: Le minimum qu'une écriture exige : les colonnes déclarées, sans type ni cycle de vie.
+SCHEMA_COLONNES = {"fields": [{"key": "siren"}, {"key": "suivi"}]}
+
+
+@pytest.fixture(params=["colonnes_seules", "schema_flotte"])
 def table(live, request):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
     st = make_store(SUB)
-    if request.param == "schema_flotte":
-        st.set_schema(ns, SCHEMA_FLOTTE)
+    st.set_schema(ns, SCHEMA_FLOTTE if request.param == "schema_flotte"
+                  else SCHEMA_COLONNES)
     row = st.append_row(ns, {"siren": "552032534", "suivi": "nouveau"})
     return ns, ns_id, row["_id"]
 

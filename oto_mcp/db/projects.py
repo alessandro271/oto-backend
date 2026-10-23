@@ -41,6 +41,12 @@ DDL_COLONNE_FOLDER = f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {COLONNE_FO
 COLONNE_POSITION = "position"
 DDL_COLONNE_POSITION = (f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {COLONNE_POSITION} "
                         "DOUBLE PRECISION")
+# Rang d'affichage d'un LIEN (docs/projects.md §Rang d'affichage d'un lien) : posé par la
+# révision `20261021_1615_links_position` ET par le démarrage, sous garde de catalogue —
+# même DDL.
+COLONNE_POSITION_LIEN = "position"
+DDL_COLONNE_POSITION_LIEN = (f"ALTER TABLE project_links ADD COLUMN IF NOT EXISTS "
+                             f"{COLONNE_POSITION_LIEN} DOUBLE PRECISION")
 # ⚠️ Cette liste est le SEUL chemin de lecture d'un projet (`get_project_by_id`,
 # `get_project_by_mcp_slug`, listes…). Une colonne écrite mais absente d'ici est une
 # colonne MORTE : la valeur part en base et ne revient jamais. Vécu — `mcp_expose_docs`
@@ -472,6 +478,22 @@ def add_project_link(project_id: int, target_type: str, target_ref: str,
     return {"status": "updated" if changed else "unchanged", "changed": changed}
 
 
+def rank_project_link(project_id: int, target_type: str, target_ref: str, *,
+                      identity_ref: Optional[str] = None,
+                      position: Optional[float]) -> int:
+    """Pose (ou retire, `None`) le rang d'affichage d'UN lien. Ne touche ni le lien
+    lui-même (libellé, rôle, slot, config) ni `projects.updated_at` : ranger une liste
+    n'est pas modifier le projet. `target_ref` tel que stocké. Rend le nombre de liens
+    rangés — 0 = aucun lien de ce nom dans ce projet."""
+    with _connect() as conn:
+        return conn.execute(
+            "UPDATE project_links SET position = %s "
+            " WHERE project_id = %s AND target_type = %s AND target_ref = %s "
+            "   AND identity_ref IS NOT DISTINCT FROM %s",
+            (position, project_id, target_type, str(target_ref), identity_ref),
+        ).rowcount
+
+
 def update_project_link_ref(project_id: int, target_type: str,
                             old_ref: str, new_ref: str) -> int:
     """Re-pointe un lien vers une autre entité (même type). Sert la cascade de
@@ -739,7 +761,8 @@ def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> N
 
 
 def list_project_links(project_id: int) -> list[dict]:
-    """Liens du projet, avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
+    """Liens du projet, rangés d'abord par `position` (leur rang, posé par
+    `rank_link` ; NULL après), avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
     le même (target_type, target_ref) est lié par un AUTRE projet → l'agent sait qu'une
     modif de l'entité retombe ailleurs (s'abstenir d'un changement brutal / demander).
     Les liens `tableau` sont enrichis du **nom** de leur tableau, sous `datastore`
@@ -777,13 +800,16 @@ def list_project_links_many(project_ids: list[int]) -> dict[int, list[dict]]:
     proprios: dict[Optional[tuple], Optional[dict]] = {}
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT pl.project_id, pl.target_type, pl.target_ref, pl.identity_ref, pl.label, pl.role, pl.slot, pl.config, pl.created_at, "
+            "SELECT pl.project_id, pl.target_type, pl.target_ref, pl.identity_ref, pl.label, pl.role, pl.slot, pl.config, pl.position, pl.created_at, "
             "       EXISTS(SELECT 1 FROM project_links o "
             "              WHERE o.target_type = pl.target_type "
             "                AND o.target_ref = pl.target_ref "
             "                AND o.project_id <> pl.project_id) AS cross_project "
             "FROM project_links pl WHERE pl.project_id = ANY(%s) "
-            "ORDER BY pl.project_id, pl.target_type, pl.label NULLS LAST, pl.target_ref, pl.identity_ref NULLS FIRST",
+            # Les liens rangés d'abord, par rang ; les autres comme avant (sans rang
+            # posé, l'ordre ne change pas).
+            "ORDER BY pl.project_id, pl.target_type, pl.position NULLS LAST, pl.label NULLS LAST, "
+            "pl.target_ref, pl.identity_ref NULLS FIRST",
             (ids_projets,),
         ).fetchall()
         for r in rows:

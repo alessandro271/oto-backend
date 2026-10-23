@@ -335,14 +335,14 @@ def import_rows(sub: str, target: dict, rows: list, *, deadline: float,
     ns_id = int(target["ns_id"])
     # Retired-word refusals are judged on the whole file before the first slice.
     mdp.controler(*(r for r in rows[resume_from:] if isinstance(r, dict)))
-    # oto#124: so are undeclared columns, from their date — nothing written.
+    # oto#124: so are undeclared columns — nothing written.
     try:
         cnd.juger_le_lot(store._schema_of(ns_id), rows[resume_from:])
     except ds.ColonneNonDeclaree as e:
         raise UploadError(400, "unknown_column", str(e), details={
             **(e.details or {}), "row": resume_from + 1, "written": 0,
             "resume_from": resume_from})
-    # oto#141: so is the business key (from its date, without `upsert`): duplicates
+    # oto#141: so is the business key (without `upsert`): duplicates
     # inside the file — and, when the file ADDS (no `key` named at the call), keys
     # already in the table — refuse the WHOLE file before the first slice. One record
     # for all slices, so that `fusions` carries the file's ranks and `dans_rang`
@@ -351,7 +351,7 @@ def import_rows(sub: str, target: dict, rows: list, *, deadline: float,
     cle_passee = bool(target.get("cle_passee"))
     fusions = upi.Fusions()
     fusions.decalage = resume_from
-    if key and not upsert and upi.refus_arme():
+    if key and not upsert:
         try:
             upi.juger_le_lot(
                 rows[resume_from:], key=key, decalage=resume_from,
@@ -461,6 +461,32 @@ def _resolve_content_type(target: dict, request_ct: Optional[str]) -> str:
     return "application/octet-stream"
 
 
+def deposer_fichier_projet(sub: str, target: dict, data: bytes,
+                           request_ct: Optional[str]) -> dict:
+    """Range `data` en fichier du projet de `target` et rend la LIGNE créée (son id
+    compris). Suppose l'autz déjà vérifiée (`check_target_access`).
+
+    Deux appelants, deux accusés : le lien signé (`materialize`) répond à un porteur
+    ANONYME et n'en recopie que le nom (oto#86) ; `oto_import`, appelé par un compte
+    authentifié qui a le droit d'écrire le projet, rend l'id du fichier créé."""
+    from . import db  # lazy : évite tout cycle d'import au boot
+    pid = int(target["project_id"])
+    filename = target.get("filename") or "file"
+    # Le type DÉCLARÉ ne fait que départager ; ce qui est écrit et enregistré est
+    # le type SERVI, décidé sur le contenu (#562).
+    ctype = media_store.type_servi(data, _resolve_content_type(target, request_ct)).content_type
+    try:
+        key = media_store.upload_object("project-files", str(pid), data, ctype,
+                                        filename, max_bytes=max_bytes())
+    except media_store.MediaError as e:
+        raise UploadError(e.status, e.code, str(e))
+    row = db.add_project_file(pid, key, filename, mime=ctype, size_bytes=len(data),
+                              title=target.get("title"),
+                              description=target.get("description"), created_by=sub)
+    db.log_project_activity(pid, sub, "project.file_add", target.get("title") or filename)
+    return row
+
+
 def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) -> dict:
     """Écrit le contenu poussé dans la ressource cible. Renvoie un accusé léger
     (jamais le body). Suppose l'autz déjà vérifiée (`check_target_access`)."""
@@ -493,20 +519,7 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
                 "bytes": len(data), "chars": len(body_md)}
 
     if kind == "project_file":
-        pid = int(target["project_id"])
-        filename = target.get("filename") or "file"
-        # Le type DÉCLARÉ ne fait que départager ; ce qui est écrit et enregistré est
-        # le type SERVI, décidé sur le contenu (#562).
-        ctype = media_store.type_servi(data, _resolve_content_type(target, request_ct)).content_type
-        try:
-            key = media_store.upload_object("project-files", str(pid), data, ctype,
-                                            filename, max_bytes=max_bytes())
-        except media_store.MediaError as e:
-            raise UploadError(e.status, e.code, str(e))
-        row = db.add_project_file(pid, key, filename, mime=ctype, size_bytes=len(data),
-                                  title=target.get("title"),
-                                  description=target.get("description"), created_by=sub)
-        db.log_project_activity(pid, sub, "project.file_add", target.get("title") or filename)
+        row = deposer_fichier_projet(sub, target, data, request_ct)
         # Allow-list, pas retrait (oto#86) : la ligne de base porte, entre autres,
         # l'identifiant du compte déposant (`created_by`), l'id interne de la ligne
         # et du projet, l'état de publication — un `row.pop("s3_key")` n'en retirait
@@ -523,8 +536,9 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
         store = ds.make_store(sub)
         # Le schéma n'entre en jeu que pour un CSV, seul format qui porte des
         # EN-TÊTES : une colonne déclarée rend `site_web.comment` lisible comme une
-        # annotation (le store la rangera), et une cible de traduction déjà déclarée
-        # est une collision. Le NDJSON porte des clés — il n'a rien à traduire.
+        # annotation (le store la rangera), et une cible de traduction déclarée est la
+        # colonne que vise chaque rechargement. Le NDJSON porte des clés — il n'a rien
+        # à traduire.
         fmt = target.get("format") or "ndjson"
         parsed = parse_import(
             data, fmt,

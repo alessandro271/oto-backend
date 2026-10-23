@@ -25,8 +25,6 @@ import pytest
 from oto_mcp.datastore.errors import RowValidationError
 from oto_mcp.datastore.points import ranger_les_couches
 
-# oto#124 : le format déclaré fait contrat partout (ex-`unknown_columns: "report"`).
-pytestmark = pytest.mark.usefixtures("validation_complete_partout")
 
 
 # ⚠️ `strict: true` : le mode sous lequel la clé passait quand même. Il juge les

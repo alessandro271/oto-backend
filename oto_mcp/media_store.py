@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
+import secrets
 from dataclasses import dataclass
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 # Type sniffé → extension stockée. On ne fait JAMAIS confiance au Content-Type
 # déclaré par le client : l'extension dérive des magic bytes.
@@ -36,6 +38,10 @@ _DEFAULT_MAX_BYTES = 2 * 1024 * 1024  # 2 Mo
 # versé (`entetes_d_objet`). Un préfixe absent de ces deux ensembles n'a pas de règle.
 PREFIXES_PUBLICS = frozenset({"avatars", "org-logos", "images"})
 PREFIXES_DURABLES = frozenset({"project-files", "transcription-jobs"})
+# Les préfixes de TRANSIT (`upload_transit`) : la liste FERMÉE de ce qu'une référence de
+# transit peut ouvrir (`oto_mcp/transit.py`), sous `tmp/` comme `upload_private`.
+PREFIXES_TRANSIT = frozenset({"threecx-recordings", "aircall-recordings",
+                              "allo-recordings"})
 _ENTETES_PUBLICS = {"ACL": "public-read",
                     "CacheControl": "public, max-age=31536000, immutable"}
 
@@ -306,6 +312,30 @@ def presign_expiry() -> int:
     return int(raw) if raw else _DEFAULT_PRESIGN_EXPIRY
 
 
+_CARACTERE_NON_SUR = re.compile(r"[^A-Za-z0-9._-]+")
+_NOM_MAX = 120
+
+
+def nom_sur(filename: str | None) -> str:
+    """Le dernier segment d'une CLÉ tiré d'un nom de fichier : caractères sûrs seuls
+    (`A-Z a-z 0-9 . _ -`, le reste devient `_`), sans `/` ni point de tête (ni `..`),
+    borné à `_NOM_MAX` en gardant l'extension. Jamais `quote` : un `%` littéral dans la
+    clé, boto le ré-encode (`%5B` → `%255B`) dans l'URL qu'il signe."""
+    nom = _CARACTERE_NON_SUR.sub("_", filename or "").lstrip("._")
+    if len(nom) > _NOM_MAX:
+        racine, ext = os.path.splitext(nom)
+        ext = ext[:16]
+        nom = racine[:_NOM_MAX - len(ext)] + ext
+    return nom or "file"
+
+
+def cle_transit(prefix: str, owner_id: str, digest: str) -> str:
+    """`tmp/<prefix>/<owner>/<digest>` : la racine d'un dépôt sous `tmp/`. Le seul
+    endroit qui l'écrit, pour le dépôt (`upload_private`, `upload_transit`) comme pour
+    la relecture d'une référence de transit."""
+    return f"tmp/{prefix}/{quote(owner_id, safe='')}/{digest}"
+
+
 def upload_private(prefix: str, owner_id: str, data: bytes, content_type: str,
                    filename: str | None = None, *, expiry: int | None = None) -> str:
     """Uploade des octets en PRIVÉ (pas d'ACL public) et renvoie une URL GET
@@ -322,8 +352,7 @@ def upload_private(prefix: str, owner_id: str, data: bytes, content_type: str,
     if not data:
         raise MediaError(400, "missing_file", "Contenu vide.")
     digest = hashlib.sha256(data).hexdigest()[:32]
-    name = quote(filename or "file", safe="")
-    key = f"tmp/{prefix}/{quote(owner_id, safe='')}/{digest}/{name}"
+    key = f"{cle_transit(prefix, owner_id, digest)}/{nom_sur(filename)}"
     try:
         client = _get_client()
         client.put_object(
@@ -341,6 +370,34 @@ def upload_private(prefix: str, owner_id: str, data: bytes, content_type: str,
         raise
     except Exception as e:  # boto / réseau
         raise MediaError(500, "upload_failed", str(e))
+
+
+def upload_transit(prefix: str, owner_id: str, data: bytes, content_type: str,
+                   filename: str | None = None) -> str:
+    """Dépose des octets EN TRANSIT et rend leur empreinte (`digest`), pas une URL :
+    l'objet se désigne ensuite par une référence courte, relue côté serveur
+    (`oto_mcp/transit.py`), qu'un agent recopie sans l'altérer.
+
+    Clé `cle_transit(prefix, owner_id, digest)` (sous `tmp/`, purgée en 1 jour comme
+    `upload_private`), le nom d'origine en métadonnée (`filename`, encodé) et en
+    téléchargement forcé si l'objet est un jour signé. `prefix` ∈ `PREFIXES_TRANSIT`."""
+    if prefix not in PREFIXES_TRANSIT:
+        raise MediaError(500, "unknown_prefix", f"Préfixe de transit inconnu : {prefix!r}.")
+    if not data:
+        raise MediaError(400, "missing_file", "Contenu vide.")
+    digest = hashlib.sha256(data).hexdigest()[:32]
+    nom = quote(os.path.basename(filename or "") or "file", safe="")[:400]
+    try:
+        _get_client().put_object(
+            Bucket=_bucket(), Key=cle_transit(prefix, owner_id, digest), Body=data,
+            ContentType=content_type or "application/octet-stream",
+            ContentDisposition=f"attachment; filename*=UTF-8''{nom}",
+            Metadata={"filename": nom})
+    except MediaError:
+        raise
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "upload_failed", str(e))
+    return digest
 
 
 def delete_by_url(url: str) -> None:
@@ -371,12 +428,18 @@ def delete_by_url(url: str) -> None:
 # persiste la CLÉ (pas une URL signée qui expire) et on signe à la demande.
 
 def upload_object(prefix: str, owner_id: str, data: bytes, content_type: str,
-                  filename: str | None = None, *, max_bytes: int | None = None) -> str:
+                  filename: str | None = None, *, max_bytes: int | None = None,
+                  propre_au_depot: bool = False) -> str:
     """Stocke un blob DURABLE (hors `tmp/`, pas d'ACL public) et renvoie sa **clé**
     S3 (à persister). L'URL d'accès se génère à la lecture via `presign_get`. Clé
     par hash de contenu → ré-upload identique idempotent. `max_bytes` (optionnel)
     surcharge le plafond image par défaut (2 Mo) — un document brut peut être plus
     gros (upload out-of-bande d'un agent, issue #105).
+
+    `propre_au_depot=True` : la clé porte en plus un aléa, deux dépôts du même contenu
+    ne partagent pas l'objet. Pour un objet que son dépôt PURGE à sa fin (l'audio d'un
+    travail de transcription) : avec la clé par contenu, la purge d'un travail
+    supprimait l'audio d'un autre travail sur le même fichier (oto-backend#1301).
 
     ⚠️ `content_type` est un type DÉCLARÉ : l'objet est écrit sous `type_servi`
     (#562), décidé sur le contenu — neutre et en téléchargement s'il est actif ou
@@ -389,9 +452,11 @@ def upload_object(prefix: str, owner_id: str, data: bytes, content_type: str,
     if len(data) > limit:
         raise MediaError(413, "file_too_large", f"Fichier > {limit} octets.")
     digest = hashlib.sha256(data).hexdigest()[:32]
-    name = quote(filename or "file", safe="")
-    key = f"{prefix}/{quote(owner_id, safe='')}/{digest}/{name}"
-    entetes = _entetes_durables(data, content_type, name)
+    if propre_au_depot:
+        digest = f"{digest}-{secrets.token_hex(8)}"
+    key = f"{prefix}/{quote(owner_id, safe='')}/{digest}/{nom_sur(filename)}"
+    # Le nom ENCODÉ va dans l'en-tête (RFC 5987, c'est sa place), jamais dans la clé.
+    entetes = _entetes_durables(data, content_type, quote(filename or "file", safe=""))
     try:
         _get_client().put_object(Bucket=_bucket(), Key=key, Body=data, **entetes)
         return key
@@ -444,6 +509,25 @@ def fetch_object(key: str, *, max_bytes: int | None = None) -> bytes:
     lit, et repasser par une URL signée serait un aller-retour HTTP vers notre propre
     stockage.
     """
+    return lire_objet(key, max_bytes=max_bytes).data
+
+
+@dataclass(frozen=True)
+class ObjetLu:
+    data: bytes
+    content_type: str
+    filename: str | None  # le nom posé en métadonnée (`upload_transit`), décodé
+
+
+def _absent(e: Exception) -> bool:
+    """L'objet n'existe pas (jamais posé, ou purgé) : le code d'erreur S3 de boto."""
+    code = (getattr(e, "response", None) or {}).get("Error", {}).get("Code")
+    return code in ("404", "NoSuchKey", "NotFound")
+
+
+def lire_objet(key: str, *, max_bytes: int | None = None) -> ObjetLu:
+    """`fetch_object`, avec le type et le nom posés au dépôt. Un objet ABSENT lève
+    `MediaError(404, "not_found")`, distinct d'un stockage injoignable (`fetch_failed`)."""
     limite = max_bytes or max_image_bytes()
     try:
         client = _get_client()
@@ -459,10 +543,14 @@ def fetch_object(key: str, *, max_bytes: int | None = None) -> bytes:
     except MediaError:
         raise
     except Exception as e:  # boto / réseau / clé absente
+        if _absent(e):
+            raise MediaError(404, "not_found", "objet absent") from None
         raise MediaError(500, "fetch_failed", str(e))
     if len(data) > limite:
         raise MediaError(413, "object_too_large", f"dépasse {limite} octets à la lecture")
-    return data
+    nom = (meta.get("Metadata") or {}).get("filename")
+    return ObjetLu(data, meta.get("ContentType") or "application/octet-stream",
+                   unquote(nom) if nom else None)
 
 
 def presign_get(key: str, *, expiry: int | None = None) -> str:

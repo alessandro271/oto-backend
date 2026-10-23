@@ -22,6 +22,9 @@ from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 def _cle_de_modele_non_exigee(monkeypatch):
     monkeypatch.setattr("oto_mcp.db.connector_settings.get_connector_setting",
                         lambda *a, **k: None)
+    # Ni routée vers la ferme : sa garde de pose a son banc (`test_cle_de_modele_exigee`).
+    monkeypatch.setattr("oto_mcp.capabilities._cle_exigee.org_routee_ferme",
+                        lambda org_id: False)
 
 
 def _ctx(sub="alexis", org_id=2):

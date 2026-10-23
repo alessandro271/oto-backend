@@ -148,7 +148,7 @@ class ConnectFlow(BaseModel):
     on the client side). `null` on the ~85 connectors that have no flow: the front
     then renders its usual fields form.
 
-    The last three fields exist ONLY on the authenticated projection
+    The last four fields exist ONLY on the authenticated projection
     (`GET /api/me/connectors?verbose=true`) and never in the public catalog: they
     answer to whoever asks, which an anonymous catalog cannot do."""
     label: str
@@ -169,6 +169,9 @@ class ConnectFlow(BaseModel):
     # Zoho region of the app set by their team: shown, never asked — the start refuses
     # any other value. Empty = every parameter is chosen at click time.
     fixed: dict[str, str] = {}
+    # Named codes about this user's applicable app — `zoho_org_unverified`: the app names
+    # no expected Zoho organization, so any Zoho account can consent to it. Empty = none.
+    warnings: list[str] = []
 
 
 class FreeTier(BaseModel):

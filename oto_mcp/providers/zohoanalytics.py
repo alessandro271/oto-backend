@@ -19,6 +19,12 @@ CONNECTOR = _c(
                         required=False,
                         help="leave empty if you connect via Zoho"),
         CredentialField("org_id", "Org ID", secret=False),
+        # OPTIONAL, non-secret: the Zoho organization this app is meant for. Checked at
+        # each consent (`auth/zoho.py::check_org`) — without it, any Zoho account can
+        # consent to the app, and the consent goes through signaled.
+        CredentialField("zoho_org_id", "Expected Zoho organization ID", secret=False,
+                        required=False,
+                        help="the organization ID shown in Zoho Analytics (Settings → Organization)"),
         CredentialField("data_center", "Data center (com, eu, in, au, jp, ca, sa)",
                         secret=False),
     ),

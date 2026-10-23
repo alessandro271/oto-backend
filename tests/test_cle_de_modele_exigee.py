@@ -47,6 +47,15 @@ def _aucune_cle_partagee(monkeypatch):
 ORG = 42
 
 
+@pytest.fixture(autouse=True)
+def routage(monkeypatch):
+    """L'org n'est PAS routée vers la ferme, sauf banc qui le pose (`routage["ferme"]`) :
+    sans cette doublure, la lecture de l'option irait chercher la vraie base."""
+    etat = {"ferme": False}
+    monkeypatch.setattr(CE, "org_routee_ferme", lambda org_id: etat["ferme"])
+    return etat
+
+
 
 @pytest.fixture(autouse=True)
 def _l_appelant_possede_l_agent(monkeypatch):
@@ -341,3 +350,72 @@ def test_le_reglage_ne_se_pose_pas_sur_un_connecteur_ordinaire(monkeypatch):
         PC._connector_setting(_ctx(), PC.ConnectorSettingInput(
             op="set", connector="folk", key=CE.CLE_REGLAGE, value="true"))
     assert e.value.code == "invalid_setting"
+
+
+# ── 7. une org routée vers la ferme exige SA clé, à la pose ──────────────────
+# La ferme ne tourne que sur la clé de l'org (jamais une clé partagée) : sans ce
+# lot, la pose réussissait — le réglage `runner.org_key_required` éteint, ou une clé
+# partagée accordée — et la réservation arrêtait chaque travail, `attempt_errors=[]`.
+
+def test_org_routee_sans_sa_cle_la_pose_est_refusee_reglage_eteint(monkeypatch, routage):
+    _reglages(monkeypatch)
+    routage["ferme"] = True
+    monkeypatch.setattr(CE, "cle_deposee", lambda org, f: False)
+    with pytest.raises(AuthzDenied) as e:
+        CE.exiger_a_la_pose(ORG, "anthropic")
+    assert (e.value.status, e.value.code) == (400, "model_key_required")
+    assert "ferme" in e.value.message and "dépose" in e.value.message
+    # Les autres familles de l'org routée ne sont pas à la ferme : rien n'est exigé.
+    CE.exiger_a_la_pose(ORG, "mistral")
+
+
+def test_org_routee_une_cle_partagee_ne_suffit_pas(monkeypatch, routage):
+    _reglages(monkeypatch, _poses(platform__anthropic="true"))
+    routage["ferme"] = True
+    monkeypatch.setattr(CE, "cle_deposee", lambda org, f: False)
+    monkeypatch.setattr(CE, "cle_partagee",
+                        lambda org_id, fournisseur, sub=None, strict=False: object())
+    with pytest.raises(AuthzDenied) as e:
+        CE.exiger_a_la_pose(ORG, "anthropic")
+    assert e.value.code == "model_key_required"
+    routage["ferme"] = False
+    CE.exiger_a_la_pose(ORG, "anthropic")  # hors ferme, la clé partagée paie
+
+
+def test_org_routee_avec_sa_cle_la_pose_passe(monkeypatch, routage):
+    _reglages(monkeypatch)
+    routage["ferme"] = True
+    monkeypatch.setattr(CE, "cle_deposee", lambda org, f: True)
+    CE.exiger_a_la_pose(ORG, "anthropic")
+
+
+def test_org_routee_sans_sa_cle_le_declencheur_ne_se_pose_pas(monkeypatch, routage):
+    _reglages(monkeypatch)
+    routage["ferme"] = True
+    monkeypatch.setattr(CE, "cle_deposee", lambda org, f: False)
+    monkeypatch.setattr(RT.db, "runner_arme",
+                        lambda org: {"armed": True, "workers": 1, "last_seen": None,
+                                     "families": ["anthropic"], "farm_routed": True})
+    monkeypatch.setattr(RT.db, "create_trigger",
+                        lambda *a, **k: pytest.fail("un refus n'écrit rien"))
+    with pytest.raises(AuthzDenied) as e:
+        asyncio.run(RT._triggers(_ctx(), RT.TriggerInput(op="create", procedure="veille",
+                                             cron="5 6 * * *", tools=["a"],
+                                             model="claude-opus-5")))
+    assert e.value.code == "model_key_required"
+
+
+def test_l_etat_servi_ne_propose_pas_la_famille_ferme_sans_sa_cle(monkeypatch, routage):
+    """L'état servi dit la vérité : la famille reste servie, mais n'est pas PROPOSÉE en
+    défaut — la proposer, c'est proposer un refus. Le routage se lit dans l'état (il
+    vient de `runner_arme`), pas par une seconde lecture."""
+    from oto_mcp.capabilities import _modele
+    _reglages(monkeypatch)
+    monkeypatch.setattr(CE, "cle_deposee", lambda org, f: False)
+    monkeypatch.setattr(CE, "org_routee_ferme",
+                        lambda org_id: pytest.fail("le routage est déjà dans l'état"))
+    def defaut(etat):
+        return [m for m in _modele.etat_servi(etat, ORG)["models"] if m["default"]]
+    etat = {"armed": True, "families": ["anthropic"]}
+    assert defaut({**etat, "farm_routed": False}), "hors ferme et réglage éteint : proposé"
+    assert defaut({**etat, "farm_routed": True}) == []

@@ -14,9 +14,8 @@ après l'appel ? ». Ce qu'il fige :
 - la liste à la racine reste refusée (garde générique de l'adaptateur, inchangée) ;
 - une ligne normale, et une colonne libre à liste de SCALAIRES, s'écrivent comme avant ;
 - une colonne DÉCLARÉE `list` à clé unique reste écrivable (le schéma dit l'intention) ;
-- sur `strict` et sur `unknown_fields: "reject"`, le lot est refusé et la ligne
-  normale passe — le schéma continue de juger les colonnes, la garde ne juge que
-  la forme ;
+- sur un schéma déclaré, le lot est refusé et la ligne normale passe — le schéma
+  continue de juger les colonnes, la garde ne juge que la forme ;
 - le PATCH n'est pas gardé : réécrire une sous-table d'une ligne reste un geste juste.
 """
 from __future__ import annotations
@@ -55,9 +54,7 @@ def test_la_forme_d_un_lot(row, attendu):
 SUB = "sub-test"
 LOT = [{"siren": "1", "nom": "A"}, {"siren": "2", "nom": "B"}]
 LIGNE = {"siren": "3", "nom": "C"}
-STRICT = {"unknown_columns": "report", "fields": [{"key": "siren", "type": "text"},
-                                     {"key": "nom", "type": "text"}]}
-REJECT = {**STRICT, "unknown_columns": "reject"}
+DECLARE = {"fields": [{"key": "siren", "type": "text"}, {"key": "nom", "type": "text"}]}
 SOUS_TABLE = {"fields": [{"key": "contacts", "type": "list",
                          "of": {"type": "object",
                                 "fields": [{"key": "nom", "type": "text"}]}}]}
@@ -74,11 +71,7 @@ def _table(schema=None):
     ns = "t-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
     if schema is not None:
-        # oto#124 : `unknown_columns` ne se pose plus — STOCKÉ, il s'écrit en base.
-        make_store(SUB).set_schema(
-            ns, {k: v for k, v in schema.items() if k != "unknown_columns"})
-        if "unknown_columns" in schema:
-            db.set_datastore_schema(ns_id, schema)
+        make_store(SUB).set_schema(ns, schema)
     return ns, ns_id
 
 
@@ -139,15 +132,15 @@ def test_la_liste_a_la_racine_reste_refusee(live):
 
 
 def test_une_ligne_normale_s_ecrit(live):
-    ns, ns_id = _table()
+    ns, ns_id = _table(DECLARE)
     status, rep = _post(ns, LIGNE)
     assert status == 201 and rep["siren"] == "3"
     assert _base(ns_id) == [LIGNE]
 
 
 def test_une_colonne_libre_a_liste_de_scalaires_s_ecrit(live):
-    """Le schéma libre accepte une liste de scalaires aujourd'hui ; il continue."""
-    ns, ns_id = _table()
+    """Une colonne déclarée sans type accepte une liste de scalaires."""
+    ns, ns_id = _table({"fields": [{"key": "siren", "type": "text"}, {"key": "tags"}]})
     status, rep = _post(ns, {"siren": "4", "tags": ["x", "y"]})
     assert status == 201 and rep["tags"] == ["x", "y"]
     assert _base(ns_id) == [{"siren": "4", "tags": ["x", "y"]}]
@@ -162,20 +155,19 @@ def test_une_colonne_declaree_list_a_cle_unique_reste_ecrivable(live):
     assert _base(ns_id) == [corps]
 
 
-@pytest.mark.parametrize("schema", [STRICT, REJECT], ids=["strict", "reject"])
-def test_sur_schema_strict_le_lot_est_refuse_et_la_ligne_passe(live, schema):
-    ns, ns_id = _table(schema)
+def test_sur_schema_declare_le_lot_est_refuse_et_la_ligne_passe(live):
+    ns, ns_id = _table(DECLARE)
     status, rep = _post(ns, {"rows": LOT})
     assert (status, rep["error"]) == (400, "batch_body")
     assert _base(ns_id) == []
     status, rep = _post(ns, LIGNE)
-    assert status == 201 and "hors_schema" not in rep
+    assert status == 201
     assert _base(ns_id) == [LIGNE]
 
 
 def test_le_patch_n_est_pas_garde(live):
     """Réécrire la sous-table d'une ligne existante : un geste juste, non gardé."""
-    ns, ns_id = _table()
+    ns, ns_id = _table({"fields": [*DECLARE["fields"], {"key": "contacts"}]})
     rid = _post(ns, LIGNE)[1]["_id"]
     status, rep = call("me.datastore.update_row",
                        path_params={"datastore": ns, "row_id": rid},

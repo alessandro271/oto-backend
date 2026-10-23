@@ -20,8 +20,8 @@ from oto_mcp.datastore.core import DatastorePg
 from oto_mcp.datastore.errors import ColumnAbsent
 
 
-STRICT = {"unknown_columns": "report", "fields": [{"key": "siren", "type": "text"},
-                                     {"key": "analyse1", "type": "text"}]}
+SCHEMA = {"fields": [{"key": "siren", "type": "text"},
+                     {"key": "analyse1", "type": "text"}]}
 
 
 @pytest.fixture()
@@ -30,7 +30,7 @@ def store(monkeypatch):
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     dropped = []
     monkeypatch.setattr(dsm.db, "get_datastore_by_id",
-                        lambda ns_id: {"id": ns_id, "schema": STRICT})
+                        lambda ns_id: {"id": ns_id, "schema": SCHEMA})
     monkeypatch.setattr(dsm.db, "datastore_drop_column",
                         lambda ns_id, key: (dropped.append((ns_id, key)) or 12))
     return st, dropped
@@ -93,7 +93,7 @@ def store_sans_effet(monkeypatch):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     monkeypatch.setattr(dsm.db, "get_datastore_by_id",
-                        lambda ns_id: {"id": ns_id, "schema": STRICT})
+                        lambda ns_id: {"id": ns_id, "schema": SCHEMA})
     monkeypatch.setattr(dsm.db, "datastore_drop_column", lambda ns_id, key: 0)
     presentes: set = set()
     monkeypatch.setattr(dsm.db, "datastore_has_column",
@@ -126,7 +126,7 @@ def test_a_layer_name_is_refused_and_NAMES_its_column(store_sans_effet):
 def test_a_layer_of_a_DECLARED_column_is_named_too(store_sans_effet):
     """La base peut n'être qu'au schéma, sans une seule ligne écrite : elle n'en est
     pas moins la colonne porteuse."""
-    st, _ = store_sans_effet          # `analyse1` est déclarée par STRICT, pas en base
+    st, _ = store_sans_effet          # `analyse1` est déclarée par SCHEMA, pas en base
     with pytest.raises(ValueError) as e:
         st.drop_column("v", "analyse1.origine", confirm=True)
     assert "`analyse1`" in str(e.value)
@@ -261,10 +261,12 @@ def test_set_schema_warns_about_the_columns_it_leaves_behind(pg_rows, monkeypatc
     conn, _ = pg_rows
     _insert(conn, [{"siren": "1", "actualite_sociale": "vieux"}])
     st = DatastorePg("u", acting_org=35)
-    msg = st._orphan_columns_warning(7, STRICT)
+    msg = st._orphan_columns_warning(7, SCHEMA)
     assert msg and "`actualite_sociale`" in msg and "data_drop_column" in msg
-    # souple = le champ libre est un droit du contrat : rien à signaler
-    assert st._orphan_columns_warning(7, {"fields": [{"key": "siren"}]}) is None
+    # tout schéma qui déclare une colonne fait contrat : il avertit aussi
+    assert "`actualite_sociale`" in st._orphan_columns_warning(7, {"fields": [{"key": "siren"}]})
+    # sans colonne déclarée, rien n'est un orphelin à nommer
+    assert st._orphan_columns_warning(7, {}) is None
 
 
 # ── la séquence du cockpit : retirer du schéma, puis purger ─────────────────
@@ -283,7 +285,7 @@ def test_set_schema_warns_about_the_columns_it_leaves_behind(pg_rows, monkeypatc
 
 @pytest.fixture()
 def store_mutable(monkeypatch):
-    etat = {"schema": dict(STRICT), "purgees": [], "rows_par_colonne": 12}
+    etat = {"schema": dict(SCHEMA), "purgees": [], "rows_par_colonne": 12}
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     monkeypatch.setattr(dsm.db, "get_datastore_by_id",

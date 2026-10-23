@@ -19,16 +19,17 @@ régulier `par_minute`, rafale `par_minute / 2`), et sa clé :
 - `sensible` — sans jeton, une route dont le chemin porte un secret ou qui ouvre un
   geste d'authentification interactif (invitation, partage public, désabonnement,
   autorisation, retours OAuth) : clé = adresse, borne STRICTE — c'est la surface
-  d'énumération. `/oauth/register` (DCR) n'y est PAS : un client hébergé enregistre
-  un client par connexion d'utilisateur, depuis sa sortie partagée — il est `anonyme` ;
+  d'énumération. L'inscription du shim anonyme (`/register`, `/oauth/register` d'un
+  projet publié) n'y est PAS : un client hébergé s'inscrit à chaque connexion
+  d'utilisateur, depuis sa sortie partagée — elle est `anonyme` ;
 - `webhook` — un tiers qui déclenche (`/api/hooks/*`, `/api/receivers/*`, webhook de
   facturation) : clé = (adresse, chemin), pour qu'un envoyeur partagé (une plateforme
   d'automatisation sert mille clients depuis ses adresses) ne s'épuise pas d'un crochet
   sur l'autre ; plus un plafond par adresse, tous chemins confondus, à dix fois ce
   débit — sans lui, faire tourner le chemin (`/api/hooks/<deviné>`) rendrait un seau
   neuf à chaque essai ;
-- `anonyme` — tout le reste sans jeton (découverte `/.well-known/*`, DCR, `/mcp` avant
-  connexion, upload signé, relais) : clé = adresse.
+- `anonyme` — tout le reste sans jeton (découverte `/.well-known/*`, inscription du shim
+  anonyme, `/mcp` avant connexion, upload signé, relais) : clé = adresse.
 
 **Le contournement qu'il referme : le jeton inventé.** La classe `jeton` se décide à la
 PRÉSENCE de l'en-tête — un `Bearer <aléatoire>` par requête aurait chacun son seau neuf.
@@ -133,9 +134,7 @@ DEFAUTS: dict[str, float] = {
 #: partage public, page publique, désabonnement) ou un geste d'authentification.
 _SENSIBLES_PREFIXES = ("/api/invitations/", "/api/public/", "/p/d/", "/o/u/", "/o/d/",
                        "/o/r/")
-_SENSIBLES_EXACTS = frozenset({"/oauth/authorize",
-                               "/oauth/relay/authorize", "/oauth/callback",
-                               "/api/mcp/auth_callback"})
+_SENSIBLES_EXACTS = frozenset({"/api/mcp/auth_callback"})
 #: Tout retour OAuth d'un connecteur (`/api/<connecteur>/oauth/callback`).
 _SENSIBLES_SUFFIXES = ("/oauth/callback",)
 

@@ -60,7 +60,7 @@ import os
 import re
 import secrets as _secrets
 from typing import Iterable, Optional
-from urllib.parse import unquote_plus
+from urllib.parse import unquote_plus, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +105,16 @@ SECRET_TOOL_ARGS: dict[str, frozenset] = {
     "typeform_webhooks": frozenset({"secret"}),
     # The media of an imported call is often a presigned link, its credential in the query.
     "modjo_calls": frozenset({"media_url"}),
-    # A signed download link carries its credential in the query string.
+    # A signed download link carries its credential in the query string. (Every
+    # `{kind: "url"}` source is masked anyway, whatever the tool: `masquer_urls_des_valeurs`.)
     "oto_import": frozenset({"url"}),
+    # Masked by default in PayFit's OUTPUT (NIR, health data): the same values passed
+    # as a write's arguments must not reach the log in clear either. `payfit_act`
+    # carries the writes; the readers still take the arguments of their old write ops
+    # (refused `op_moved`, but logged all the same).
+    "payfit_act": frozenset({"social_security_number", "absence_type"}),
+    "payfit_collaborator": frozenset({"social_security_number"}),
+    "payfit_absence": frozenset({"absence_type"}),
 }
 
 _UUID_RE = re.compile(
@@ -412,20 +420,56 @@ def masquer_urls(texte: str) -> str:
     return masquer_requetes(texte) if "?" in texte else texte
 
 
-def masquer_urls_des_valeurs(valeur):
+def masquer_adresse(url: str) -> str:
+    """Une adresse réduite à son ORIGINE suivie du masque de l'adresse entière :
+    `https://hote/…#3f7a…`. L'hôte reste lisible (le diagnostic : « quel service ? »),
+    le chemin et la requête tombent — c'est là que vit l'accès — et deux lignes portant
+    le même masque disent « la même adresse, rejouée »."""
+    morceaux = urlsplit(url)
+    if not morceaux.hostname:
+        return mask(url)
+    return f"{morceaux.scheme}://{morceaux.hostname}/…{mask(url)}"
+
+
+def _cle_de_source(cle) -> bool:
+    """`source`, `html_source`… : le nom qu'un outil donne à une référence de fichier
+    (`file_source.resolve`)."""
+    return isinstance(cle, str) and (cle == "source" or cle.endswith("_source"))
+
+
+def _source_par_url(cle, valeur: dict) -> bool:
+    """`valeur` désigne-t-elle un fichier PAR SON ADRESSE ? Une source `{kind: "url",
+    url}` où qu'elle soit, ou, sous une clé de source, un `url` sans `kind` (une source
+    mal formée est refusée par l'outil, mais son adresse s'écrit au journal quand
+    même)."""
+    if not isinstance(valeur.get("url"), str):
+        return False
+    kind = valeur.get("kind")
+    return kind == "url" or (kind is None and _cle_de_source(cle))
+
+
+def masquer_urls_des_valeurs(valeur, _cle=None):
     """`valeur` (les `args` d'une ligne du journal : dict, liste, scalaires, à toute
     profondeur) où chaque CHAÎNE qui contient une adresse passe par `masquer_urls`.
     Mesuré le 15/10/2026 : une URL S3 pré-signée passée à un outil s'écrivait entière
     dans `tool_calls.args` — `X-Amz-Signature`, `X-Amz-Credential`,
     `X-Amz-Security-Token`, l'accès au fichier jusqu'à l'expiration. Chaîne par chaîne
     et non sur le JSON sérialisé : un masque posé sur le texte JSON pourrait manger
-    l'échappement d'un guillemet et rendre la ligne illisible."""
+    l'échappement d'un guillemet et rendre la ligne illisible.
+
+    **L'adresse d'une source de fichier tombe ENTIÈRE** (`masquer_adresse`), quel que
+    soit l'outil : une source `{kind: "url", url}` désigne un fichier par le lien qui
+    y donne accès. La reconnaissance par la FORME (clés de requête de signature) ne
+    voit pas un accès porté par le chemin (`/s/<jeton>/rapport.pdf`) ni par une clé
+    de requête au nom ordinaire (`?t=…`) ; la PROPRIÉTÉ « c'est une source » si."""
     if isinstance(valeur, str):
         return masquer_urls(valeur) if "://" in valeur else valeur
     if isinstance(valeur, dict):
-        return {k: masquer_urls_des_valeurs(v) for k, v in valeur.items()}
+        if _source_par_url(_cle, valeur):
+            valeur = {**valeur, "url": masquer_adresse(valeur["url"])}
+        return {k: masquer_urls_des_valeurs(v, k) for k, v in valeur.items()}
     if isinstance(valeur, (list, tuple)):
-        return [masquer_urls_des_valeurs(v) for v in valeur]
+        return [masquer_urls_des_valeurs(v, _cle) for v in valeur]
     return valeur
 
 

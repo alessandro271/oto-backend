@@ -69,7 +69,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, apollo_receiver, output_projection, session_org
-from .lecture import LECTURE
+from .lecture import ACTE, LECTURE
 from ..datastore.identite import AdresseJson as Adresse
 
 logger = logging.getLogger(__name__)
@@ -1633,7 +1633,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def apollo_email(
-        op: Literal["draft", "send", "status", "search", "content", "stats"],
+        op: Literal["draft", "status", "search", "content", "stats"],
         contact_id: Optional[str] = None,
         subject: Optional[str] = None,
         body_html: Optional[str] = None,
@@ -1644,7 +1644,6 @@ def register(mcp: FastMCP) -> None:
         enable_tracking: Optional[bool] = None,
         outreach_task_id: Optional[str] = None,
         message_id: Optional[str] = None,
-        surface: Optional[str] = None,
         stats: Optional[list[str]] = None,
         reply_classes: Optional[list[str]] = None,
         sequence_ids: Optional[list[str]] = None,
@@ -1657,11 +1656,10 @@ def register(mcp: FastMCP) -> None:
         page: int = 1,
         ids: Optional[list[str]] = None,
         body_format: str = "plain",
-        dry_run: bool = False,
     ) -> dict:
-        """One-off emails (outside sequences). `draft` and `send` are ALWAYS two
-        distinct steps — never collapsed — so nothing confuses "prepare" and "send".
-        BYO key only on EVERY op: `search`/`content`/`stats` read the key owner's OWN
+        """One-off emails (outside sequences): prepare, follow, read. SENDING is
+        `apollo_act(op="send_email")` — another tool, the one your client asks you to
+        confirm: `draft` here never reaches anyone. BYO key only on EVERY op: `search`/`content`/`stats` read the key owner's OWN
         sent mailbox (bodies included), not Apollo's shared database — unlike
         organization/people search, a platform key here would leak someone else's inbox.
 
@@ -1670,10 +1668,8 @@ def register(mcp: FastMCP) -> None:
           is set (thread reply). Optional `subject`, `body_html`, `recipients`
           (`[{"email":, "contact_id":, "recipient_type_cd": "to"|"cc"|"bcc"}]`),
           `emailer_template_id`, `attachment_ids`, `enable_tracking`,
-          `outreach_task_id`. Does NOT send.
-        - `send`: `message_id` (from `draft`'s response) + optional `surface`.
-          IRREVERSIBLE — the only gesture here that reaches a real person by direct
-          email. Supports `dry_run=True` (validates message_id is set, does not call).
+          `outreach_task_id`. Does NOT send: `apollo_act(op="send_email",
+          message_id=…)` does.
         - `status`: `message_id` — poll send status.
         - `search`: `stats`, `reply_classes`, `sequence_ids`, `exclude_sequence_ids`,
           `keywords`, `date_range_mode` (`due_at`/`completed_at`), `date_min`/`date_max`
@@ -1682,9 +1678,9 @@ def register(mcp: FastMCP) -> None:
         - `stats`: `message_id` — opens/clicks. ⚠️ Apollo doc says this needs a
           Master API key, not verified from this environment.
         """
-        if op not in ("draft", "send", "status", "search", "content", "stats"):
-            raise _bad(f'unknown op "{op}" — expected: draft, send, status, search, '
-                       'content, stats')
+        if op not in ("draft", "status", "search", "content", "stats"):
+            raise _bad(f'unknown op "{op}" — expected: draft, status, search, content, '
+                       'stats (sending is apollo_act)')
 
         client = _client_byo()
         try:
@@ -1700,13 +1696,6 @@ def register(mcp: FastMCP) -> None:
                     emailer_template_id=emailer_template_id,
                     attachment_ids=attachment_ids, enable_tracking=enable_tracking,
                     outreach_task_id=outreach_task_id)
-
-            if op == "send":
-                if not message_id:
-                    raise ValueError("message_id required")
-                if dry_run:
-                    return {"dry_run": True, "action": "send", "message_id": message_id}
-                return client.send_email_now(message_id, surface=surface)
 
             if op == "status":
                 if not message_id:
@@ -1728,6 +1717,31 @@ def register(mcp: FastMCP) -> None:
                 return client.get_email_stats(message_id)
         except ValueError as e:
             raise _bad(str(e))
+
+    @mcp.tool(annotations=ACTE)
+    def apollo_act(
+        op: Literal["send_email"],
+        message_id: str,
+        surface: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """⚠️ ACTS at Apollo, in the key owner's name: `send_email` sends a one-off
+        email prepared by `apollo_email(op="draft")` — IRREVERSIBLE, it reaches a real
+        person. Preparing, following and reading emails is `apollo_email`.
+
+        Args:
+            op: "send_email".
+            message_id: the draft's id (from `apollo_email(op="draft")`'s response).
+            surface: optional sending surface.
+            dry_run: True validates the call and sends nothing.
+        """
+        if op != "send_email":
+            raise _bad(f'unknown op "{op}" — expected: send_email')
+        if not message_id:
+            raise _bad("op='send_email': message_id required")
+        if dry_run:
+            return {"dry_run": True, "action": "send_email", "message_id": message_id}
+        return _client_byo().send_email_now(message_id, surface=surface)
 
     # ------------------------------------------------------------------
     # Conversations — byo-only on ALL ops: transcripts of real calls/video meetings

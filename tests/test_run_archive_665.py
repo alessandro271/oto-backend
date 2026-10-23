@@ -2,7 +2,7 @@
 
 Arbitrage d'Alexis du 23/09/2026, option B. L'archive du journal (`deploy/
 archive_tool_calls.py`) exporte au froid puis supprime les mois entiers au-delà de la
-rétention, en EXEMPTANT `run_start`/`run_finish` : passé 90 jours, un run garde ses
+rétention, en EXEMPTANT `run_start`/`run_finish` : passé la rétention, un run garde ses
 bornes et perd son corps. Sans rien de plus, sa page servait deux lignes sous une issue
 « done » — la page vide de #289 revenue à une autre borne.
 

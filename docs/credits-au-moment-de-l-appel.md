@@ -79,7 +79,7 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
 | `PUT /api/service/orgs/{id}/credits/payer-mode` | qui paie dans l'org : `org` (défaut) ou `person` |
 | `POST /api/service/credits/movements` | verse un montant signé à un payeur, une fois par `(payeur, idempotency_key)` ; même clé, autre contenu : 409 `idempotency_conflict` |
 | `GET /api/service/credits/balance?payer=` | `balance` (versé − réglé), `holds_open` (réservé, pas encore réglé), `available` |
-| `GET /api/service/credits/movements?after=&limit=` | les mouvements de tous les payeurs, 500 par défaut, 1 000 au plus |
+| `GET /api/service/credits/movements?after=&limit=` | les mouvements de tous les payeurs, 500 par défaut, 1 000 au plus ; `as_of` et `settled_as_of` sur chaque page |
 
 - **Une ligne de barème** : `(connector, function, unit)` → `budget` unités par paquet de
   `per_n` unités de la fonction. Réservation et règlement s'arrondissent au paquet
@@ -110,6 +110,74 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   d'un curseur servi. Relu jusqu'à `next_cursor == after`, il n'en manque aucun.
   L'horizon est celui de TOUT le serveur PostgreSQL : une transaction longue, dans
   n'importe quelle base de l'instance, retarde le curseur — un retard, jamais une perte.
+- **`as_of`** (#1290), sur chaque page, vide comprise : l'instant sous lequel aucun
+  mouvement ne peut plus apparaître. Tout mouvement qui n'est pas DÉJÀ sous l'horizon
+  du curseur sera daté (`created_at`) d'au moins `as_of` ; une période qui s'achève à
+  `as_of` ou avant est donc complète une fois le flux lu jusqu'au bout (une page plus
+  courte que `limit`). Une page pleine laisse derrière elle des mouvements déjà
+  visibles, plus anciens que `as_of` : il faut lire la suite.
+  - **Le calcul** (`db/credits.page_de_mouvements`) : le plus ancien de trois instants.
+    (1) L'instant de lecture, moins une seconde. (2) Le début de toute transaction
+    ouverte de la base courante dont le rôle peut insérer dans `credit_movements` ou
+    dans `credit_holds` (pour `settled_as_of`, ci-dessous), lu dans
+    `pg_stat_activity` AVANT l'instantané de la page. `created_at` vaut `NOW()`,
+    le DÉBUT de la transaction qui écrit : une transaction qui n'a encore que lu (sans
+    xid, donc invisible au curseur) peut valider plus tard un mouvement daté de son
+    début — elle compte, xid ou non. (3) Le plus ancien mouvement déjà validé que
+    l'horizon retient encore (`xid >= pg_snapshot_xmin`), lu DANS l'instantané de la
+    page.
+  - **Pourquoi cet ordre** : lue après l'instantané, `pg_stat_activity` raterait une
+    transaction validée entre les deux, invisible à la page et retenue par l'horizon.
+    Lue avant, toute transaction en cours à l'instantané y figure déjà, ou a commencé
+    après la lecture. La seconde de marge couvre la fenêtre où une transaction qui
+    démarre a déjà pris son horodatage sans l'avoir publié.
+  - **Les autres bases** ne peuvent pas écrire ici : elles ne retiennent `as_of` qu'à
+    travers le curseur, au plus ancien mouvement de cette base qu'il retient. Une
+    transaction qui ne fait que lire, ailleurs, ne retient rien (sans xid, elle ne
+    retient même pas l'horizon).
+  - **Ce que cela coûte** : une transaction ouverte de la base courante, même de
+    lecture, même inactive (`idle in transaction`), retient `as_of` à son début tant
+    qu'elle court — celles du pool sont coupées à 60 s
+    (`idle_in_transaction_session_timeout`), une session manuelle n'a pas de borne. Le
+    rôle d'une session qui ne peut pas insérer dans la table ne retient rien. Deux
+    requêtes par page au lieu d'une ; `pg_stat_activity` se lit sans verrou.
+  - **Monotone**, quel que soit le curseur et l'appelant : chaque terme n'avance
+    jamais d'une lecture à l'autre (une transaction absente de la lecture précédente a
+    commencé après elle, un mouvement retenu maintenant l'était déjà ou vient d'une
+    transaction qui courait alors).
+  - **`null`** quand une transaction de la base a un début illisible : une session
+    d'un autre rôle quand le rôle du cœur n'a pas `pg_read_all_stats` (elle n'expose
+    alors ni son état ni son début), ou une transaction préparée. Le cœur ne promet
+    rien plutôt qu'un horizon faux, et le journalise. **Prérequis de production** : le
+    rôle applicatif porte `pg_read_all_stats` (ou `pg_monitor`).
+- **`settled_as_of`**, sur chaque page, vide comprise : l'instant sous lequel tout appel
+  est réglé ou libéré. `as_of` dit qu'aucun MOUVEMENT daté d'avant ne peut plus
+  apparaître ; mais une réservation encore ouverte n'a pas de mouvement — une soumission
+  asynchrone attend sa relève, ou son échéance de 24 h (`OTO_CREDITS_HOLD_MAX_S`) — et
+  son règlement, à venir, sera daté de plus tard. Juger réglés les appels d'une
+  période se fait donc sur `settled_as_of`, pas sur `as_of`, sans connaître l'échéance.
+  - **Le calcul** : le plus ancien de `as_of` et du début (`created_at`) de la plus
+    ancienne réservation, tous payeurs confondus, encore OUVERTE ou réglée par un
+    mouvement `settle` que l'horizon du curseur retient encore (`xid >=
+    pg_snapshot_xmin`) — lu dans le MÊME instantané que la page et le terme (3)
+    d'`as_of`. Toute réservation posée avant est close (réglée, libérée ou échue), et
+    son mouvement, s'il en a un, est servi par le flux. Une échéance est un mouvement
+    `settle` ; une libération n'en écrit aucun, rien ne reste à servir. Une transaction
+    longue du serveur, qui retient le curseur, retient donc aussi `settled_as_of` au
+    début des réservations qu'elle empêche de servir.
+  - **Ce que cela coûte** : deux lectures bornées, l'une par l'index partiel des
+    réservations ouvertes, l'autre par l'index du curseur (les seuls mouvements
+    retenus), puis la clé de leur réservation.
+  - **Monotone**, comme `as_of`. Une réservation close ne se rouvre pas, et un
+    règlement retenu à une lecture l'était déjà à la précédente s'il était visible
+    (l'horizon ne recule pas) ; une réservation retenue à une lecture et invisible à la
+    précédente vient d'une transaction qui n'était pas validée à l'instantané
+    précédent : elle courait à la
+    lecture de `pg_stat_activity` d'alors, qui l'a comptée à son début — c'est-à-dire à
+    son `created_at` (`NOW()`, le début de la transaction) —, ou elle a commencé après.
+    D'où le terme (2), qui compte aussi les rôles qui peuvent insérer dans
+    `credit_holds`.
+  - **`null`** quand `as_of` l'est.
 - Le curseur porte les règlements (échéances comprises), les versements et les transferts.
   Les réservations en cours se lisent dans le solde (`holds_open`).
 - **Rapprocher un règlement de ce qui a consommé** : le `call_uid` d'un mouvement `settle`
@@ -126,6 +194,10 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   L'échéance d'une réservation synchrone ne dit pas `key_mode` : rien ne le garde sans
   colonne, et une réservation synchrone n'a pas de `job` (il entrerait dans l'index de
   la relève). Son `call_id` reste lu dans sa clé.
+
+  Côté appels, la lentille du relevé `org.usage.calls` rend `call_uid` à côté de `call_id`
+  (l'`id` entier de la ligne) : c'est le `call_id` de la `meta` des mouvements, la clé par
+  laquelle le commerce apparie un mouvement à l'appel qui l'a consommé.
 - **Un règlement réel après l'échéance** : une réservation échue se règle au montant
   réservé ; le règlement réel qui arrive ensuite est seulement journalisé
   (`credits_hold_expired_before_settle`), sans remboursement. Au commerce de verser un
@@ -207,6 +279,11 @@ tenant→org (son quota) est vérifiée d'abord : son refus ne laisse aucune ré
 | `report` (défaut) | oui ; la réservation est posée même au-delà du disponible | jamais : journalise ce qu'`enforce` refuserait |
 | `enforce` | oui | `insufficient_credits` (non rejouable), `credits_unpriced` (fonction sans ligne au barème, non rejouable), `spend_ledger_unavailable` (registre illisible ou non écrit, rejouable) |
 | `off` | non | jamais |
+
+Le TEXTE de `insufficient_credits` ne porte aucun montant : l'unité de budget est celle de
+l'instance, et un nombre nu tromperait le lecteur. Le pire cas réservé et le disponible
+restent dans les données du refus (`needed`, `available`), en unités de budget, à traduire
+par l'instance.
 
 Un réglage illisible refuse le démarrage (`credits.verifier_reglages`). Un règlement qui
 échoue ne défait jamais l'appel : la réservation reste ouverte, et son échéance la règle.

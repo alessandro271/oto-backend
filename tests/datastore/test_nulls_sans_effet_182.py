@@ -17,9 +17,6 @@ import pytest
 
 from oto_mcp.datastore.columns import sans_les_nulls_sans_effet
 
-_SCHEMA = {"fields": [{"key": k, "type": "text"}
-                      for k in ("raison", "site_web", "effectif", "_claimed_by")]}
-
 
 def _jamais_appele():
     raise AssertionError("la ligne en place a été lue alors qu'aucun `null` n'est écrit")
@@ -29,7 +26,7 @@ def _jamais_appele():
 
 def test_sans_null_la_ligne_en_place_nest_jamais_lue():
     corps = {"raison": "ACME", "site_web": ""}
-    assert sans_les_nulls_sans_effet(corps, _jamais_appele, _SCHEMA) is corps
+    assert sans_les_nulls_sans_effet(corps, _jamais_appele) is corps
 
 
 @pytest.mark.parametrize("en_place", [{}, {"site_web": None}, {"site_web": ""},
@@ -37,36 +34,39 @@ def test_sans_null_la_ligne_en_place_nest_jamais_lue():
                          ids=["absente", "null_stocke", "vide", "couche_seule"])
 def test_un_null_sans_valeur_en_place_nest_pas_ecrit(en_place):
     sortie = sans_les_nulls_sans_effet({"raison": "ACME", "site_web": None},
-                                       lambda: en_place, _SCHEMA)
+                                       lambda: en_place)
     assert sortie == {"raison": "ACME"}
 
 
 def test_un_null_sur_une_valeur_en_place_reste_un_effacement():
     corps = {"site_web": None, "effectif": {"valeur": None}}
     en_place = {"site_web": "acme.fr", "effectif": {"valeur": 12, "origine": "registre"}}
-    assert sans_les_nulls_sans_effet(corps, lambda: en_place, _SCHEMA) == corps
+    assert sans_les_nulls_sans_effet(corps, lambda: en_place) == corps
 
 
 def test_une_valeur_nulle_en_couches_garde_ce_qui_laccompagne():
     sortie = sans_les_nulls_sans_effet(
-        {"site_web": {"valeur": None, "comment": "cherché, rien trouvé"}}, lambda: {},
-        _SCHEMA)
+        {"site_web": {"valeur": None, "comment": "cherché, rien trouvé"}}, lambda: {})
     assert sortie == {"site_web": {"comment": "cherché, rien trouvé"}}
 
 
 def test_les_colonnes_techniques_ne_sont_pas_filtrees():
-    sortie = sans_les_nulls_sans_effet({"_claimed_by": None, "raison": None}, lambda: {},
-                                       _SCHEMA)
+    sortie = sans_les_nulls_sans_effet({"_claimed_by": None, "raison": None},
+                                       lambda: {})
     assert sortie == {"_claimed_by": None}
 
 
-@pytest.mark.parametrize("schema", [_SCHEMA, None], ids=["hors_schema", "table_libre"])
-def test_un_null_hors_du_declare_garde_son_comportement(schema):
-    """La lecture ne sert à `null` que le déclaré. Un `null` sur une colonne inconnue
-    n'est pas un écho : il naît en base, le relevé le nomme, ou le tableau le refuse. Le
-    filtrer ferait disparaître une faute de frappe sans refus ni relevé."""
+def test_un_null_hors_du_declare_sans_valeur_en_place_ne_cree_pas_la_colonne():
+    """Un `null` sur une colonne non déclarée n'est pas refusé : il efface. Sans valeur
+    en place il n'efface rien, et l'écrire ferait naître la colonne à `null`, hors
+    schéma (oto-backend#1292)."""
+    assert sans_les_nulls_sans_effet({"raison": "ACME", "sit_web": None},
+                                     lambda: {"raison": "X"}) == {"raison": "ACME"}
+
+
+def test_un_null_hors_du_declare_efface_la_valeur_en_place():
     corps = {"sit_web": None}
-    assert sans_les_nulls_sans_effet(corps, _jamais_appele, schema) is corps
+    assert sans_les_nulls_sans_effet(corps, lambda: {"sit_web": "a.fr"}) == corps
 
 
 # ── les trois chemins, sur PostgreSQL ────────────────────────────────────────

@@ -20,7 +20,8 @@ Les docstrings de `signwell_document` restent courtes ; ce guide porte ce qui fa
 4. **Créer** : `op="create"` rend un **brouillon** — rien n'est parti. Relis la vue :
    `fields_count` (quelques secondes après, les text tags sont détectés en différé),
    destinataires, `emailed`.
-5. **Envoyer** : `op="send", document_id=…`. Vérifie ensuite `status == "Sent"` ;
+5. **Envoyer** : `signwell_act(op="send_document", document_id=…)` — un autre outil, que
+   ton client te fait confirmer. Vérifie ensuite `status == "Sent"` ;
    `Created` et `Sending` ne sont pas des envois.
 
 ## Text tags

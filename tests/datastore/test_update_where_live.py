@@ -161,16 +161,8 @@ def test_a_missing_column_is_declared_before_writing(store):
     assert {d["segment"] for d in _base(ns_id).values()} == {"industrie"}
 
 
-def test_a_table_without_schema_gets_none_declared(store):
-    ns, ns_id = _table(LIGNES, schema=None)
-    out = store.update_where(ns, {"tier": "x"})
-    assert "declared" not in out and out["updated"] == 4
-
-
-def test_a_value_the_schema_refuses_is_refused_whole(store, monkeypatch):
-    from oto_mcp.datastore import validation_complete as dsvc
+def test_a_value_the_schema_refuses_is_refused_whole(store):
     from oto_mcp.datastore.errors import RowValidationError
-    monkeypatch.setenv(dsvc.ENV_VALIDATION_COMPLETE_LE, "2026-01-01")
     ns, ns_id = _table(LIGNES)
     with pytest.raises(RowValidationError):
         store.update_where(ns, {"tier": "Tier 9"})
@@ -255,8 +247,9 @@ def test_unchanged_is_judged_on_the_unwrapped_value_and_its_type(store):
     out = store.update_where(ns, {"tier": "Tier 1"})
     assert out["unchanged"] == 4 and out["updated"] == 0
     assert _revisions(ns_id) == avant
-    # Au type près : `1` n'est pas `True`, la ligne n'est PAS sautée.
-    ns2, ns2_id = _table(LIGNES, schema=None)
+    # Au type près : `1` n'est pas `True`, la ligne n'est PAS sautée (colonne sans type).
+    ns2, ns2_id = _table(LIGNES, schema={"fields": SCHEMA["fields"][:2] + [
+        {"key": "client"}]})
     out = store.update_where(ns2, {"client": 1}, filter={"nom": "a"})
     assert out["unchanged"] == 0
 
@@ -277,12 +270,10 @@ def test_origine_layer_and_layer_only_empty_rule_are_refused(store):
         store.update_where(ns, {"tier.comment": "x"}, only_if_empty=True)
 
 
-def test_rule_refused_on_every_row_is_refused_whole_and_undeclared(store, monkeypatch):
+def test_rule_refused_on_every_row_is_refused_whole_and_undeclared(store):
     """Une faute que le jugement d'avant la boucle ne voit pas : un `required` que
     les lignes en place ne portent pas. Trois refus, rien d'écrit → la règle est
     refusée, et la colonne déclarée pour elle est retirée."""
-    from oto_mcp.datastore import validation_complete as dsvc
-    monkeypatch.setenv(dsvc.ENV_VALIDATION_COMPLETE_LE, "2026-01-01")
     ns, ns_id = _table(LIGNES)
     store.patch_schema(ns, fields=[{"key": "pays", "type": "text", "required": True}])
     with pytest.raises(ValueError):
@@ -379,12 +370,6 @@ def test_concurrent_append_rules_all_land_without_conflicts(store):
     assert all(o["conflicts"] == 0 and o["updated"] == 1 for o in sorties)
     lignes = _valeur(_base(ns_id)["a"]["journal"]).split("\n")
     assert sorted(lignes) == sorted(f"{p}{i}" for p in "xy" for i in range(tours))
-
-
-def test_append_on_a_table_without_schema_extends_the_text_in_place(store):
-    ns, ns_id = _table([{"nom": "a", "journal": "debut"}], schema=None)
-    store.update_where(ns, {"journal[+]": "suite"}, filter={"nom": "a"})
-    assert _valeur(_base(ns_id)["a"]["journal"]) == "debut\nsuite"
 
 
 @pytest.mark.parametrize("set_, kw, attendu", [

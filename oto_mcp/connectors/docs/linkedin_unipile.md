@@ -7,7 +7,8 @@ connect YOUR LinkedIn account from the oto dashboard — no cookie to paste, no 
 ## usage — LinkedIn prospecting and messaging
 
 search, profiles, posts, network, job offers and messaging — you act as yourself, under your own account.
-- what acts at someone else or in your name has its own tool, so that allowing reads never allows it: `linkedin_unipile_send` (a message, a reaction, a thread's state), `linkedin_unipile_invite` (send, answer or withdraw an invitation), `linkedin_unipile_publish` (a post, a comment, a reaction on a post). their old ops in `linkedin_unipile_chat`, `_network` and `_post` are deprecated, served until 10/12/2026.
+- the tools that read only read: `linkedin_unipile` (messaging: `op=list|read|attendees|contacts`), `linkedin_unipile_post`, `linkedin_unipile_network`, `linkedin_unipile_profile`, `linkedin_unipile_search`.
+- everything that acts at someone else or in your name is ONE tool, `linkedin_unipile_act` — your client asks you to confirm it, so allowing reads never allows it: a message (`op=send|react_message|update`), a post (`op=publish_post|comment_post|react_post`), an invitation (`op=invite|accept_invitation|decline_invitation|cancel_invitation`), a member (`op=endorse|update_member`).
 - "search LinkedIn for CFOs in the Lyon area in my 1st-degree network"
 - "open this slug's LinkedIn profile and summarize their career"
 - "send an invitation to this prospect with a note" then "reply in the thread when they accept"

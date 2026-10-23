@@ -64,11 +64,14 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
         # Le porteur `microsoft` (2026-10-08) : le compte Microsoft 365 garde le flux
         # du compte, `sharepoint` devient son premier service — un flux par carte,
         # même retour, comme google et ses services. Outlook, Outlook Calendar et Teams
-        # (2026-10-08) : les services suivants, même flux.
-        "microsoft", "sharepoint", "outlook", "outlook_calendar", "teams",
+        # (2026-10-08) : les services suivants, même flux ; OneNote (2026-10-21) aussi, et l'annuaire `entra`.
+        "microsoft", "sharepoint", "outlook", "outlook_calendar", "teams", "onenote", "entra",
         # `ubersuggest` (2026-10-08) : connexion Ubersuggest de la personne (client
         # OAuth public enregistré dynamiquement), même patron.
         "ubersuggest",
+        # `jefacture` (2026-10-22) : connexion jefacture.com de la personne (code
+        # d'autorisation, application plateforme), même patron.
+        "jefacture",
         # Le compte `unipile` GARDE son flux multi-canal (code de production) ; le
         # split du 2026-08-28 ajoute un flux par canal, sans paramètre — le canal
         # est dérivé du connecteur au lieu d'être choisi dans une liste.

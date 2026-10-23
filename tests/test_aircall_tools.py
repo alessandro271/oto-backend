@@ -8,6 +8,10 @@ Ce que ce fichier verrouille — les tripwires génériques couvrent déjà regi
   intact, `projection` qui NOMME ce qui manque) et `full=True` qui rend le brut ;
 - les refus d'intention (argument d'un autre `op`, argument requis absent) ;
 - la traduction des refus amont, dont le 404 de l'IA conversationnelle ;
+- l'audio d'un appel (`op="recording"|"voicemail"`) : rendu en fichier par le client
+  (`get_call_recording`, `get_call_voicemail`), déposé en transit, rendu en `source`
+  courte ; chaque refus du fichier (code nommé de la lib, délai, 404) est une erreur
+  d'outil ; aucun lien d'enregistrement n'est plus un argument (`short_urls` retiré) ;
 - la sonde : `probe()`, 401/403 → `NonAutorise`, autre code → non classé.
 """
 import asyncio
@@ -87,7 +91,7 @@ _CALLS = {
              "next_page_link": None, "previous_page_link": None},
     "calls": [{
         "id": 812, "direct_link": "https://api.aircall.test/v1/calls/812",
-        "direction": "inbound", "recording": "https://rec.test/a.mp3",
+        "direction": "inbound",
         "cost": "0", "ivr_options_selected": [],
         "number": {"id": 1234, "digits": "+33 1 00 00 00 00",
                    "direct_link": "https://api.aircall.test/v1/numbers/1234",
@@ -105,9 +109,9 @@ def test_list_rend_la_vue_resserree_et_nomme_ce_qui_manque(client):
     out = _tool("aircall_calls")(date_from="2026-09-01", order="desc", per_page=50)
     kw = client.list_calls.call_args.kwargs
     assert kw["date_from"] == "2026-09-01" and kw["order"] == "desc"
-    assert kw["per_page"] == 50 and kw["fetch_short_urls"] is None
+    assert kw["per_page"] == 50 and kw["fetch_contact"] is None
+    assert "fetch_short_urls" not in kw
     call = out["calls"][0]
-    assert call["recording"] == "https://rec.test/a.mp3"
     assert "direct_link" not in call and "cost" not in call
     assert call["number"] == {"id": 1234, "digits": "+33 1 00 00 00 00"}
     assert call["user"] == {"id": 456, "name": "Jane Doe"}
@@ -127,21 +131,83 @@ def test_full_rend_le_brut(client):
 def test_search_route_ses_filtres(client):
     client.search_calls.return_value = {"meta": {}, "calls": []}
     _tool("aircall_calls")(op="search", direction="outbound", user_id=456,
-                           phone_number="+33100000000", short_urls=True)
+                           phone_number="+33100000000", fetch_contact=True)
     kw = client.search_calls.call_args.kwargs
     assert kw["direction"] == "outbound" and kw["user_id"] == 456
-    assert kw["phone_number"] == "+33100000000" and kw["fetch_short_urls"] is True
+    assert kw["phone_number"] == "+33100000000" and kw["fetch_contact"] is True
+    assert "fetch_short_urls" not in kw
 
 
 def test_get_rend_l_appel_brut(client):
     client.get_call.return_value = {"call": {"id": 812, "direct_link": "x"}}
     out = _tool("aircall_calls")(op="get", call_id=812, fetch_contact=True)
     assert out == {"call": {"id": 812, "direct_link": "x"}}
-    client.get_call.assert_called_once_with(812, fetch_contact=True,
-                                            fetch_short_urls=None)
+    client.get_call.assert_called_once_with(812, fetch_contact=True)
+
+
+@pytest.fixture
+def audio(monkeypatch):
+    """Le dépôt en transit, observé."""
+    vu = {"deposer": []}
+
+    def deposer(prefix, data, mime, filename, *, lien=False):
+        vu["deposer"].append((prefix, data, mime, filename))
+        return {"source": {"kind": "transit", "ref": prefix + "/" + "0" * 32}}
+
+    monkeypatch.setattr("oto_mcp.transit.deposer", deposer)
+    return vu
+
+
+_METHODE_AUDIO = {"recording": "get_call_recording", "voicemail": "get_call_voicemail"}
+
+
+@pytest.mark.parametrize("op", ["recording", "voicemail"])
+def test_l_audio_d_un_appel_part_en_transit(client, audio, op):
+    from oto.connectors.files import FileOut
+    getattr(client, _METHODE_AUDIO[op]).return_value = FileOut(
+        f"call-812-{op}.mp3", b"ID3audio", "audio/mpeg")
+    out = _tool("aircall_calls")(op=op, call_id=812)
+    getattr(client, _METHODE_AUDIO[op]).assert_called_once_with(812)
+    client.get_call.assert_not_called()
+    assert audio["deposer"] == [("aircall-recordings", b"ID3audio", "audio/mpeg",
+                                 f"call-812-{op}.mp3")]
+    assert out == {"source": {"kind": "transit", "ref": "aircall-recordings/" + "0" * 32}}
+
+
+@pytest.mark.parametrize("code", ["file_missing", "file_too_large",
+                                  "file_download_refused", "file_type_refused"])
+def test_un_fichier_refuse_par_la_lib_est_nomme(client, audio, code):
+    from oto.connectors.files import FileOutputError
+    client.get_call_voicemail.side_effect = FileOutputError(code, "refus de test")
+    with pytest.raises(McpError, match=f"Aircall voicemail: {code}: refus de test"):
+        _tool("aircall_calls")(op="voicemail", call_id=812)
+    assert audio["deposer"] == []
+
+
+def test_un_audio_trop_lent_est_une_erreur_d_outil(client, audio):
+    import requests
+    client.get_call_recording.side_effect = requests.Timeout("lent")
+    with pytest.raises(McpError, match="Aircall recording: .*120 s"):
+        _tool("aircall_calls")(op="recording", call_id=812)
+    assert audio["deposer"] == []
+
+
+def test_un_appel_inconnu_de_l_amont_est_nomme(client, audio):
+    client.get_call_recording.side_effect = _upstream(404)
+    with pytest.raises(McpError, match=r"not found \(404\)"):
+        _tool("aircall_calls")(op="recording", call_id=812)
+    assert audio["deposer"] == []
+
+
+def test_aucun_lien_d_enregistrement_n_est_un_argument():
+    import inspect
+    assert "short_urls" not in inspect.signature(_tool("aircall_calls")).parameters
 
 
 @pytest.mark.parametrize("kw", [
+    {"op": "recording"},                              # call_id manquant
+    {"op": "recording", "call_id": 1, "full": True},  # vue sur un audio
+    {"op": "voicemail", "call_id": 1, "fetch_contact": True},
     {"op": "get"},                                    # call_id manquant
     {"op": "get", "call_id": 1, "per_page": 10},      # pagination sur un get
     {"op": "list", "user_id": 456},                   # filtre de search sur list

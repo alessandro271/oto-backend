@@ -27,6 +27,21 @@ COLONNE_OUTILS_PLATEFORME = "outils_plateforme"
 DDL_COLONNE_OUTILS_PLATEFORME = (
     f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS {COLONNE_OUTILS_PLATEFORME} "
     "JSONB NOT NULL DEFAULT '[]'::jsonb")
+# Les webhooks qu'oto a INSCRITS chez la source pour cet agent (`connect_source`,
+# docs/runner-et-automatisations.md §Brancher une source) : posée par la révision
+# `0072_triggers_hook_sources` ET par le démarrage, sous garde de catalogue — même DDL.
+# `[{source, remote_id, event, campaign_id}]` ; NULL = rien d'inscrit. Des
+# identifiants chez le tiers, jamais un secret : la colonne se sert.
+COLONNE_HOOK_SOURCES = "hook_sources"
+DDL_COLONNE_HOOK_SOURCES = (f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS "
+                            f"{COLONNE_HOOK_SOURCES} JSONB")
+# Le FILTRE de livraison d'un webhook (`hook_filter.py`) : `{chemin: [valeurs]}`
+# qu'une livraison authentifiée doit porter pour lancer un run. Posée par la
+# révision `20261023_0900_hook_filter` ET par le démarrage, sous garde de
+# catalogue — même DDL. NULL = tout passe.
+COLONNE_HOOK_FILTER = "hook_filter"
+DDL_COLONNE_HOOK_FILTER = (f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS "
+                           f"{COLONNE_HOOK_FILTER} JSONB")
 
 _COLS = ("id, org_id, sub, label, folder, procedure, project_id, tools, "
          "outils_plateforme AS platform_tools, "
@@ -34,7 +49,7 @@ _COLS = ("id, org_id, sub, label, folder, procedure, project_id, tools, "
          "max_tokens, max_run_seconds, model, kind, payload_mode, payload_fields, max_per_hour, fraicheur_s, "
          "cron, tz, enabled, next_due, last_enqueued_at, created_at, hook_auth, "
          "(hook_signing_secret_enc IS NOT NULL) AS signing_secret_set, "
-         "max_per_day, hook_slug, hook_filter")
+         "max_per_day, hook_slug, hook_sources, hook_filter")
 
 #: ⚠️ `hook_secret_hash` n'est PAS dans `_COLS`, et c'est la garde : un haché servi
 #: à une lecture partirait dans la réponse de `op=list`, donc dans un transcript
@@ -485,6 +500,51 @@ def poser_secret_de_hook(trigger_id: int, org_id: int, secret_hash: str) -> bool
             "UPDATE runner_triggers SET hook_secret_hash = %s "
             "WHERE id = %s AND org_id = %s AND kind = 'webhook'",
             (secret_hash, trigger_id, org_id),
+        )
+        return bool(cur.rowcount)
+
+
+#: La garde des deux écritures de `hook_sources` : la ligne porte-t-elle encore ce que
+#: le geste a lu ? NULL et `[]` se valent (rien d'inscrit).
+_SOURCES_INCHANGEES = "COALESCE(hook_sources, '[]'::jsonb) = %s::jsonb"
+
+
+def poser_sources_de_hook(trigger_id: int, org_id: int, sources: Optional[list], *,
+                          sources_avant: Optional[list]) -> bool:
+    """Remplace la liste des webhooks inscrits chez la source — SEULEMENT si la ligne
+    porte encore `sources_avant` (ce que le geste a lu). `None` ou `[]` = plus rien
+    d'inscrit (NULL). `False` = la ligne a changé (un branchement concurrent) ou
+    n'existe plus : rien n'est écrit, à l'appelant de le dire."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE runner_triggers SET hook_sources = %s::jsonb "
+            f"WHERE id = %s AND org_id = %s AND kind = 'webhook' AND {_SOURCES_INCHANGEES}",
+            (json.dumps(sources) if sources else None, trigger_id, org_id,
+             json.dumps(sources_avant or [])),
+        )
+        return bool(cur.rowcount)
+
+
+def brancher_la_source(trigger_id: int, org_id: int, *, hook_auth: str,
+                       secret_hash: str, hook_slug: str, sources: list,
+                       sources_avant: Optional[list]) -> bool:
+    """Le BRANCHEMENT d'une source, en UNE transaction : l'adresse privée, le mode, le
+    porteur neuf et les webhooks inscrits. ⚠️ Séparées, une panne entre deux écritures
+    laisserait un porteur que la source ne détient pas, ou des inscriptions qu'aucun
+    porteur n'ouvre. Le secret de signature est effacé, comme à tout passage au porteur.
+
+    ⚠️ Écrit SEULEMENT si la ligne porte encore `sources_avant` (ce que le branchement
+    a lu, et retirera chez la source) : un branchement concurrent écrasé en silence
+    laisserait SES inscriptions chez le tiers sans plus aucune ligne pour les retirer.
+    `False` = la ligne a changé ou n'existe plus — à l'appelant de compenser."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE runner_triggers SET hook_slug = %s, hook_auth = %s, "
+            "hook_secret_hash = %s, hook_signing_secret_enc = NULL, "
+            "hook_sources = %s::jsonb "
+            f"WHERE id = %s AND org_id = %s AND kind = 'webhook' AND {_SOURCES_INCHANGEES}",
+            (hook_slug, hook_auth, secret_hash, json.dumps(sources), trigger_id, org_id,
+             json.dumps(sources_avant or [])),
         )
         return bool(cur.rowcount)
 

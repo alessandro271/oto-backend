@@ -37,6 +37,12 @@ could not stop at the first page outside the window. Unlike Attio,
 there was nothing to refuse here: GraphQL HARD-rejects an unknown filter
 field, so there is no risk of a filter being silently swallowed.
 
+**Extra reads on `op="get"`** (`include`): customer needs, relations and the status
+history of an issue, customer needs of a project. Linear carried them all along; the
+client's default field set did not ask for them, so a run announcing what shipped could
+say neither who had asked for it nor when it reached a status. The history keeps status
+changes only and walks its pages (5 × 100 entries, `truncated` past that).
+
 **Live-tested 2026-08-21** against a real workspace, through this tool layer
 (not just the raw client) — full create/get/update/delete lifecycle on
 issues, projects, and webhooks, param-guard behavior confirmed, everything
@@ -46,6 +52,7 @@ Linear's docs or its GraphQL schema alone.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, List, Literal, Optional
 
 from fastmcp import FastMCP
@@ -132,6 +139,73 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
         raise _bad(_upstream_message(e))
 
 
+# Reads that op="get" adds on demand (`include`). Linear carries all three on
+# `Issue` (and customer needs on `Project`); the client's default field set
+# never asked for them, so a run could not say who requested an issue, what it
+# is related to, nor when it reached a status. Every query built here was
+# validated against Linear's published SDL (`schema.graphql` of `@linear/sdk`,
+# read 2026-10-22), not only mocked.
+_NEED_FIELDS = """
+    id body priority url createdAt
+    customer { id name domains }
+    attachment { title url }
+"""
+_STATE = "id name type"
+_HISTORY_PAGE = 100
+_HISTORY_MAX_PAGES = 5
+
+ISSUE_INCLUDE_FIELDS = {
+    "needs": f"needs(first: 50) {{ nodes {{ {_NEED_FIELDS} }} pageInfo {{ hasNextPage }} }}",
+    "relations": (
+        "relations(first: 50) { nodes { type relatedIssue { id identifier title url "
+        f"state {{ {_STATE} }} }} }} pageInfo {{ hasNextPage }} }}"
+        " inverseRelations(first: 50) { nodes { type issue { id identifier title url "
+        f"state {{ {_STATE} }} }} }} pageInfo {{ hasNextPage }} }}"),
+    # "history" is paged: `_history_fields`.
+}
+PROJECT_INCLUDE_FIELDS = {
+    "needs": (f"needs(first: 50) {{ nodes {{ {_NEED_FIELDS} issue {{ id identifier title url }} }} "
+              "pageInfo { hasNextPage } }"),
+}
+
+
+def _history_fields(after: Optional[str] = None) -> str:
+    cursor = f", after: {json.dumps(after)}" if after else ""
+    return (f"history(first: {_HISTORY_PAGE}{cursor}) {{ nodes {{ createdAt "
+            f"fromState {{ {_STATE} }} toState {{ {_STATE} }} }} "
+            "pageInfo { hasNextPage endCursor } }")
+
+
+def _issue_with_includes(c: Any, issue_id: str, include: List[str]) -> Any:
+    """op="get" with `include`: the default fields plus the asked extras, in
+    ONE query. `history` keeps only status changes (Linear's history also logs
+    title, assignee, label… edits), oldest first, and walks its pages so the
+    order Linear serves them in never decides which moves are lost."""
+    from oto.tools.linear.client import LinearClient
+
+    parts = [LinearClient._ISSUE_FIELDS]
+    for name in include:
+        parts.append(_history_fields() if name == "history" else ISSUE_INCLUDE_FIELDS[name])
+    issue = c.get_issue(issue_id, fields="\n".join(parts))
+    if issue is None or "history" not in include:
+        return issue
+
+    page = issue.pop("history") or {}
+    nodes = list(page.get("nodes") or [])
+    pages = 1
+    while (page.get("pageInfo") or {}).get("hasNextPage") and pages < _HISTORY_MAX_PAGES:
+        more = c.get_issue(issue_id, fields=_history_fields(page["pageInfo"]["endCursor"])) or {}
+        page = more.get("history") or {}
+        nodes.extend(page.get("nodes") or [])
+        pages += 1
+    moves = sorted((n for n in nodes if n.get("toState")), key=lambda n: n.get("createdAt") or "")
+    issue["state_history"] = {
+        "nodes": moves,
+        "truncated": bool((page.get("pageInfo") or {}).get("hasNextPage")),
+    }
+    return issue
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.linear.client import LinearClient
     from oto.tools.linear import LinearError
@@ -179,6 +253,7 @@ def register(mcp: FastMCP) -> None:
         order_by: Optional[Literal["createdAt", "updatedAt"]] = None,
         first: Optional[int] = None,
         after: Optional[str] = None,
+        include: Optional[List[Literal["needs", "relations", "history"]]] = None,
     ) -> object:
         """A Linear issue — list/filter, full-text search, fetch one,
         create, update, archive (reversible), or delete (moves to trash).
@@ -210,6 +285,15 @@ def register(mcp: FastMCP) -> None:
                 "updatedAt". Descending either way.
             first/after: op="list"/"search" only — cursor pagination
                 (`after` = previous call's `pageInfo.endCursor`).
+            include: op="get" only — extra reads, any of:
+                "needs" = customer needs (who asked: customer name and
+                domains, the request text, its source link);
+                "relations" = related, blocking, duplicate issues, both
+                directions (`relations` and `inverseRelations`);
+                "history" = `state_history`, every status change with its
+                date, oldest first (answers "when did it move to Done").
+                A project's customer needs: `linear_project(op="get",
+                include=["needs"])`.
         """
         c = _client()
         if op == "list":
@@ -219,7 +303,8 @@ def register(mcp: FastMCP) -> None:
                         "first", "after"},
                   issue_id=issue_id, query=query, title=title, description=description,
                   priority=priority, label_ids=label_ids, due_date=due_date,
-                  estimate=estimate, parent_id=parent_id)
+                  estimate=estimate, parent_id=parent_id,
+                  include=include)
             return _run(lambda: c.list_issues(
                 team_id=team_id, project_id=project_id, cycle_id=cycle_id,
                 assignee_id=assignee_id, state_id=state_id,
@@ -228,7 +313,8 @@ def register(mcp: FastMCP) -> None:
                 order_by=order_by, first=_page(first), after=after))
         if op == "get":
             _require(op, issue_id=issue_id)
-            _only(op, {"issue_id"}, team_id=team_id, project_id=project_id, cycle_id=cycle_id,
+            _only(op, {"issue_id", "include"}, team_id=team_id, project_id=project_id,
+                  cycle_id=cycle_id,
                   assignee_id=assignee_id, state_id=state_id, query=query, title=title,
                   description=description, priority=priority, label_ids=label_ids,
                   due_date=due_date, estimate=estimate, parent_id=parent_id,
@@ -236,7 +322,9 @@ def register(mcp: FastMCP) -> None:
                   created_after=created_after, created_before=created_before,
                   order_by=order_by,
                   first=first, after=after)
-            return _run(lambda: c.get_issue(issue_id))
+            if not include:
+                return _run(lambda: c.get_issue(issue_id))
+            return _run(lambda: _issue_with_includes(c, issue_id, list(dict.fromkeys(include))))
         if op == "search":
             _require(op, query=query)
             _only(op, {"query", "team_id", "first", "after"},
@@ -246,7 +334,8 @@ def register(mcp: FastMCP) -> None:
                   due_date=due_date, estimate=estimate, parent_id=parent_id,
                   updated_after=updated_after, updated_before=updated_before,
                   created_after=created_after, created_before=created_before,
-                  order_by=order_by)
+                  order_by=order_by,
+                  include=include)
             return _run(lambda: c.search_issues(query, team_id=team_id, first=_page(first), after=after))
         if op == "create":
             _require(op, title=title, team_id=team_id)
@@ -256,7 +345,8 @@ def register(mcp: FastMCP) -> None:
                   issue_id=issue_id, query=query, first=first, after=after,
                   updated_after=updated_after, updated_before=updated_before,
                   created_after=created_after, created_before=created_before,
-                  order_by=order_by)
+                  order_by=order_by,
+                  include=include)
             return _run(lambda: c.create_issue(
                 title, team_id, description=description, assignee_id=assignee_id,
                 state_id=state_id, priority=priority, label_ids=label_ids,
@@ -270,7 +360,8 @@ def register(mcp: FastMCP) -> None:
                   team_id=team_id, query=query, parent_id=parent_id, first=first, after=after,
                   updated_after=updated_after, updated_before=updated_before,
                   created_after=created_after, created_before=created_before,
-                  order_by=order_by)
+                  order_by=order_by,
+                  include=include)
             return _run(lambda: c.update_issue(
                 issue_id, title=title, description=description, assignee_id=assignee_id,
                 state_id=state_id, priority=priority, label_ids=label_ids,
@@ -285,7 +376,8 @@ def register(mcp: FastMCP) -> None:
                   updated_after=updated_after, updated_before=updated_before,
                   created_after=created_after, created_before=created_before,
                   order_by=order_by,
-                  first=first, after=after)
+                  first=first, after=after,
+                  include=include)
             return _run(lambda: c.archive_issue(issue_id))
         if op == "delete":
             _require(op, issue_id=issue_id)
@@ -296,7 +388,8 @@ def register(mcp: FastMCP) -> None:
                   updated_after=updated_after, updated_before=updated_before,
                   created_after=created_after, created_before=created_before,
                   order_by=order_by,
-                  first=first, after=after)
+                  first=first, after=after,
+                  include=include)
             return _run(lambda: c.delete_issue(issue_id))
         raise _bad(f"op inconnu: {op!r}")
 
@@ -370,6 +463,7 @@ def register(mcp: FastMCP) -> None:
         target_date: Optional[str] = None,
         first: Optional[int] = None,
         after: Optional[str] = None,
+        include: Optional[List[Literal["needs"]]] = None,
     ) -> object:
         """A Linear project (spans one or more teams).
 
@@ -386,31 +480,40 @@ def register(mcp: FastMCP) -> None:
                 has no such field). Read an existing project's `status.id`
                 via `linear_project(op="get"|"list")` to find a valid value.
             first/after: op="list" only — cursor pagination.
+            include: op="get" only — ["needs"] adds the project's customer
+                needs (who asked: customer name and domains, the request
+                text, the issue it was attached to if any).
         """
         c = _client()
         if op == "list":
             _only(op, {"team_id", "first", "after"},
                   project_id=project_id, team_ids=team_ids, name=name,
                   description=description, status_id=status_id, lead_id=lead_id,
-                  target_date=target_date)
+                  target_date=target_date,
+                  include=include)
             return _run(lambda: c.list_projects(team_id=team_id, first=_page(first), after=after))
         if op == "get":
             _require(op, project_id=project_id)
-            _only(op, {"project_id"}, team_id=team_id, team_ids=team_ids, name=name,
-                  description=description, status_id=status_id, lead_id=lead_id,
-                  target_date=target_date, first=first, after=after)
-            return _run(lambda: c.get_project(project_id))
+            _only(op, {"project_id", "include"}, team_id=team_id, team_ids=team_ids,
+                  name=name, description=description, status_id=status_id,
+                  lead_id=lead_id, target_date=target_date, first=first, after=after)
+            if not include:
+                return _run(lambda: c.get_project(project_id))
+            fields = "\n".join([LinearClient._PROJECT_FIELDS, PROJECT_INCLUDE_FIELDS["needs"]])
+            return _run(lambda: c.get_project(project_id, fields=fields))
         if op == "create":
             _require(op, name=name, team_ids=team_ids)
             _only(op, {"name", "team_ids", "description", "status_id", "lead_id", "target_date"},
-                  project_id=project_id, team_id=team_id, first=first, after=after)
+                  project_id=project_id, team_id=team_id, first=first, after=after,
+                  include=include)
             return _run(lambda: c.create_project(
                 name, team_ids, description=description, status_id=status_id,
                 lead_id=lead_id, target_date=target_date))
         if op == "update":
             _require(op, project_id=project_id)
             _only(op, {"project_id", "name", "description", "status_id", "lead_id", "target_date"},
-                  team_id=team_id, team_ids=team_ids, first=first, after=after)
+                  team_id=team_id, team_ids=team_ids, first=first, after=after,
+                  include=include)
             return _run(lambda: c.update_project(
                 project_id, name=name, description=description, status_id=status_id,
                 lead_id=lead_id, target_date=target_date))
@@ -418,7 +521,8 @@ def register(mcp: FastMCP) -> None:
             _require(op, project_id=project_id)
             _only(op, {"project_id"}, team_id=team_id, team_ids=team_ids, name=name,
                   description=description, status_id=status_id, lead_id=lead_id,
-                  target_date=target_date, first=first, after=after)
+                  target_date=target_date, first=first, after=after,
+                  include=include)
             return _run(lambda: c.delete_project(project_id))
         raise _bad(f"op inconnu: {op!r}")
 

@@ -253,9 +253,13 @@ en partie non francophones).
   TEXTE des 4 gabarits vit dans `email_templates.py`, qui y accède par
   `import email as _email` (jamais `from .email import _send` — un import de nom
   capturerait une copie figée qu'un `monkeypatch.setattr(email, "_send", ...)` ne
-  toucherait pas). `email.py` réexpose les quatre fonctions
-  (`from .email_templates import ...`) pour que `email.send_invite_email` etc.
-  restent des attributs valides du module `email`, ce que les tests monkeypatchent.
+  toucherait pas). `email.py` réexpose les gabarits pour que
+  `email.send_invite_email` etc. restent des attributs valides du module `email`, ce
+  que les tests monkeypatchent — par import de MODULE lui aussi (`from . import
+  email_templates`), le nom lu À L'APPEL par son `__getattr__`. ⚠️ Jamais
+  `from .email_templates import <nom>` : entrer dans le trio par `email_templates`
+  (ce que fait la maintenance `alertes-credential`) trouvait ce module à moitié
+  chargé, et l'import levait.
 - **Les appelants lisent `users.locale` du DESTINATAIRE, pas de l'émetteur** :
   - `orgs/invites.py::emit_invitation` — `db.get_user_by_email(email_addr)`. Une
     adresse jamais vue (pas encore de compte) n'a pas de ligne `users` ⟹

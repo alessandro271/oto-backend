@@ -26,6 +26,7 @@ EXPECTED_TOOLS = {
     "lightfield_accounts", "lightfield_contacts", "lightfield_opportunities",
     "lightfield_lists", "lightfield_notes", "lightfield_tasks",
     "lightfield_meetings", "lightfield_emails", "lightfield_objects",
+    "lightfield_act",
 }
 
 
@@ -217,8 +218,8 @@ def test_sending_an_email_is_dry_run_BY_DEFAULT(capsys):
     DEMANDER, pas l'obtenir par défaut."""
     fake = _FakeClient()
     with _with_client(fake):
-        out = _tool("lightfield_emails").fn(
-            op="send", sender="me@corp.test", to=["you@corp.test"], subject="Hi")
+        out = _tool("lightfield_act").fn(
+            op="send_email", sender="me@corp.test", to=["you@corp.test"], subject="Hi")
     assert out["dry_run"] is True
     assert not [c for c in fake.calls if c[0] == "send_email"]
 
@@ -226,8 +227,8 @@ def test_sending_an_email_is_dry_run_BY_DEFAULT(capsys):
 def test_sending_for_real_requires_dry_run_false(capsys):
     fake = _FakeClient()
     with _with_client(fake):
-        _tool("lightfield_emails").fn(
-            op="send", sender="me@corp.test", to=["you@corp.test"], dry_run=False)
+        _tool("lightfield_act").fn(
+            op="send_email", sender="me@corp.test", to=["you@corp.test"], dry_run=False)
     sent = [c for c in fake.calls if c[0] == "send_email"]
     assert sent and sent[0][1][0]["from"] == "me@corp.test"
 
@@ -235,14 +236,16 @@ def test_sending_for_real_requires_dry_run_false(capsys):
 def test_an_email_without_a_connected_sender_is_refused_before_any_call():
     fake = _FakeClient()
     with _with_client(fake), pytest.raises(McpError, match="CONNECT"):
-        _tool("lightfield_emails").fn(op="send", to=["you@corp.test"], dry_run=False)
+        _tool("lightfield_act").fn(op="send_email", sender=None, to=["you@corp.test"],
+                                  dry_run=False)
     assert fake.calls == []
 
 
 def test_a_send_with_no_recipient_is_refused():
     fake = _FakeClient()
     with _with_client(fake), pytest.raises(McpError):
-        _tool("lightfield_emails").fn(op="send", sender="me@corp.test", dry_run=False)
+        _tool("lightfield_act").fn(op="send_email", sender="me@corp.test", to=[],
+                                  dry_run=False)
 
 
 def test_draft_and_send_are_separate_paths():

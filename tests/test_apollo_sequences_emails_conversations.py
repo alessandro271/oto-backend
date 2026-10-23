@@ -269,7 +269,7 @@ def test_email_send_resolves_byo_only(monkeypatch):
     client = MagicMock()
     client.send_email_now.return_value = {"emailer_message": {}}
     get_tool, calls, _ = _mount(monkeypatch, client)
-    get_tool("apollo_email")(op="send", message_id="msg1")
+    get_tool("apollo_act")(op="send_email", message_id="msg1")
     assert calls == ["byo"]
     assert client.send_email_now.call_args.args[0] == "msg1"
 
@@ -277,7 +277,7 @@ def test_email_send_resolves_byo_only(monkeypatch):
 def test_email_send_dry_run_skips_the_call(monkeypatch):
     client = MagicMock()
     get_tool, calls, _ = _mount(monkeypatch, client)
-    result = get_tool("apollo_email")(op="send", message_id="msg1", dry_run=True)
+    result = get_tool("apollo_act")(op="send_email", message_id="msg1", dry_run=True)
     assert result["dry_run"] is True
     assert not client.send_email_now.called
 
@@ -286,7 +286,7 @@ def test_email_send_requires_a_message_id(monkeypatch):
     client = MagicMock()
     get_tool, calls, _ = _mount(monkeypatch, client)
     with pytest.raises(McpError):
-        get_tool("apollo_email")(op="send")
+        get_tool("apollo_act")(op="send_email", message_id="")
     assert not client.send_email_now.called
 
 

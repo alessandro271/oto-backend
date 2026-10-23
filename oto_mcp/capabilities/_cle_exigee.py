@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from .. import credentials_store, providers
+from .. import credentials_store, db, providers
 from ..db import connector_settings
 from ._types import AuthzDenied
 
@@ -171,13 +171,41 @@ def raison_sans_acces(fournisseur: str) -> str:
             "prochaine échéance.")
 
 
-def manquantes(org_id: int, fournisseurs: Optional[list[str]] = None) -> list[str]:
+RAISON_FERME = (
+    "cette organisation est servie par la ferme (Claude Code), qui ne tourne que sur la "
+    "clé Anthropic de l'organisation elle-même. Elle n'en a pas déposé : dépose-la "
+    "(Connecteurs), ou fais retirer l'option ferme pour tourner sur la clé partagée.")
+
+
+def org_routee_ferme(org_id: int) -> bool:
+    """L'org est-elle routée vers la ferme (`db.OPTION_FERME`, don d'option VIVANT) ?"""
+    return db.has_option_comp("org", str(org_id), db.OPTION_FERME)
+
+
+def _manque(org_id: int, fournisseur: str, routee: bool) -> bool:
+    if routee and fournisseur == db.FAMILLE_FERME:
+        # ⚠️ LA FERME (21/10/2026) : elle ne tourne que sur la clé de l'org, réglage
+        # `runner.org_key_required` posé ou non, et ne reçoit jamais une clé partagée
+        # (`runner_jobs._avec_cle`). Sans dépôt, la pose réussissait et la réservation
+        # arrêtait chaque travail.
+        return not cle_deposee(org_id, fournisseur)
+    return (cle_exigee(org_id, fournisseur) and not cle_deposee(org_id, fournisseur)
+            and cle_partagee(org_id, fournisseur) is None)
+
+
+def manquantes(org_id: int, fournisseurs: Optional[list[str]] = None, *,
+               routee: Optional[bool] = None) -> list[str]:
     """Les fournisseurs dont une clé est EXIGÉE et que l'org n'a ni déposée, ni reçue
     en partage (`cle_partagee` : une clé de plateforme accordée paie, et se
-    refacture — l'org n'a rien à déposer)."""
-    return [f for f in (fournisseurs or fournisseurs_de_modele())
-            if cle_exigee(org_id, f) and not cle_deposee(org_id, f)
-            and cle_partagee(org_id, f) is None]
+    refacture — l'org n'a rien à déposer). Pour une org routée vers la ferme, sa
+    famille ferme exige SA clé, et une clé partagée ne suffit pas.
+
+    `routee` = le routage vers la ferme, quand l'appelant l'a déjà lu (`runner_arme`
+    le rend) ; None = lu ici, et seulement si la famille ferme est en jeu."""
+    fournisseurs = fournisseurs or fournisseurs_de_modele()
+    if routee is None:
+        routee = db.FAMILLE_FERME in fournisseurs and org_routee_ferme(org_id)
+    return [f for f in fournisseurs if _manque(org_id, f, routee)]
 
 
 def raison_du_refus(fournisseurs: list[str]) -> str:
@@ -190,7 +218,8 @@ def raison_du_refus(fournisseurs: list[str]) -> str:
             "`procedure-en-routine`.")
 
 
-def exiger_a_la_pose(org_id: int, famille: Optional[str] = None) -> None:
+def exiger_a_la_pose(org_id: int, famille: Optional[str] = None,
+                     etat: Optional[dict] = None) -> None:
     """Le refus LISIBLE, au moment de poser un agent. Lève `model_key_required`.
 
     `famille` = celle du modèle DÉCLARÉ sur cet agent, telle que
@@ -212,12 +241,20 @@ def exiger_a_la_pose(org_id: int, famille: Optional[str] = None) -> None:
     (`runner_jobs._avec_cle`) — sans cela il tournait sur le modèle du worker,
     donc sur notre clé, sans qu'aucune clé d'org ne soit en jeu.
 
+    ⚠️ Une org routée vers la ferme (21/10/2026) : sa famille ferme exige SA clé,
+    réglage posé ou non, et une clé partagée ne suffit pas (`_manque`). `etat` = l'état
+    du runner que l'appelant a déjà lu (`runner_arme`, qui porte `farm_routed`) ; sans
+    lui, le routage se lit ici.
+
     ⚠️ La garde à la RÉSERVATION (`refuser_pour_identite`, arrêt définitif) reste
     la vraie garantie et n'est PAS touchée par ce lot : elle juge le travail
     produit, avec sa famille déjà écrite dedans — jamais un ensemble de familles
     « peut-être demandées »."""
     if not famille:
         return
-    absentes = manquantes(org_id, [famille])
+    routee = famille == db.FAMILLE_FERME and (
+        bool(etat.get("farm_routed")) if etat is not None else org_routee_ferme(org_id))
+    absentes = manquantes(org_id, [famille], routee=routee)
     if absentes:
-        raise AuthzDenied(400, "model_key_required", raison_du_refus(absentes))
+        raise AuthzDenied(400, "model_key_required",
+                          RAISON_FERME if routee else raison_du_refus(absentes))

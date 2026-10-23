@@ -67,7 +67,8 @@ _ETAT = {"armed": True, "workers": 1, "last_seen": None,
 def test_l_etat_d_une_org_SANS_cle_propose_mistral(monkeypatch):
     vus = []
     monkeypatch.setattr(_modele._cle_exigee, "manquantes",
-                        lambda org, familles: vus.append((org, list(familles))) or ["anthropic"])
+                        lambda org, familles, routee=None:
+                        vus.append((org, list(familles))) or ["anthropic"])
     assert _defaut(_modele.etat_servi(dict(_ETAT), 226)["models"]) == "mistral-large-2512"
     assert vus == [(226, ["anthropic", "mistral"])], "la clé se lit pour CETTE org et ses familles servies"
 

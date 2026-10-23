@@ -28,7 +28,7 @@ def _with_fake_client():
 
 
 CRM_TOOLS = {
-    "lemlist_contact", "lemlist_company", "lemlist_inbox", "lemlist_inbox_send",
+    "lemlist_contact", "lemlist_company", "lemlist_inbox", "lemlist_act",
     "lemlist_unsubscribe", "lemlist_task", "lemlist_watchlist",
     "lemlist_database", "lemlist_team", "lemlist_mailbox",
     "lemlist_deliverability", "lemlist_webhook",
@@ -69,7 +69,7 @@ def test_le_second_module_est_charge_par_le_boot_reel(all_tools):
     ("lemlist_mailbox", "lemlist_crm", {}),
     ("lemlist_deliverability", "lemlist_crm", {}),
     ("lemlist_webhook", "lemlist_crm", {}),
-    ("lemlist_inbox_send", "lemlist_crm",
+    ("lemlist_act", "lemlist_crm",
      {"message": "x", "send_user_id": "usr_1"}),
     ("lemlist_lead", "lemlist", {}),
 ])
@@ -185,16 +185,16 @@ def test_un_envoi_incomplet_est_refuse_sans_aller_retour():
     key, cls = _with_fake_client()
     with key, cls as client_cls:
         inst = client_cls.return_value
-        tool = _tool("lemlist_inbox_send")
+        tool = _tool("lemlist_act")
 
         with pytest.raises(Exception, match="send_user_mailbox_id"):
-            tool.fn(op="email", message="hi", send_user_id="usr_1",
+            tool.fn(op="send_email", message="hi", send_user_id="usr_1",
                     send_user_email="me@x.fr")
         with pytest.raises(Exception, match="lead_id"):
-            tool.fn(op="linkedin", message="hi", send_user_id="usr_1")
+            tool.fn(op="send_linkedin", message="hi", send_user_id="usr_1")
         assert not inst.method_calls
 
-        tool.fn(op="email", message="hi", send_user_id="usr_1",
+        tool.fn(op="send_email", message="hi", send_user_id="usr_1",
                 send_user_email="me@x.fr", send_user_mailbox_id="mbx_1")
         assert inst.send_inbox_email.call_args.kwargs["send_user_mailbox_id"] == "mbx_1"
 

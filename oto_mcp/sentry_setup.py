@@ -118,7 +118,7 @@ def _before_send_transaction(event, hint):
 def _redact_hook_request(event) -> None:
     """Une requête de webhook ne part jamais entière vers Sentry : son ADRESSE
     est le credential d'un agent sans preuve (`hook_auth=none`), et son CORPS
-    porte le porteur d'un agent `lemlist` (le secret renvoyé par la source).
+    porte le porteur d'un agent `body_secret` (le secret renvoyé par la source).
     Le chemin est masqué, le corps retiré — la pile suffit au diagnostic."""
     from urllib.parse import urlsplit
 

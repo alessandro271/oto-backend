@@ -509,6 +509,25 @@ def test_un_audio_plus_gros_qu_une_image_est_relu_et_un_echec_de_lecture_purge(
     assert monde["jobs"][ref2["job_id"]]["audio_key"] in monde["s3"].supprimes
 
 
+def test_le_meme_audio_soumis_deux_fois_a_deux_cles_et_deux_pages(all_tools, monde):
+    """oto-backend#1301 : la clé de l'audio était celle du CONTENU — le même fichier
+    soumis deux fois dans un projet partageait un objet, et la purge du premier travail
+    supprimait l'audio du second, qui échouait à la relecture. Chaque travail a la
+    sienne : les deux aboutissent, et chacun purge la sienne seulement."""
+    ref1 = _appeler(all_tools, source=_pf())
+    ref2 = _appeler(all_tools, source=_pf())
+    cle1 = monde["jobs"][ref1["job_id"]]["audio_key"]
+    cle2 = monde["jobs"][ref2["job_id"]]["audio_key"]
+    assert cle1 != cle2
+    assert cle1.startswith("transcription-jobs/42/") and cle1.endswith("/visite.m4a")
+    _tourner(monde)
+    assert monde["s3"].supprimes == [cle1] and cle2 in monde["s3"].objets
+    _tourner(monde)
+    assert _statut(all_tools, ref1["job_id"])["status"] == "done"
+    assert _statut(all_tools, ref2["job_id"])["status"] == "done"
+    assert monde["s3"].supprimes == [cle1, cle2]
+
+
 # --- la face REST : la même file, et les tours en JSON ----------------------------------
 
 def _ctx():

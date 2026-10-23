@@ -96,5 +96,5 @@ NULL), pour que la réactivation du tenant ne la lève pas.
 `platform.usage.first_calls` (`GET /api/admin/usage/first-calls?org_ids=…`, admin
 plateforme) rend le premier appel journalisé (`tool_calls`, MCP et REST) de chaque
 org — l'horloge d'essai d'un tenant qui suspend à la fin de l'essai. Une sonde
-d'index par org (`idx_tool_calls_org`). ⚠️ Le journal expire (~90 jours) : la date
+d'index par org (`idx_tool_calls_org`). ⚠️ Le journal expire (~30 jours) : la date
 glisse vers l'avant passé ce délai, l'appelant la fige de son côté.

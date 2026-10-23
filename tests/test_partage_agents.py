@@ -362,7 +362,7 @@ def forfait(org, monkeypatch):
                         org["poses"].append((sub, proprio, famille)))
     monkeypatch.setattr(RT._modele, "exige_un_runner", lambda o: {})
     monkeypatch.setattr(RT._modele, "exige_servi", lambda etat, famille: None)
-    monkeypatch.setattr(RT._cle_exigee, "exiger_a_la_pose", lambda o, famille: None)
+    monkeypatch.setattr(RT._cle_exigee, "exiger_a_la_pose", lambda o, famille, etat=None: None)
     return org
 
 

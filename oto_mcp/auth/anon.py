@@ -11,7 +11,7 @@ s'inscrire auprès du service de connexion »). Ce shim satisfait leur flux en
   vérifie jamais — elle est sans auth : le token n'ouvre rien).
 
 Sécurité : le seul risque réel est l'open-redirect → `redirect_uri` validé STRICTEMENT
-(mêmes hôtes que la façade DCR : claude.ai/.com, chatgpt, mistral). PKCE (S256) respecté,
+(liste fermée d'hôtes, `_redirect_ok` : claude.ai/.com, chatgpt, mistral, local). PKCE (S256) respecté,
 code à usage unique + TTL court. Mono-process → store in-memory suffisant. Host-aware :
 resource/issuer dérivés du Host de la requête (= le sous-domaine servi), validé sur la
 forme d'un endpoint de projet (`subdomain_project.hote_de_projet`), sinon l'adresse
@@ -22,18 +22,117 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import os
+import re
 import secrets
 import time
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode, urlsplit
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.routing import Route
 
 from ..json_body import InvalidJsonBody, read_json_body
-from .facade import _cors, _redirect_ok
 
 logger = logging.getLogger("oto_mcp.anon_oauth")
+
+
+def _cors() -> dict:
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "content-type",
+    }
+
+
+# ⚠️ La SEULE garde du rappel de ce shim : il délivre un code à tout client qui le demande,
+# sans login — le seul risque réel est l'open-redirect (vol de code). Liste FERMÉE :
+# claude.ai/.com en https (callback MCP), ChatGPT et Mistral à leurs chemins documentés,
+# hôtes locaux en http (Claude Code/desktop, port ignoré). Comparaison de host EXACTE après
+# parsing : jamais de startswith sur l'URL brute (contournable via `http://localhost.evil.com`).
+_ALLOWED_HTTPS_HOSTS = {"claude.ai", "claude.com"}
+_ALLOWED_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_CALLBACK_PATH = "/api/mcp/auth_callback"
+
+
+def _extra_https_hosts() -> set[str]:
+    extra = (os.environ.get("OTO_MCP_DCR_ALLOWED_REDIRECTS") or "").strip()
+    return {h.strip().lower().rstrip(".") for h in extra.split(",") if h.strip()}
+
+
+# L'autorité d'un rappel : un host (nom ou IPv6 entre crochets) et un port, RIEN d'autre —
+# ni `user@`, ni `%`, ni barre oblique inverse.
+_AUTORITE = re.compile(r"^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(?::[0-9]{1,5})?$")
+
+
+def _uri_canonique(uri: str):
+    """Le découpage de `uri` si Python et un NAVIGATEUR y lisent le même host, sinon None.
+
+    ⚠️ **Cette liste juge ce que `urlsplit` lit ; le navigateur, lui, suit WHATWG**, et les
+    deux divergent : `http://evil.example\\@127.0.0.1/cb` est un rappel LOCAL pour Python
+    (ce qui précède `@` est une identité) et part chez `evil.example` dans un navigateur (la
+    barre oblique inverse y sépare le chemin). Or cette fonction est la SEULE garde du rappel
+    de ce shim — aucun serveur d'autorisation ne le revalide derrière. D'où : ASCII imprimable sans
+    barre oblique inverse ni fragment, autorité réduite à host[:port], aucun segment `.` ou
+    `..` (encodé ou non), que le navigateur résoudrait vers un autre chemin."""
+    if not isinstance(uri, str) or not uri or "#" in uri \
+            or any(c <= " " or c > "~" or c == "\\" for c in uri):
+        return None
+    try:
+        p = urlsplit(uri)
+        p.port  # un port hors bornes lève
+    # noqa: SILENT — fail-closed : un redirect_uri douteux est refusé, sans dire pourquoi
+    except Exception:
+        return None
+    if not _AUTORITE.match(p.netloc):
+        return None
+    if any(unquote(seg) in (".", "..") for seg in p.path.split("/")):
+        return None
+    return p
+
+
+_SEGMENT = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _prefixe_borne(chemin: str, prefixe: str, *, suffixe_requis: bool = True) -> bool:
+    """`chemin` = `prefixe`, suivi d'AU PLUS un segment (`[A-Za-z0-9_-]+`) — jamais un
+    préfixe sans borne : `/connector/oauth/x/../../ailleurs` ou `/auth_callbackXYZ` ne
+    passent pas. `suffixe_requis` : le segment est obligatoire (identifiant du connecteur)."""
+    if chemin == prefixe:
+        return not suffixe_requis
+    reste = chemin[len(prefixe):] if chemin.startswith(prefixe + "/") else None
+    return reste is not None and bool(_SEGMENT.match(reste[1:]))
+
+
+def _redirect_ok(uri: str) -> bool:
+    p = _uri_canonique(uri)
+    if p is None:
+        return False
+    host = (p.hostname or "").lower().rstrip(".")
+    if p.scheme == "https" and host in (_ALLOWED_HTTPS_HOSTS | _extra_https_hosts()) \
+            and _prefixe_borne(p.path, _CALLBACK_PATH, suffixe_requis=False):
+        return True
+    # ChatGPT (connecteurs MCP) : DEUX formes de rappel, toutes deux documentées
+    # par OpenAI (developers.openai.com/plugins/build/auth). Ce n'est pas le mode de
+    # connexion qui tranche, c'est le serveur d'AUTORISATION : le rappel propre au
+    # connecteur `https://chatgpt.com/connector/oauth/<id>` (<id> varie → préfixe de
+    # path, pas l'URI exacte) quand l'AS n'annonce pas l'identification d'émetteur
+    # RFC 9207 ; le rappel STABLE `connector_platform_oauth_redirect` quand il
+    # l'annonce — et aussi pour tout connecteur créé avant l'apparition du premier,
+    # qui garde la forme stable. Refuser la seconde suffit à rendre le connecteur
+    # ininstallable, sans qu'aucune trace ne survive plus de 19 h.
+    if p.scheme == "https" and host == "chatgpt.com" and (
+            _prefixe_borne(p.path, "/connector/oauth")
+            or p.path == "/connector_platform_oauth_redirect"):
+        return True
+    # Mistral (Le Chat, connecteurs MCP) : redirect FIXE callback.mistral.ai.
+    if p.scheme == "https" and host == "callback.mistral.ai" \
+            and _prefixe_borne(p.path, "/v1/integrations_auth"):
+        return True
+    if p.scheme == "http" and host in _ALLOWED_LOCAL_HOSTS:
+        return True
+    return False
+
 
 _ANON_CLIENT_ID = "oto-anon-public"
 _SCOPES = ["mcp", "openid", "profile", "email", "offline_access"]

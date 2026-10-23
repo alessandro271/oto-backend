@@ -24,14 +24,14 @@ date +%H:%M:%S
 date +%H:%M:%S
 systemctl start oto-mcp-canari@blue
 systemctl is-active --quiet oto-mcp-canari@blue
-curl -fsS --max-time 5 http://127.0.0.1:9105/.well-known/oauth-authorization-server -o /dev/null
+curl -fsS --max-time 5 http://127.0.0.1:9105/.well-known/oauth-protected-resource -o /dev/null
 date +%H:%M:%S
 cp -a /etc/caddy/upstream-oto-canari.conf /etc/caddy/upstream-oto-canari.conf.prev
 date -Is
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 systemctl reload caddy
 date +%H:%M:%S
-curl -fsS --max-time 20 -o /dev/null -w %{http_code} https://mcp-canari.oto.ninja/.well-known/oauth-authorization-server
+curl -fsS --max-time 20 -o /dev/null -w %{http_code} https://mcp-canari.oto.ninja/.well-known/oauth-protected-resource
 date +%H:%M:%S
 systemctl enable oto-mcp-canari@blue
 systemctl disable oto-mcp-canari@green
@@ -51,7 +51,7 @@ journalctl -u oto-mcp-canari@blue -n 10 --no-pager
 [12:00:00] démarrage oto-mcp-canari@blue sur :9105
 [12:00:00] couleur blue prête en Ns
 [12:00:00] amont basculé sur blue (9105) — reload caddy gracieux
-[12:00:00] trafic public OK sur https://mcp-canari.oto.ninja/.well-known/oauth-authorization-server
+[12:00:00] trafic public OK sur https://mcp-canari.oto.ninja/.well-known/oauth-protected-resource
 [12:00:00] vidange de green (:9108) confiée à oto-mcp-drain-canari — 0 connexion(s) au moment de la bascule, plafond 120s (journalctl -u oto-mcp-drain-canari)
 [12:00:00] === canari OK : green -> blue en Ns (démarrage Ns) — déploiement TERMINÉ, la vidange continue en fond ===
 ### erreurs

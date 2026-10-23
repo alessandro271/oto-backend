@@ -3,9 +3,13 @@
 Ce que ce fichier verrouille : chaque op appelle la BONNE méthode du client (une op
 mal câblée, dans un ATS, crée ou déplace un candidat réel), le défaut d'`op` est une
 lecture, un argument obligatoire manquant ou un argument hors de son op est refusé
-AVANT tout appel, et une liste rend sa vue de tri (les corps deviennent leur taille).
+AVANT tout appel, une liste rend sa vue de tri (les corps deviennent leur taille), et
+un CV rendu porte son lien DURABLE (`resume_link`, scellé compte / org / équipe /
+candidat) à côté du lien de WTTJ qui expire. La route qui l'ouvre :
+`tests/api/test_wttj_resume.py`.
 """
 import asyncio
+import time
 from unittest.mock import patch
 
 import pytest
@@ -141,6 +145,66 @@ def test_candidate_op_inconnue_nomme_les_ops(client):
     with pytest.raises(McpError, match="'list', 'get', 'create' or 'update'"):
         _tool("wttj_candidate")(op="delete")
     _no_write(client)
+
+
+# --- CV : le lien durable --------------------------------------------------------
+
+@pytest.fixture
+def appelant(monkeypatch):
+    """L'identité de l'appel (compte, org, équipe) sous laquelle la clé est résolue."""
+    from oto_mcp import access
+
+    monkeypatch.setenv("OTO_MCP_OAUTH_STATE_SECRET", "secret-de-banc-assez-long")
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://oto.example.test")
+    vus = []
+    monkeypatch.setattr(access, "current_user_sub_or_raise",
+                        lambda: vus.append("sub") or "u-recruteur")
+    monkeypatch.setattr(access, "current_org", lambda sub: 7)
+    monkeypatch.setattr(access, "current_group", lambda sub: 31)
+    return vus
+
+
+def _jeton(lien: str) -> dict:
+    from oto_mcp.tools import wttj_resume
+
+    assert lien.startswith("https://oto.example.test/api/wttj/resume/")
+    return wttj_resume.verify(lien.rsplit("/", 1)[-1])
+
+
+def test_candidate_get_ajoute_le_lien_durable_du_cv(client, appelant):
+    client.get_candidate.return_value = {
+        "reference": "C1", "resume_url": "https://cdn.example.test/cv.pdf?Expires=1"}
+    out = _tool("wttj_candidate")(op="get", candidate_reference="C1")["candidate"]
+    assert out["resume_url"] == "https://cdn.example.test/cv.pdf?Expires=1", (
+        "le lien brut reste : un agent qui télécharge tout de suite en a besoin")
+    payload = _jeton(out["resume_link"])
+    assert (payload["sub"], payload["org"]) == ("u-recruteur", 7)
+    assert payload["target"] == {"kind": "wttj_resume", "group": 31,
+                                 "candidate_reference": "C1"}
+    assert payload["exp"] - time.time() > 29 * 24 * 3600, "le lien vit 30 jours"
+    _no_write(client)
+
+
+def test_candidate_get_sans_cv_ne_frappe_rien(client, appelant):
+    client.get_candidate.return_value = {"reference": "C1", "resume_url": None}
+    out = _tool("wttj_candidate")(op="get", candidate_reference="C1")["candidate"]
+    assert "resume_link" not in out
+    assert appelant == [], "sans CV, aucune identité n'est lue"
+
+
+def test_candidate_list_ajoute_le_lien_aux_seules_lignes_qui_ont_un_cv(client, appelant):
+    client.list_candidates.return_value = [
+        {"reference": "C1", "resume_url": "https://cdn.example.test/1.pdf"},
+        {"reference": "C2", "resume_url": None}]
+    rows = _tool("wttj_candidate")(job_reference="J1")["candidates"]
+    assert _jeton(rows[0]["resume_link"])["target"]["candidate_reference"] == "C1"
+    assert "resume_link" not in rows[1]
+    assert appelant == ["sub"], "une seule lecture d'identité pour toute la page"
+
+
+def test_la_description_dit_quel_lien_donner_a_un_humain():
+    doc = _tool("wttj_candidate").__doc__
+    assert "resume_link" in doc and "30 min" in doc
 
 
 # --- commentaire, mouvements ---------------------------------------------------

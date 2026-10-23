@@ -99,9 +99,12 @@ def table(live):
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
     db.create_datastore("user", SUB, ns)
+    st = make_store(SUB)
+    # Les colonnes de `LIGNE`, déclarées : une colonne non déclarée est refusée (oto#124).
+    st.set_schema(ns, {"fields": [{"key": c} for c in LIGNE]})
     # `LIGNE` porte une couche `origine` (import de socle) : depuis oto#70 lot 2, la
     # poser se déclare — c'est le geste exact qu'un import fera en production.
-    row = make_store(SUB).append_row(ns, dict(LIGNE), origine_override=True)
+    row = st.append_row(ns, dict(LIGNE), origine_override=True)
     return ns, row["_id"]
 
 

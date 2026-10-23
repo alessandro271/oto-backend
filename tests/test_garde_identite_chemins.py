@@ -12,8 +12,10 @@ d'un AUTRE tenant passe, un compte du tenant primaire passe sans aucune lecture)
      du tenant (drain d'alias) — la cause racine de la session restée ouverte ;
   5. MCP, toute requête, sub canonique (JWT OAuth ou jeton `oto_`) ;
   6. MCP, naissance d'un compte du tenant refusée par `upsert_user` ;
-  7. lien d'upload signé, qui porte le sub scellé sans aucun jeton ;
-  8. façade OAuth sur le host du tenant (enregistrement, autorisation, rafraîchissement).
+  7. lien d'upload signé, qui porte le sub scellé sans aucun jeton.
+
+L'inscription, l'autorisation et le rafraîchissement OAuth se font chez l'annuaire du
+tenant (CIMD) : la plateforme ne les voit pas, elle refuse le jeton qui en sort.
 
 Puis le cliquet de CENTRALITÉ : les deux prédicats (`tenant_desactive.refus`,
 `account_suspension.refus`) ne sont appelés que par `garde_identite.refus`, et celle-ci
@@ -231,66 +233,6 @@ def test_un_lien_dupload_scelle_pour_un_compte_du_tenant_nest_pas_servi(base, mo
     assert client.put(f"/api/upload/{jeton}", content=b"x").status_code == 200
 
 
-# ── 8. La façade OAuth sur le host du tenant ─────────────────────────────────
-
-def _entree(slug, **kw):
-    from oto_mcp import tenancy
-    return tenancy.TenantIssuer(slug=slug, issuer=f"https://auth.{slug}.test/oidc",
-                                jwks_uri="", **kw)
-
-
-def test_le_registre_garde_le_tenant_desactive_et_le_marque(monkeypatch):
-    """L'entrée RESTE (son émetteur sert à reconnaître et refuser nommément ses jetons,
-    et ses comptes restent classés sous lui) ; elle porte l'état lu en base."""
-    from oto_mcp import tenancy
-    monkeypatch.setenv("OTO_TENANT_PRIMAIRE_SLUG", "oto")
-    reg = tenancy.IssuerRegistry(tenancy.build("https://auth.oto.test/oidc", tenants=[
-        {"slug": "acme", "issuer": "https://auth.acme.test/oidc",
-         "disabled_at": "2026-10-06T10:00:00"},
-        {"slug": "beta", "issuer": "https://auth.beta.test/oidc", "disabled_at": None}]))
-    assert reg.get("https://auth.acme.test/oidc").disabled is True
-    assert reg.get("https://auth.beta.test/oidc").disabled is False
-    assert reg.tenant_of(DU_TENANT) == "acme"
-
-
-def test_la_facade_refuse_une_autorisation_nouvelle_sur_le_host_du_tenant():
-    from oto_mcp.auth import facade
-    refus = facade.refus_tenant_desactive(_entree("acme", disabled=True))
-    assert refus is not None and refus.status_code == 403
-    assert json.loads(refus.body)["error"] == "tenant_disabled"
-    assert facade.refus_tenant_desactive(_entree("beta")) is None
-    assert facade.refus_tenant_desactive(None) is None
-
-
-def test_les_trois_routes_oauth_du_host_tenant_appellent_le_refus():
-    """Enregistrement (DCR), autorisation relayée, échange de jeton (code ET
-    rafraîchissement) : les trois points où l'annuaire du tenant délivre du neuf."""
-    for fichier, attendu in (("auth/facade.py", 1), ("auth/relay.py", 2)):
-        src = (RACINE / fichier).read_text()
-        appels = src.count("(coupe := refus_tenant_desactive(") + \
-            src.count("(coupe := facade.refus_tenant_desactive(")
-        assert appels == attendu, fichier
-
-
-def test_la_dcr_dun_host_de_tenant_desactive_est_refusee(monkeypatch):
-    """Bout en bout sur la route servie : rien n'est enregistré dans son annuaire."""
-    from starlette.applications import Starlette
-    from starlette.testclient import TestClient
-    from oto_mcp.auth import facade
-    entree = _entree("acme", disabled=True, hosts=("mcp.acme.test",),
-                     oauth_client_id="app-acme")
-    monkeypatch.setattr(facade, "tenant_for_host",
-                        lambda host: entree if host == "mcp.acme.test" else None)
-    ecrit = []
-    monkeypatch.setattr(facade, "_register_redirects", lambda *a, **k: ecrit.append(a))
-    client = TestClient(Starlette(routes=facade.make_routes(
-        "https://mcp.oto.test", "app-oto")), base_url="https://mcp.acme.test")
-    r = client.post("/oauth/register",
-                    json={"redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]})
-    assert r.status_code == 403 and r.json()["error"] == "tenant_disabled"
-    assert ecrit == []
-
-
 # ── Le prédicat : fail-closed, et le préfixe exact ───────────────────────────
 
 def test_un_hoquet_de_base_ne_blanchit_pas_un_tenant_desactive(monkeypatch):
@@ -341,13 +283,15 @@ def test_les_predicats_ne_sont_lus_que_par_la_garde_centrale():
 def test_la_garde_centrale_est_traversee_par_les_quatre_portes():
     """REST (jetons `oto_` et JWT : `api/base.py`, deux branches), MCP (le middleware sur
     `on_request`), lien d'upload signé, relais d'upload vers la GED Pennylane (cabinet,
-    `/api/relay/{token}` : son jeton scelle un compte, rejoué à la réception) — et le
+    `/api/relay/{token}` : son jeton scelle un compte, rejoué à la réception), lien
+    durable vers le CV d'un candidat WTTJ (`/api/wttj/resume/{token}`, même régime à
+    chaque ouverture) — et le
     worker de `jev_rows(background=true)`,
     qui rejoue chaque tranche sous l'identité de l'appelant SANS requête : la garde y
     est relue avant chaque tranche. Une porte d'identité neuve doit s'ajouter ICI —
     c'est l'endroit où elle se déclare."""
     assert _appels("garde_identite", "refus") == {
         "api/base.py", "middleware/account_suspended.py", "api/uploads.py",
-        "api/pennylane_firm.py", "jev_jobs_worker.py"}
+        "api/pennylane_firm.py", "api/wttj.py", "jev_jobs_worker.py"}
     base_src = (RACINE / "api" / "base.py").read_text()
     assert base_src.count("garde_identite.refus") == 2

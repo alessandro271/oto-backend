@@ -66,7 +66,8 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
 > **Troisième porteur depuis le 2026-10-08 : `microsoft`** (le compte Microsoft 365,
 > OAuth délégué par personne, ou au nom de l'org ou d'une équipe : `docs/partage-de-compte.md`
 > lot 5). `sharepoint` en devient le premier service
-> (`credential_of="microsoft"`), `outlook`, `outlook_calendar` et `teams` les suivants,
+> (`credential_of="microsoft"`), `outlook`, `outlook_calendar`, `teams`, `onenote` et l'annuaire `entra` (lecture,
+> approuvé par un administrateur depuis sa seule carte : `ADMIN_ONLY_SERVICES`) les suivants,
 > chacun né avec ses outils (une carte sans outil se présenterait comme un connecteur
 > sans en avoir les effets) — flux, lien, indice et identités se DÉRIVENT du registre
 > (`credential_of="microsoft"`). Un service peut avoir un PALIER ADMIN que nulle carte
@@ -235,7 +236,11 @@ si chacun de ses scopes est dans la fermeture des scopes du niveau par `scope_im
   Premiers déclarants : `zoho` (`read` = `ZohoCRM.modules.READ` + `ZohoCRM.settings.modules.READ`,
   `ZohoCRM.modules.ALL` implique les quatre verbes) et `zohodesk` (`read` =
   `Desk.articles.READ` + `Desk.search.READ`). `zohoanalytics` n'en déclare pas.
-  `auth/zoho.SCOPES` **dérive** de `full` (source unique) ; cliquets :
+  `auth/zoho.SCOPES` **dérive** de `full` (source unique). Le consentement y ajoute les
+  scopes de **vérification** de l'organisation consentie (`auth/zoho.VERIFICATION_SCOPES` :
+  `ZohoCRM.org.READ` au CRM, `Desk.basic.READ` à Desk) — HORS des niveaux, qui disent quels
+  outils sont servis ; la liste exacte demandée est figée par
+  `test_les_scopes_du_consentement_sont_figes`. Cliquets :
   `tests/connectors/test_access_levels.py` (`full` == le consentement d'avant, à l'octet) et
   `tests/connectors/test_access_levels_declares.py` (tout outil SERVI d'un connecteur à
   niveaux a sa déclaration, ses ops sont celles du schéma servi — population tirée du montage).
@@ -632,7 +637,7 @@ un : un champ toujours présent devient du bruit qu'on cesse de lire.
 2. **Clé** ? il pose sa clé Unipile (BYO) **ou** un admin lui **grant la clé plateforme** (fiche user → « grant key »).
 3. **Option débloquée** ? l'org est **abonnée** à un plan qui l'inclut, **ou** un admin
    **accorde l'option** (comp, fiche user ou org), **ou** l'entité est en BYO.
-4. Puis **lui** connecte son LinkedIn/WhatsApp (hosted-auth, `/console/connectors`).
+4. Puis **lui** connecte son LinkedIn/WhatsApp (hosted-auth, `/connectors`).
 
 ## Trous connus (à combler)
 

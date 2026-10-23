@@ -5,8 +5,7 @@ Ce que ce fichier verrouille :
   méthode du client ;
 - un argument requis manquant nommé, un argument non pertinent REFUSÉ — « fourni » se
   lit `is not None`, donc `limit=0` et `include_in_progress=False` comptent ;
-- **aucune écriture n'est câblée** : éprouvé à part, op par op, dans
-  `test_payfit_ecritures_non_cablees.py` ;
+- les ÉCRITURES : éprouvées à part, op par op, dans `test_payfit_ecritures.py` ;
 - la seule clé renommée (`absence_type` + `absence_category`), et le fait que tout le
   reste sort tel que l'amont l'envoie — le connecteur ne retire plus rien en dur ;
 - les documents (PDF, export, virement) : leur VERROU est éprouvé à part, dans
@@ -123,6 +122,20 @@ def test_list_defaults_are_sent(client):
 def test_get_contract_forwards_the_french_variant(client):
     _tool("payfit_contract")(op="get", contract_id=K, fr=True)
     client.get_contract.assert_called_once_with(K, fr=True)
+
+
+def test_the_company_says_what_the_key_may_write(client):
+    """Les scopes de la clé et les ops de `payfit_act` qu'ils permettent, lus AVANT
+    d'écrire — dérivés de la déclaration des niveaux, la seule qui dit quel scope
+    exige chaque op."""
+    client.get_company.return_value = {"id": K}
+    client.get_key_scopes.return_value = ["collaborators:read", "time:read",
+                                          "time:write"]
+    out = _tool("payfit_company")()
+    assert out["key_scopes"] == ["collaborators:read", "time:read", "time:write"]
+    assert out["writable_ops"] == ["create_absence", "cancel_absence"]
+    client.get_key_scopes.return_value = ["time:read"]
+    assert _tool("payfit_company")()["writable_ops"] == []
 
 
 def test_the_french_company_is_asked_for_explicitly(client):

@@ -190,7 +190,7 @@ class Prereglage:
       - `bearer` : l'en-tête `Authorization: Bearer otoh_…` ;
       - `standard_webhooks` : la source SIGNE (`whsec_…`, en-têtes `webhook-*`) ;
       - `body_secret` : la source ne sait ni poser un en-tête ni signer ; elle
-        RENVOIE dans son corps JSON un secret qu'on lui a donné (Lemlist). Ce
+        RENVOIE dans son corps JSON un secret qu'on lui a donné (Lemlist, cal.com…). Ce
         secret est NOTRE porteur `otoh_`, posé dans la clé de PREMIER niveau
         `champ_secret` (pas un chemin : c'est elle qui est retirée du corps) ;
       - `none` : AUCUNE preuve, choix explicite du propriétaire. L'adresse privée
@@ -220,10 +220,12 @@ class Prereglage:
 PREREGLAGES: dict[str, Prereglage] = {p.nom: p for p in (
     Prereglage(BEARER, BEARER),
     Prereglage(STANDARD_WEBHOOKS, STANDARD_WEBHOOKS),
-    # Lemlist (`POST /api/hooks` côté Lemlist) : « secret » est renvoyé tel quel
-    # dans le corps de chaque appel ; `_id` est l'identifiant de l'activité.
+    # Le jeton dans le corps, pour TOUTE source qui sait mettre un champ de
+    # premier niveau `secret` dans son JSON (Lemlist, cal.com, un formulaire
+    # no-code…). `_id` ne déduplique que si la source en envoie un : Lemlist y met
+    # l'identifiant de l'activité ; une source sans `_id` n'a pas de déduplication.
     # https://developer.lemlist.com/api-reference/endpoints/webhooks/add-webhook
-    Prereglage("lemlist", BODY_SECRET, champ_secret="secret", chemin_id="_id"),
+    Prereglage(BODY_SECRET, BODY_SECRET, champ_secret="secret", chemin_id="_id"),
     # Slack (Events API) : signé avec le *Signing Secret* de l'app ; `event_id`,
     # dans le corps SIGNÉ, identifie la livraison (Slack retente sous 3 s).
     # https://api.slack.com/authentication/verifying-requests-from-slack
@@ -231,6 +233,12 @@ PREREGLAGES: dict[str, Prereglage] = {p.nom: p for p in (
     Prereglage(NONE, NONE),
 )}
 HOOK_AUTHS = tuple(PREREGLAGES)
+
+#: L'ANCIEN nom de `body_secret` (06/10 → 20/10/2026), le nom d'une marque pour un
+#: schéma générique. Plus aucun préréglage ne le porte : les lignes stockées sont
+#: réécrites par la révision `0071_hook_auth_body_secret`, et une pose qui le
+#: demande encore est refusée en le nommant (`hook_auth_renamed`), jamais traduite.
+ANCIEN_NOM_BODY_SECRET = "lemlist"
 
 #: Le plafond journalier d'un agent SANS preuve dont le propriétaire n'en a pas
 #: déclaré (la pose l'exige, mais une ligne ne doit jamais dépendre d'une seule
@@ -741,6 +749,7 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
     except Exception as e:  # noqa: BLE001 — voir ci-dessus
         logger.warning("déclencheur %s : état de la procédure illisible (%s)", trigger_id, e)
         retiree = None
+    sans_modele = runner_models.motif_sans_famille(t.get("model"))
     with db._connect() as conn:
         if not t["enabled"]:
             db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_PAUSED,
@@ -765,6 +774,17 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
                 "This agent's procedure is archived: it will not run until the procedure "
                 "is put back in service (oto_procedure op=unarchive). The delivery is "
                 "recorded and visible on its page.")
+        elif sans_modele:
+            # Agent SANS MODÈLE (21/10/2026) : son travail n'aurait aucune famille,
+            # donc aucun worker ne le servirait. Rien n'est enfilé ; le motif est
+            # sur la page de l'agent (`refused_no_model`) et dans la réponse.
+            db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_NO_MODEL,
+                           source=source, **marque)
+            refus = HookRefus(409, "trigger_no_model", (
+                f"This agent declares a model unknown to the catalogue (`{t['model']}`): "
+                "it will not run until a catalogued model is set." if t.get("model") else
+                "This agent declares no model: it will not run until one is set.")
+                + " The delivery is recorded and visible on its page.")
         else:
             # ⚠️ AVANT de compter. Une rafale est concurrente par définition : sans
             # ce verrou, toutes les livraisons lisent le même compte et partent

@@ -36,7 +36,7 @@ BG_SNIPPET=oto_prod
 BG_DOCSHARE_HOST=mcp.oto.cx
 BG_ASK=1                     # la prod porte le `ask` de l'on-demand TLS
 BG_ACTIVE=/etc/oto-mcp/active-prod
-BG_PUBLIC="https://mcp.oto.cx/.well-known/oauth-authorization-server"
+BG_PUBLIC="https://mcp.oto.cx/.well-known/oauth-protected-resource"
 # Plafond de la vidange. Mesuré le 28/08 sous charge réelle : la vidange ne protège
 # PAS les sessions MCP (elles tombent en <4 s, le client rouvre), seulement les
 # requêtes déjà en cours. Donc pas de raison de faire vivre deux versions longtemps —

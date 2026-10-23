@@ -23,6 +23,7 @@ qui exige un compte le refuse (`_authz._require_sub`). Deux verrous : une route
 from __future__ import annotations
 
 import contextvars
+import os
 from functools import lru_cache
 from typing import Optional
 
@@ -80,16 +81,32 @@ def _verifier_pour(issuer: str, aud: str) -> JWTVerifier:
                        audience=aud, algorithm="ES384")
 
 
-def verifier() -> JWTVerifier:
-    """Le verifier des services : l'émetteur PRIMAIRE de l'instance, audience stricte.
-    Un tenant tiers n'émet pas de jeton de service — son annuaire n'est pas le nôtre."""
-    issuer = require_env("LOGTO_ENDPOINT").rstrip("/") + "/oidc"
-    return _verifier_pour(issuer, audience())
+def emetteurs() -> tuple[str, ...]:
+    """Les émetteurs dont un jeton de service est accepté : le PRIMAIRE de l'instance, et
+    pendant la fenêtre de drain d'une bascule de domaine `LOGTO_ENDPOINT_ALT`, comme pour
+    les personnes (`server._registry_and_issuers`) — sinon le service tombe entre la
+    bascule de l'annuaire et celle du cœur. Un tenant tiers n'émet pas de jeton de
+    service : son annuaire n'est pas le nôtre."""
+    primaire = require_env("LOGTO_ENDPOINT").rstrip("/") + "/oidc"
+    alt = os.environ.get("LOGTO_ENDPOINT_ALT", "").strip().rstrip("/")
+    return (primaire, f"{alt}/oidc") if alt else (primaire,)
+
+
+def verifier(token: str) -> Optional[JWTVerifier]:
+    """Le verifier de l'émetteur que le jeton REVENDIQUE, s'il est l'un des nôtres
+    (`emetteurs`), audience stricte ; None sinon. Choisi sur la revendication lue sans
+    vérification : le verifier revalide tout (signature, émetteur, audience)."""
+    iss = tenancy.unverified_claims(token).get("iss")
+    return _verifier_pour(iss, audience()) if iss in emetteurs() else None
 
 
 async def verifier_jeton(token: str) -> dict:
     """Vérifie un jeton adressé aux services et rend le principal, ou lève `ServiceRefuse`."""
-    access = await verifier().verify_token(token)
+    v = verifier(token)
+    if v is None:
+        raise ServiceRefuse(401, "invalid_token",
+                            "Jeton de service d'un émetteur que cette instance ne reconnaît pas.")
+    access = await v.verify_token(token)
     claims = getattr(access, "claims", None) or {}
     if not claims:
         raise ServiceRefuse(401, "invalid_token", "Jeton de service invalide ou expiré.")

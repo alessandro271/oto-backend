@@ -27,7 +27,6 @@ from . import acces_agent as aga
 from . import cles_inconnues
 from . import reglages
 from . import validation_complete as dsvc
-from .definition import preavis_de_pose
 from . import formule as dsformule
 from . import schema as dsv2
 from . import violations_existantes as dsve
@@ -231,11 +230,6 @@ class SchemaOpsMixin:
                                 # (`scripts/durcir_schemas.py`), et se DISENT : le
                                 # premier qui voudra les modifier sera refusé.
                                 cles_inconnues.residus_warning(schema),
-                                # #319 : des options déclarées mais qu'aucun régime ne
-                                # fait respecter — dit AU MOMENT où on pose le schéma,
-                                # pas six semaines plus tard devant des valeurs libres.
-                                dsv2.options_not_enforced_warning(
-                                    dsv2.options_not_enforced(schema)),
                                 # Et le fait, sur les champs `json` : stockés, rendus,
                                 # mais pas interrogeables en profondeur.
                                 dsv2.json_depth_warning(dsv2.json_fields_depth(schema)),
@@ -254,9 +248,6 @@ class SchemaOpsMixin:
                                 self._offpattern_warning(ns_id, schema),
                                 self._offending_enum_warning(ns_id, schema),
                                 self._orphan_columns_warning(ns_id, schema),
-                                # oto#124 : les gardes de pose que la validation
-                                # complète armera à la date, dites d'ici là.
-                                dsvc.avertissement_de_pose(preavis_de_pose(schema)),
                                 # oto-backend#479 : la phrase qui renvoie au relevé
                                 # structuré, et qui dit quand il n'est qu'un plancher.
                                 dsve.releve_warning(out)) if w]
@@ -362,9 +353,8 @@ class SchemaOpsMixin:
         nouveau : trois agents successifs ont écrit dedans en la prenant pour la
         bonne cible. Le silence à la pose du schéma est ce qui laisse le piège armé.
 
-        Seulement quand le format fait contrat (`validation_complete.complete` —
-        partout à partir du 21/10/2026, oto#124) : d'ici là, sur un tableau qui ne le
-        faisait pas, une colonne libre est encore créée à l'écriture, avec un préavis."""
+        Seulement quand le format fait contrat (`validation_complete.complete`,
+        oto#124)."""
         if not dsvc.complete(schema):
             return None
         declared = {f.get("key") for f in dsv2._fields(schema)}
@@ -514,14 +504,10 @@ class SchemaOpsMixin:
         fautives avec leur compte — c'est ce qui permet de choisir entre corriger la
         donnée et élargir les options, là où un total nu laisse chercher."""
         # Gate = la validation sera-t-elle ACTIVE ? On avertit exactement quand les
-        # écritures futures seront refusées. Sur un schéma souple, la liste ne
-        # condamne rien (validation opt-in, 0016) : signaler l'existant y annoncerait
-        # un refus qui n'aura pas lieu — un faux avertissement coûte la confiance
-        # qu'on met dans les vrais. oto#124 : en PRÉAVIS, le refus aura lieu à la
-        # date — l'avertissement la dit.
-        active = dsv2.validation_active(schema)
-        preavis = dsvc.en_preavis(schema) and not active
-        if not (preavis or active):
+        # écritures futures seront refusées. Sur un schéma sans colonne, la liste ne
+        # condamne rien : signaler l'existant y annoncerait un refus qui n'aura pas
+        # lieu — un faux avertissement coûte la confiance qu'on met dans les vrais.
+        if not dsv2.validation_active(schema):
             return None
         options = dsv2.top_level_options(schema)
         if not options:
@@ -540,11 +526,7 @@ class SchemaOpsMixin:
                 "\nCes lignes restent en place, et les lectures les voient telles "
                 "quelles : les filtres, le regroupement et les comptes les rendent "
                 "comme toute valeur. Le tri sur cette colonne les range après les "
-                "valeurs conformes. "
-                + (f"À partir du {dsvc.date_de_bascule().isoformat()} (d'ici là, elle "
-                   "passe avec un préavis), une écriture" if preavis
-                   else "Une écriture")
-                + " future qui pose une valeur hors "
+                "valeurs conformes. Une écriture future qui pose une valeur hors "
                 "options la voit écartée, et le reste de la ligne s'écrit ; seule "
                 "dans le geste ou avec un autre refus, elle est refusée. Un patch "
                 "d'un autre champ passe. Corrige-les (réécris le champ) ou élargis "

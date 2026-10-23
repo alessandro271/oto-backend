@@ -59,10 +59,13 @@ def _faux_scopes():
     s.MAIL = (G + "Mail.ReadWrite", G + "Mail.Send")
     s.CALENDAR = (G + "Calendars.ReadWrite",)
     s.TEAMS = (G + "Team.ReadBasic.All", G + "Chat.ReadWrite")
+    s.NOTES = (G + "Notes.ReadWrite.All",)
+    s.DIRECTORY = (G + "Directory.Read.All", G + "AuditLog.Read.All", G + "Sites.Read.All")
     s.TEAMS_ADMIN = (G + "ChannelMessage.Read.All",)
     s.REFRESH = (G + ".default", "offline_access")
     canon = {n.removeprefix(G).lower(): n.removeprefix(G)
-             for t in (s.IDENTITY, s.FILES, s.MAIL, s.CALENDAR, s.TEAMS, s.TEAMS_ADMIN)
+             for t in (s.IDENTITY, s.FILES, s.MAIL, s.CALENDAR, s.TEAMS, s.NOTES, s.DIRECTORY,
+                       s.TEAMS_ADMIN)
              for n in t}
 
     def _court(n):
@@ -281,8 +284,10 @@ def test_scopes_par_carte(env):
     assert env.auth.scopes_for("outlook") == s.IDENTITY + s.MAIL
     assert env.auth.scopes_for("outlook_calendar") == s.IDENTITY + s.CALENDAR
     assert env.auth.scopes_for("teams") == s.IDENTITY + s.TEAMS
+    assert env.auth.scopes_for("onenote") == s.IDENTITY + s.NOTES
+    assert env.auth.scopes_for("entra") == s.IDENTITY + s.DIRECTORY
     with pytest.raises(RuntimeError, match="not a known Microsoft service"):
-        env.auth.scopes_for("onenote")
+        env.auth.scopes_for("planner")
 
 
 def test_les_scopes_d_avant_le_porteur_donnent_sharepoint_sans_reconnexion(env):
@@ -345,7 +350,7 @@ def test_le_dialogue_d_un_service_demande_ses_scopes(env):
     client_id, retour, etat = appel.args
     assert client_id == "app-id-fictif" and retour == _RETOUR
     assert appel.kwargs == {"scopes": env.coeur.scopes.IDENTITY + env.coeur.scopes.FILES,
-                            "tenant": "organizations"}
+                            "tenant": "organizations", "login_hint": None}
     assert env.auth.verify_state(etat) == (SUB, ORG, "", SERVICE, None, "member", None)
 
 
@@ -537,6 +542,38 @@ def test_reconnecter_le_meme_compte_remplace_sa_ligne_meme_renommee(env):
     assert env.coffre.meta("client-a")["is_default"] is False, "le défaut ne bouge pas"
 
 
+def test_reconnecter_un_compte_par_son_nom_vise_son_adresse_et_son_annuaire(env):
+    """« Reconnecter » sur la ligne d'un compte KO : le dialogue est pré-rempli de SON
+    adresse, sur SON annuaire (un invité revient chez son client) ; le retour retrouve sa
+    ligne par l'id Microsoft (`persist_grant`)."""
+    from oto_mcp.connectors import flow as connector_flow
+
+    _connecter(env, JANE, "RT-JANE")
+    _connecter(env, JOHN, "RT-JOHN", tenant="contoso.onmicrosoft.com")
+    start = connector_flow.entries()[SERVICE].start
+    start(types.SimpleNamespace(sub=SUB),
+          {"account": "john@fabrikam.example (contoso.onmicrosoft.com)"})
+    appel = env.coeur.auth.authorize_url.call_args
+    assert appel.kwargs["login_hint"] == "john@fabrikam.example"
+    assert appel.kwargs["tenant"] == "contoso.onmicrosoft.com"
+    assert env.auth.verify_state(appel.args[2]).tenant == "contoso.onmicrosoft.com"
+
+
+@pytest.mark.parametrize("valeurs, statut, code", [
+    ({"account": "inconnu@exemple.test"}, 404, "account_not_found"),
+    ({"account": "jane@contoso.example", "scope": "org"}, 400, "invalid_scope"),
+])
+def test_reconnecter_un_compte_qui_n_est_pas_le_sien_est_refuse(env, valeurs, statut, code):
+    from oto_mcp.capabilities._types import AuthzDenied
+    from oto_mcp.connectors import flow as connector_flow
+
+    _connecter(env, JANE, "RT-JANE")
+    with pytest.raises(AuthzDenied) as e:
+        connector_flow.entries()[SERVICE].start(types.SimpleNamespace(sub=SUB), valeurs)
+    assert (e.value.status, e.value.code) == (statut, code)
+    env.coeur.auth.authorize_url.assert_not_called()
+
+
 def test_un_nom_pris_par_un_autre_compte_n_est_pas_ecrase(env):
     env.coffre.poser("jane@contoso.example", "RT-AUTRE", {"microsoft_id": "id-autre"})
     with pytest.raises(RuntimeError, match="rename"):
@@ -720,6 +757,28 @@ def test_autorisation_morte_marque_ce_compte_seulement(env):
         assert "jane@contoso.example" not in etat.health_reason
 
 
+def test_le_compte_ko_se_lit_sur_sa_ligne_et_le_message_dit_le_bouton(env):
+    """La carte montrait une pastille verte à côté de « Connexion KO » : la ligne d'un
+    compte marqué dit `reauth_required`, l'autre reste `ok`."""
+    from oto_mcp.connectors import identities
+
+    _deux_comptes(env)
+    env.coeur.auth.refresh.side_effect = env.coeur.MicrosoftGrantExpired(
+        "Entra refused the token request (HTTP 400): AADSTS50173: The provided grant has "
+        "expired due to it being revoked.", code="AADSTS50173")
+    with pytest.raises(env.auth.MicrosoftReauthRequired, match="« Reconnect »") as e:
+        env.sous_compte("john@fabrikam.example")(env.auth.access_token_for, SUB, SERVICE)
+    assert "default setting and its loans are kept" in str(e.value)
+    # La cause d'Entra est gardée, sur la marque comme dans le refus : sans elle, nul ne
+    # sait après coup pourquoi un compte a été coupé.
+    assert "(Entra: AADSTS50173: The provided grant has expired due to it being revoked.)" \
+        in str(e.value)
+    assert "AADSTS50173" in env.coffre.meta("john@fabrikam.example")["health_reason"]
+    for carte in (PORTEUR, SERVICE):
+        assert [(i["id"], i["status"]) for i in identities.list_identities(SUB, carte)] == [
+            ("jane@contoso.example", "ok"), ("john@fabrikam.example", "reauth_required")]
+
+
 def test_secret_d_application_faux_ne_marque_pas_la_personne(env):
     env.coffre.poser("jane@contoso.example", "RT1")
     env.coeur.auth.refresh.side_effect = env.coeur.MicrosoftAuthError("invalid_client")
@@ -780,7 +839,7 @@ def test_lien_d_approbation_demande_l_union_des_services(env):
     assert appel.kwargs["tenant"] == "organizations"
     assert not set(s.TEAMS_ADMIN) & set(appel.kwargs["scopes"]), "TEAMS_ADMIN pour Teams seul"
     with pytest.raises(ValueError, match="Unknown Microsoft service"):
-        env.auth.admin_consent_url(SUB, ("onenote",))
+        env.auth.admin_consent_url(SUB, ("planner",))
 
 
 def test_le_lien_d_approbation_vit_sept_jours(env, monkeypatch):
@@ -825,7 +884,7 @@ def test_le_lien_d_approbation_servi_par_la_carte(env):
     ctx = types.SimpleNamespace(sub=SUB)
     out = cap.handler(ctx, cap.Input())
     assert out["url"] == "https://login.example/adminconsent?x=1"
-    assert out["services"] == ["sharepoint", "outlook", "outlook_calendar", "teams"]
+    assert out["services"] == ["sharepoint", "outlook", "outlook_calendar", "teams", "onenote"]
     assert out["tenant"] == "organizations"
     assert out["expires_at"].endswith("Z")
     etat = env.auth.verify_admin_state(env.coeur.auth.admin_consent_url.call_args.args[2])
@@ -838,7 +897,7 @@ def test_le_lien_d_approbation_servi_par_la_carte(env):
 
 
 @pytest.mark.parametrize("entree,motif", [
-    ({"services": ["onenote"]}, "Unknown Microsoft service"),
+    ({"services": ["planner"]}, "Unknown Microsoft service"),
     ({"connector": "gmail"}, "not a Microsoft card"),
     ({"tenant": "consumers"}, "Client directory"),
 ])
@@ -914,7 +973,7 @@ def test_l_axe_account_est_accepte_sur_les_outils(env):
 
     for outil in ("sharepoint_file", "sharepoint_site", "outlook",
                   "outlook_act", "outlook_calendar_calendars", "outlook_calendar_event",
-                  "teams_spaces", "teams_message", "teams_send"):
+                  "teams", "teams_act", "onenote", "onenote_act", "entra"):
         assert "_account" in {a.param for a in call_axes.axes_for_call(outil)}, outil
 
 
@@ -1132,9 +1191,11 @@ def test_le_schema_annonce_account_sur_toutes_les_cartes_microsoft():
 
     for outil in ("microsoft_accounts", "sharepoint_file", "sharepoint_site",
                   "outlook", "outlook_act", "outlook_calendar_calendars",
-                  "outlook_calendar_event", "teams_spaces", "teams_message", "teams_send"):
+                  "outlook_calendar_event", "teams", "teams_act", "onenote", "onenote_act",
+                  "entra"):
         assert "_account" in {a.param for a in call_axes.axes_for(outil)}, outil
-    for carte in (PORTEUR, "sharepoint", "outlook", "outlook_calendar", "teams"):
+    for carte in (PORTEUR, "sharepoint", "outlook", "outlook_calendar", "teams", "onenote",
+                  "entra"):
         assert providers.REGISTRY[carte].account_axis_static, carte
 
 
@@ -1339,3 +1400,16 @@ def test_preter_outlook_a_toute_l_org_est_servi_donc_accepte_et_journalise(pret_
         "entity_id": CHEZ_PRETEUSE, "account": "jane@contoso.example"}]
     assert pret_org.sous_compte("jane@contoso.example")(
         pret_org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+
+
+@pytest.mark.parametrize("texte, code, attendu", [
+    ("Entra refused the token request (HTTP 400): AADSTS700082: The refresh token has "
+     "expired due to inactivity.", "AADSTS700082",
+     "AADSTS700082: The refresh token has expired due to inactivity."),
+    ("Entra refused the token request (HTTP 400): invalid_grant", "AADSTS50173",
+     "AADSTS50173: invalid_grant"),
+    ("", None, "expired, revoked, or the password changed"),
+])
+def test_la_cause_d_entra_est_lue_et_bornee(env, texte, code, attendu):
+    assert env.auth._cause_entra(env.coeur.MicrosoftGrantExpired(texte, code=code)) == attendu
+    assert len(env.auth._cause_entra(env.coeur.MicrosoftGrantExpired("x" * 900))) == 300

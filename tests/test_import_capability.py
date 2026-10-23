@@ -119,23 +119,103 @@ def test_the_fetch_follows_checked_redirects(cible, monkeypatch):
     assert vu["follow_redirects"] is True
 
 
+def _ligne(target, data):
+    """La ligne que `db.add_project_file` rend (forme de `_PFILE_COLS`)."""
+    return {"id": 81, "project_id": int(target["project_id"]), "s3_key": "project-files/3/h/f",
+            "filename": target["filename"], "mime": "application/pdf",
+            "size_bytes": len(data), "title": None, "description": None, "summary": None,
+            "public": False, "public_url": None, "created_by": "tenant-x:sub-y",
+            "created_at": "2026-10-21 00:00:00"}
+
+
 def test_a_project_file_keeps_the_source_name(monkeypatch):
     monkeypatch.setattr(upload_tokens, "check_target_access", lambda sub, t: None)
     monkeypatch.setattr(file_source, "resolve", lambda *a, **k: _rf(name="deck.pdf",
                                                                      mime="application/pdf"))
     ecrit = {}
 
-    def materialize(sub, target, data, ct):
+    def deposer(sub, target, data, ct):
         ecrit.update(target)
-        return {"ok": True, "kind": "project_file", "filename": target["filename"],
-                "bytes": len(data)}
-    monkeypatch.setattr(upload_tokens, "materialize", materialize)
+        return _ligne(target, data)
+    monkeypatch.setattr(upload_tokens, "deposer_fichier_projet", deposer)
     out = up._import(_ctx(), up.ImportInput(
         source={"kind": "url", "url": "https://x/deck.pdf?sig=1"},
         target="project_file", project_id=3))
     assert ecrit["filename"] == "deck.pdf"
     assert out["source"]["url"] == "https://x/deck.pdf"
     assert len(out["source"]["sha256"]) == 64
+
+
+def test_a_project_file_receipt_gives_the_id_of_the_file_it_created(monkeypatch):
+    """oto-backend#1301 : l'accusé ne rendait que `filename` et `bytes` — l'appelant
+    devait relister le projet pour retrouver le fichier qu'il venait de créer. Il rend
+    `file_id` et `project_id`, et RIEN d'autre de la ligne (ni la clé de stockage, ni le
+    compte déposant)."""
+    monkeypatch.setattr(upload_tokens, "check_target_access", lambda sub, t: None)
+    monkeypatch.setattr(file_source, "resolve", lambda *a, **k: _rf(name="deck.pdf",
+                                                                     mime="application/pdf"))
+    monkeypatch.setattr(upload_tokens, "deposer_fichier_projet",
+                        lambda sub, target, data, ct: _ligne(target, data))
+    out = up._import(_ctx(), up.ImportInput(
+        source={"kind": "url", "url": "https://x/deck.pdf"}, target="project_file",
+        project_id=3))
+    source = out.pop("source")
+    assert out == {"ok": True, "kind": "project_file", "file_id": 81, "project_id": 3,
+                   "filename": "deck.pdf", "bytes": len(_rf().data)}
+    assert source["name"] == "deck.pdf"
+
+
+def test_the_rest_face_returns_the_same_ids(monkeypatch):
+    """La face REST (`POST /api/me/import`) passe par le VRAI handler de l'adaptateur :
+    le même accusé, ids compris. Seule l'autz est court-circuitée (pas l'objet ici)."""
+    import asyncio
+    import dataclasses
+    import json
+
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+
+    from oto_mcp.capabilities import _rest_adapter
+    from oto_mcp.capabilities._types import ResolvedCtx
+    from oto_mcp.capabilities.registry import CAPABILITIES
+
+    monkeypatch.setattr(upload_tokens, "check_target_access", lambda sub, t: None)
+    monkeypatch.setattr(file_source, "resolve", lambda *a, **k: _rf(name="deck.pdf",
+                                                                     mime="application/pdf"))
+    monkeypatch.setattr(upload_tokens, "deposer_fichier_projet",
+                        lambda sub, target, data, ct: _ligne(target, data))
+    cap = next(c for c in CAPABILITIES if c.key == "me.import")
+    cap = dataclasses.replace(cap, authz=lambda raw, inp: ResolvedCtx(sub=raw.sub))
+    [binding] = cap.rest_bindings()
+    assert (binding.verb, binding.path) == ("POST", "/api/me/import")
+
+    async def _auth(_req, _verifier, **_kw):
+        return "sub-test", None
+
+    handler = _rest_adapter._make_handler(
+        cap, binding, None, _auth,
+        lambda _r, payload, status=200: JSONResponse(payload, status_code=status),
+        lambda _r, status, code, message=None, **kw: JSONResponse(
+            {"error": code, "detail": message}, status_code=status))
+    corps = json.dumps({"source": {"kind": "url", "url": "https://x/deck.pdf"},
+                        "target": "project_file", "project_id": 3}).encode()
+
+    async def _receive():
+        return {"type": "http.request", "body": corps, "more_body": False}
+
+    req = Request({"type": "http", "method": "POST", "path": "/api/me/import",
+                   "headers": [(b"content-type", b"application/json")],
+                   "query_string": b"", "path_params": {}}, _receive)
+    rep = asyncio.run(handler(req))
+    out = json.loads(bytes(rep.body))
+    assert rep.status_code == 200, out
+    assert out["file_id"] == 81 and out["project_id"] == 3 and out["kind"] == "project_file"
+
+
+def test_the_declared_receipt_names_the_ids():
+    """Le contrat dérivé (OpenAPI, `ImportOutput`) déclare les deux champs rendus."""
+    champs = up.ImportOutput.model_fields
+    assert "file_id" in champs and "project_id" in champs
 
 
 def test_a_file_the_agent_produced_is_filed_in_the_project_as_is(monkeypatch):
@@ -145,11 +225,10 @@ def test_a_file_the_agent_produced_is_filed_in_the_project_as_is(monkeypatch):
     monkeypatch.setattr(upload_tokens, "check_target_access", lambda sub, t: None)
     ecrit = {}
 
-    def materialize(sub, target, data, ct):
+    def deposer(sub, target, data, ct):
         ecrit.update(target, data=data, ct=ct)
-        return {"ok": True, "kind": "project_file", "filename": target["filename"],
-                "bytes": len(data)}
-    monkeypatch.setattr(upload_tokens, "materialize", materialize)
+        return _ligne(target, data)
+    monkeypatch.setattr(upload_tokens, "deposer_fichier_projet", deposer)
     xlsx = b"PK\x03\x04" + bytes(range(256))
     out = up._import(_ctx(), up.ImportInput(
         source={"kind": "content", "filename": "synthese.xlsx",
@@ -163,7 +242,7 @@ def test_a_file_the_agent_produced_is_filed_in_the_project_as_is(monkeypatch):
 def test_an_inline_file_beyond_the_bound_is_refused_with_the_seam_contract(monkeypatch):
     import base64
     monkeypatch.setattr(upload_tokens, "check_target_access", lambda sub, t: None)
-    monkeypatch.setattr(upload_tokens, "materialize",
+    monkeypatch.setattr(upload_tokens, "deposer_fichier_projet",
                         lambda *a: pytest.fail("rien ne s'écrit au-delà du plafond"))
     trop = base64.b64encode(b"x" * (file_source.CONTENT_MAX_BYTES + 1)).decode()
     with pytest.raises(AuthzDenied) as e:

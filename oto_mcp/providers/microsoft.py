@@ -6,7 +6,7 @@ describe it). See `providers/_model.py` for the `Connector` contract.
 
 Same shape as the Google account (`providers/google.py`): each Microsoft service
 (`auth/microsoft.SERVICE_SCOPES`: SharePoint & OneDrive, Outlook, Outlook Calendar,
-Teams) is a connector in its own right (its card, its activation, its selection, ITS
+Teams, OneNote, the directory) is a connector in its own right (its card, its activation, its selection, ITS
 consent: its scopes only, added to the same Entra consent of the account) and borrows
 the account from here (`credential_of="microsoft"`, see `service` below).
 

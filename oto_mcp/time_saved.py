@@ -12,7 +12,8 @@ de l'absence de déclaration, ni un type du nom de l'outil.
   n'est pas compté, et le résumé le dit (`not_counted`), il ne retombe sur rien ;
 - de chaque appel : son `op`, s'il a RÉUSSI, et l'enregistrement touché ;
 - sur un outil multiplexé, l'`op` dit le geste : une `op` de `READ_OPS` est une
-  recherche ; sur un outil qui agit, seule une `op` de `SEND_OPS` est un envoi —
+  recherche ; sur un outil qui agit, seule une `op` dont le verbe est dans `SEND_OPS`
+  (`send`, `send_email`) est un envoi —
   ranger, archiver ou supprimer (`gmail_act op=archive|trash`) n'est pas un envoi et
   ne rapporte rien ;
 - un même enregistrement ne compte qu'UNE fois par jour et par agent ;
@@ -113,7 +114,9 @@ def kind_of(name: str, op: Optional[str] = None) -> Optional[str]:
             return "action"
         if geste in READ_OPS:
             return "research"
-        return "action" if geste in SEND_OPS else None
+        # Une op de `<ns>_act` porte son objet (`send_email`, `publish_post`) : c'est son
+        # VERBE qui dit l'envoi.
+        return "action" if geste.split("_", 1)[0] in SEND_OPS else None
     return None
 
 

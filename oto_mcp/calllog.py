@@ -194,6 +194,11 @@ def truncated_args(arguments: dict | None, max_chars: int = MAX_ARG_CHARS,
         # dans un sous-dictionnaire. Sans reprendre SA déclaration, `oto_call`
         # rouvrirait le canal qu'on vient de fermer.
         caches = caches | journal_secrets.secret_arg_names(arguments.get("name"))
+    # Avant la mise en texte ci-dessous : l'adresse d'une source de fichier se
+    # reconnaît à sa STRUCTURE (`{kind: "url", url}`), que `str(v)` effacerait.
+    # `db.insert_tool_call` repasse le même masque (idempotent) pour les écrivains
+    # qui n'empruntent pas ce chemin.
+    arguments = journal_secrets.masquer_urls_des_valeurs(arguments)
     out: dict[str, Any] = {}
     tailles: dict[str, int] = {}
     for k, v in arguments.items():

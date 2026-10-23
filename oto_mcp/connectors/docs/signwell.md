@@ -7,10 +7,10 @@ create a key in SignWell: **Settings → API → Create API key**, then paste it
 ## usage — send a document to sign, track it, retrieve the pdf
 
 five tools, verb in `op`:
-- "send this NDA to be signed" → `signwell_document(op="create", files=[{name, file_url}], recipients=[{id:"1", name, email}], text_tags=True)` creates a **draft**; review it, then `signwell_document(op="send", document_id=…)`
+- "send this NDA to be signed" → `signwell_document(op="create", files=[{name, file_url}], recipients=[{id:"1", name, email}], text_tags=True)` creates a **draft**; review it, then `signwell_act(op="send_document", document_id=…)` — sending is its own tool, the one your client asks you to confirm
 - "a file from the project" → `oto_project_files(op="list")` returns a signed `download_url`: that is the `file_url` to pass
 - "where does the signature stand?" → `signwell_document(op="get", document_id=…)` — status, and for each recipient their `signing_link`, whether they received an email (`emailed`) and where they are
-- "remind them" → `signwell_document(op="remind", document_id=…)`
+- "remind them" → `signwell_act(op="remind_document", document_id=…)`
 - "give me the signed PDF" → `signwell_document(op="completed_pdf", document_id=…, audit_page=True)`
 - "a link I will send myself, without a SignWell email" → `embedded_signing=True` at creation: each recipient gets a `signing_link` that opens in a browser
 - "from my template" → `signwell_template(op="create_document", template_id=…, recipients=[{id, placeholder_name, name, email}])`
@@ -21,7 +21,7 @@ placing the fields in the file (text tags): `oto_guide op=read slug="signwell-en
 
 ## note — what the tools do differently from the api
 
-- **creating does not mean sending.** At SignWell, `POST /documents` SENDS by default. Here `op="create"` (and `signwell_template(op="create_document")`) creates a draft unless `draft=False` is explicit; sending is `op="send"`.
+- **creating does not mean sending.** At SignWell, `POST /documents` SENDS by default. Here `op="create"` (and `signwell_template(op="create_document")`) creates a draft unless `draft=False` is explicit; sending is `signwell_act(op="send_document")`.
 - **a single link per recipient**: SignWell returns it under `signing_url` or `embedded_signing_url` depending on the mode; the view always returns it under `signing_link`, with `emailed` saying whether SignWell writes to that person. `full=True` returns the raw payload.
 - **the signed PDF is returned as a link**, never as bytes. This link is a bearer: whoever holds it downloads the document.
 - **no document list**: the API has none. Keep the `id` returned at creation — it cannot be found afterwards.

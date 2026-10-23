@@ -11,22 +11,22 @@ create a key in Productlane (Settings → API), then paste it into oto.
 
 - "what are our customers asking for?" → `productlane_threads(op="search", status="open")`, or `productlane_roadmap(op="projects", sort="total_score")` to rank by the weight of attached feedback rather than by date
 - "read a whole conversation" → `productlane_threads(op="get", thread_id="…", expand=["messages","comments"])`
-- "reply to the customer" → `productlane_threads(op="send", thread_id="…", content="…")` — ⚠️ **this really goes out**, through the channel the thread came from
+- "reply to the customer" → `productlane_act(op="send_message", thread_id="…", content="…")` — ⚠️ **this really goes out**, through the channel the thread came from; it is its own tool, the one your client asks you to confirm
 - "leave a note for the team" → `productlane_threads(op="comment", …)`: visible to teammates only, nothing goes out
 - "link this feedback to the roadmap" → `productlane_threads(op="link", thread_id="…", issue_ids=[…])`: this is the gesture that raises a project's score
 - "who asked for this?" → `productlane_contacts(op="search", …)` then `op="issues"` / `op="projects"` on the contact
 - "publish a release note" → `productlane_changelogs(op="create", fields={…})`, then `op="update"` with `{"published": true}` to make it visible
-- "notify subscribers" → `productlane_changelogs(op="broadcast", changelog_id="…", email=true, dry_run=false)`
+- "notify subscribers" → `productlane_act(op="broadcast_changelog", changelog_id="…", email=true, dry_run=false)`
 - "what our online help says" → `productlane_docs(op="articles", title_contains="…")`
 - check what the key is allowed to do, before running into it → `productlane_workspace(op="me")`: it returns the granted scopes and requires no right
 
 ## note — publishing is not broadcasting
 
-⚠️ **`op="broadcast"` has NO effect on `published`** — the vendor spells it out. The two gestures are independent, and mixing them up is costly in both directions:
+⚠️ **`productlane_act(op="broadcast_changelog")` has NO effect on `published`** — the vendor spells it out. The two gestures are independent, and mixing them up is costly in both directions:
 - broadcasting an **unpublished** changelog sends your subscribers a link to an invisible page
 - publishing without broadcasting notifies no one
 
-publish = `productlane_changelogs(op="update", fields={"published": true})`. broadcast = `op="broadcast"`, which is **dry-run by default**: you need `dry_run=false` for anything to go out, and there is no cancel or recall.
+publish = `productlane_changelogs(op="update", fields={"published": true})`. broadcast = `productlane_act(op="broadcast_changelog")`, which is **dry-run by default**: you need `dry_run=false` for anything to go out, and there is no cancel or recall.
 
 ## note — the roadmap is a mirror of Linear
 

@@ -17,8 +17,7 @@ from oto_mcp.datastore import validation as V
 
 
 def _schema(**extra):
-    return {"unknown_columns": "report",
-            "fields": [{"key": "priorite", "type": "number"},
+    return {"fields": [{"key": "priorite", "type": "number"},
                        {"key": "ca", "type": "number"}],
             **extra}
 
@@ -55,19 +54,3 @@ def test_insert_sans_written_juge_toujours_la_row_entiere():
     merged = {"priorite": 3, "ca": "5547719 (2024)"}
     errors = V.validate_row(_schema(), merged, written=None)
     assert any("`ca`" in e and "refused" in e for e in errors), errors
-
-
-def test_sans_validation_active_la_colonne_heritee_est_gelee_par_types_trahis_seul():
-    """Le banc qui prouve la branche : un tableau SANS validation active (ni `strict`,
-    ni `required`, ni borne) — `_row_errors` ne tourne pas, seul `types_trahis` juge le
-    type. Sur le schéma `strict` des bancs ci-dessus, `_row_errors` rangeait déjà `ca`
-    en gelée : ils passaient sans la nouvelle branche. Celui-ci tombe sans elle."""
-    schema = {"fields": [{"key": "priorite", "type": "number"},
-                         {"key": "ca", "type": "number"}]}
-    assert not V.validation_active(schema)
-    merged = {"priorite": 3, "ca": "5547719 (2024)"}
-    gelees: list = []
-    errors = V.validate_row(schema, merged, written={"priorite"}, gelees=gelees)
-    assert errors == [], errors
-    assert [g["champ"] for g in gelees] == ["ca"], gelees
-    assert "`ca`" in gelees[0]["refus"] and "refused" in gelees[0]["refus"], gelees

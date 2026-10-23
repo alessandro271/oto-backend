@@ -348,7 +348,7 @@ CREATE TABLE IF NOT EXISTS runner_triggers (
     -- 25/09/2026 : COMMENT une source prouve qui elle est. `bearer` (défaut) =
     -- l'en-tête `Authorization: Bearer otoh_…` que nous générons ;
     -- `standard_webhooks` = la source SIGNE avec son propre secret (Granola,
-    -- Svix…), et le porteur est alors REFUSÉ pour cet agent. Depuis : `lemlist`,
+    -- Svix…), et le porteur est alors REFUSÉ pour cet agent. Depuis : `body_secret`,
     -- `none`, `slack` — les préréglages de `runner_hook.PREREGLAGES`.
     hook_auth TEXT NOT NULL DEFAULT 'bearer',
     -- Le secret de signature fourni par la source, CHIFFRÉ (`crypto.encrypt`, AAD
@@ -363,6 +363,10 @@ CREATE TABLE IF NOT EXISTS runner_triggers (
     -- credential : la preuve reste exigée derrière. ⚠️ Son index unique n'est
     -- pas ici (colonne née d'un ALTER du boot, #450) : `db/_init.py`.
     hook_slug TEXT,
+    -- 20/10/2026 : les webhooks qu'oto a INSCRITS chez la source pour cet agent
+    -- (`connect_source`) — `[{source, remote_id, event, campaign_id}]`. Des
+    -- identifiants chez le tiers, jamais un secret. NULL = rien d'inscrit.
+    hook_sources JSONB,
     -- Le FILTRE de livraison (`hook_filter.py`) : `{chemin: [valeurs]}` qu'une
     -- livraison AUTHENTIFIÉE doit porter pour lancer un run ; ce qu'il écarte rend
     -- un succès à la source, sans travail. NULL = tout passe.

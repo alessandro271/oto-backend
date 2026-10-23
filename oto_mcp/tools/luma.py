@@ -1,6 +1,6 @@
 """Luma tools — events, guests and blasts (lu.ma).
 
-Wraps `oto.tools.luma.client.LumaClient`. Five tools here, five more in
+Wraps `oto.tools.luma.client.LumaClient`. Six tools here, five more in
 `luma_calendar.py`; the shared base (key, calendar of an organization key,
 refusal translation) is `luma_socle.py`.
 
@@ -8,7 +8,8 @@ refusal translation) is `luma_socle.py`.
   `luma_guests` only read (declared `LECTURE`, so a recipe can pull a guest
   list), `luma_event_admin` and `luma_guest_admin` change things.
 - ⚠️ Three gestures reach people outside the organization and are **dry-run
-  by default**: `luma_guest_admin op="invite"`, `luma_blasts op="send"`,
+  by default**: `luma_guest_admin op="invite"`, `luma_act op="send_blast"` (sending a
+  blast is not an op of `luma_blasts`, which reads them: a client authorizes tools),
   `luma_event_admin op="cancel"`.
 - **Cursor pagination**: lists return `{entries, has_more, next_cursor}`;
   pass `next_cursor` back as `cursor` while `has_more` is true.
@@ -23,7 +24,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastmcp import FastMCP
 
 from ..connectors import verify as connector_verify
-from .lecture import LECTURE
+from .lecture import ACTE, LECTURE
 from .luma_socle import (EVENT_ROW_OMITTED, GUEST_ROW_OMITTED, _bad, _client,
                          _slim, _verify, bad_op, dry_run_reply, need, run)
 
@@ -383,40 +384,33 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def luma_blasts(
-        op: Literal["list", "get", "send", "update", "delete"] = "list",
+        op: Literal["list", "get", "update", "delete"] = "list",
         event_id: Optional[str] = None,
         blast_id: Optional[str] = None,
         content_md: Optional[str] = None,
         subject: Optional[str] = None,
         recipient_groups: Optional[List[Dict[str, Any]]] = None,
         scheduled_for: Optional[str] = None,
-        dry_run: bool = True,
         calendar_id: Optional[str] = None,
     ) -> Any:
         """Luma — blasts: emails to an event's guests, also posted on the event page.
+        SENDING one is `luma_act(op="send_blast")`, another tool.
 
         `op`:
         - `list` — the event's blasts, newest first, with recipient and open
           counts once sent. `get` — one blast (`blast_id`, `ep-…`).
-        - `send` — ⚠️ emails the guests now, or at `scheduled_for` (ISO 8601).
-          Cannot be recalled once sent; counts against the calendar's send
-          limit (10 blasts per 5 minutes). **Dry-run by default.**
-          `recipient_groups`: `[{status, event_ticket_type_id?}]` with status
-          approved (going, the default) | checked_in | pending_approval |
-          waitlist | invited.
         - `update` — before sending, anything; after, only `subject` and
           `content_md`, which edits the page post, not delivered emails.
         - `delete` — cancels a scheduled blast; a sent one only leaves the page.
 
         Args:
             op: the operation, see above.
-            event_id: list / send — the event (`evt-…`).
+            event_id: list — the event (`evt-…`).
             blast_id: get / update / delete.
-            content_md: send / update — the message, in markdown.
-            subject: send / update — email subject (default "New message in …").
-            recipient_groups: send / update — who receives it.
-            scheduled_for: send / update — future send time (ISO 8601).
-            dry_run: op='send' — True (default) describes without sending.
+            content_md: update — the message, in markdown.
+            subject: update — email subject.
+            recipient_groups: update — who receives it.
+            scheduled_for: update — future send time (ISO 8601).
             calendar_id: with an ORGANIZATION key, the calendar (`cal-…`).
         """
         c = _client(calendar_id)
@@ -426,19 +420,6 @@ def register(mcp: FastMCP) -> None:
         if op == "get":
             need(blast_id, "blast_id", op)
             return run(lambda: c.get_blast(blast_id))
-        if op == "send":
-            need(event_id, "event_id", op)
-            need(content_md, "content_md", op)
-            if dry_run:
-                return dry_run_reply(
-                    "email this message to the event's guests",
-                    "a sent blast cannot be recalled",
-                    event_id=event_id, subject=subject,
-                    recipient_groups=recipient_groups or [{"status": "approved"}],
-                    scheduled_for=scheduled_for, content_md=content_md)
-            return run(lambda: c.create_blast(
-                event_id, content_md, subject=subject,
-                recipient_groups=recipient_groups, scheduled_for=scheduled_for))
         if op == "update":
             need(blast_id, "blast_id", op)
             return run(lambda: c.update_blast(
@@ -447,4 +428,49 @@ def register(mcp: FastMCP) -> None:
         if op == "delete":
             need(blast_id, "blast_id", op)
             return run(lambda: c.delete_blast(blast_id))
-        raise bad_op(op, "list | get | send | update | delete")
+        raise bad_op(op, "list | get | update | delete")
+
+    @mcp.tool(annotations=ACTE)
+    def luma_act(
+        op: Literal["send_blast"],
+        event_id: str,
+        content_md: str,
+        subject: Optional[str] = None,
+        recipient_groups: Optional[List[Dict[str, Any]]] = None,
+        scheduled_for: Optional[str] = None,
+        dry_run: bool = True,
+        calendar_id: Optional[str] = None,
+    ) -> Any:
+        """⚠️ ACTS at Luma, toward an event's guests: `send_blast` emails them now, or at
+        `scheduled_for` (ISO 8601), and posts the message on the event page. Cannot be
+        recalled once sent; counts against the calendar's send limit (10 blasts per 5
+        minutes). **Dry-run by default.** Reading, changing or cancelling a blast is
+        `luma_blasts`.
+
+        Args:
+            op: "send_blast".
+            event_id: the event (`evt-…`).
+            content_md: the message, in markdown.
+            subject: email subject (default "New message in …").
+            recipient_groups: `[{status, event_ticket_type_id?}]` with status approved
+                (going, the default) | checked_in | pending_approval | waitlist |
+                invited.
+            scheduled_for: future send time (ISO 8601).
+            dry_run: True (default) describes without sending.
+            calendar_id: with an ORGANIZATION key, the calendar (`cal-…`).
+        """
+        if op != "send_blast":
+            raise bad_op(op, "send_blast")
+        need(event_id, "event_id", op)
+        need(content_md, "content_md", op)
+        c = _client(calendar_id)
+        if dry_run:
+            return dry_run_reply(
+                "email this message to the event's guests",
+                "a sent blast cannot be recalled",
+                event_id=event_id, subject=subject,
+                recipient_groups=recipient_groups or [{"status": "approved"}],
+                scheduled_for=scheduled_for, content_md=content_md)
+        return run(lambda: c.create_blast(
+            event_id, content_md, subject=subject,
+            recipient_groups=recipient_groups, scheduled_for=scheduled_for))

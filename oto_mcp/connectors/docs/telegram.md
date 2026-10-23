@@ -6,7 +6,7 @@ your Telegram account is connected through a hosted flow (login by number + code
 
 ## usage — read and reply from your account
 
-`telegram_chat(op=list|read)` reads, `telegram_send` sends — two tools, so that allowing reads never allows sending (`telegram_chat(op=send)` is deprecated, served until 10/12/2026). you act as yourself, under your own account.
+`telegram(op=list|read)` reads your conversations — one-to-one AND group ones (`is_group`) —, `telegram_act(op=send)` sends: two tools, so that allowing reads never allows sending (your client asks you to confirm `telegram_act`). you act as yourself, under your own account.
 - "read my latest Telegram conversations"
 - "reply to [contact] on Telegram"
 - "summarize this Telegram thread"

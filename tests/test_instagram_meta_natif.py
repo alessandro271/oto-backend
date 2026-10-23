@@ -189,7 +189,8 @@ def test_le_namespace_ne_tombe_pas_sur_le_connecteur_de_messagerie():
     from oto_mcp import tool_visibility as tv
 
     assert tv.namespace_of("instagram_meta_get_profile") == CONNECTEUR
-    assert tv.namespace_of("instagram_chat") == "instagram"
+    assert tv.namespace_of("instagram") == "instagram"
+    assert tv.namespace_of("instagram_act") == "instagram"
     assert providers.connector_for_namespace(CONNECTEUR).name == CONNECTEUR
 
 

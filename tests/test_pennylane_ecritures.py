@@ -162,7 +162,7 @@ def _refus(statut: int, detail: str):
 
 GESTES = [
     ("pennylane_invoice", {"op": "finalize", "invoice_id": 1}, "finalize_invoice"),
-    ("pennylane_invoice", {"op": "send", "invoice_id": 1}, "send_invoice"),
+    ("pennylane_act", {"op": "send_invoice", "invoice_id": 1}, "send_invoice"),
     ("pennylane_invoice", {"op": "update", "invoice_id": 1, "fields": {"label": "x"}},
      "update_invoice"),
     ("pennylane_supplier", {"op": "create", "name": "ACME"}, "create_supplier"),

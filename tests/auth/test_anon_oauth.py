@@ -29,7 +29,7 @@ from starlette.testclient import TestClient
 
 from oto_mcp.auth import anon
 
-# Le seul rappel accepté, tel que `oto_mcp/auth/facade.py` le déclare : schéma https,
+# Le seul rappel accepté, tel que `oto_mcp/auth/anon.py` le déclare : schéma https,
 # hôte dans l'allowlist, chemin de rappel exact.
 _OK = "https://claude.ai/api/mcp/auth_callback"
 

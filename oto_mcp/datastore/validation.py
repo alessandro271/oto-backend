@@ -196,9 +196,8 @@ def _type_error(value: Any, ftype: Optional[str], path: str,
         cle = of.get("key") if isinstance(of.get("key"), str) else None
         # Un attribut inconnu se nomme UNE fois pour toute la colonne, sur le premier
         # élément qui le porte : les items d'une liste partagent leur déclaration,
-        # donc 300 contacts fautifs diraient 300 fois la même chose. Même borne que
-        # l'agrégation du relevé `hors_schema` (`clé[].sous_clé`), et même raison :
-        # un refus qu'on ne peut pas lire ne vaut pas mieux qu'un silence.
+        # donc 300 contacts fautifs diraient 300 fois la même chose. Un chemin agrégé
+        # (`clé[].sous_clé`) par la même raison : un refus qu'on ne peut pas lire ne vaut pas mieux qu'un silence.
         vus: set = set()
         vus_geles: set = set()
         for i, item in enumerate(value):
@@ -261,7 +260,8 @@ def _row_errors(fields: list, data: dict, path: str,
                 charge: Optional[dict] = None,
                 chemin: tuple = car.RACINE,
                 cle_d_identite: Optional[str] = None,
-                ecrits_par_rang: Optional[dict] = None) -> list[str]:
+                ecrits_par_rang: Optional[dict] = None,
+                poses: Optional[dict] = None) -> list[str]:
     """Erreurs d'un (sous-)record. `written` = clés effectivement RÉÉCRITES par ce
     geste (None = toutes) : la borne de longueur, le motif, la fermeture d'un
     composite **et le TYPE** s'y restreignent — eux seuls, cf. `validate_row`. La
@@ -282,13 +282,19 @@ def _row_errors(fields: list, data: dict, path: str,
     `@empty` n'y est pas une alternative.
 
     `contraignant` = le format du tableau fait contrat (`validation_complete.complete`,
-    partout à partir du 21/10/2026, oto#124). Il n'interdit rien ICI au premier niveau
+    oto#124). Il n'interdit rien ICI au premier niveau
     (une colonne non déclarée est l'affaire de `colonnes_non_declarees`, jugée sur le
     geste dans `_check_row`) ; il FERME les composites déclarés d'un cran plus bas
     (#544). `closed` porte cette fermeture.
 
     `vus` = les attributs déjà nommés pour la colonne-liste courante (borne du
     refus, cf. `_type_error`).
+
+    `poses` (premier niveau) = ce que le geste nomme par colonne AVANT fusion, sur les
+    chemins qui fusionnent (`validate_row(pose=…)`). Une couche inconnue que la
+    cellule porte DÉJÀ et que le geste ne pose pas n'est pas jugée contre lui : écrite
+    par une version plus récente, elle traverse la réécriture (#326) et se dit
+    (`gelees`). Absent (création), tout ce qui est posé vient du geste.
 
     `details` (dict mutable, optionnel) = le refus STRUCTURÉ que l'appelant récupère,
     aujourd'hui `expected_column` (#545). Renseigné au PREMIER cas rencontré et jamais
@@ -324,7 +330,10 @@ def _row_errors(fields: list, data: dict, path: str,
         # patch sans rapport (les 23 lignes gelées d'oto-backend#284).
         pose = written is None or key in written
         # Le marqueur du vide assumé (oto#204) est une clé INTERNE, pas un sous-champ.
-        inconnues = [k for k in unknown_layers(data.get(key)) if k not in CLES_INTERNES]
+        # Une colonne déclarée `json` porte un objet métier, pas des couches : une clé
+        # `origine` y est une donnée (#329, la sortie que nomme le garde mixte).
+        inconnues = [] if f.get("type") == "json" else [
+            k for k in unknown_layers(data.get(key)) if k not in CLES_INTERNES]
         if inconnues:
             proches = [cle_la_plus_proche(k, list(LAYER_KEYS)) for k in inconnues]
             dites = [f"`{p}` for {k!r}" for k, p in zip(inconnues, proches) if p]
@@ -335,9 +344,12 @@ def _row_errors(fields: list, data: dict, path: str,
                 + ". A layer stored without being read would give the illusion of a "
                 "filled-in provenance.")
             # oto#124 : on juge ce que le geste ÉCRIT. Une couche inconnue déjà en
-            # base sur une colonne que ce geste ne touche pas se DIT (`gelees`), elle
-            # ne refuse pas l'écriture d'une autre colonne.
-            if pose:
+            # base — sur une colonne que ce geste ne touche pas, ou que ce geste
+            # réécrit sans la poser (#326) — se DIT (`gelees`), elle ne refuse pas.
+            couche_posee = pose and (poses is None or (
+                isinstance(poses.get(key), dict)
+                and any(k in poses[key] for k in inconnues)))
+            if couche_posee:
                 errors.append(inconnue)
                 for p in proches:
                     if p:
@@ -540,24 +552,17 @@ def validate_row(schema: Optional[dict], merged: dict, *,
                  gelees: Optional[list] = None,
                  en_place: Optional[dict] = None,
                  pose: Optional[dict] = None,
-                 ecrits_par_rang: Optional[dict] = None,
-                 preavis: Optional[list] = None) -> list[str]:
+                 ecrits_par_rang: Optional[dict] = None) -> list[str]:
     """Erreurs d'une row TELLE QU'ELLE SERA ÉCRITE (le résultat mergé, pas le
     patch) : required / required_when / types / structure imbriquée — si la
     validation est active — plus le cycle de vie (états + transitions) dès qu'un
     `lifecycle` est déclaré, même hors validation armée. Liste vide = OK.
 
-    Quand le format fait contrat (`validation_complete.complete` — partout à partir du
-    21/10/2026, oto#124), un composite DÉCLARÉ est en plus un référentiel FERMÉ (#544) :
+    Quand le format fait contrat (`validation_complete.complete` — tout tableau qui
+    déclare une colonne, oto#124), un composite DÉCLARÉ est en plus un référentiel FERMÉ (#544) :
     un attribut absent de `of.fields` / `fields` est refusé. La fermeture ne descend
     que dans les composites que le geste RÉÉCRIT — même restriction que `max_length`,
     et même raison.
-
-    `preavis` = liste OUT (oto#124) : sur un tableau en PRÉAVIS
-    (`validation_complete.en_preavis`), les fautes que la validation complète aurait
-    refusées et que le régime actuel laisse passer — jugées sur le même geste
-    (`written`, `en_place`, `ecrits_par_rang`), donc sur ce qu'il ÉCRIT. Elles ne
-    refusent rien : l'appelant les dit, datées. Absente = rien n'est calculé.
 
     `written` = les clés que ce geste réécrit (None = la row entière, cas d'un
     insert). **Quatre** contrôles s'y restreignent, et eux
@@ -606,24 +611,13 @@ def validate_row(schema: Optional[dict], merged: dict, *,
     ou sans `of.key` : le geste dit lui-même ce qu'il écrit, il n'y a rien à déduire."""
     errors: list[str] = []
     charge: Optional[dict] = {} if details is not None else None
-    actuelles: list[str] = []
     if validation_active(schema):
         # required_when se juge sur la row finale (le statut mergé, pas l'ancien)
-        actuelles = _row_errors(_fields(schema), merged, "", written,
-                                contraignant=vc.complete(schema),
-                                details=details, hors=hors, gelees=gelees,
-                                en_place=en_place, charge=charge,
-                                ecrits_par_rang=ecrits_par_rang)
-        errors.extend(actuelles)
-    if preavis is not None and vc.en_preavis(schema):
-        # Le MÊME juge, réglé comme il le sera à la date : ce qu'il refuserait de plus
-        # que le régime actuel est le préavis. Ses relevés propres (`hors`, `gelees`,
-        # charge) ne sont pas collectés : rien n'est écarté ni refusé à ce titre.
-        deja = set(actuelles)
-        preavis.extend(e for e in _row_errors(_fields(schema), merged, "", written,
-                                              contraignant=True, en_place=en_place,
-                                              ecrits_par_rang=ecrits_par_rang)
-                       if e not in deja)
+        errors.extend(_row_errors(_fields(schema), merged, "", written,
+                                  contraignant=vc.complete(schema),
+                                  details=details, hors=hors, gelees=gelees,
+                                  en_place=en_place, charge=charge,
+                                  ecrits_par_rang=ecrits_par_rang, poses=pose))
     # oto#75 barreau 1 : HORS du garde `validation_active`, comme le cycle de vie
     # ci-dessous — la déclaration `required_layers` s'arme elle-même.
     errors.extend(couches_manquantes(schema, merged, written=written, charge=charge,

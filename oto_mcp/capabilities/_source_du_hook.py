@@ -1,0 +1,299 @@
+"""BRANCHER une source sur un agent webhook — `oto_trigger op=connect_source`.
+
+Une source qui ne sait pas poser d'en-tête (Lemlist) reçoit le porteur `otoh_` de
+l'agent comme `secret` de son webhook (préréglage `body_secret`). Sans ce geste,
+il fallait que le porteur passe par quelqu'un : rendu à l'écran, copié, collé chez
+la source — ou, pire, passé en argument d'outil par un modèle, ce que la règle du
+dépôt interdit (un secret brut ne passe jamais par un outil).
+
+Ici le SERVEUR fait tout : il fabrique le porteur, l'inscrit chez la source avec la
+clé de la source que l'APPELANT résout dans l'org, et ne rend que les identifiants
+des webhooks inscrits. Le porteur va de la mémoire du serveur à la source — jamais
+dans une réponse, un journal ou un transcript.
+
+## L'ordre, et pourquoi
+
+1. Inscrire chez la source avec le porteur NEUF (et, pour un agent qui n'en a pas,
+   l'adresse privée NEUVE), encore en mémoire. Une inscription qui échoue retire
+   celles déjà faites : la base n'a pas bougé, l'agent garde sa porte, intacte.
+2. Écrire en base, en UNE transaction : adresse, mode `body_secret`, haché du
+   porteur, inscriptions (`db.brancher_la_source`) — à condition que les
+   inscriptions lues au départ soient toujours celles de la ligne (un branchement
+   concurrent, ou l'agent supprimé entre-temps, ne s'écrase pas en silence).
+3. Si cette écriture échoue (panne, ou ligne changée), COMPENSER : retirer chez la
+   source ce qu'on vient d'y inscrire — sinon un webhook resterait chez le tiers,
+   porteur d'un secret qu'aucune ligne ne connaît, et qu'oto ne saurait plus
+   retirer. Un retrait qui échoue à son tour est une erreur NOMMÉE
+   (`source_cleanup_failed`), journalisée avec les identifiants distants à retirer
+   à la main — jamais avalée.
+4. Retirer chez la source les inscriptions d'AVANT (un rebranchement) : elles portent
+   l'ancien porteur, qui n'ouvre plus rien. Un retrait qui échoue ne défait rien —
+   il est RENDU (`remote_cleanup_failed`) et journalisé.
+
+Rebrancher une source déjà branchée est donc la ROTATION du porteur d'un agent
+branché : `rotate_secret`, `rotate_address` et le changement de mode sont refusés
+sur un agent branché (`source_connected`), parce qu'ils couperaient la source sans
+qu'oto puisse lui donner la nouvelle porte.
+"""
+from __future__ import annotations
+
+import logging
+import os
+from typing import Any, Callable, Optional
+
+from .. import db, runner_hook
+from ._types import AuthzDenied, ResolvedCtx
+
+logger = logging.getLogger(__name__)
+
+#: Les sources qu'oto sait brancher. Une source de plus = un client qui sait
+#: inscrire et retirer un webhook, et le préréglage par lequel elle prouve.
+SOURCES = ("lemlist",)
+
+#: Combien d'événements un branchement inscrit, au plus : un webhook par
+#: événement chez Lemlist, et chaque inscription est un appel au tiers.
+EVENEMENTS_MAX = 10
+
+SOURCE_CONNECTED = (
+    "A sender is wired to this agent (`hook_sources`): changing its door would cut "
+    "the sender off, with no way for oto to hand it the new one. Re-run "
+    "`op=connect_source` to renew the token AND the registration, or "
+    "`op=disconnect_source` first to change the door otherwise.")
+
+
+def exiger_aucune_source(t: Optional[dict]) -> None:
+    """Refuse un geste de porte sur un agent branché (voir `SOURCE_CONNECTED`)."""
+    if t and t.get("hook_sources"):
+        raise AuthzDenied(409, "source_connected", SOURCE_CONNECTED)
+
+
+def _client(ctx: ResolvedCtx, source: str) -> Any:
+    """Le client de la source, sur la clé que l'APPELANT résout dans l'org de
+    l'agent — la même cascade qu'un outil `lemlist_*` dans cette org.
+
+    `want="byo"` : la clé d'un compte de l'appelant (perso, équipe, org) — jamais un
+    rang partagé, qui inscrirait le webhook sur le compte d'un autre.
+    `check_usage=False` : configurer une connexion ne consomme pas de quota."""
+    from .. import access, session_org
+    from ..auth import hooks as auth_hooks
+    from ..mcp_errors import McpError
+    from oto.tools.lemlist import LemlistClient
+
+    try:
+        with auth_hooks.sub_override(ctx.sub):
+            jeton = session_org.set_call_org(int(ctx.org_id))
+            try:
+                rc = access.resolve_credential(source, want="byo", sub=ctx.sub,
+                                               check_usage=False)
+            finally:
+                session_org.reset_call_org(jeton)
+    except McpError as e:
+        # `from e` : la face MCP rend l'erreur d'origine, déjà actionnable.
+        raise AuthzDenied(400, "credential_unavailable", e.error.message) from e
+    return LemlistClient(api_key=rc.key)
+
+
+def _url_publique(slug: str) -> str:
+    """L'URL que la source appellera. ⚠️ Sans `OTO_MCP_PUBLIC_URL`, l'URL servie à
+    un écran est RELATIVE (`_url_du_hook`) — inscrite chez un tiers, elle ne
+    répondrait jamais : refusé par son nom plutôt qu'inscrit faux."""
+    base = (os.environ.get("OTO_MCP_PUBLIC_URL") or "").rstrip("/")
+    if not base:
+        raise AuthzDenied(
+            503, "public_url_unset",
+            "This server does not know its public address (`OTO_MCP_PUBLIC_URL`): "
+            "the sender could not reach the agent. Nothing was registered.")
+    return f"{base}/api/hooks/{slug}"
+
+
+def _motif(e: Exception) -> str:
+    """Ce qu'on dit d'un refus du tiers. ⚠️ Jamais `str(e)` : le message d'une
+    erreur amont peut recopier la requête, donc le porteur qu'elle portait."""
+    statut = getattr(e, "status_code", None)
+    return f"{type(e).__name__}{f' {statut}' if statut else ''}"
+
+
+def _retirer(client: Any, inscrites: list) -> list:
+    """Retire chez la source chaque inscription ; rend celles qui ont RÉSISTÉ."""
+    restees = []
+    for ins in inscrites:
+        try:
+            client.delete_webhook(ins["remote_id"])
+        except Exception as e:  # noqa: SILENT — journalisé, et rendu à l'appelant
+            logger.warning("webhook %s chez %s : retrait impossible (%s)",
+                           ins.get("remote_id"), ins.get("source"), _motif(e))
+            restees.append({**ins, "error": _motif(e)})
+    return restees
+
+
+def _ids(inscrites: list) -> str:
+    return ", ".join(str(i.get("remote_id")) for i in inscrites)
+
+
+def _compenser(ctx: ResolvedCtx, t: dict, client: Any, source: str, inscrites: list,
+               cause: str) -> None:
+    """Retire chez la source les inscriptions qu'aucune ligne ne retiendra. Si l'une
+    résiste, LÈVE `source_cleanup_failed` en la nommant — un webhook orphelin chez
+    le tiers porte un secret qu'oto ne connaît plus : il ne doit pas passer inaperçu."""
+    restees = _retirer(client, inscrites)
+    if not restees:
+        return
+    logger.error("webhook %s (org %s) : %s — %d webhook(s) ORPHELIN(S) chez %s, à "
+                 "retirer à la main : %s", t["id"], ctx.org_id, cause, len(restees),
+                 source, _ids(restees))
+    raise AuthzDenied(
+        502, "source_cleanup_failed",
+        f"Wiring failed ({cause}) and {source} refused to remove {len(restees)} "
+        f"webhook(s) oto had just registered: {_ids(restees)}. They hold a token "
+        "that opens nothing; remove them in the sender's settings.")
+
+
+def _evenements(events: Optional[list]) -> list:
+    vus = []
+    for ev in events or []:
+        ev = (ev or "").strip() if isinstance(ev, str) else ""
+        if ev and ev not in vus:
+            vus.append(ev)
+    if not vus:
+        raise AuthzDenied(
+            400, "events_required",
+            "`events`: at least one of the sender's events (Lemlist: "
+            "`emailsReplied`, `linkedinReplied`…). No default: subscribing to "
+            "EVERYTHING would start the agent on every email open.")
+    if len(vus) > EVENEMENTS_MAX:
+        raise AuthzDenied(400, "too_many_events",
+                          f"`events`: at most {EVENEMENTS_MAX} per wiring.")
+    return vus
+
+
+def _inscrire(ctx: ResolvedCtx, t: dict, client: Any, source: str, url: str,
+              porteur: str, evenements: list, campaign_id: Optional[str],
+              is_first: Optional[bool]) -> list:
+    """Inscrit un webhook par événement. Un refus (ou une réponse sans identifiant)
+    retire celles déjà faites et lève `source_registration_failed`."""
+    inscrites: list = []
+    for ev in evenements:
+        motif = None
+        try:
+            r = client.add_webhook(url, type=ev, secret=porteur,
+                                   campaign_id=campaign_id, is_first=is_first)
+        except Exception as e:  # noqa: SILENT — journalisé, défait, et refusé par son nom
+            motif = _motif(e)
+            logger.warning("webhook %s : inscription `%s` chez %s refusée (%s)",
+                           t["id"], ev, source, motif)
+        else:
+            remote_id = r.get("_id") if isinstance(r, dict) else None
+            if remote_id:
+                inscrites.append({"source": source, "remote_id": remote_id,
+                                  "event": ev, "campaign_id": campaign_id})
+                continue
+            # Sans identifiant, oto ne saurait pas le retirer : refusé comme un échec.
+            motif = "no webhook id returned"
+            logger.error("webhook %s : %s a inscrit `%s` SANS rendre d'identifiant — "
+                         "un webhook peut rester chez la source, à vérifier à la main",
+                         t["id"], source, ev)
+        _compenser(ctx, t, client, source, inscrites,
+                   f"registration of `{ev}` refused ({motif})")
+        raise AuthzDenied(
+            502, "source_registration_failed",
+            f"{source} refused to register `{ev}` ({motif}): nothing changed on the "
+            "agent. Check the event name and the sender's key.")
+    return inscrites
+
+
+def connecter(ctx: ResolvedCtx, t: dict, *, source: Optional[str],
+              events: Optional[list], campaign_id: Optional[str],
+              is_first: Optional[bool]) -> dict:
+    """Branche `source` sur l'agent `t` (porte DÉJÀ vérifiée par l'appelant).
+
+    Rend `{"connected": [...], "remote_cleanup_failed": [...]}` — sans porteur."""
+    if source not in SOURCES:
+        raise AuthzDenied(400, "unknown_source",
+                          f"`source`: one of {', '.join(SOURCES)}.")
+    evenements = _evenements(events)
+    # L'adresse privée AVANT l'inscription, mais en MÉMOIRE : la source garde l'URL
+    # qu'on lui donne, et une adresse numérique se parcourt. Posée en base avec le
+    # reste (`brancher_la_source`) : un branchement refusé ne la pose pas — elle
+    # remplacerait l'adresse numérique, qu'une autre source utilise peut-être.
+    slug = t.get("hook_slug") or runner_hook.nouvelle_adresse()
+    url = _url_publique(slug)
+    client = _client(ctx, source)
+    porteur, hache = runner_hook.nouveau_secret()
+    inscrites = _inscrire(ctx, t, client, source, url, porteur, evenements,
+                          campaign_id, is_first)
+
+    anciennes = list(t.get("hook_sources") or [])
+    try:
+        ecrit = db.brancher_la_source(
+            t["id"], ctx.org_id, hook_auth=runner_hook.BODY_SECRET, secret_hash=hache,
+            hook_slug=slug, sources=inscrites, sources_avant=anciennes or None)
+    except Exception as e:
+        logger.error("webhook %s (org %s) : écriture du branchement en échec (%s) — "
+                     "retrait chez %s de %s", t["id"], ctx.org_id, type(e).__name__,
+                     source, _ids(inscrites))
+        _compenser(ctx, t, client, source, inscrites,
+                   f"database write failed ({type(e).__name__})")
+        raise
+    if not ecrit:
+        # Supprimé, ou rebranché par un autre geste entre la lecture et l'écriture.
+        logger.warning("webhook %s (org %s) : l'agent a changé pendant le branchement "
+                       "— retrait chez %s de %s", t["id"], ctx.org_id, source,
+                       _ids(inscrites))
+        _compenser(ctx, t, client, source, inscrites, "the agent changed meanwhile")
+        raise AuthzDenied(
+            409, "trigger_changed",
+            "The agent was changed or deleted while being wired: the registrations "
+            "just made were removed at the sender. Read it again, then retry.")
+    logger.warning("webhook %s (org %s) : source %s BRANCHÉE par %s — %d événement(s), "
+                   "porteur neuf posé chez la source", t["id"], ctx.org_id, source,
+                   ctx.sub, len(inscrites))
+    restees = _retirer(client, [a for a in anciennes if a.get("remote_id")])
+    return {"connected": inscrites, "remote_cleanup_failed": restees}
+
+
+def deconnecter(ctx: ResolvedCtx, t: dict) -> dict:
+    """Retire chez la source tout ce qui est inscrit pour l'agent `t` (porte DÉJÀ
+    vérifiée). Ce qui résiste RESTE dans `hook_sources` — oto doit pouvoir le
+    retirer plus tard — et est rendu. Le mode et le porteur ne changent pas."""
+    inscrites = list(t.get("hook_sources") or [])
+    if not inscrites:
+        return {"disconnected": [], "remote_cleanup_failed": []}
+    restees = []
+    par_source: dict = {}
+    for ins in inscrites:
+        par_source.setdefault(ins.get("source"), []).append(ins)
+    for source, lot in par_source.items():
+        if source not in SOURCES:
+            logger.warning("webhook %s : source inconnue `%s`, %s non retiré(s)",
+                           t["id"], source, _ids(lot))
+            restees += [{**i, "error": "unknown_source"} for i in lot]
+            continue
+        try:
+            client = _client(ctx, source)
+        except AuthzDenied as e:
+            # Sans clé, rien ne se retire — mais `delete` ne doit pas en être
+            # bloqué : ce qui reste est rendu, avec la raison, et journalisé.
+            logger.warning("webhook %s : aucune clé %s pour %s (%s), %s non retiré(s)",
+                           t["id"], source, ctx.sub, e.code, _ids(lot))
+            restees += [{**i, "error": e.code} for i in lot]
+            continue
+        restees += _retirer(client, lot)
+    ids_restes = {r.get("remote_id") for r in restees}
+    if not db.poser_sources_de_hook(
+            t["id"], ctx.org_id,
+            [i for i in inscrites if i.get("remote_id") in ids_restes],
+            sources_avant=inscrites):
+        # Rebranché (ou supprimé) entre la lecture et l'écriture : la ligne porte
+        # d'AUTRES inscriptions, qu'on n'écrase pas — elles se retireraient plus.
+        logger.warning("webhook %s (org %s) : l'agent a changé pendant le débranchement "
+                       "— %d retirée(s) chez la source, ligne laissée telle quelle",
+                       t["id"], ctx.org_id, len(inscrites) - len(restees))
+        raise AuthzDenied(
+            409, "trigger_changed",
+            "The agent was changed or deleted while being disconnected: its current "
+            "registrations were left as they are. Read it again, then retry.")
+    logger.warning("webhook %s (org %s) : source(s) DÉBRANCHÉE(S) par %s — %d retirée(s), "
+                   "%d restée(s)", t["id"], ctx.org_id, ctx.sub,
+                   len(inscrites) - len(restees), len(restees))
+    return {"disconnected": [i for i in inscrites if i.get("remote_id") not in ids_restes],
+            "remote_cleanup_failed": restees}

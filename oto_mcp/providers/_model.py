@@ -70,6 +70,12 @@ class CredentialField:
     # breaks things: a value outside the list is refused at WRITE time, with the expected
     # set in the message.
     choices: tuple[str, ...] = ()
+    # ACCEPTED PREFIXES of the value (a key whose shape tells what it is). Empty = free.
+    # A value that starts with none of them is refused at WRITE time, with the expected
+    # prefixes in the message — never the value: the field may be secret. E.g. the
+    # Anthropic key, where a session token or an admin key would be accepted, then
+    # refused by every worker.
+    prefixes: tuple[str, ...] = ()
     # True = the value lives in `connector_credentials.meta`, IN CLEAR, and not in the
     # encrypted blob (14/09/2026). For a NON-secret field added to a connector whose
     # credentials are already set: the shape of the encrypted blob depends only on the fields that
@@ -99,7 +105,12 @@ class Connector:
                                        # Browserbase) on the UI side — ORTHOGONAL to sharing:
                                        # the level (user/team/org) follows `auth_modes`
                                        # (`byo_org` ⇒ shareable session, e.g. pennylaneged)
-    secret_kind: str                   # api_key|refresh_token|oauth|cookie|none
+    secret_kind: str                   # api_key|refresh_token|oauth|cookie|fields|none|settings
+                                       # `settings` (19/10/2026): the card holds ONLY optional,
+                                       # non-secret SETTINGS — it works with nothing set (the
+                                       # waterfalls). Same form as `fields` (auth method
+                                       # `secret`); a front reads it to say "included, nothing
+                                       # to connect" instead of "not connected".
     default_quota: int                 # 0 = unlimited
     default_active: bool               # axis B: curated base set (ADR 0050) — installed
                                        # by default when seeding a new (sub, org);

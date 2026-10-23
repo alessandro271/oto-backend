@@ -135,7 +135,7 @@ def slack(monkeypatch):
     t = {"id": 5, "org_id": ORG, "sub": "alexis", "procedure": "support",
          "tools": ["a"], "input": "réponds", "enabled": True, "kind": "webhook",
          "payload_mode": "inline", "payload_fields": None, "max_per_hour": None,
-         "fraicheur_s": None, "model": None, "project_id": None, "max_steps": None,
+         "fraicheur_s": None, "model": "claude-sonnet-5", "project_id": None, "max_steps": None,
          "label": None, "hook_auth": "slack", "max_per_day": None,
          "hook_slug": "h_privee", "hook_filter": None,
          "hook_signing_secret_enc": runner_hook.chiffrer_secret_de_signature(5, SECRET)}

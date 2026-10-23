@@ -1,7 +1,8 @@
 """Tools `teams_*` du connecteur Teams (service du porteur `microsoft`).
 
 Ce que ce fichier verrouille :
-- la SURFACE (3 tools : lire et écrire sont deux outils, #1231), le jeton du service `teams`, le refus nommé d'un compte qui
+- la SURFACE (la paire `teams` / `teams_act` : lire et écrire sont deux outils, #1231,
+  21/10/2026), le jeton du service `teams`, le refus nommé d'un compte qui
   ne l'a pas autorisé ;
 - le dispatch vers les VRAIES méthodes de `TeamsClient` (autospec), le lieu : un canal
   (`team_id` + `channel_id`) OU une conversation (`chat_id`), jamais les deux ;
@@ -90,7 +91,7 @@ MSG = {"id": "1700", "from": {"user": {"displayName": "Jane"}},
 
 def test_surface(env):
     assert {t.name for t in asyncio.run(_mcp().list_tools())} == {
-        "teams_spaces", "teams_message", "teams_send"}
+        "teams", "teams_act"}
 
 
 def test_un_compte_sans_teams_recoit_le_refus_du_porteur(env, monkeypatch):
@@ -99,62 +100,62 @@ def test_un_compte_sans_teams_recoit_le_refus_du_porteur(env, monkeypatch):
 
     monkeypatch.setattr("oto_mcp.auth.microsoft.access_token_for", refus)
     with pytest.raises(McpError, match="has not yet authorized Teams"):
-        _tool("teams_spaces")()
+        _tool("teams")()
     assert env.jetons == []
 
 
 def test_espaces(env):
     c = env.client
     c.list_joined_teams.return_value = [{"id": "t1", "displayName": "Ventes", "x": 1}]
-    assert _tool("teams_spaces")()["teams"] == [{"id": "t1", "displayName": "Ventes",
+    assert _tool("teams")()["teams"] == [{"id": "t1", "displayName": "Ventes",
                                                  "description": None}]
     c.list_channels.return_value = [{"id": "19:a@thread.tacv2", "displayName": "Général"}]
-    out = _tool("teams_spaces")(op="channels", team_id="t1")
+    out = _tool("teams")(op="channels", team_id="t1")
     c.list_channels.assert_called_once_with("t1")
     assert out["channels"][0]["id"] == "19:a@thread.tacv2"
     c.list_chats.return_value = []
-    _tool("teams_spaces")(op="chats", limit=7)
+    _tool("teams")(op="chats", limit=7)
     c.list_chats.assert_called_once_with(limit=7)
     with pytest.raises(McpError, match="requires `team_id`"):
-        _tool("teams_spaces")(op="channels")
+        _tool("teams")(op="channels")
 
 
 @pytest.mark.parametrize("lieu", [{}, {"team_id": "t1", "chat_id": "c1"},
                                   {"team_id": "t1", "channel_id": "ch", "chat_id": "c1"}])
 def test_un_lieu_et_un_seul(env, lieu):
     with pytest.raises(McpError, match="exactly one"):
-        _tool("teams_message")(**lieu)
+        _tool("teams")(op="list", **lieu)
 
 
 def test_un_canal_a_besoin_de_son_equipe(env):
     with pytest.raises(McpError, match="requires `team_id`"):
-        _tool("teams_message")(channel_id="ch")
+        _tool("teams")(op="list", channel_id="ch")
 
 
 # --- conversations et publication : sans palier admin ----------------------------
 
 def test_lire_une_conversation_sans_palier_admin(env):
     env.client.list_chat_messages.return_value = [dict(MSG)]
-    out = _tool("teams_message")(chat_id="19:c@unq.gbl.spaces", limit=5)
+    out = _tool("teams")(op="list", chat_id="19:c@unq.gbl.spaces", limit=5)
     env.client.list_chat_messages.assert_called_once_with("19:c@unq.gbl.spaces", limit=5)
     m = out["messages"][0]
     assert m["text"] == "Bonjour & merci" and m["from"] == "Jane" and m["attachments"] == 1
     assert "reactions" not in m
-    assert _tool("teams_message")(chat_id="c", full=True)["messages"] == [MSG]
+    assert _tool("teams")(op="list", chat_id="c", full=True)["messages"] == [MSG]
     assert env.jetons == ["AT-cache", "AT-cache"] and env.liens == []
 
 
 def test_publier_dans_un_canal_et_une_conversation(env):
     c = env.client
     c.post_channel_message.return_value = {"id": "m1"}
-    _tool("teams_send")(team_id="t1", channel_id="ch", body="**Point** à 14 h")
+    _tool("teams_act")(team_id="t1", channel_id="ch", body="**Point** à 14 h")
     args, kw = c.post_channel_message.call_args
     assert args == ("t1", "ch") and "<strong>Point</strong>" in kw["html"]
     c.post_chat_message.return_value = {"id": "m2"}
-    _tool("teams_send")(op="post", chat_id="c1", body="ok")
+    _tool("teams_act")(op="post", chat_id="c1", body="ok")
     assert c.post_chat_message.call_args.args == ("c1",)
     c.reply_channel_message.return_value = {"id": "m3"}
-    _tool("teams_send")(op="reply", team_id="t1", channel_id="ch", message_id="1700",
+    _tool("teams_act")(op="reply", team_id="t1", channel_id="ch", message_id="1700",
                         body="vu")
     assert c.reply_channel_message.call_args.args == ("t1", "ch", "1700")
     assert env.liens == [], "publier n'a pas besoin du palier admin"
@@ -162,11 +163,11 @@ def test_publier_dans_un_canal_et_une_conversation(env):
 
 def test_une_conversation_n_a_pas_de_fil(env):
     with pytest.raises(McpError, match="no threads"):
-        _tool("teams_message")(op="replies", chat_id="c1", message_id="1")
+        _tool("teams")(op="replies", chat_id="c1", message_id="1")
     with pytest.raises(McpError, match="no threads"):
-        _tool("teams_send")(op="reply", chat_id="c1", message_id="1", body="x")
+        _tool("teams_act")(op="reply", chat_id="c1", message_id="1", body="x")
     with pytest.raises(McpError, match="requires `body`"):
-        _tool("teams_send")(op="post", chat_id="c1")
+        _tool("teams_act")(op="post", chat_id="c1")
     assert env.jetons == [], "un envoi refusé ne résout aucun jeton"
 
 
@@ -174,14 +175,15 @@ def test_une_conversation_n_a_pas_de_fil(env):
                                   {"channel_id": "ch"}])
 def test_l_ecrivain_refuse_un_lieu_ambigu_avant_tout_jeton(env, lieu):
     with pytest.raises(McpError, match="exactly one|requires `team_id`"):
-        _tool("teams_send")(body="x", **lieu)
+        _tool("teams_act")(body="x", **lieu)
     assert env.jetons == []
 
 
 def test_une_op_inconnue_du_lecteur_nomme_l_ecrivain(env):
-    """Une op inconnue du lecteur est refusée en nommant l'écrivain — jamais un envoi."""
-    with pytest.raises(McpError, match="teams_send"):
-        _tool("teams_message")(op="send", chat_id="c1", body="x")
+    """Une op inconnue du lecteur — même `send` — est refusée en nommant l'outil qui
+    agit, avant tout jeton : jamais un envoi."""
+    with pytest.raises(McpError, match="teams_act"):
+        _tool("teams")(op="send", chat_id="c1")
     assert env.jetons == []
 
 
@@ -190,14 +192,14 @@ def test_une_op_inconnue_du_lecteur_nomme_l_ecrivain(env):
 def test_lire_un_canal_sans_palier_admin_refus_avec_le_lien(env):
     env.meta = {"scopes": SANS_ADMIN, "tenant": "contoso.onmicrosoft.com"}
     with pytest.raises(McpError) as e:
-        _tool("teams_message")(team_id="t1", channel_id="ch")
+        _tool("teams")(op="list", team_id="t1", channel_id="ch")
     assert "requires your Microsoft admin's approval" in str(e.value)
     assert "https://login.example/adminconsent?x=1" in str(e.value)
     assert env.liens == [(("teams",), "contoso.onmicrosoft.com", "teams")]
     assert env.jetons == ["AT-neuf"], "UN renouvellement forcé avant de refuser"
     env.client.list_channel_messages.assert_not_called()
     with pytest.raises(McpError, match="admin's approval"):
-        _tool("teams_message")(op="replies", team_id="t1", channel_id="ch",
+        _tool("teams")(op="replies", team_id="t1", channel_id="ch",
                                message_id="1700")
     env.client.list_replies.assert_not_called()
 
@@ -205,7 +207,7 @@ def test_lire_un_canal_sans_palier_admin_refus_avec_le_lien(env):
 def test_une_approbation_donnee_depuis_est_vue_au_renouvellement(env):
     env.apres_renouvellement = ADMIN
     env.client.list_channel_messages.return_value = [dict(MSG)]
-    out = _tool("teams_message")(team_id="t1", channel_id="ch", limit=3)
+    out = _tool("teams")(op="list", team_id="t1", channel_id="ch", limit=3)
     env.client.list_channel_messages.assert_called_once_with("t1", "ch", limit=3)
     assert env.jetons == ["AT-neuf"] and env.liens == [] and out["count"] == 1
 
@@ -213,7 +215,7 @@ def test_une_approbation_donnee_depuis_est_vue_au_renouvellement(env):
 def test_palier_accorde_jeton_d_avant_l_approbation_renouvele_une_fois(env):
     env.meta = {"scopes": ADMIN}
     env.client.list_replies.side_effect = [_upstream(403), [dict(MSG)]]
-    out = _tool("teams_message")(op="replies", team_id="t1", channel_id="ch",
+    out = _tool("teams")(op="replies", team_id="t1", channel_id="ch",
                                  message_id="1700")
     assert env.jetons == ["AT-cache", "AT-neuf"] and out["count"] == 1
     assert env.client.list_replies.call_count == 2
@@ -223,7 +225,7 @@ def test_jamais_plus_d_un_renouvellement(env):
     env.meta = {"scopes": ADMIN}
     env.client.list_channel_messages.side_effect = _upstream(403)
     with pytest.raises(McpError, match="HTTP 403"):
-        _tool("teams_message")(team_id="t1", channel_id="ch")
+        _tool("teams")(op="list", team_id="t1", channel_id="ch")
     assert env.jetons == ["AT-cache", "AT-neuf"]
     assert env.client.list_channel_messages.call_count == 2
     # Déjà renouvelé pour lire le palier : un 403 ensuite ne renouvelle plus.
@@ -231,7 +233,7 @@ def test_jamais_plus_d_un_renouvellement(env):
     env.client.list_channel_messages.reset_mock()
     env.client.list_channel_messages.side_effect = _upstream(403)
     with pytest.raises(McpError, match="HTTP 403"):
-        _tool("teams_message")(team_id="t1", channel_id="ch")
+        _tool("teams")(op="list", team_id="t1", channel_id="ch")
     assert env.jetons == ["AT-neuf"] and env.client.list_channel_messages.call_count == 1
 
 
@@ -239,5 +241,16 @@ def test_un_autre_refus_n_est_pas_un_renouvellement(env):
     env.meta = {"scopes": ADMIN}
     env.client.list_channel_messages.side_effect = _upstream(404)
     with pytest.raises(McpError, match="not found"):
-        _tool("teams_message")(team_id="t1", channel_id="ch")
+        _tool("teams")(op="list", team_id="t1", channel_id="ch")
     assert env.jetons == ["AT-cache"]
+
+
+def test_les_ops_de_lieu_refusent_les_arguments_d_un_message(env):
+    """`teams(op="teams"|"channels"|"chats")` ne prend ni canal, ni conversation, ni
+    message : une erreur d'intention, refusée avant tout jeton."""
+    for op, extra in (("teams", {"chat_id": "c1"}), ("channels", {"team_id": "t1",
+                                                                  "channel_id": "ch"}),
+                      ("chats", {"message_id": "1"}), ("teams", {"team_id": "t1"})):
+        with pytest.raises(McpError, match="does not use"):
+            _tool("teams")(op=op, **extra)
+    assert env.jetons == []

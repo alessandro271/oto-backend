@@ -12,8 +12,9 @@ règle mécanique, connecteur par connecteur :
 - **ops** : aucune op de `<ns>` ne porte un verbe à effet (hors simulations nommées), et
   `<ns>_act` n'a que des ops à effet ; aucun paramètre qui déclenche (`mode`, `notify`,
   `send_*`) sur `<ns>` ;
-- **retraits** : chaque ancien nom de `outils_retires.RENOMMAGES_ACT` n'est plus servi, et
-  son remplaçant sert bien l'op annoncée.
+- **retraits** : chaque ancien nom de `outils_retires.RENOMMAGES` n'est plus servi, et
+  son remplaçant sert bien l'op annoncée ; chaque op de `outils_retires.OPS_DEPLACEES`
+  a quitté le lecteur qui reste servi, et son acteur la sert.
 
 `A_MIGRER` est la liste FERMÉE des connecteurs pas encore passés à la paire. Elle ne peut
 que rétrécir : un connecteur qui devient conforme, ou qui n'existe plus, y rougit jusqu'à
@@ -35,12 +36,12 @@ from _mcp_app import static_mcp
 A_MIGRER = frozenset({
     "affinity", "ahrefs", "aircall", "airtable", "amplitude", "apify", "apollo",
     "ashby", "attio", "bigquery", "bls", "bodacc", "boondmanager", "brevo", "brevoauto",
-    "browser", "calendar", "ccn", "chat", "claap", "clay", "cloro", "cognism",
+    "browser", "calendar", "ccn", "claap", "clay", "cloro", "cognism",
     "crunchbase", "culture", "dataforseo", "drive", "dropcontact", "figma", "finkare",
     "firecrawl", "fireflies", "folk", "foncier", "forager", "fr", "frenchtech",
     "fullenrich", "ga4", "github", "gocardless", "google", "google_ads", "gr", "grain",
     "granola", "greenhouse", "hellostock", "hithorizons", "http", "hubspot", "hunter",
-    "infosec", "inqom", "instagram", "instagram_meta", "jev", "juris", "kaspr",
+    "infosec", "inqom", "instagram_meta", "jev", "juris", "kaspr",
     "klaviyo", "leexi", "lemlist", "lever", "lightfield", "lighton", "linear",
     "linkedin_aiark", "linkedin_unipile", "loi", "lucca", "luma", "lusha", "mailpool",
     "make", "meta_ads", "microsoft", "minari", "modjo", "monid", "n8n", "nextmotion",
@@ -49,9 +50,9 @@ A_MIGRER = frozenset({
     "posthog", "productlane", "promptwatch", "recruitee", "reddit", "resend", "routine",
     "salesforce", "sante", "searchapi", "sellsy", "serpapi", "serper", "sharepoint",
     "sheets", "signwell", "silae", "sivan", "slack", "snitcher", "spott", "stripe",
-    "supabase", "tally", "tasks", "tavily", "teams", "teamtailor", "telegram",
+    "supabase", "tally", "tasks", "tavily", "teamtailor",
     "theirstack", "threecx", "topograph", "transcription", "typeform", "ubersuggest",
-    "unipile", "urba", "waalaxy", "web", "webflow", "whatsapp", "wordpress", "wttj",
+    "unipile", "urba", "waalaxy", "web", "webflow", "wordpress", "wttj",
     "yousign", "zapier", "zerobounce", "zoho", "zohoanalytics", "zohodesk",
 })
 
@@ -60,7 +61,7 @@ VERBES_EFFET = re.compile(
     r"^(send|reply|forward|publish|broadcast|invite|remind|trash|archive|move|delete|"
     r"remove|rm|create|update|upsert|set|add|cancel|trigger|activate|post|react|"
     r"comment|review|push|upload|share|unshare|lend|revoke|disable|enable|call|request|"
-    r"import)(_|$)")
+    r"import|accept|decline|endorse)(_|$)")
 #: Les ops qui SIMULENT : elles écrivent ce que personne ne voit et que rien ne détruit.
 SIMULATIONS = frozenset({"draft"})
 #: Les paramètres qui feraient agir l'outil qui lit.
@@ -81,6 +82,9 @@ def _ops(outil) -> list[str]:
     op = (outil.parameters.get("properties") or {}).get("op") or {}
     if "enum" in op:
         return list(op["enum"])
+    if "const" in op:
+        # Un seul geste (`Literal["update_rows"]`) : le schéma le dit en `const`.
+        return [op["const"]]
     return [v for branche in op.get("anyOf", ()) for v in branche.get("enum", ())]
 
 
@@ -147,7 +151,7 @@ def test_l_outil_qui_agit_n_a_que_des_ops_a_effet(par_connecteur):
 
 def test_les_anciens_noms_ne_sont_plus_servis_et_leur_remplacant_sert_l_op(par_connecteur):
     servis = {nom: t for outils in par_connecteur.values() for nom, t in outils.items()}
-    for r in outils_retires.RENOMMAGES_ACT:
+    for r in outils_retires.RENOMMAGES:
         assert r.ancien not in servis, r.ancien
         assert r.outil in servis, r
         assert r.op in _ops(servis[r.outil]), r
@@ -157,12 +161,122 @@ def test_les_anciens_noms_ne_sont_plus_servis_et_leur_remplacant_sert_l_op(par_c
 
 def test_un_ancien_nom_garde_tout_son_sens_dans_les_listes():
     """Ce qu'un ancien outil savait faire, ses remplaçants le savent : une liste
-    d'outils autorisés (ou masqués) réécrite garde exactement son sens."""
+    d'outils MASQUÉS réécrite garde tout son sens (et, au lot 0062, une liste autorisée
+    aussi)."""
     assert outils_retires.remplacants("gmail_compose") == ("gmail", "gmail_act")
     assert outils_retires.remplacants("gmail_message") == ("gmail", "gmail_act")
     assert outils_retires.remplacants("gmail_list_accounts") == ("gmail",)
     assert outils_retires.remplacants("outlook_compose") == ("outlook", "outlook_act")
+    assert outils_retires.remplacants("whatsapp_chat") == ("whatsapp", "whatsapp_act")
     assert outils_retires.remplacants("inconnu") == ()
+    # Un lecteur qui RESTE servi (lot des envois) : lui-même, et l'acteur de ses ops.
+    assert outils_retires.remplacants("apollo_email") == ("apollo_email", "apollo_act")
+    assert outils_retires.remplacants("linkedin_unipile_publish") == (
+        "linkedin_unipile_act",)
+
+
+def test_autoriser_un_ancien_lecteur_n_autorise_que_la_lecture():
+    """Décision du 21/10/2026 : autoriser reste étroit — jamais plus qu'avant. Un ancien
+    outil MIXTE (le lecteur qui envoyait encore en transition) ne donne que le nouveau
+    lecteur ; un ancien outil d'envoi dédié donne `<ns>_act` seulement si `<ns>_act` ne
+    fait rien de plus que lui, sinon RIEN."""
+    r = outils_retires.remplacants_autorises
+    assert r("whatsapp_chat") == ("whatsapp",)
+    assert r("whatsapp_send") == ("whatsapp_act",)
+    assert r("linkedin_unipile_chat") == ("linkedin_unipile",)
+    # `linkedin_unipile_act` publie, invite et envoie : aucun outil dédié ne le donne.
+    assert r("linkedin_unipile_send") == ()
+    assert r("teams_message") == ("teams",) and r("teams_spaces") == ("teams",)
+    assert r("teams_send") == ("teams_act",)
+    assert r("chat_message") == ("chat",) and r("chat_send") == ("chat_act",)
+    # Lot des envois : le lecteur mixte reste lui-même, l'outil d'envoi dédié → acteur.
+    assert r("apollo_email") == ("apollo_email",)
+    assert r("linkedin_unipile_post") == ("linkedin_unipile_post",)
+    assert r("linkedin_unipile_publish") == () and r("linkedin_unipile_invite") == ()
+    assert r("lemlist_inbox_send") == ("lemlist_act",)
+    # Masquer reste large : masquer l'ancien outil dédié masque l'acteur.
+    assert outils_retires.remplacants("linkedin_unipile_invite") == ("linkedin_unipile_act",)
+    perdus = {"linkedin_unipile_send", "linkedin_unipile_publish", "linkedin_unipile_invite"}
+    for ancien in dict.fromkeys(x.ancien for x in outils_retires.RENOMMAGES_MESSAGERIES
+                                + outils_retires.RENOMMAGES_ENVOIS
+                                + outils_retires.OPS_DEPLACEES):
+        nouveaux = r(ancien)
+        assert bool(nouveaux) == (ancien not in perdus), (ancien, nouveaux)
+        for acteur in (n for n in nouveaux if n.endswith("_act")):
+            assert not outils_retires.ops_en_plus(ancien, acteur), (ancien, acteur)
+        assert all(n.endswith("_act") for n in nouveaux) or not any(
+            n.endswith("_act") for n in nouveaux), (ancien, nouveaux)
+
+
+def test_les_tables_donnent_a_chaque_acteur_toutes_ses_ops(par_connecteur):
+    """`remplacants_autorises` compare ce que l'ancien outil faisait aux ops de l'acteur
+    lues dans les tables : elles doivent être TOUTES celles de sa signature, sinon un
+    acteur qui fait plus passerait pour équivalent."""
+    servis = {nom: t for outils in par_connecteur.values() for nom, t in outils.items()}
+    acteurs = {r.outil for r in outils_retires.RENOMMAGES_MESSAGERIES
+               + outils_retires.RENOMMAGES_ENVOIS + outils_retires.OPS_DEPLACEES
+               if r.outil.endswith("_act")}
+    for acteur in acteurs:
+        assert outils_retires.ops_de_l_acteur(acteur) == set(_ops(servis[acteur])), acteur
+
+
+def test_le_lot_0062_est_fige():
+    """0062 est jouée : sa table ne reçoit plus aucune ligne (un lot neuf a la sienne)."""
+    assert {r.ancien for r in outils_retires.RENOMMAGES_ACT} == {
+        "gmail_list_accounts", "gmail_message", "gmail_compose", "outlook_message",
+        "outlook_compose"}
+
+
+def test_le_refus_d_un_ancien_nom_dit_son_jour_et_sa_paire():
+    """Le refus nomme le lecteur et l'acteur de la PAIRE, pas un préfixe deviné du nom
+    retiré (`linkedin_unipile_chat` n'est pas `linkedin`), et le jour de son lot."""
+    m = outils_retires.RETIRES["linkedin_unipile_chat"].message
+    assert "(21/10/2026, security)" in m
+    assert "`linkedin_unipile` reads" in m and "`linkedin_unipile_act` acts" in m
+    assert "(17/10/2026, security)" in outils_retires.RETIRES["gmail_compose"].message
+    # Un outil d'envoi du lot des envois n'a pas de lecteur `<ns>` à nommer.
+    m = outils_retires.RETIRES["lemlist_inbox_send"].message
+    assert "`lemlist` reads" not in m and "`lemlist_act` acts" in m
+    assert "`linkedin_unipile` reads" not in outils_retires.RETIRES[
+        "linkedin_unipile_invite"].message
+    # L'autorisation ne passe pas à un acteur qui fait plus : le refus le dit.
+    m = outils_retires.RETIRES["linkedin_unipile_publish"].message
+    assert "Allowing `linkedin_unipile_publish` does NOT allow `linkedin_unipile_act`" in m
+    assert "op=send" in m and "op=invite" in m and "op=publish_post" not in m.split(
+        "does more")[1]
+    assert "does NOT allow" not in outils_retires.RETIRES["whatsapp_send"].message
+    assert "does NOT allow" not in outils_retires.RETIRES["lemlist_inbox_send"].message
+
+
+def test_une_op_deplacee_a_quitte_son_lecteur_et_son_acteur_la_sert(par_connecteur):
+    """Lot des envois : le lecteur reste servi, l'op d'envoi n'y est plus, l'acteur la
+    sert, et l'appel de l'ancienne op refuse en nommant le nouveau."""
+    servis = {nom: t for outils in par_connecteur.values() for nom, t in outils.items()}
+    for r in outils_retires.OPS_DEPLACEES:
+        ancienne = r.selecteur.split(", ")[0].removeprefix("op=")
+        assert r.ancien in servis, r
+        assert ancienne not in _ops(servis[r.ancien]), r
+        assert r.op in _ops(servis[r.outil]), r
+        assert r.outil == f"{tool_visibility.namespace_of(r.ancien)}_act", r
+        refus = outils_retires.op_deplacee(r.ancien, ancienne)
+        assert refus is not None and f'`{r.outil}(op="{r.op}"' in refus.message, r
+    assert outils_retires.op_deplacee("apollo_email", "search") is None
+    assert not {r.ancien for r in outils_retires.OPS_DEPLACEES} & set(outils_retires.RETIRES)
+
+
+def test_l_appel_d_une_op_deplacee_refuse_en_nommant_l_acteur():
+    """Le vrai chemin : la signature refuse l'op, la taxonomie nomme le nouvel appel."""
+    from oto_mcp import error_taxonomy
+
+    try:
+        asyncio.run(static_mcp().call_tool("apollo_email", {"op": "send",
+                                                            "message_id": "m1"}))
+    except Exception as e:  # noqa: BLE001 — la taxonomie la classe ci-dessous
+        info = error_taxonomy.classify(e)
+    else:
+        pytest.fail("apollo_email(op='send') ne doit plus rien servir")
+    assert info.code == "invalid_input"
+    assert '`apollo_act(op="send_email", …)`' in info.message
 
 
 def test_l_annonce_se_sert_jusqu_a_sa_date_puis_se_tait():
@@ -170,7 +284,7 @@ def test_l_annonce_se_sert_jusqu_a_sa_date_puis_se_tait():
 
     fin = outils_retires.ANNONCE_ACT_JUSQU_AU
     annonce = outils_retires.annonce_act_du_jour(fin)
-    for r in outils_retires.RENOMMAGES_ACT:
+    for r in outils_retires.RENOMMAGES:
         assert f"`{r.ancien}`" in annonce and f"`{r.outil}`" in annonce, r
     assert outils_retires.annonce_act_du_jour(fin + datetime.timedelta(days=1)) is None
 
@@ -194,9 +308,64 @@ def test_la_migration_reecrit_sur_place_sans_doublon():
         m.reecrire([{"name": "gmail_message"}], table)
 
 
+def test_la_revision_des_messageries_autorise_etroit_et_masque_large():
+    import importlib.util
+    from pathlib import Path
+
+    import oto_mcp
+
+    chemin = (Path(oto_mcp.__file__).parent / "db" / "migrations" / "versions"
+              / "20261021_1219_outils_act_msg.py")
+    spec = importlib.util.spec_from_file_location("revision_messageries", chemin)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m.down_revision == "0072_triggers_hook_sources"
+    autorise, masque = m.correspondances(outils_retires.RENOMMAGES_MESSAGERIES)
+    reecrire = m._revision_0062().reecrire
+    assert reecrire(["whatsapp_chat"], autorise) == ["whatsapp"]
+    assert reecrire(["whatsapp_chat", "whatsapp_send", "teams_spaces", "teams_message",
+                     "fr_get"], autorise) == ["whatsapp", "whatsapp_act", "teams", "fr_get"]
+    assert reecrire(["whatsapp_chat"], masque) == ["whatsapp", "whatsapp_act"]
+    assert not set(autorise) & {r.ancien for r in outils_retires.RENOMMAGES_ACT}
+
+
+def test_la_revision_des_envois_garde_le_lecteur_et_n_autorise_pas_l_acteur():
+    import importlib.util
+    from pathlib import Path
+
+    import oto_mcp
+
+    chemin = (Path(oto_mcp.__file__).parent / "db" / "migrations" / "versions"
+              / "20261021_1352_outils_act_envois.py")
+    spec = importlib.util.spec_from_file_location("revision_envois", chemin)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m.down_revision == "20261021_1219_outils_act_msg"
+    autorise, masque = m.correspondances()
+    reecrire = m._revision_des_messageries()._revision_0062().reecrire
+    assert reecrire(["apollo_email", "linkedin_unipile_publish", "fr_get"], autorise) == [
+        "apollo_email", "fr_get"]
+    assert reecrire(["lemlist_inbox_send"], autorise) == ["lemlist_act"]
+    # Joué seul avant, le lot des messageries avait donné l'acteur LinkedIn pour la
+    # messagerie : ce lot l'élargit, l'autorisation se perd ; le masquage reste.
+    assert m.acteurs_elargis() == ("linkedin_unipile_act",)
+    assert reecrire(["linkedin_unipile_act", "fr_get"], autorise) == ["fr_get"]
+    assert reecrire(["linkedin_unipile_act"], masque) == ["linkedin_unipile_act"]
+    assert reecrire(["linkedin_unipile_post"], masque) == ["linkedin_unipile_post",
+                                                           "linkedin_unipile_act"]
+    assert reecrire(["linkedin_unipile_publish"], masque) == ["linkedin_unipile_act"]
+    assert not set(autorise) & {r.ancien for r in outils_retires.RENOMMAGES_ACT
+                                + outils_retires.RENOMMAGES_MESSAGERIES}
+
+
 #: Les connecteurs encore dans `A_MIGRER` dont la PAIRE est déjà née : leurs outils
 #: d'avant restent, mais `<ns>` et `<ns>_act` ont la forme cible dès aujourd'hui.
-PAIRES_NEES = ("http", "slack")
+PAIRES_NEES = ("http", "slack", "linkedin_unipile")
+#: Les connecteurs encore dans `A_MIGRER` dont l'ACTEUR est né (lot des envois,
+#: 21/10/2026) avant leur lecteur `<ns>` : leurs lecteurs gardent leur nom, ce qui atteint
+#: un tiers est dans `<ns>_act`, qui a déjà la forme cible.
+ACTEURS_NES = ("apollo", "lightfield", "luma", "pennylane", "signwell", "productlane",
+               "ahrefs", "lemlist")
 
 
 @pytest.mark.parametrize("ns", PAIRES_NEES)
@@ -209,6 +378,17 @@ def test_une_paire_nee_avant_la_migration_a_deja_la_forme_cible(par_connecteur, 
         assert not VERBES_EFFET.match(op), (ns, op)
     for p in lecteur.parameters.get("properties") or {}:
         assert not PARAMETRES_DECLENCHEURS.match(p), (ns, p)
+    a = acteur.annotations
+    assert a is not None and a.readOnlyHint is False
+    assert {"destructiveHint", "openWorldHint"} <= set(a.model_dump(exclude_unset=True))
+    assert _ops(acteur) and all(VERBES_EFFET.match(op) for op in _ops(acteur)), (
+        f"{ns}_act", _ops(acteur))
+
+
+@pytest.mark.parametrize("ns", ACTEURS_NES)
+def test_un_acteur_ne_avant_son_lecteur_a_deja_la_forme_cible(par_connecteur, ns):
+    acteur = par_connecteur[ns].get(f"{ns}_act")
+    assert acteur is not None, ns
     a = acteur.annotations
     assert a is not None and a.readOnlyHint is False
     assert {"destructiveHint", "openWorldHint"} <= set(a.model_dump(exclude_unset=True))

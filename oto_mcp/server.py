@@ -273,7 +273,7 @@ def reload_tenant_registry() -> dict:
     sous CPython — aucun lecteur ne voit un état intermédiaire) :
 
     1. `tenancy.install(registre_neuf)` — classification des subs, hosts, préfixes
-       d'outils, façade OAuth : tout ce qui lit `tenancy.current()` par requête.
+       d'outils, découverte OAuth : tout ce qui lit `tenancy.current()` par requête.
     2. `verifier._by_issuer = dict_neuf` — les émetteurs ACCEPTÉS : c'est le swap
        qui éteint le verdict `pending_restart` (les jetons du tenant passent).
 
@@ -361,7 +361,7 @@ class TenantChallengeMiddleware:
       l'octet servi est celui d'avant.
 
     Ne réécrit jamais l'émetteur annoncé dans le challenge : c'est le PRM pointé qui
-    le porte, et lui suit déjà le host (`oauth_facade`). Une seule source.
+    le porte, et lui suit déjà le host (`auth.decouverte`). Une seule source.
     """
 
     _MARK = "resource_metadata="
@@ -419,34 +419,17 @@ def _point_challenge_at_host(challenge: str, host: str) -> str:
 
 
 def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
-    """Valider les JWTs Logto + se présenter en **façade AS** (cf. oauth_facade) :
-    le PRM pointe les clients vers NOUS (pas Logto direct), pour qu'ils lisent
-    notre métadonnée AS augmentée d'un `registration_endpoint` (DCR façade). Sans
-    ça, claude.ai ne peut pas s'auto-enregistrer (Logto n'a pas de DCR) et l'user
-    doit coller le client_id à la main."""
-    public_base = require_env("OTO_MCP_PUBLIC_URL").rstrip("/")
-    # Façade DCR active ⟺ OTO_MCP_CLAUDE_APP_ID posé : alors le PRM pointe vers
-    # NOUS (on sert l'AS metadata + /oauth/register, cf. oauth_facade + branche
-    # HTTP). Sinon, fallback au comportement historique (PRM → Logto direct,
-    # client_id collé à la main). Les deux DOIVENT rester couplés sur ce flag,
-    # sinon le PRM pointerait vers un AS metadata inexistant → discovery cassée.
-    if os.environ.get("OTO_MCP_CLAUDE_APP_ID"):
-        authz = public_base
-    else:
-        authz = f"{require_env('LOGTO_ENDPOINT').rstrip('/')}/oidc"
+    """Valider les JWTs Logto, et annoncer Logto LUI-MÊME comme serveur d'autorisation
+    (`auth.decouverte`) : le client s'y inscrit par CIMD et y obtient ses jetons. Les
+    routes de PRM sensibles au host masquent celles-ci (montées avant, cf. `main`) ;
+    ces valeurs-ci ne restent servies que derrière elles."""
+    from .auth import decouverte
     return RemoteAuthProvider(
         token_verifier=verifier,
-        authorization_servers=[AnyHttpUrl(authz)],
-        base_url=public_base,
-        # Scopes annoncés dans le PRM (RFC 9728). Sans ça le PRM expose
-        # `scopes_supported: []` → un client conforme (Mistral) qui DÉRIVE le
-        # `scope` de sa requête authorize du PRM n'envoie AUCUN scope → l'authorize
-        # authentifié échoue côté Logto et renvoie une erreur au callback (erreur de
-        # connexion immédiate, sans navigateur). claude.ai contourne en envoyant
-        # `offline_access` en dur, d'où « marche dans Claude, pas dans Mistral ».
-        # Mêmes scopes que l'AS metadata (oauth_facade.as_metadata). Vécu 2026-06-25.
-        scopes_supported=["openid", "profile", "email", "offline_access"],
-        resource_name="oto MCP",
+        authorization_servers=[AnyHttpUrl(decouverte.emetteur_primaire())],
+        base_url=require_env("OTO_MCP_PUBLIC_URL").rstrip("/"),
+        scopes_supported=decouverte.SCOPES,
+        resource_name=decouverte.RESOURCE_NAME,
     )
 
 
@@ -1081,10 +1064,6 @@ def main():
     # le cas-limite sub=None disparaît. L'usage local passe par la CLI `oto`.
     transport = os.environ.get("MCP_TRANSPORT", "streamable_http")
 
-    # Relais d'autorisation : un host déclaré sans secret de sceau est une configuration
-    # INCOMPLÈTE — refuser de démarrer en la nommant, avant d'avoir rien écrit.
-    from .auth import relay as oauth_relay
-    oauth_relay.verifier_configuration()
     # Proxies de confiance (#1232) : lus UNE fois ici ; un réglage illisible refuse de
     # démarrer — jamais des en-têtes d'adresse crus (ou ignorés) sans décision.
     from . import client_trace
@@ -1175,16 +1154,12 @@ def main():
         from .api.erreur_interne import ErreurInterneAvecCors
         app.add_middleware(ErreurInterneAvecCors)
 
-        # Façade DCR (oauth_facade) : sert /.well-known/oauth-authorization-server
-        # + /oauth/register pour que claude.ai s'auto-enregistre sans coller le
-        # client_id. No-op si OTO_MCP_CLAUDE_APP_ID absent (paste manuel conservé).
-        claude_app_id = os.environ.get("OTO_MCP_CLAUDE_APP_ID")
-        if claude_app_id:
-            from .auth import facade as oauth_facade
-            for route in reversed(oauth_facade.make_routes(
-                    require_env("OTO_MCP_PUBLIC_URL"), claude_app_id)):
-                app.router.routes.insert(0, route)
-            logger.info("DCR facade active (claude app %s)", claude_app_id)
+        # Découverte (RFC 9728) sensible au host : le PRM annonce l'émetteur Logto qui
+        # sert ce host (le nôtre, ou celui d'un tenant) ; l'inscription du client se fait
+        # chez Logto, par CIMD (`auth.decouverte`, `docs/auth-logto.md`).
+        from .auth import decouverte
+        for route in reversed(decouverte.make_routes(require_env("OTO_MCP_PUBLIC_URL"))):
+            app.router.routes.insert(0, route)
 
         # Le 401 de `/mcp` dit ce qu'est oto et comment s'y connecter (#1071) : corps
         # seulement, statut et `WWW-Authenticate` intacts, hôte principal d'oto

@@ -72,8 +72,8 @@ class EcritureMixin:
         qu'une row porte déjà cette valeur de clé (pas de doublon, l'index
         `ds_bkey_<ns>` la refuse) : l'écriture qui la DÉSIGNE (`key` = la clé
         déclarée, ou tableau fermé) la modifie ; celle qui AJOUTE la fusionne avec
-        `upsert=True`, et sans lui est avertie puis REFUSÉE à la date de
-        `upsert_implicite` (oto#141). Sinon append. Renvoie la row.
+        `upsert=True`, et sans lui est REFUSÉE (`upsert_implicite`, oto#141). Sinon
+        append. Renvoie la row.
 
         `key` (oto#141) = l'appel NOMME la clé : elle doit être la clé déclarée, et la
         row en porter la valeur — sinon refus, jamais un paramètre ignoré (cf.
@@ -128,8 +128,7 @@ class EcritureMixin:
                 ns_id, schema, user_data))
         # oto#182 : un `null` qui n'efface rien (l'écho d'une ligne lue) ne s'écrit pas.
         user_data = sans_les_nulls_sans_effet(
-            user_data, lambda: self._donnees_de_la_ligne_visee(ns_id, schema, user_data),
-            schema)
+            user_data, lambda: self._donnees_de_la_ligne_visee(ns_id, schema, user_data))
         # oto#165 : un `{}` sur une case vide n'est pas une valeur — écarté, et dit.
         user_data, objets_vides = sans_les_objets_vides(
             user_data, lambda: self._donnees_de_la_ligne_visee(ns_id, schema, user_data))
@@ -174,9 +173,9 @@ class EcritureMixin:
         if key and kv is not None:
             existing_id = db.datastore_find_row_id_by_key(ns_id, key, kv)
             if existing_id is not None:
-                # oto#141 : DÉSIGNÉE, la ligne se modifie ; AJOUTÉE, la fusion n'est
-                # plus implicite — avertie jusqu'à sa date, refusée à partir d'elle.
-                upi.controler_fusion(self.off_notices, designation=designation,
+                # oto#141 : DÉSIGNÉE, la ligne se modifie ; AJOUTÉE sans `upsert`, elle
+                # est refusée.
+                upi.controler_fusion(designation=designation,
                                      upsert=upsert,
                                      datastore=ns.get("datastore") or datastore,
                                      key=key, kv=kv, row_id=existing_id)
@@ -249,7 +248,7 @@ class EcritureMixin:
             existing_id = ligne_de_la_course_perdue(ns_id, key, kv, e)
             # oto#141 : perdre la course, c'est découvrir que la clé EXISTE — même règle
             # que le lookup ci-dessus.
-            upi.controler_fusion(self.off_notices, designation=designation,
+            upi.controler_fusion(designation=designation,
                                  upsert=upsert,
                                  datastore=ns.get("datastore") or datastore,
                                  key=key, kv=kv, row_id=existing_id)
@@ -416,8 +415,8 @@ class EcritureMixin:
         """Écrit un LOT de rows en un appel. Si une clé métier est en vigueur (param
         `key` explicite, sinon `schema.key` déclarée), une row dont la valeur de clé
         existe déjà en base est MODIFIÉE si le lot la DÉSIGNE (`key` nommé, tableau
-        fermé), et sinon — un AJOUT — fusionne avec `upsert=True`, avertie puis REFUSÉE
-        sans lui à la date de `upsert_implicite` (oto#141). Deux rows du lot à la même
+        fermé), et sinon — un AJOUT — fusionne avec `upsert=True`, REFUSÉE sans lui
+        (`upsert_implicite`, oto#141). Deux rows du lot à la même
         clé suivent cette dernière règle dans les deux cas. Sinon append. Renvoie un récap {inserted, updated, count,
         key, ids, fusions?}. Résout le datastore UNE fois (write) pour tout le lot."""
         ns_id = self._resolve(datastore, write=True)

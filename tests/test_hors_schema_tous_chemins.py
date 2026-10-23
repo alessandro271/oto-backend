@@ -1,20 +1,20 @@
-"""`hors_schema` parle sur TOUS les chemins d'écriture, ou il ne sert à rien (#647).
+"""Une colonne hors schéma est REFUSÉE sur TOUS les chemins d'écriture (#647, oto#124).
 
 **Le fait, campagne du 31/08/2026.** Une colonne non déclarée est née pendant un
 passage sur un tableau `strict` — absente de l'instantané de départ, présente en base
 à l'arrivée. **Cent trois travaux ont relevé `hors_schema` : tous à zéro.** Trois
 lectures indépendantes disent zéro, la table dit un.
 
-⚠️ **Ce que ça coûte, et pourquoi ce banc existe.** La valeur écrite est une donnée que
-le contrat de la campagne interdit. Rangée hors schéma, elle est **invisible à tous les
-contrôles qui lisent le schéma** — dont celui qui compte précisément ce type de donnée.
-*Un rapporteur qui se tait par intermittence est pire qu'un rapporteur absent : son
-zéro se lit comme une mesure.*
+⚠️ **Ce que ça coûtait, et pourquoi ce banc existe.** La valeur écrite est une donnée
+que le contrat de la campagne interdit. Rangée hors schéma, elle est **invisible à tous
+les contrôles qui lisent le schéma**. Le relevé a laissé place au refus (oto#124) : une
+colonne non déclarée ne naît plus. Une garde qui mord par intermittence est pire
+qu'une garde absente.
 
 Ce banc pose donc la question sur la MATRICE, pas sur le cas vu : chaque chemin
-d'écriture × colonne créée / colonne déjà là × `id` explicite / alias de réservation.
-Il tourne sur une vraie base, par les mêmes appels que la campagne, et il interroge le
-STOCKAGE pour établir que la colonne existe — jamais le retour de l'écriture.
+d'écriture × colonne neuve / colonne déjà là × forme de la valeur. Il tourne sur une
+vraie base, par les mêmes appels que la campagne, et il interroge le STOCKAGE pour
+établir que la colonne n'existe pas — jamais le retour de l'écriture.
 """
 from __future__ import annotations
 
@@ -22,12 +22,13 @@ import uuid
 
 import pytest
 
+from oto_mcp.datastore.errors import ColonneNonDeclaree
 
-# Le tableau de la campagne, réduit à ce qui porte la règle : `strict`, une clé
-# métier, et une colonne-liste (les contacts, où le défaut du 29/08 s'était logé).
+
+# Le tableau de la campagne, réduit à ce qui porte la règle : une clé métier, et une
+# colonne-liste (les contacts, où le défaut du 29/08 s'était logé).
 SCHEMA = {
     "key": "siren",
-    "unknown_columns": "report",
     "fields": [
         {"key": "siren", "type": "text"},
         {"key": "raison_sociale", "type": "text"},
@@ -50,18 +51,13 @@ def table(live):
     ns = "t-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", "sub-test", ns)
     st = _store()
-    # oto#124 : `unknown_columns` ne se POSE plus ; ce banc tient le relevé `report`
-    # tant qu'un schéma STOCKÉ le porte encore (jusqu'au 21/10/2026 et au retrait du
-    # stocké) — le schéma est donc posé sans lui, puis le réglage écrit comme il
-    # subsiste en base.
-    st.set_schema(ns, {k: v for k, v in SCHEMA.items() if k != "unknown_columns"})
-    db.set_datastore_schema(ns_id, SCHEMA)
+    st.set_schema(ns, SCHEMA)
     row = st.append_row(ns, {"siren": "552032534", "raison_sociale": "TEMOIN"})
     return st, ns, ns_id, row["_id"]
 
 
 def _colonnes_en_base(ns_id: int, row_id: str) -> set:
-    """Ce que porte LA BASE. Le relevé doit s'accorder avec elle, pas avec lui-même."""
+    """Ce que porte LA BASE, jamais ce que l'écriture a bien voulu rendre."""
     from oto_mcp.db._conn import _connect
     with _connect() as conn:
         r = conn.execute(
@@ -70,64 +66,70 @@ def _colonnes_en_base(ns_id: int, row_id: str) -> set:
     return set((r or {}).get("data") or {})
 
 
-def _releve(st) -> list:
-    return st.off_schema_report().get("hors_schema", [])
+def _colonnes_du_tableau(ns_id: int) -> set:
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        rs = conn.execute("SELECT data FROM datastore_rows WHERE ns_id = %s",
+                          (ns_id,)).fetchall()
+    return {k for r in rs for k in (r["data"] or {})}
 
 
-# ── La matrice : chaque chemin, colonne CRÉÉE ────────────────────────────────
+def _ligne_salie(ns_id: int) -> str:
+    """Une ligne qui porte DÉJÀ la colonne hors schéma — écrite avant le refus."""
+    from oto_mcp import db
+    db.datastore_insert_row(ns_id, "r-salie", {"siren": "301234567", HORS: "ancien"})
+    return "r-salie"
 
-def test_patch_par_id_releve_la_colonne_creee(table):
+
+# ── La matrice : chaque chemin, colonne NEUVE ────────────────────────────────
+
+def test_patch_par_id_refuse_la_colonne(table):
     """⚠️ LE chemin de l'incident : `data_write(id=…)` — le geste le plus courant
     d'un agent, et celui que l'alias de réservation emprunte."""
     st, ns, ns_id, rid = table
-    st.update_row(ns, rid, {HORS: "https://example.invalid/x"})
+    with pytest.raises(ColonneNonDeclaree, match=f"`{HORS}`"):
+        st.update_row(ns, rid, {HORS: "https://example.invalid/x"})
+    assert HORS not in _colonnes_en_base(ns_id, rid), "la colonne n'est PAS née en base"
 
-    assert HORS in _colonnes_en_base(ns_id, rid), "la colonne EST née en base"
-    assert HORS in _releve(st), "…et le relevé doit la nommer"
 
-
-def test_append_releve_la_colonne_creee(table):
+def test_append_refuse_la_colonne(table):
     st, ns, ns_id, _ = table
-    row = st.append_row(ns, {"siren": "301234567", HORS: "x"})
-    assert HORS in _colonnes_en_base(ns_id, row["_id"])
-    assert HORS in _releve(st)
+    with pytest.raises(ColonneNonDeclaree, match=f"`{HORS}`"):
+        st.append_row(ns, {"siren": "301234567", HORS: "x"})
+    assert HORS not in _colonnes_du_tableau(ns_id)
+    assert st.count_rows(ns) == 1, "aucune ligne créée"
 
 
-def test_le_lot_releve_la_colonne_creee(table):
+def test_le_lot_refuse_la_colonne(table):
     """Le lot fusionne sur la clé métier : c'est le chemin `write_rows`."""
     st, ns, ns_id, _ = table
-    st.write_rows(ns, [{"siren": "552032534", HORS: "x"}])
-    assert HORS in _releve(st)
+    with pytest.raises(ColonneNonDeclaree, match=f"`{HORS}`"):
+        st.write_rows(ns, [{"siren": "552032534", HORS: "x"}], key="siren")
+    assert HORS not in _colonnes_du_tableau(ns_id)
 
 
-# ── La matrice : colonne DÉJÀ hors schéma, réécrite ──────────────────────────
+# ── La matrice : colonne DÉJÀ hors schéma ────────────────────────────────────
 
-def test_la_colonne_DEJA_hors_schema_se_releve_a_chaque_ecriture(table):
-    """⚠️ Le cas qui rend le relevé utile dans la durée : une fois la colonne née,
-    chaque écriture qui la touche doit continuer de la nommer. Sinon le signal ne
-    parle qu'une fois — au moment où personne ne regardait."""
-    st, ns, ns_id, rid = table
-    st.update_row(ns, rid, {HORS: "premier"})
-    st2 = _store()                                  # relevé neuf, comme un autre appel
-    st2.update_row(ns, rid, {HORS: "second"})
-    assert HORS in _releve(st2), "la deuxième écriture doit la nommer aussi"
-
-
-def test_une_ecriture_qui_ne_TOUCHE_pas_la_colonne_ne_la_releve_pas(table):
-    """La borne du relevé, et elle est voulue : il nomme ce que LE GESTE pose, pas
-    ce que la ligne porte. Sinon toute écriture sur une ligne déjà salie crierait,
-    et le signal deviendrait un bruit de fond qu'on cesse de lire."""
-    st, ns, ns_id, rid = table
-    st.update_row(ns, rid, {HORS: "x"})
-    st2 = _store()
-    st2.update_row(ns, rid, {"raison_sociale": "AUTRE"})
-    assert _releve(st2) == [], "un geste qui ne pose pas la colonne ne la relève pas"
+def test_la_colonne_DEJA_hors_schema_se_refuse_a_chaque_ecriture(table):
+    """⚠️ Une colonne déjà en base n'en devient pas déclarée : chaque écriture qui la
+    POSE est refusée, la première comme les suivantes."""
+    st, ns, ns_id, _ = table
+    rid = _ligne_salie(ns_id)
+    for valeur in ("premier", "second"):
+        with pytest.raises(ColonneNonDeclaree, match=f"`{HORS}`"):
+            _store().update_row(ns, rid, {HORS: valeur})
 
 
-# ── Deux formes qui ne sont pas RELEVÉES parce qu'elles sont REFUSÉES ────────
-# Écrit après coup : j'attendais un relevé, la plateforme rend un refus. C'est mieux
-# — une colonne qui n'existe pas n'a pas besoin d'être signalée — et il faut le figer,
-# sinon une main future « corrigera » le silence en rouvrant la porte.
+def test_une_ecriture_qui_ne_TOUCHE_pas_la_colonne_passe(table):
+    """La borne du refus, et elle est voulue : il juge ce que LE GESTE pose, pas ce
+    que la ligne porte (#284). Sinon une ligne déjà salie deviendrait inécrivable."""
+    st, ns, ns_id, _ = table
+    rid = _ligne_salie(ns_id)
+    st.update_row(ns, rid, {"raison_sociale": "AUTRE"})
+    assert {"raison_sociale", HORS} <= _colonnes_en_base(ns_id, rid)
+
+
+# ── Un attribut hors schéma DANS un composite déclaré ────────────────────────
 
 def test_une_cle_hors_schema_DANS_un_contact_est_REFUSEE(table):
     """Le défaut du cinquième passage (`contacts[].email_pattern`) ne peut plus se
@@ -144,27 +146,26 @@ def test_une_cle_hors_schema_DANS_un_contact_est_REFUSEE(table):
 
 # ── Le témoin négatif : pas de faux positif ──────────────────────────────────
 
-def test_une_ecriture_entierement_declaree_ne_releve_RIEN(table):
+def test_une_ecriture_entierement_declaree_passe(table):
     st, ns, ns_id, rid = table
     st.update_row(ns, rid, {"raison_sociale": "ACME",
                             "contacts": [{"nom": "Jo", "fonction": "Gérante"}]})
-    assert _releve(st) == []
+    assert {"raison_sociale", "contacts"} <= _colonnes_en_base(ns_id, rid)
 
 
 # ── Les FORMES de l'écriture, et c'est là que le silence se loge ─────────────
-# ⚠️ Écrit après avoir constaté que les cinq chemins parlent : si le rapporteur se
-# tait quand même en production, ce n'est pas le chemin qui varie, c'est la FORME de
-# ce qu'on écrit. Une colonne du datastore s'écrit de trois façons — valeur nue,
-# objet à couches, clé plate pointée — et un détecteur qui n'en connaît qu'une se
-# tait sur les deux autres sans que rien ne le dise.
+# ⚠️ Ce n'est pas seulement le chemin qui varie, c'est la FORME de ce qu'on écrit.
+# Une colonne du datastore s'écrit de trois façons — valeur nue, objet à couches, clé
+# plate pointée — et une garde qui n'en connaît qu'une se tait sur les deux autres
+# sans que rien ne le dise.
 
 def test_colonne_hors_schema_ecrite_en_OBJET_A_COUCHES(table):
     """La forme que la campagne emploie partout : `{valeur, comment}`."""
     st, ns, ns_id, rid = table
-    st.update_row(ns, rid, {HORS: {"valeur": "https://x.invalid/a",
-                                   "comment": "site — pied de page"}})
-    assert HORS in _colonnes_en_base(ns_id, rid), "la colonne EST née"
-    assert HORS in _releve(st), "…et le relevé doit la nommer"
+    with pytest.raises(ColonneNonDeclaree, match=f"`{HORS}`"):
+        st.update_row(ns, rid, {HORS: {"valeur": "https://x.invalid/a",
+                                       "comment": "site — pied de page"}})
+    assert HORS not in _colonnes_en_base(ns_id, rid), "la colonne n'est PAS née"
 
 
 def test_une_cle_PLATE_POINTEE_ne_fabrique_JAMAIS_de_colonne(table):
@@ -193,33 +194,25 @@ def test_une_cle_PLATE_POINTEE_ne_fabrique_JAMAIS_de_colonne(table):
 
 # ── La quatrième FORME, et c'est celle du terrain ────────────────────────────
 # ⚠️ Écrit le 31/08 après avoir enfin LU la colonne née en production : ses huit
-# occurrences portent toutes `null`. Le banc ci-dessus n'éprouvait que des valeurs
-# posées — trois formes, cinq chemins, et **pas une seule valeur vide**. Or c'est
-# exactement la forme du terrain. *Un banc qui couvre toute la matrice sauf la case
+# occurrences portent toutes `null`. *Un banc qui couvre toute la matrice sauf la case
 # où l'incident a eu lieu certifie le silence qu'il devait expliquer.*
 
 def test_colonne_hors_schema_ecrite_a_NULL(table):
-    """La forme observée en production : la clé est posée, sa valeur est vide.
-
-    La colonne naît quand même en base — donc elle existe, donc elle est invisible
-    aux contrôles qui lisent le schéma. Le relevé doit la nommer comme les autres :
-    *ce qui compte est que la colonne EXISTE, pas qu'elle porte quelque chose.*"""
+    """La forme observée en production : la clé est posée, sa valeur est vide. Un
+    `null` EFFACE, il ne crée rien : il n'est pas refusé, et la colonne ne naît pas —
+    *ce qui compte est que la colonne N'EXISTE PAS, pas ce que dit la réponse.*"""
     st, ns, ns_id, rid = table
     st.update_row(ns, rid, {HORS: None})
-
-    en_base = HORS in _colonnes_en_base(ns_id, rid)
-    releve = HORS in _releve(st)
-    assert en_base, "la colonne naît-elle à null ?"
-    assert releve == en_base, (
-        f"la colonne existe en base ({en_base}) mais le relevé dit {releve} — "
-        "un rapporteur qui se tait sur la forme du terrain rend un zéro faux")
+    assert HORS not in _colonnes_en_base(ns_id, rid), "la colonne ne naît pas à null"
 
 
 def test_colonne_hors_schema_a_null_DANS_un_objet_a_couches(table):
-    """L'autre vide plausible : la couche est là, la valeur est vide."""
+    """L'autre vide plausible : la couche est là, la valeur est vide — la couche est
+    une valeur posée, la colonne est refusée."""
     st, ns, ns_id, rid = table
-    st.update_row(ns, rid, {HORS: {"valeur": None, "comment": "site — rien trouvé"}})
-    assert (HORS in _colonnes_en_base(ns_id, rid)) == (HORS in _releve(st))
+    with pytest.raises(ColonneNonDeclaree, match=f"`{HORS}`"):
+        st.update_row(ns, rid, {HORS: {"valeur": None, "comment": "site — rien trouvé"}})
+    assert HORS not in _colonnes_en_base(ns_id, rid)
 
 
 # ── Ce que la PRODUCTION porte, et que le banc affirmait impossible ──────────
@@ -232,8 +225,8 @@ def test_colonne_hors_schema_a_null_DANS_un_objet_a_couches(table):
 # *Un relevé bâti sur ce que la lecture rend compte des colonnes qui n'existent pas.*
 # C'est ce qui a produit un faux positif de comptage le 31/08 : un contrôle de
 # campagne lisait la face REST et prenait 304 couches servies à plat pour autant de
-# colonnes inventées. Le rapporteur du serveur, lui, n'en a jamais vu une seule —
-# il lit ce que le geste POSE, et le geste pose un objet.
+# colonnes inventées. La garde du serveur juge ce que le geste POSE, et le geste pose
+# un objet.
 
 def test_la_couche_est_STOCKEE_IMBRIQUEE_sous_sa_colonne(table):
     """Le geste servi écrit un objet ; la base porte UNE colonne, pas deux."""
@@ -247,21 +240,21 @@ def test_la_couche_est_STOCKEE_IMBRIQUEE_sous_sa_colonne(table):
         f"aucune clé pointée en base — la couche vit SOUS sa colonne : {sorted(en_base)}")
 
 
-def test_une_couche_ne_sort_JAMAIS_en_hors_schema(table):
-    """Le corollaire côté relevé : les quatre couches d'une colonne déclarée sont le
-    format normal, jamais une colonne inventée."""
+def test_une_couche_n_est_JAMAIS_une_colonne_non_declaree(table):
+    """Le corollaire côté garde : les quatre couches d'une colonne déclarée sont le
+    format normal, jamais une colonne inventée — l'écriture passe."""
     st, ns, ns_id, rid = table
     st.update_row(ns, rid, {"raison_sociale": {"valeur": "A", "comment": "c",
                                                "origine": "o", "link": "https://x.fr"}},
                   origine_override=True)
-    assert _releve(st) == []
+    assert not [k for k in _colonnes_en_base(ns_id, rid) if "." in k]
 
 
 def test_la_LECTURE_aplatit_ce_que_la_base_garde_imbrique():
     """L'autre moitié du fait, et c'est elle qui piège les instruments.
 
     La même colonne a deux formes selon le côté où on se place. Sans ce témoin, la
-    mise en garde de `off_schema_keys` n'est qu'une affirmation dans une docstring —
+    mise en garde n'est qu'une affirmation dans une docstring —
     et c'est exactement le genre d'affirmation qui devient fausse en silence."""
     from oto_mcp.datastore import schema as dsv2
     stocke = {"valeur": "https://x.fr", "comment": "site — pied de page"}
@@ -281,7 +274,6 @@ def test_le_RELEVE_et_la_LECTURE_ne_comptent_pas_les_memes_cles(table):
     servi = set(st.get_row(ns, rid) or {})
     assert "raison_sociale.comment" in servi, "servie : la couche est une clé"
     assert "raison_sociale.comment" not in ecrit, "écrite : elle n'en est pas une"
-    assert _releve(st) == [], "et le relevé suit l'ÉCRITE, donc il se tait"
 
 
 # ── Retirer une COUCHE : refusé, et le refus nomme sa destination ────────────

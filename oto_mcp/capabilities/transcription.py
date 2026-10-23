@@ -100,11 +100,11 @@ def deposer(sub: str, pid: int, lire: Callable[[], file_source.ResolvedFile], *,
     try:
         audio_key = media_store.upload_object(
             "transcription-jobs", str(pid), fichier.data, fichier.mime,
-            filename=fichier.filename, max_bytes=MAX_AUDIO_BYTES)
+            filename=fichier.filename, max_bytes=MAX_AUDIO_BYTES, propre_au_depot=True)
     except media_store.MediaError as e:
         raise AuthzDenied(e.status, e.code, str(e)) from None
-    # AAD = `audio_key` (déjà unique, déjà colonne de LA ligne créée juste en
-    # dessous) : lie le chiffré à sa ligne sans un aller-retour pour connaître
+    # AAD = `audio_key` (unique par travail — `propre_au_depot` —, déjà colonne de LA
+    # ligne créée juste en dessous) : lie le chiffré à sa ligne sans un aller-retour pour connaître
     # l'id serial d'abord (même intention que le coffre, forme plus simple).
     job_id = db.create_transcription_job(
         project_id=pid, sub=sub, audio_key=audio_key, filename=fichier.filename,
@@ -174,8 +174,9 @@ def position_en_file(file: dict) -> dict:
 class TranscriptionCreateInput(BaseModel):
     project_id: int
     # La RÉFÉRENCE du fichier, jamais ses octets (`file_source`) : `project_file`
-    # (`{"kind":"project_file","file_id":N}`, le projet de l'URL par défaut), `url`,
-    # `drive`, `gmail`. Un fichier à envoyer tel quel passe par `…/transcriptions/upload`.
+    # (`{"kind":"project_file","file_id":N}`, le projet de l'URL par défaut), `transit`
+    # (l'enregistrement qu'un outil a déposé pour l'appelant), `url`, `drive`, `gmail`.
+    # Un fichier à envoyer tel quel passe par `…/transcriptions/upload`.
     source: dict
     vocabulary: Optional[str] = None
     vocabulary_replace: bool = False

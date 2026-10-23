@@ -48,12 +48,19 @@ def client(monkeypatch):
     ("reactions", {"identifier": "ACoAA1"}, "list_member_reactions"),
     ("followers", {}, "list_followers"),
     ("following", {}, "list_following"),
-    ("endorse", {"identifier": "ACoAA1", "skill_endorsement_id": 7}, "endorse_profile"),
-    ("action", {"identifier": "ACoAA1", "api": "recruiter",
-                "action": "rejectApplicant"}, "member_action"),
 ])
 def test_profile_ops_route_to_the_right_client_method(client, op, kwargs, method):
     _tool("linkedin_unipile_profile")(op=op, **kwargs)
+    getattr(client, method).assert_called_once()
+
+
+@pytest.mark.parametrize("op,kwargs,method", [
+    ("endorse", {"identifier": "ACoAA1", "skill_endorsement_id": 7}, "endorse_profile"),
+    ("update_member", {"identifier": "ACoAA1", "api": "recruiter",
+                       "action": "rejectApplicant"}, "member_action"),
+])
+def test_member_acts_route_to_the_right_client_method(client, op, kwargs, method):
+    _tool("linkedin_unipile_act")(op=op, **kwargs)
     getattr(client, method).assert_called_once()
 
 
@@ -83,17 +90,18 @@ def test_profile_company_is_cached(client):
     ("contacts", {}, "list_attendees"),
 ])
 def test_chat_ops_route_to_the_right_client_method(client, op, kwargs, method):
-    _tool("linkedin_unipile_chat")(op=op, **kwargs)
+    _tool("linkedin_unipile")(op=op, **kwargs)
     getattr(client, method).assert_called_once()
 
 
 @pytest.mark.parametrize("op,kwargs,method", [
     ("send", {"chat_id": "c1", "text": "hello"}, "send_message"),
     ("update", {"chat_id": "c1", "action": "setReadStatus", "value": True}, "patch_chat"),
-    ("react", {"message_id": "m1", "reaction": "👍", "chat_id": "c1"}, "react_message"),
+    ("react_message", {"message_id": "m1", "reaction": "👍", "chat_id": "c1"},
+     "react_message"),
 ])
 def test_send_ops_route_to_the_right_client_method(client, op, kwargs, method):
-    _tool("linkedin_unipile_send")(op=op, **kwargs)
+    _tool("linkedin_unipile_act")(op=op, **kwargs)
     getattr(client, method).assert_called_once()
 
 
@@ -101,7 +109,7 @@ def test_chat_send_refuses_without_a_destination(client):
     """Ni fil ni destinataire = message qui part nulle part : refus explicite, pas un
     appel amont qui échouera plus loin avec un message opaque."""
     with pytest.raises(McpError, match="chat_id"):
-        _tool("linkedin_unipile_send")(op="send", text="hello")
+        _tool("linkedin_unipile_act")(op="send", text="hello")
     client.send_message.assert_not_called()
 
 
@@ -110,21 +118,21 @@ def test_chat_list_refuses_a_page_linkedin_refuses_naming_the_bound(client, limi
     """#873 — au-delà de 25, Unipile répond « 400 Invalid querystring » sans nommer la
     borne : le refus la nomme, et renvoie à `cursor`, avant tout appel amont."""
     with pytest.raises(McpError, match="1 to 25") as e:
-        _tool("linkedin_unipile_chat")(op="list", limit=limit)
+        _tool("linkedin_unipile")(op="list", limit=limit)
     assert "cursor" in str(e.value.error.message)
     client.list_chats.assert_not_called()
 
 
 def test_chat_list_accepts_the_bound_itself(client):
     """Contrôle positif : 25 passe (mesuré le 11/09/2026 sur un compte réel)."""
-    _tool("linkedin_unipile_chat")(op="list", limit=25)
+    _tool("linkedin_unipile")(op="list", limit=25)
     assert client.list_chats.call_args.kwargs["limit"] == 25
 
 
 def test_chat_react_omits_chat_id_when_absent(client):
     """`chat_id` est requis par l'API v2 mais absent de la v1 : on ne passe le kwarg
     que s'il est fourni, pour rester compatible d'un oto-core plus ancien."""
-    _tool("linkedin_unipile_send")(op="react", message_id="m1", reaction="👍")
+    _tool("linkedin_unipile_act")(op="react_message", message_id="m1", reaction="👍")
     assert "chat_id" not in client.react_message.call_args.kwargs
 
 
@@ -140,12 +148,12 @@ def test_post_ops_route_to_the_right_client_method(client, op, kwargs, method):
 
 
 @pytest.mark.parametrize("op,kwargs,method", [
-    ("create", {"text": "hello"}, "create_post"),
-    ("comment", {"post_id": "urn:li:1", "text": "bravo"}, "comment_post"),
-    ("react", {"post_id": "urn:li:1"}, "react_post"),
+    ("publish_post", {"text": "hello"}, "create_post"),
+    ("comment_post", {"post_id": "urn:li:1", "text": "bravo"}, "comment_post"),
+    ("react_post", {"post_id": "urn:li:1"}, "react_post"),
 ])
 def test_publish_ops_route_to_the_right_client_method(client, op, kwargs, method):
-    _tool("linkedin_unipile_publish")(op=op, **kwargs)
+    _tool("linkedin_unipile_act")(op=op, **kwargs)
     getattr(client, method).assert_called_once()
 
 
@@ -168,11 +176,14 @@ def test_network_ops_route_to_the_right_client_method(client, op, kwargs, method
 
 @pytest.mark.parametrize("op,kwargs,method", [
     ("invite", {"provider_id": "ACoAA1"}, "send_invitation"),
-    ("handle", {"invitation_id": "i1", "shared_secret": "s1"}, "handle_invitation"),
-    ("cancel", {"invitation_id": "i1"}, "cancel_invitation"),
+    ("accept_invitation", {"invitation_id": "i1", "shared_secret": "s1"},
+     "handle_invitation"),
+    ("decline_invitation", {"invitation_id": "i1", "shared_secret": "s1"},
+     "handle_invitation"),
+    ("cancel_invitation", {"invitation_id": "i1"}, "cancel_invitation"),
 ])
 def test_invite_ops_route_to_the_right_client_method(client, op, kwargs, method):
-    _tool("linkedin_unipile_invite")(op=op, **kwargs)
+    _tool("linkedin_unipile_act")(op=op, **kwargs)
     getattr(client, method).assert_called_once()
 
 
@@ -210,7 +221,7 @@ def test_network_handle_requires_the_shared_secret(client):
     """`invitation_id` et `shared_secret` viennent du MÊME item : sans le second,
     l'appel amont échoue — autant le dire ici."""
     with pytest.raises(McpError, match="shared_secret"):
-        _tool("linkedin_unipile_invite")(op="handle", invitation_id="i1")
+        _tool("linkedin_unipile_act")(op="accept_invitation", invitation_id="i1")
     client.handle_invitation.assert_not_called()
 
 
@@ -241,9 +252,9 @@ def test_job_ops_route_to_the_right_client_method(client, op, kwargs, method):
 # --- refus ---------------------------------------------------------------------
 
 @pytest.mark.parametrize("tool", [
-    "linkedin_unipile_profile", "linkedin_unipile_chat", "linkedin_unipile_post",
+    "linkedin_unipile_profile", "linkedin_unipile", "linkedin_unipile_post",
     "linkedin_unipile_network", "linkedin_unipile_account", "linkedin_unipile_job",
-    "linkedin_unipile_send", "linkedin_unipile_publish", "linkedin_unipile_invite",
+    "linkedin_unipile_act",
 ])
 def test_unknown_op_is_refused_with_the_allowed_list(client, tool):
     """Une op inconnue doit lever en nommant les ops valides — jamais retomber
@@ -254,17 +265,17 @@ def test_unknown_op_is_refused_with_the_allowed_list(client, tool):
 
 @pytest.mark.parametrize("tool,op,missing", [
     ("linkedin_unipile_profile", "person", "identifier"),
-    ("linkedin_unipile_profile", "endorse", "skill_endorsement_id"),
-    ("linkedin_unipile_chat", "read", "chat_id"),
-    ("linkedin_unipile_publish", "create", "text"),
-    ("linkedin_unipile_publish", "comment", "post_id"),
-    ("linkedin_unipile_send", "update", "chat_id"),
-    ("linkedin_unipile_invite", "invite", "provider_id"),
+    ("linkedin_unipile_act", "endorse", "skill_endorsement_id"),
+    ("linkedin_unipile", "read", "chat_id"),
+    ("linkedin_unipile_act", "publish_post", "text"),
+    ("linkedin_unipile_act", "comment_post", "post_id"),
+    ("linkedin_unipile_act", "update", "chat_id"),
+    ("linkedin_unipile_act", "invite", "provider_id"),
     ("linkedin_unipile_account", "select", "contract_id"),
     ("linkedin_unipile_job", "applicant", "applicant_id"),
 ])
 def test_missing_required_arg_names_the_op_and_the_arg(client, tool, op, missing):
-    kwargs = {"identifier": "x"} if tool == "linkedin_unipile_profile" and op == "endorse" else {}
+    kwargs = {"identifier": "x"} if op == "endorse" else {}
     if (tool, op) == ("linkedin_unipile_job", "applicant"):
         kwargs = {"job_id": "j1"}
     with pytest.raises(McpError, match=missing):
@@ -287,7 +298,7 @@ def test_channel_chat_ops_route_to_the_right_client_method(
 
     m = FastMCP("t")
     U.register_messaging_tools(m, channel.upper())
-    asyncio.run(m.get_tool(f"{channel}_chat")).fn(op=op, **kwargs)
+    asyncio.run(m.get_tool(channel)).fn(op=op, **kwargs)
     getattr(client, method).assert_called_once()
 
 
@@ -298,7 +309,7 @@ def test_channel_send_routes_to_send_message(client, channel):
 
     m = FastMCP("t")
     U.register_messaging_tools(m, channel.upper())
-    asyncio.run(m.get_tool(f"{channel}_send")).fn(text="hello", chat_id="c1")
+    asyncio.run(m.get_tool(f"{channel}_act")).fn(text="hello", chat_id="c1")
     client.send_message.assert_called_once_with("hello", chat_id="c1", attendee_id=None)
 
 
@@ -308,12 +319,12 @@ def test_channel_chat_refuses_unknown_op_and_missing_args(client):
 
     m = FastMCP("t")
     U.register_messaging_tools(m, "WHATSAPP")
-    fn = asyncio.run(m.get_tool("whatsapp_chat")).fn
+    fn = asyncio.run(m.get_tool("whatsapp")).fn
     with pytest.raises(McpError, match="op must be"):
         fn(op="nope")
     with pytest.raises(McpError, match="chat_id"):
         fn(op="read")
-    send = asyncio.run(m.get_tool("whatsapp_send")).fn
+    send = asyncio.run(m.get_tool("whatsapp_act")).fn
     with pytest.raises(McpError, match="text"):
         send(text="", chat_id="c1")
     with pytest.raises(McpError, match="chat_id"):
@@ -327,6 +338,6 @@ def test_linkedin_read_pose_la_reference_des_pieces(client):
     url = "https://unipile.example/v2/acc_forme/messages/m1/attachments/a1"
     msgs = [{"id": "m1", "attachments": [{"url": url}]}]
     client.list_messages.return_value = {"data": msgs, "items": msgs}
-    out = _tool("linkedin_unipile_chat")(op="read", chat_id="c1")
+    out = _tool("linkedin_unipile")(op="read", chat_id="c1")
     assert out["items"][0]["attachments"][0]["source"] == {
         "kind": "unipile", "channel": "linkedin", "url": url}

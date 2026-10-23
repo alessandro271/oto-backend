@@ -6,8 +6,8 @@ Ce que ce fichier verrouille :
   compte), seule passée au client ; mode inconnu, paire incomplète ou sans
   `base_url` → refusé avant de construire le client, dans l'outil ET la sonde ;
 - la garde d'egress sur `base_url` à chaque construction du client ;
-- la vue de tri du journal (corps rendus en taille) et le rendu de l'audio par
-  `file_content.render_for_agent` ;
+- la vue de tri du journal (corps rendus en taille) et l'audio déposé en transit
+  (`transit.deposer`, une `source` courte ; l'URL signée seulement sur `link=true`) ;
 - un 401/403 de la sonde → `NonAutorise`, classé sur `status_code`.
 """
 import asyncio
@@ -116,38 +116,42 @@ def test_journal_brut(construits, egress_vu, monkeypatch):
     assert out == {"calls": [{"SegmentId": 1, "Transcription": "x"}], "next_skip": None}
 
 
-def test_enregistrement_rendu_par_render_for_agent(construits, egress_vu, monkeypatch):
+@pytest.mark.parametrize("link", [False, True])
+def test_enregistrement_depose_en_transit(construits, egress_vu, monkeypatch, link):
     inst, _ = construits
     _creds(monkeypatch, _USER)
     inst.download_recording.return_value = {
         "content": b"RIFF", "content_type": "audio/x-wav", "filename": "a.wav"}
     vus = []
 
-    def render(data, filename, mime, *, sub, prefix, **kw):
-        vus.append((data, filename, mime, sub, prefix))
-        return {"encoding": "url", "url": "https://signed"}
+    def deposer(prefix, data, mime, filename, *, lien=False):
+        vus.append((prefix, data, mime, filename, lien))
+        return {"source": {"kind": "transit", "ref": "threecx-recordings/" + "0" * 32}}
 
-    monkeypatch.setattr("oto_mcp.file_content.render_for_agent", render)
-    monkeypatch.setattr("oto_mcp.access.current_user_sub_or_raise", lambda: "sub-1")
-    out = _tool("threecx_recording")(42)
+    monkeypatch.setattr("oto_mcp.transit.deposer", deposer)
+    out = _tool("threecx_recording")(42, link=link)
     inst.download_recording.assert_called_once_with(42)
-    assert vus == [(b"RIFF", "a.wav", "audio/x-wav", "sub-1", "threecx-files")]
-    assert out["url"] == "https://signed"
+    assert vus == [("threecx-recordings", b"RIFF", "audio/x-wav", "a.wav", link)]
+    assert out["source"]["kind"] == "transit"
+
+
+def test_la_description_mene_a_la_source_transit():
+    t = asyncio.run(_mcp().get_tool("threecx_recording"))
+    assert '{"kind":"transit","ref":…}' in t.description and "never a URL" in t.description
 
 
 def test_stockage_indisponible_refus_nomme(construits, egress_vu, monkeypatch):
-    from oto_mcp import file_content
+    from oto_mcp import transit
 
     inst, _ = construits
     _creds(monkeypatch, _USER)
     inst.download_recording.return_value = {
         "content": b"RIFF", "content_type": "audio/x-wav", "filename": "a.wav"}
 
-    def render(*a, **kw):
-        raise file_content.MediaUnavailable("stockage indisponible")
+    def deposer(*a, **kw):
+        raise transit.TransitError("stockage indisponible")
 
-    monkeypatch.setattr("oto_mcp.file_content.render_for_agent", render)
-    monkeypatch.setattr("oto_mcp.access.current_user_sub_or_raise", lambda: "sub-1")
+    monkeypatch.setattr("oto_mcp.transit.deposer", deposer)
     with pytest.raises(McpError, match="stockage indisponible"):
         _tool("threecx_recording")(42)
 

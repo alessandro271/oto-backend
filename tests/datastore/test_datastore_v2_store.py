@@ -11,7 +11,6 @@ from oto_mcp.datastore.core import DatastorePg, RowValidationError
 
 
 SCHEMA = {
-    "unknown_columns": "report",
     "fields": [
         {"key": "fact_id", "type": "text", "required": True},
         {"key": "status", "role": "status",
@@ -57,6 +56,8 @@ def store(monkeypatch):
     monkeypatch.setattr(dsm.db, "datastore_active_lease", lambda ns_id, rid: None)
     # oto-backend#479 : le relevé des lignes en place compte d'abord le tableau — vide ici.
     monkeypatch.setattr(dsm.db, "datastore_count_rows", lambda *a, **k: 0)
+    # #296 : la pose relève les colonnes des données hors schéma — aucune ici.
+    monkeypatch.setattr(dsm.db, "datastore_row_keys", lambda ns_id: [])
     return st, calls
 
 
