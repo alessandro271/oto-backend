@@ -34,13 +34,17 @@ from starlette.concurrency import run_in_threadpool
 
 from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
                _modele, _source_du_hook, runner_jobs)
-from .. import (db, org_store, ownership, procedure_retiree, roles, runner_hook,
-                runner_models, runner_tick, session_visibility, tool_alias, tool_registry,
-                verrou_org)
+from .. import (db, deprecations, org_store, outils_du_travail, ownership,
+                procedure_retiree, roles, runner_hook, runner_models, runner_tick,
+                session_visibility, tool_alias, tool_registry, verrou_org)
+from ..db import recipes as db_recipes
+from ..recipes import outils_cites
 from ..tools import catalogue as tool_catalogue
 from ._authz import ORG_MEMBER
 from ._dossier import FOLDER_MAX, dossier_valide
-from ._outils_plateforme import PLATFORM_TOOLS_MAX, outils_plateforme_valides
+from ._outils_plateforme import (PLATFORM_TOOLS_MAX, exiger_aucun_ajout_d_agent,
+                                 exiger_aucun_outil_hors_du_travail,
+                                 outils_plateforme_valides)
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
 from .registry import CAPABILITIES
@@ -294,8 +298,14 @@ class ToolWarning(BaseModel):
     #: seulement (`oto_call` l'atteint quand même) ; `not_exposed` = derrière une
     #: garde d'APPEL — injoignable même par `oto_call` ; `unknown_tool` = ce nom
     #: n'existe dans AUCUN registre (faute de frappe, ou outil retiré depuis).
-    issue: Literal["installable", "not_exposed", "unknown_tool"]
+    #: `not_granted` = l'outil est appelé par la procédure de l'agent ou par une recette
+    #: qu'elle lance, mais n'est PAS dans `tools` : le run sera refusé
+    #: (`tool_not_in_job`) au premier appel. `needed_by` dit qui l'appelle ; le geste qui
+    #: le lève est `missing_tools` du déclencheur (un clic : `op=update`,
+    #: `tools=tools+missing_tools`), un geste de personne (`tools_human_only`).
+    issue: Literal["installable", "not_exposed", "unknown_tool", "not_granted"]
     detail: str
+    needed_by: Optional[str] = None
 
 
 class Trigger(BaseModel):
@@ -372,6 +382,12 @@ class Trigger(BaseModel):
     #: `None` = pas pu être calculé (hors serveur booté — en pratique jamais en
     #: production) ; `[]` = calculé, rien à signaler. Jamais stocké — cf. `ToolWarning`.
     tool_warnings: Optional[list[ToolWarning]] = None
+    #: Les outils que la procédure ou ses recettes appellent et que `tools` n'a pas —
+    #: la liste à AJOUTER (`op=update`, `tools=tools+missing_tools`) : le bouton
+    #: « Autoriser » d'un écran, joué par une personne — un agent hébergé n'élargit
+    #: aucune liste (`tools_human_only`). Calculé même quand `tools` est vide. `[]` = rien
+    #: ne manque ; `None` = pas calculé. Jamais stocké, comme `tool_warnings`.
+    missing_tools: Optional[list[str]] = None
     #: Ce qui ATTEND maintenant — ce que `clear_queue` viderait. `queue_pending`
     #: part dès qu'un worker passe ; `queue_held` attend qu'on rallume l'agent.
     #: Servis sur un webhook ; `0` est un vrai zéro.
@@ -550,10 +566,15 @@ def _outils_de_la_procedure(ctx: ResolvedCtx, slug: str) -> list[str]:
     déclarée, et une allowlist trop large est exactement ce qu'elle existe pour
     empêcher.
     """
-    g = db.get_guide_db("org", str(ctx.org_id), slug)
-    if not g:
-        return []
-    return tool_registry.ref_names(g.get("body_md") or "")
+    return tool_registry.ref_names(_corps_de_la_procedure(ctx.org_id, slug))
+
+
+def _corps_de_la_procedure(org: int, slug: str) -> str:
+    """Sync (base) : la prose de la procédure `slug` de l'org, vide si elle n'existe pas —
+    la lecture que partagent l'allowlist déduite (`_outils_de_la_procedure`) et les outils
+    non accordés (`_outils_non_accordes`)."""
+    g = db.get_guide_db("org", str(org), slug)
+    return (g or {}).get("body_md") or ""
 
 
 _REGLAGES_WEBHOOK = ("payload_mode", "payload_fields", "max_per_hour",
@@ -733,7 +754,7 @@ async def _catalogue_par_nom(ctx: ResolvedCtx, org: int) -> Optional[dict]:
 
 
 async def _avec_tool_warnings(ctx: ResolvedCtx, t: dict,
-                              catalogues: Optional[dict] = None) -> dict:
+                              memo: Optional[dict] = None) -> dict:
     """Le déclencheur, augmenté de ce que ses outils déclarés risquent de ne pas
     atteindre au run — jamais un refus, un signal.
 
@@ -753,20 +774,38 @@ async def _avec_tool_warnings(ctx: ResolvedCtx, t: dict,
     dans un objet qui n'a que le seul attribut lu. `None` hors d'un serveur
     booté (les bancs légers sans base) — fail-soft, jamais un refus.
 
-    `catalogues` : `{org: catalogue}` partagé par toute une réponse. Le catalogue ne
-    dépend que de (porteur, org) : le recalculer par déclencheur coûtait, à chaque
-    ligne d'une liste, une douzaine de lectures et ~12 ms de boucle pour ~870 outils
-    (oto-backend#1148)."""
+    `memo` : ce que toute une réponse partage. Le catalogue ne dépend que de (porteur,
+    org) : le recalculer par déclencheur coûtait, à chaque ligne d'une liste, une
+    douzaine de lectures et ~12 ms de boucle pour ~870 outils (oto-backend#1148). Les
+    outils que cite une procédure (et ses recettes) ne dépendent que de (org,
+    procédure) : lus une fois par réponse, quel que soit le nombre d'agents qui la
+    portent (`_outils_non_accordes`).
+
+    `missing_tools` se calcule même quand `tools` est vide : c'est l'agent à qui il
+    manque TOUT ce que sa procédure appelle."""
     outils = t.get("tools") or []
-    if not outils:
-        return t
     org = t.get("org_id") or ctx.org_id
-    catalogues = {} if catalogues is None else catalogues
-    if org not in catalogues:
-        catalogues[org] = await _catalogue_par_nom(ctx, org)
-    par_nom = catalogues[org]
-    if par_nom is None:
-        return t
+    memo = {} if memo is None else memo
+    avertis: Optional[list] = []
+    if outils:
+        if ("catalogue", org) not in memo:
+            memo[("catalogue", org)] = await _catalogue_par_nom(ctx, org)
+        par_nom = memo[("catalogue", org)]
+        avertis = None if par_nom is None else _avertissements_du_catalogue(outils, par_nom)
+    manque = await _manque_fail_soft(org, t, memo) if t.get("procedure") else None
+    if manque is None:
+        return t if avertis is None or not outils else {**t, "tool_warnings": avertis}
+    if avertis is not None:
+        avertis += [{"tool": nom, "issue": "not_granted", "needed_by": par,
+                     "detail": f"{par} calls it but this agent's tools do not include "
+                               "it: the run will be refused (`tool_not_in_job`). Add "
+                               "it (`missing_tools`)."} for nom, par in manque]
+    return {**t, **({"tool_warnings": avertis} if avertis is not None else {}),
+            "missing_tools": [n for n, _ in manque]}
+
+
+def _avertissements_du_catalogue(outils: list, par_nom: dict) -> list[dict]:
+    """Ce que les outils DÉCLARÉS risquent de ne pas atteindre, selon le catalogue."""
     avertis = []
     for nom in outils:
         entree = par_nom.get(nom)
@@ -777,7 +816,72 @@ async def _avec_tool_warnings(ctx: ResolvedCtx, t: dict,
         elif entree["state"] != "installed":
             avertis.append({"tool": nom, "issue": entree["state"],
                             "detail": tool_catalogue.LEGENDE[entree["state"]]})
-    return {**t, "tool_warnings": avertis}
+    return avertis
+
+
+async def _manque_fail_soft(org: int, t: dict, memo: dict) -> Optional[list[tuple[str, str]]]:
+    """`_outils_non_accordes` hors de la boucle — `None` s'il ne se calcule pas : un
+    avertissement manqué n'est pas un déclencheur cassé."""
+    try:
+        return await run_in_threadpool(_outils_non_accordes, org, t, memo)
+    except Exception as e:  # noqa: SILENT — journalisé, un avertissement manqué n'est pas un déclencheur cassé
+        logger.warning("missing_tools indisponible pour le déclencheur %s : %s", t.get("id"), e)
+        return None
+
+
+def _outils_non_accordes(org: int, t: dict,
+                         memo: Optional[dict] = None) -> list[tuple[str, str]]:
+    """Sync (base) : ce que la procédure de l'agent et les recettes qu'elle lance
+    appellent, hors de ce que son travail sera servi (`outils_servis`) — `[(outil, qui
+    l'appelle)]`, dans l'ordre de la procédure. `memo` : la lecture d'une procédure et
+    de ses recettes, partagée par toute une réponse (`_outils_cites_par_la_procedure`).
+
+    Né du 22/10/2026 : deux agents d'une même chaîne bloqués le même soir, chacun sur un
+    outil qu'une recette de sa procédure appelait (une lecture de CRM, une lecture de
+    tableau) — et un troisième la veille, sur les fournisseurs d'une cascade. Le refus
+    n'arrivait qu'au run ; il se voit maintenant sur l'agent, avant."""
+    slug = t.get("procedure")
+    if not slug:
+        return []
+    memo = {} if memo is None else memo
+    if ("procedure", org, slug) not in memo:
+        memo[("procedure", org, slug)] = _outils_cites_par_la_procedure(org, slug, memo)
+    servis = {deprecations.tool_canonique(n) for n in
+              (outils_du_travail.outils_servis(t) or []) if isinstance(n, str)}
+    servis |= outils_du_travail.OUTILS_DE_L_HOTE
+    vus: set[str] = set()
+    manque = []
+    for nom, par in memo[("procedure", org, slug)]:
+        c = deprecations.tool_canonique(nom)
+        if c in servis or c in vus:
+            continue
+        vus.add(c)
+        manque.append((c, par))
+    return manque
+
+
+def _outils_cites_par_la_procedure(org: int, slug: str,
+                                   memo: dict) -> list[tuple[str, str]]:
+    """Sync (base) : les outils que la procédure cite (`<tool:…>`, comme l'allowlist
+    déduite) puis ceux des recettes PUBLIÉES qu'elle nomme — `[(outil, qui l'appelle)]`.
+    Une recette nommée par plusieurs procédures se lit une fois par réponse (`memo`)."""
+    corps = _corps_de_la_procedure(org, slug)
+    cites = [(n, f"procedure `{slug}`") for n in tool_registry.ref_names(corps)]
+    for recette in outils_cites.recettes_citees(corps):
+        if ("recipe", org, recette) not in memo:
+            memo[("recipe", org, recette)] = _outils_de_la_recette_publiee(org, recette)
+        cites += [(n, f"recipe `{recette}`") for n in memo[("recipe", org, recette)]]
+    return cites
+
+
+def _outils_de_la_recette_publiee(org: int, recette: str) -> list[str]:
+    """Sync (base) : les outils que cite la version PUBLIÉE de la recette `recette` de
+    l'org — rien pour un slug qui n'en est pas une, ou une recette jamais publiée."""
+    fiche = db_recipes.get_recipe("org", str(org), recette)
+    if not fiche or not fiche.get("published_version"):
+        return []
+    version = db_recipes.get_version(fiche["id"], fiche["published_version"])
+    return outils_cites.outils_cites((version or {}).get("body"))
 
 
 def _noms_canoniques(ctx: ResolvedCtx, inp: TriggerInput) -> TriggerInput:
@@ -910,6 +1014,9 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 "été fourni. Un agent sans outil n'exécute rien : cite les outils "
                 "dans la procédure (marqueurs `<tool:nom>`), ou passe `tools` "
                 "explicitement.")
+        # Sous un jeton de délégation, l'agent créé n'a pas plus d'outils que le travail
+        # qui le crée — liste fournie ou déduite de la procédure (`tools_human_only`).
+        exiger_aucun_outil_hors_du_travail(outils)
         tz = inp.tz or _TZ_DEFAUT
         if not webhook:
             try:
@@ -1493,6 +1600,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     # lit donc ici, juste avant d'écrire.
     if not _actuel():
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+    if "tools" in champs:
+        exiger_aucun_ajout_d_agent(_actuel(), champs["tools"])
     if inp.platform_tools is not None:
         champs["outils_plateforme"] = outils_plateforme_valides(
             ctx, inp.platform_tools, _actuel(), champs.get("tools"))
@@ -1806,11 +1915,12 @@ async def _ajouter_tool_warnings(ctx: ResolvedCtx, rep: dict) -> dict:
     Séparé du SQL (`_triggers_sync`) parce que le calcul de visibilité est asynchrone : le
     SQL part au threadpool en un bloc, les avertissements se calculent ensuite dans la
     boucle — ils ne lisent pas la base directement."""
-    catalogues: dict = {}   # un catalogue par org pour toute la réponse (#1148)
+    # Un catalogue par org (#1148), une lecture par procédure : pour toute la réponse.
+    memo: dict = {}
     if "trigger" in rep:
-        rep["trigger"] = await _avec_tool_warnings(ctx, rep["trigger"], catalogues)
+        rep["trigger"] = await _avec_tool_warnings(ctx, rep["trigger"], memo)
     if "triggers" in rep:
-        rep["triggers"] = [await _avec_tool_warnings(ctx, t, catalogues)
+        rep["triggers"] = [await _avec_tool_warnings(ctx, t, memo)
                            for t in rep["triggers"]]
     return rep
 
@@ -1905,6 +2015,10 @@ CAPABILITIES += [
                           "`platform_tools` hors d'`op=update`"),
             DeclaredError(403, "platform_tools_human_only",
                           "`platform_tools` posé depuis un agent hébergé (jeton de délégation)"),
+            DeclaredError(403, "tools_human_only",
+                          "`tools` élargi depuis un agent hébergé (jeton de délégation) : "
+                          "à `update`, un outil hors de la liste stockée ; à `create`, un "
+                          "outil hors de celle du travail appelant — un geste de personne"),
             DeclaredError(403, "platform_tools_owner_only",
                           "`platform_tools` posé par un autre que le propriétaire de l'agent"),
             DeclaredError(403, "platform_tools_operator_only",

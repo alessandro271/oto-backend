@@ -2597,3 +2597,43 @@ d'outils du travail le refusant de toute façon (`tool_not_in_job`).
 **Quand elle vaut.** Seulement pour un agent que son porteur SEUL peut changer : abonnement
 personnel, aucun éditeur nommé (`db.outils_plateforme_du_travail`). Ailleurs elle est lue
 vide. Chaque exercice laisse une ligne au journal, quel que soit le mode.
+
+## Outils non accordés — `missing_tools` (2026-10-22)
+
+**Le besoin.** La liste d'outils d'un agent est tenue par le serveur sur tous les chemins
+(`tool_not_in_job`, #1256) — y compris les appels qu'une recette fait pour lui. Mais rien
+ne le disait avant le run : une procédure qui lance une recette, une recette qui lit un
+CRM ou un tableau, et l'agent se bloquait au premier appel refusé, un outil par run.
+Vécu : deux agents d'une même chaîne bloqués le même soir, chacun sur un outil d'une
+recette de sa procédure.
+
+**Avant le run.** `oto_trigger op=get|list` sert, pour un agent qui porte une procédure,
+`missing_tools` : ce que la procédure cite (`<tool:…>`) et ce que citent les recettes
+PUBLIÉES qu'elle nomme (`oto_recipe … slug="x"`, lues par `recipes/outils_cites.py`), hors
+de ce que le travail sera servi (`outils_du_travail.outils_servis`, plus les outils de
+l'hôte). Chacun porte aussi un avertissement `not_granted` dans `tool_warnings`, avec
+`needed_by` (« procedure `p` », « recipe `r` »). Calculé à la lecture, jamais stocké,
+fail-soft (un calcul qui échoue rend l'agent sans `missing_tools`, jamais un refus), et
+calculé même pour un agent dont `tools` est vide. Une liste lit chaque procédure (et ses
+recettes) une fois par réponse, quel que soit le nombre d'agents qui la portent. Le geste
+qui le lève est UN `op=update` : `tools` + `missing_tools` — le bouton « Autoriser » de
+l'écran. Il n'accorde rien seul : la liste reste la borne fail-closed de #1256.
+
+**Élargir est un geste de personne (`tools_human_only`).** Sous un jeton de délégation
+(`verrou_org.travail_de_la_requete`, la même détection que `platform_tools_human_only`), un
+`op=update` dont `tools` nomme un outil absent de la liste stockée est refusé (403) : sans
+ça, un agent qui a `oto_trigger` élargirait sa propre liste — une injection de prompt
+suffirait. Réduire la liste, ou la reposer telle quelle, passe. `op=create` suit la même
+règle contre la liste du travail APPELANT (`outils_du_travail.permis_du_travail` : sa
+liste servie et les outils de l'hôte) : sinon il suffirait de créer un agent plus outillé
+que soi. La liste jugée est celle qui sera écrite — `tools` fourni, ou, s'il est omis, la
+liste par défaut, c'est-à-dire les outils que la procédure cite (`<tool:…>`,
+`_outils_de_la_procedure`). Un sous-ensemble passe.
+
+**Au run.** Une recette-code est jugée avant son premier appel
+(`outils_du_travail.manquants`) : un seul reçu `code: tool_not_in_job`, `missing_tools`
+(tous), `fix` (`{"tool": "oto_trigger", "op": "update", "trigger_id", "tools"}`, `tools` =
+la liste que le travail a reçue plus les manquants : le geste entier, que l'écran joue pour
+une personne), et un `error` qui dit à l'agent quoi faire, et seulement cela :
+`run_finish(outcome="blocked")` en les nommant.
+Un nom d'outil construit à l'exécution n'est pas lu : il reste jugé à l'appel.

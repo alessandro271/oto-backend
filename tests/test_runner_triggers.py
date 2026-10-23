@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import types
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -399,6 +400,120 @@ def test_platform_tools_refuse_sous_un_jeton_de_delegation(agent_d_operateur):
         verrou_org.lever(t)
     assert (e.value.status, e.value.code) == (403, "platform_tools_human_only")
     assert agent_d_operateur == {}
+
+
+# ── tools : élargir est un geste de personne (`tools_human_only`) ────────────
+
+def test_une_personne_elargit_la_liste_d_un_agent(agent_d_operateur):
+    _appel(_ctx(), op="update", trigger_id=3,
+           tools=["fr_siret", "oto_admin_org", "oto_admin_signal", "data_rows"])
+    assert agent_d_operateur == {
+        "tools": ["fr_siret", "oto_admin_org", "oto_admin_signal", "data_rows"]}
+
+
+def test_un_agent_heberge_n_elargit_pas_une_liste_d_outils(agent_d_operateur):
+    """Sous un jeton de délégation, un agent qui a `oto_trigger` ajouterait à sa propre
+    liste n'importe quel outil : une injection de prompt suffirait."""
+    from oto_mcp import verrou_org
+    t = verrou_org.poser(verrou_org.Verrou(sub="porteur", org_id=2, job_id=9))
+    try:
+        with pytest.raises(AuthzDenied) as e:
+            _appel(_ctx(), op="update", trigger_id=3,
+                   tools=["fr_siret", "oto_admin_org", "oto_admin_signal", "data_rows"])
+    finally:
+        verrou_org.lever(t)
+    assert (e.value.status, e.value.code) == (403, "tools_human_only")
+    assert "data_rows" in e.value.message
+    assert agent_d_operateur == {}, "rien n'est écrit"
+
+
+@pytest.mark.parametrize("outils", [
+    ["fr_siret"],                                             # réduite
+    ["oto_admin_signal", "oto_admin_org", "fr_siret"],        # la même, réordonnée
+    [],                                                       # vidée
+])
+def test_un_agent_heberge_reduit_ou_repose_une_liste_d_outils(agent_d_operateur, outils):
+    """Réduire ne donne rien de plus : la règle ne vise que l'ajout."""
+    from oto_mcp import verrou_org
+    t = verrou_org.poser(verrou_org.Verrou(sub="porteur", org_id=2, job_id=9))
+    try:
+        _appel(_ctx(), op="update", trigger_id=3, tools=outils)
+    finally:
+        verrou_org.lever(t)
+    assert agent_d_operateur == {"tools": outils}
+
+
+# ── tools à la création : pas plus d'outils que le travail qui crée ─────────
+
+@pytest.fixture
+def creation(monkeypatch):
+    """Une org servie, aucun agent sur la procédure ; le travail 9 peut appeler
+    `fr_siret`, `data_write` et `oto_trigger`. Rend ce que `create_trigger` a reçu, et
+    `deleguer()` pose le jeton de ce travail."""
+    from contextlib import contextmanager
+
+    from oto_mcp import outils_du_travail, verrou_org
+    monkeypatch.setattr(RT.db, "runner_arme",
+                        lambda org: {"armed": True, "workers": 1,
+                                     "last_seen": "2026-09-02 07:00:00",
+                                     "families": ["anthropic"]})
+    monkeypatch.setattr(RT.db, "triggers_for_procedure", lambda o, p: [])
+    monkeypatch.setattr(RT.tool_alias, "canonical_names", lambda noms, sub: list(noms))
+    monkeypatch.setattr(outils_du_travail.db, "charge_du_travail", lambda job: {
+        "tools": ["fr_siret", "data_write", "oto_trigger"], "trigger_id": 5})
+    vu: dict = {}
+    monkeypatch.setattr(RT.db, "create_trigger",
+                        lambda org, sub, **kw: vu.update(kw) or {"id": 1, **kw})
+
+    @contextmanager
+    def deleguer():
+        t = verrou_org.poser(verrou_org.Verrou(sub="alexis", org_id=2, job_id=9))
+        try:
+            yield
+        finally:
+            verrou_org.lever(t)
+    return types.SimpleNamespace(vu=vu, deleguer=deleguer)
+
+
+def test_un_agent_heberge_ne_cree_pas_un_agent_plus_outille_que_lui(creation):
+    with creation.deleguer(), pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *",
+               tools=["fr_siret", "apollo_search_people"])
+    assert (e.value.status, e.value.code) == (403, "tools_human_only")
+    assert "apollo_search_people" in e.value.message
+    assert creation.vu == {}, "rien n'est écrit"
+
+
+def test_un_agent_heberge_cree_un_agent_avec_une_partie_de_ses_outils(creation):
+    with creation.deleguer():
+        _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *",
+               tools=["data_write", "run_finish"])
+    assert creation.vu["tools"] == ["data_write", "run_finish"]
+
+
+@pytest.mark.parametrize("cites, refuse", [
+    ("<tool:fr_siret> puis <tool:data_write>", False),
+    ("<tool:fr_siret> puis <tool:apollo_search_people>", True),
+])
+def test_sans_tools_la_liste_deduite_de_la_procedure_est_jugee(
+        creation, monkeypatch, cites, refuse):
+    """`tools` omis : la liste par défaut est celle que la procédure cite
+    (`_outils_de_la_procedure`). Elle ne dépasse pas plus que l'autre le travail."""
+    monkeypatch.setattr(RT.db, "get_guide_db", lambda *a: {"body_md": cites})
+    with creation.deleguer():
+        if refuse:
+            with pytest.raises(AuthzDenied) as e:
+                _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *")
+            assert e.value.code == "tools_human_only" and creation.vu == {}
+        else:
+            _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *")
+            assert creation.vu["tools"] == ["fr_siret", "data_write"]
+
+
+def test_une_personne_cree_un_agent_avec_n_importe_quelle_liste(creation):
+    _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *",
+           tools=["fr_siret", "apollo_search_people", "oto_admin_org"])
+    assert creation.vu["tools"] == ["fr_siret", "apollo_search_people", "oto_admin_org"]
 
 
 def test_platform_tools_ne_se_pose_pas_a_la_creation():
