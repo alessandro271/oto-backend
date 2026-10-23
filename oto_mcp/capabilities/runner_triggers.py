@@ -1291,10 +1291,10 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                       else db.file_du_declencheur(t["id"], ctx.org_id)["pending"])
         if en_attente:
             raise AuthzDenied(409, "run_already_queued",
-                              f"un run de cet agent attend déjà un worker ({en_attente} "
-                              "en file) : il partira dès qu'un worker passe. Suis-le "
-                              "dans l'historique de l'agent, ou vide la file "
-                              "(`op=clear_queue`) avant d'en relancer un.")
+                              f"une exécution de cet agent est déjà en file ({en_attente} "
+                              "en attente) : elle partira dès qu'une place se libère. "
+                              "Suis-la dans l'historique de l'agent, ou vide la file "
+                              "(`op=clear_queue`) avant d'en relancer une.")
         # La MÊME charge que l'horloge (`runner_tick.charge_du_declencheur`), datée
         # de maintenant. Puis le chemin d'un enfilage à la main
         # (`runner_jobs.charge_et_modele`) : outils au canonique, famille
@@ -2084,8 +2084,8 @@ CAPABILITIES += [
                           "`run_now` d'un agent sans modèle, ou au modèle sorti du "
                           "catalogue : le même refus que le tick et le webhook"),
             DeclaredError(409, "run_already_queued",
-                          "`run_now` sans `handoff` alors qu'un travail de cet agent "
-                          "attend déjà un worker (`pending`)"),
+                          "`run_now` sans `handoff` alors qu'une exécution de cet "
+                          "agent est déjà en file (`pending`)"),
             DeclaredError(403, "org_admin_required",
                           "`take_over` par quelqu'un qui n'est pas admin de l'org"),
             DeclaredError(403, "owner_still_member",
