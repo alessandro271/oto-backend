@@ -69,3 +69,16 @@ def test_les_numeros_d_une_file_se_comptent_un_par_un():
     assert _fiches({"op": "add_queue_numbers", "entries": [{"number": "+33"}] * 3}) == 3
     assert _fiches({"op": "add_queue_numbers", "entries": "x"}) is None
     assert _fiches({"op": "create_person"}) == 1
+
+
+def test_une_recette_lit_les_comptes_et_les_exports_d_une_campagne_lemlist_sans_rien_ecrire():
+    """Comparer les leads d'un tableau à ceux des campagnes avant de pousser : des
+    lectures, sans déclaration. Créer, mettre en pause, envoyer un export par mail :
+    refusé — rien de `lemlist_campaign` ne se déclare. `export_status` aussi : sans
+    `export_start`, une recette n'a jamais l'id d'un export."""
+    for op in ("reports", "batch_stats", "export_leads", "statutes"):
+        assert ec.juger("lemlist_campaign", {"op": op}) == ("lire", None), op
+    for op in ("create", "update", "pause", "duplicate", "export_email", "export_start",
+               "export_status"):
+        assert ec.juger("lemlist_campaign", {"op": op})[0] == "refus", op
+    assert not any(d.startswith("lemlist_campaign") for d in ec.declarables())

@@ -54,6 +54,14 @@ ECRITURES: dict[str, Ecriture] = {
     "allo_act": Ecriture(frozenset(), frozenset({"create_person", "update_person",
                                                  "create_company", "update_company",
                                                  "add_queue_numbers"})),
+    # Multiplexé avec des ops qui écrivent (create, pause, export_email…) : il ne peut
+    # pas se déclarer `LECTURE` en entier. Ses comptes et ses exports se LISENT — ce
+    # qu'une recette compare aux leads d'un tableau avant de pousser. Rien à déclarer.
+    # Pas `export_status` : sans `export_start`, une recette n'en a jamais l'id.
+    # Entrée TRANSITOIRE tant que lemlist est dans `A_MIGRER`
+    # (`tests/test_convention_act.py`) : à sa paire, ces ops vont au lecteur `lemlist`.
+    "lemlist_campaign": Ecriture(frozenset({"reports", "batch_stats", "export_leads",
+                                            "statutes"}), frozenset()),
 }
 
 #: Ce qu'aucune op permise ne peut être : détruire, fusionner, une op `bulk_*` (un lot
