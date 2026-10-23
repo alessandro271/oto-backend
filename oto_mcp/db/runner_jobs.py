@@ -47,6 +47,13 @@ def _abonnement_personnel(depot: Optional[str]) -> bool:
 
 _LEASE_DEFAULT_S = 600  # ~3× la ligne la plus lente mesurée (180 s) — le tour d'un run
 
+# Le pouvoir délégué vit un peu plus longtemps que le bail : un agent qui
+# conclut à la dernière seconde doit pouvoir écrire. Trop court couperait un
+# travail abouti juste avant sa conclusion — le pire moment, puisqu'il a déjà
+# tout coûté. Une seule marge, à l'émission (`capabilities.runner_jobs._delegue`)
+# comme à la prolongation (`extend_job_lease`) : le jeton suit le bail.
+MARGE_JETON_DELEGATION_S = 120
+
 # Plafond d'une page de file. Il existait déjà — enfoui dans le LIMIT, appliqué sans
 # être dit : `limit=1000` rendait 200 lignes et rien ne l'annonçait (#469). Il est
 # nommé ici parce que c'est là que le SQL le fait respecter, et déclaré au contrat
@@ -1547,17 +1554,39 @@ def bind_job_run(job_id: int, worker_sub: str, run_id: str) -> bool:
 
 def extend_job_lease(job_id: int, worker_sub: str,
                      lease_seconds: int = _LEASE_DEFAULT_S) -> bool:
-    """Prolonge le bail — le heartbeat du worker. Claimant seul."""
-    with _connect() as conn:
-        cur = conn.execute(
+    """Prolonge le bail — le heartbeat du worker. Claimant seul.
+
+    ⚠️ **Le jeton de délégation du travail suit le bail** (#1333), dans la MÊME
+    transaction et seulement si le bail a été prolongé : émis une fois au claim pour
+    `bail + marge`, il expirait sinon en plein vol d'un travail long dont le bail était
+    pourtant tenu — 401, puis le travail rejoué en entier jusqu'au plafond de
+    tentatives. Il est porté à `NOW() + bail + marge`, jamais raccourci (`GREATEST`) ;
+    un jeton révoqué n'est pas prolongé. Le filtre sur `sub` (le porteur du travail)
+    sert l'index `idx_user_api_tokens_sub` : `job_id` n'en a pas."""
+    with _connect() as conn, conn.transaction():
+        row = conn.execute(
             """
             UPDATE runner_jobs
                SET lease_until = NOW() + make_interval(secs => %s)
              WHERE id = %s AND claimed_by = %s AND status = 'claimed'
+            RETURNING sub
             """,
             (int(lease_seconds), job_id, worker_sub),
-        )
-        return bool(cur.rowcount)
+        ).fetchone()
+        if row is None:
+            return False
+        if row["sub"]:
+            conn.execute(
+                """
+                UPDATE user_api_tokens
+                   SET expires_at = GREATEST(
+                           expires_at, NOW() + make_interval(secs => %s))
+                 WHERE sub = %s AND kind = 'delegation' AND job_id = %s
+                   AND revoked_at IS NULL
+                """,
+                (int(lease_seconds) + MARGE_JETON_DELEGATION_S, row["sub"], job_id),
+            )
+        return True
 
 
 def complete_job(job_id: int, worker_sub: str, ok: bool,

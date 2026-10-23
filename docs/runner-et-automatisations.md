@@ -732,6 +732,13 @@ paramètre « agis en tant que » (usurpation en une ligne de JSON). Le pouvoir 
 seconde doit pouvoir écrire. Couper au bail exact tuerait un travail abouti juste
 avant sa conclusion — le pire moment, puisqu'il a déjà tout coûté.
 
+⚠️ **Le jeton suit le bail** (#1333) : `extend` (`db.extend_job_lease`) porte, dans la
+même transaction et seulement si le bail a été prolongé par son claimant, l'échéance
+du jeton de délégation du travail à `bail + 2 min` — jamais plus court, jamais un
+jeton révoqué. Sans cela, un travail plus long que son bail initial perdait son jeton
+en plein vol (401), puis rejouait tout jusqu'au plafond de tentatives. Une seule marge,
+`db.MARGE_JETON_DELEGATION_S`, à l'émission comme à la prolongation.
+
 ⚠️ **`create_api_token` fait un `upsert_user`** : il CRÉE le compte s'il n'existe
 pas. L'existence se vérifie donc AVANT — sinon on ressusciterait un compte
 supprimé et on lui délivrerait un accès dans la foulée.
