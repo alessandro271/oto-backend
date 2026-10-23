@@ -1,7 +1,7 @@
 """Tools `sharepoint_*` du connecteur.
 
 Ce que ce fichier verrouille :
-- la SURFACE (2 tools) et le routage vers la bonne méthode de `FilesClient` ;
+- la SURFACE (4 tools : site, fichier, lecture et écriture des cellules Excel) et le routage vers la bonne méthode de `FilesClient` ;
 - le jeton : celui de la personne appelante pour le service `sharepoint`
   (`auth/microsoft.access_token_for`), seul passé au client ; pas de compte connecté → refus qui dit le geste, avant de
   construire le client ;
@@ -39,6 +39,7 @@ def construits(monkeypatch):
 
     coeur = types.ModuleType("oto.tools.microsoft")
     coeur.FilesClient = fabrique
+    coeur.WorkbookClient = MagicMock(name="WorkbookClient")
 
     class MicrosoftAuthError(ValueError):
         status_code = 401
@@ -90,7 +91,8 @@ def _upstream(status, body=None):
 
 def test_surface(construits):
     names = {t.name for t in asyncio.run(_mcp().list_tools())}
-    assert names == {"sharepoint_site", "sharepoint_file"}
+    assert names == {"sharepoint_site", "sharepoint_file", "sharepoint_excel",
+                     "sharepoint_excel_act"}
 
 
 def test_le_client_porte_le_jeton_de_l_appelant(construits):

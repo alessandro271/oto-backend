@@ -17,6 +17,11 @@ generic `_account=` axis (no parameter specific to the tools), resolved by
   otherwise); a Word or PowerPoint document is converted to PDF by Graph so that
   its text can be read.
 
+- `sharepoint_excel` (sheets/range) — READ the cells of an Excel workbook in place;
+  `sharepoint_excel_act` (update_range) WRITES a range of cells, nothing else of the
+  file (formatting, other sheets, history stay) — instead of rebuilding and
+  re-uploading the whole workbook.
+
 ⚠️ `upload` and `create_folder` WRITE to SharePoint or OneDrive; by default
 a name already taken is refused (`conflict="fail"`), never silently overwritten. No
 deletion, no move, no sharing: outside this surface.
@@ -35,6 +40,7 @@ from .. import access, file_source
 from ._microsoft_graph import bad as _bad, need as _need, raw as _brut
 from ._microsoft_graph import refuse_ignored as _refuse_ignored
 from ._microsoft_graph import run, token
+from .lecture import ACTE, LECTURE
 
 # Read as PDF by default: Graph converts them, and it is the PDF's text that the agent
 # reads (the raw Office binary can't be read). A spreadsheet stays raw: it renders
@@ -48,6 +54,9 @@ _CONFLIT = ("an item already has this name — `conflict=\"rename\"` or "
             "`\"replace\"` to override")
 _DOWNLOAD_MAX = 50 * 1024 * 1024
 _UPLOAD_MAX = 25 * 1024 * 1024
+#: Rows of a range returned inline by default — a sheet of a few thousand rows would
+#: fill the agent's context.
+_EXCEL_ROWS = 200
 
 
 def _site(s: dict) -> dict:
@@ -115,7 +124,7 @@ def _contenu(content_base64: Optional[str], content_text: Optional[str],
 
 
 def register(mcp: FastMCP) -> None:
-    from oto.tools.microsoft import FilesClient
+    from oto.tools.microsoft import FilesClient, WorkbookClient
 
     from .. import file_content
 
@@ -353,3 +362,117 @@ def register(mcp: FastMCP) -> None:
 
         raise _bad("op must be 'list', 'get', 'search', 'download', 'upload' or "
                    "'create_folder'.")
+
+    def _plage(r: dict, max_rows: Optional[int], displayed: bool) -> dict:
+        lignes = (r.get("text") if displayed else r.get("values")) or []
+        borne = max_rows or _EXCEL_ROWS
+        out = {"address": r.get("address"), "rowCount": r.get("rowCount"),
+               "columnCount": r.get("columnCount"), "values": lignes[:borne]}
+        if len(lignes) > borne:
+            out["truncated"] = True
+        return out
+
+    def _classeur(drive_id, user, item_id, path):
+        if not item_id and not path:
+            raise _bad("the workbook is `item_id` or `path` (from sharepoint_file "
+                       "op='list'/'search').")
+        return WorkbookClient(token(_SERVICE)), _drive_id(_client(), drive_id, user)
+
+    @mcp.tool(annotations=LECTURE)
+    def sharepoint_excel(
+        op: Literal["sheets", "range"] = "sheets",
+        drive_id: Optional[str] = None,
+        user: Optional[str] = None,
+        item_id: Optional[str] = None,
+        path: Optional[str] = None,
+        sheet: Optional[str] = None,
+        address: Optional[str] = None,
+        displayed: bool = False,
+        max_rows: Optional[int] = None,
+    ) -> dict:
+        """READ the cells of an Excel workbook (.xlsx) stored in SharePoint or OneDrive,
+        in place — the workbook is a file found with `sharepoint_file` (`drive_id` and
+        `item_id`, or `path`; your OneDrive by default, `user` for a colleague's).
+        Writing cells is `sharepoint_excel_act`.
+
+        `op`:
+        - **"sheets"** (default): the worksheets — {sheets: [{id, name, position,
+          visibility}]}.
+        - **"range"**: the cells of `sheet` (its name) at `address` (A1 notation:
+          "A1:H40", "D:D") — without `address`, the sheet's used range (from A1 to its
+          last cell with a value: the way to find the header row and the columns).
+          Returns {address, rowCount, columnCount, values: [[…], …]} — numbers as
+          numbers; `displayed=true` returns the cells as Excel shows them instead
+          (formatted dates, percentages). At most `max_rows` rows (default 200):
+          read a longer sheet by address, block after block.
+
+        Args:
+            op: sheets (default) | range.
+            drive_id: the library's drive id (`sharepoint_site` op="drives"). Omit
+                for your OneDrive.
+            user: a colleague's OneDrive, by address, instead.
+            item_id: the workbook's id.
+            path: the workbook by path from the drive root, instead of `item_id`.
+            sheet: op="range" — the worksheet's name.
+            address: op="range" — the range, A1 notation; omit for the used range.
+            displayed: op="range" — the text Excel displays instead of the values.
+            max_rows: op="range" — rows returned (default 200).
+        """
+        if op not in ("sheets", "range"):
+            raise _bad("op must be 'sheets' or 'range'.")
+        if op == "sheets":
+            _refuse_ignored(op, sheet=sheet, address=address, max_rows=max_rows)
+            if displayed:
+                raise _bad("`displayed` only applies to op='range'.")
+            w, drive = _classeur(drive_id, user, item_id, path)
+            feuilles = _run(lambda: w.list_worksheets(drive, item_id=item_id, path=path))
+            return {"sheets": [{k: f.get(k) for k in ("id", "name", "position",
+                                                      "visibility")} for f in feuilles],
+                    "count": len(feuilles)}
+        nom = _need(sheet, "sheet", op)
+        w, drive = _classeur(drive_id, user, item_id, path)
+        r = _run(lambda: w.get_range(drive, nom, address, item_id=item_id, path=path))
+        return _plage(r, max_rows, displayed)
+
+    @mcp.tool(annotations=ACTE)
+    def sharepoint_excel_act(
+        op: Literal["update_range"],
+        sheet: str,
+        address: str,
+        values: list[list[Union[str, float, int, bool, None]]],
+        drive_id: Optional[str] = None,
+        user: Optional[str] = None,
+        item_id: Optional[str] = None,
+        path: Optional[str] = None,
+    ) -> dict:
+        """⚠️ WRITE cells of an Excel workbook (.xlsx) in SharePoint or OneDrive, in
+        place: only the cells of `address` change — formatting, the other cells and
+        sheets, the file's version history stay, and it works while colleagues have it
+        open. Never rebuild and re-upload a workbook to change some cells. Reading is
+        `sharepoint_excel`.
+
+        `op` **"update_range"**: writes `values` into `sheet` at `address` (A1
+        notation). `values` is a list of rows, exactly the range's shape: "H2:I4" =
+        3 rows of 2 cells. A number is written as a number (keep the column's format),
+        `null` leaves a cell unchanged, "" clears it, a text starting with "=" is a
+        formula. To fill a column from row 2, read the used range first
+        (`sharepoint_excel(op="range")`) to find the column letters and the rows.
+        Returns the range as written {address, rowCount, columnCount, values}.
+
+        Args:
+            op: update_range.
+            sheet: the worksheet's name (`sharepoint_excel` op="sheets").
+            address: the range to write, A1 notation ("H2:I17").
+            values: the rows to write, the range's exact shape.
+            drive_id: the library's drive id. Omit for your OneDrive.
+            user: a colleague's OneDrive, by address, instead.
+            item_id: the workbook's id.
+            path: the workbook by path from the drive root, instead of `item_id`.
+        """
+        if op != "update_range":
+            raise _bad("op must be 'update_range'.")
+        w, drive = _classeur(drive_id, user, item_id, path)
+        r = _run(lambda: w.update_range(drive, _need(sheet, "sheet", op),
+                                        _need(address, "address", op), values,
+                                        item_id=item_id, path=path))
+        return _plage(r, len(values), False)

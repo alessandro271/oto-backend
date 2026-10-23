@@ -973,7 +973,8 @@ def test_microsoft_accounts_dit_les_services_de_chaque_compte(env, monkeypatch):
 def test_l_axe_account_est_accepte_sur_les_outils(env):
     from oto_mcp import call_axes
 
-    for outil in ("sharepoint_file", "sharepoint_site", "outlook",
+    for outil in ("sharepoint_file", "sharepoint_site", "sharepoint_excel",
+                  "sharepoint_excel_act", "outlook",
                   "outlook_act", "outlook_calendar_calendars", "outlook_calendar_event",
                   "teams", "teams_act", "onenote", "onenote_act", "entra", "entra_act"):
         assert "_account" in {a.param for a in call_axes.axes_for_call(outil)}, outil
@@ -1192,6 +1193,7 @@ def test_le_schema_annonce_account_sur_toutes_les_cartes_microsoft():
     from oto_mcp import call_axes
 
     for outil in ("microsoft_accounts", "sharepoint_file", "sharepoint_site",
+                  "sharepoint_excel", "sharepoint_excel_act",
                   "outlook", "outlook_act", "outlook_calendar_calendars",
                   "outlook_calendar_event", "teams", "teams_act", "onenote", "onenote_act",
                   "entra", "entra_act"):
