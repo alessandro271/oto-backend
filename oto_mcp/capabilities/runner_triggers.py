@@ -167,7 +167,7 @@ class TriggerInput(BaseModel):
     link_kind: Optional[Literal["starts", "requires"]] = Field(default=None, description=(
         "link only: `starts` = `trigger_id` may start `to_trigger_id` with `run_now` at "
         "the end of its run (an agent with `starts` links starts ONLY those, and needs "
-        "`oto_trigger` in its tools); `requires` = "
+        "`oto_trigger` in its tools, else `link_warnings` says so); `requires` = "
         "`to_trigger_id` runs at its own time only if `trigger_id`'s last run today "
         "succeeded, else that occurrence is skipped (`refused_requires`)."))
     condition: Optional[str] = Field(default=None, max_length=CONDITION_MAX, description=(
@@ -560,6 +560,11 @@ class TriggerOut(BaseModel):
     #: que l'appelant voit (les deux agents visibles). `{id, from_trigger_id,
     #: to_trigger_id, kind, condition, created_by, created_at}`.
     link: Optional[dict] = None
+    #: `link` seulement : ce que le lien posé ne fera pas tout seul, `[]` = rien.
+    #: Un lien `starts` depuis un agent sans `oto_trigger` dans ses outils est posé,
+    #: mais l'agent ne lancera rien : `{tool: "oto_trigger", issue: "not_granted",
+    #: needed_by: "link", detail}` — la forme de `tool_warnings`.
+    link_warnings: Optional[list[ToolWarning]] = None
     links: Optional[list[dict]] = None
     #: `graph` seulement : les chaînes de la semaine, la plus récente d'abord —
     #: `{root_job, started_at, steps: [{job_id, trigger_id, status, depth, parent_job,
@@ -1165,8 +1170,9 @@ def _liens(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         raise AuthzDenied(400, "link_self", "un agent ne se relie pas à lui-même.")
     # Modifier les DEUX : le lien change ce que fait `de` (il peut lancer) et ce qui
     # arrive à `vers` (il peut être lancé, ou sauté) — le droit de `run_now` aussi.
-    for bout in (de, vers):
-        _acces_agent.exiger(ctx, db.get_trigger(bout, ctx.org_id), _acces_agent.ECRIRE)
+    agents = {bout: db.get_trigger(bout, ctx.org_id) for bout in (de, vers)}
+    for agent in agents.values():
+        _acces_agent.exiger(ctx, agent, _acces_agent.ECRIRE)
     liens_org = db.runner_links.de_l_org(ctx.org_id)
     arcs = [(int(l["from_trigger_id"]), int(l["to_trigger_id"]))
             for l in liens_org
@@ -1195,7 +1201,25 @@ def _liens(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                                  (inp.condition or "").strip() or None, ctx.sub)
     logger.info("lien %s : agent %s → agent %s (%s), par %s", lien["id"], de, vers,
                 inp.link_kind, ctx.sub)
-    return {"ok": True, "link": _lien_servi(lien)}
+    return {"ok": True, "link": _lien_servi(lien),
+            "link_warnings": _avertissements_du_lien(agents[de], inp.link_kind)}
+
+
+def _avertissements_du_lien(source: dict, genre: str) -> list[dict]:
+    """Ce que le lien posé ne fera PAS tout seul — `[]` quand rien ne manque.
+
+    Un lien `starts` ne donne pas `oto_trigger` à l'agent qui lance (l'outil modifie,
+    partage et supprime aussi des agents : il se met dans la liste par une personne).
+    Sans l'outil, l'agent ne reçoit pas la consigne de relais et ne lance rien : le lien
+    est posé quand même, et la réponse le DIT plutôt qu'un état muet. Même forme que
+    `tool_warnings` (`not_granted`, `needed_by`), et même geste pour le lever :
+    `op=update`, `tools=tools+["oto_trigger"]`."""
+    if genre != db.runner_links.DEMARRE or "oto_trigger" in (source.get("tools") or []):
+        return []
+    return [{"tool": "oto_trigger", "issue": "not_granted", "needed_by": "link",
+             "detail": (f"l'agent {source['id']} n'a pas `oto_trigger` dans ses outils : "
+                        "il ne lancera pas l'agent relié tant qu'on ne l'y ajoute pas "
+                        "(`op=update`, `tools=tools+[\"oto_trigger\"]`).")}]
 
 
 def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:

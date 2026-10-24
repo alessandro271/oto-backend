@@ -76,6 +76,24 @@ def test_un_lien_se_pose_et_se_relit(org):
     assert [(l["from_trigger_id"], l["to_trigger_id"]) for l in vus] == [(1, 2)]
 
 
+def test_un_lien_depuis_un_agent_sans_l_outil_le_dit(org):
+    """Le lien ne donne pas `oto_trigger` : sans lui, l'agent ne lancera rien. Le lien
+    est posé quand même, et la réponse le dit — jamais un état muet."""
+    out = _relier(1, 2)
+    assert out["ok"] and len(org["liens"]) == 1, "un avertissement, pas un refus"
+    (avert,) = out["link_warnings"]
+    assert (avert["tool"], avert["issue"], avert["needed_by"]) == (
+        "oto_trigger", "not_granted", "link")
+    assert "op=update" in avert["detail"]
+
+
+def test_un_lien_depuis_un_agent_qui_porte_l_outil_ne_dit_rien(org):
+    org["agents"][1]["tools"] = ["data_rows", "oto_trigger"]
+    assert _relier(1, 2)["link_warnings"] == []
+    # `requires` ne lance rien : l'outil ne lui manque jamais.
+    assert _relier(3, 4, genre="requires")["link_warnings"] == []
+
+
 def test_reposer_un_lien_change_sa_phrase_sans_le_doubler(org):
     _relier(1, 2, condition="a")
     _relier(1, 2, condition="b")

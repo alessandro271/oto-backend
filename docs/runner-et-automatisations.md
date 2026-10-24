@@ -1662,7 +1662,9 @@ genres :
   `chain_too_wide`, `chain_too_deep`, `chain_budget_exhausted` (budget par `root_job`),
   et `run_already_queued` hors `handoff`. ⚠️ Le lien ne DONNE PAS `oto_trigger` : l'outil
   ne sert pas que `run_now` (il modifie, partage, supprime des agents), il se met dans
-  la liste d'outils de A par une personne. Quand A le porte, il reçoit après son
+  la liste d'outils de A par une personne — et `op=link` le DIT quand il manque :
+  le lien est posé, la réponse porte `link_warnings` (`oto_trigger`, `not_granted`,
+  `needed_by: "link"`, la forme de `tool_warnings`). Quand A le porte, il reçoit après son
   instruction la consigne de relais (`_instruction.relais`) : chaque cible, et la
   `condition` du lien — LA phrase que l'écran dessine sur la flèche, la même que
   l'agent lit ; sans l'outil, aucune consigne. C'est A qui juge la condition ; ne pas
