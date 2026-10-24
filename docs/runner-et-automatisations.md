@@ -95,7 +95,15 @@ jusqu'au 01/09/2026 : c'est faux et constaté sur la machine), gaté par le cran
   = propriétaire seul, read = org_admin en projection neutre (`include_raw` au
   propriétaire) ; la reprise inter-agents lit le JOURNAL, jamais le fil.
 - **file de jobs** `runner_jobs` — capacité `runner.jobs` (REST-only
-  `/api/me/runner/jobs`) : claim SKIP LOCKED + bail re-claimable, backoff,
+  `/api/me/runner/jobs`) : claim SKIP LOCKED + bail re-claimable, backoff
+  (linéaire, +30 s × tentatives ; **2 min puis 10 min**, plafonné à 10 min, quand le
+  motif nomme un refus PASSAGER du fournisseur — HTTP 429, 500, 502, 503, 504, 529,
+  `rate_limit`, `overloaded`, `server_error`, `db.runner_jobs.refus_passager` — pour
+  qu'une fenêtre de refus de quelques minutes ne consomme pas les trois tentatives ;
+  la relance reste une tentative comptée dans `max_attempts`. ⚠️ Un marqueur DÉFINITIF
+  dans le même motif l'emporte — autre 4xx, quota, crédit, facturation,
+  authentification, permission, argument invalide (`insufficient_quota` arrive en
+  HTTP 429) — et garde le linéaire : attendre ne répare pas une clé refusée),
   `result` JSONB déclaré à la conclusion (usage_tokens, `tool_counts` — le
   « tour perdu », un agent qui analyse sans écrire, se lit au grain job),
   op=list org-scopé (surveillance dashboard `/automations`), **paginé et
