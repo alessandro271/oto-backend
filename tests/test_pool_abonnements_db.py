@@ -127,6 +127,13 @@ def _etat(job_id):
                                  (job_id,)).fetchone())
 
 
+def _echeance_dans_une_heure():
+    """Une échéance de plafond (`limit_reset_at`), une heure après l'horloge de la base."""
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        return conn.execute("SELECT NOW() + interval '1 hour' AS t").fetchone()["t"]
+
+
 def _dans_une_heure():
     from oto_mcp.db._conn import _connect
     with _connect() as conn:
@@ -286,6 +293,192 @@ def test_une_org_en_PERSONNEL_ignore_les_prets(live):
         "en pool, sa connexion ne compte plus : le prêteur sert")
 
 
+def _voie(job):
+    from oto_mcp import db
+    return db.par_le_pool(job)
+
+
+def test_sans_mode_REGLE_le_pool_sert_qui_n_a_pas_d_abonnement(live):
+    """Le défaut (revue du 19/10/2026) : le pool COMPLÈTE. Un membre sans abonnement
+    est servi par un prêt, sans qu'un admin passe l'org en pool."""
+    oid = _org("cpl-sans", "cpl-sans-dem", "cpl-sans-p", mode=None)
+    _abonne("cpl-sans-p", pret_a=[oid])
+    travail = _travail(oid, "cpl-sans-dem")
+    pris = _claim(oid)
+    assert pris["id"] == travail and _forfait(pris) == "cpl-sans-p"
+    assert _voie(pris) is True
+
+
+def test_sans_mode_REGLE_un_membre_garde_SON_abonnement(live):
+    """Un prêt ne remplace l'abonnement de personne : le demandeur connecté tourne
+    sur le sien, et le prêteur n'est pas consommé (son tour de pool ne bouge pas)."""
+    from oto_mcp.db._conn import _connect
+    oid = _org("cpl-garde", "cpl-garde-dem", "cpl-garde-p", mode=None)
+    _abonne("cpl-garde-dem")
+    _abonne("cpl-garde-p", pret_a=[oid])
+    _travail(oid, "cpl-garde-dem")
+    pris = _claim(oid)
+    assert _forfait(pris) == "cpl-garde-dem" and _voie(pris) is False
+    with _connect() as conn:
+        servi = conn.execute("SELECT servi_at FROM user_model_subscription_loans "
+                             "WHERE sub = 'cpl-garde-p'").fetchone()["servi_at"]
+    assert servi is None
+    # Occupé, il ATTEND le sien : le pool ne sert pas un membre dont l'abonnement sert.
+    _travail(oid, "cpl-garde-dem")
+    assert _claim(oid) is None
+
+
+def test_sans_mode_REGLE_un_abonnement_AU_PLAFOND_passe_par_le_pool(live):
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        apres = conn.execute("SELECT NOW() + interval '1 hour' AS t").fetchone()["t"]
+    oid = _org("cpl-plafond", "cpl-plafond-dem", "cpl-plafond-p", mode=None)
+    _abonne("cpl-plafond-dem", statut="paused_limit", reset=apres)
+    _abonne("cpl-plafond-p", pret_a=[oid])
+    _travail(oid, "cpl-plafond-dem")
+    pris = _claim(oid)
+    assert _forfait(pris) == "cpl-plafond-p" and _voie(pris) is True
+
+
+def test_sans_mode_REGLE_un_pret_DECONNECTE_ne_compte_pas(live):
+    """Un prêteur qui se déconnecte n'arrête l'agent de personne : le demandeur
+    connecté tourne sur le sien, celui qui n'a rien suit la voie personnelle comme
+    sans pool (la remise dit pourquoi)."""
+    oid = _org("cpl-deco", "cpl-deco-dem", "cpl-deco-nu", "cpl-deco-p", mode=None)
+    _abonne("cpl-deco-dem")
+    _abonne("cpl-deco-p", statut="disconnected", pret_a=[oid])
+    _travail(oid, "cpl-deco-dem")
+    assert _forfait(_claim(oid)) == "cpl-deco-dem"
+    _travail(oid, "cpl-deco-nu")
+    pris = _claim(oid)
+    assert _forfait(pris) == "cpl-deco-nu" and _voie(pris) is False
+
+
+def test_sans_mode_REGLE_un_preteur_AU_PLAFOND_ne_compte_pas(live):
+    """Revue du 19/10/2026 : un prêt au plafond ne compte pas pour un membre. Le
+    demandeur au plafond attend SON échéance, comme sans pool ; le prêteur n'est pas
+    consommé à sa place."""
+    oid = _org("cpl-pp", "cpl-pp-dem", "cpl-pp-p", mode=None)
+    _abonne("cpl-pp-dem", statut="paused_limit", reset=_echeance_dans_une_heure())
+    _abonne("cpl-pp-p", statut="paused_limit", reset=_echeance_dans_une_heure(), pret_a=[oid])
+    travail = _travail(oid, "cpl-pp-dem")
+    assert _claim(oid) is None
+    assert _etat(travail) == {"status": "pending", "attempts": 0}
+    from oto_mcp.capabilities import _abonnement
+    assert _abonnement.par_le_pool(oid, _F, "cpl-pp-dem") is False
+
+
+def test_sans_mode_REGLE_sans_abonnement_et_SEUL_preteur_au_plafond(live, monkeypatch):
+    """Le cas qui sépare les deux lectures de la revue (option A, la plus prudente,
+    celle-ci) : un membre SANS abonnement dont le seul prêteur est au plafond n'a pas
+    de prêteur qui compte — il reste sur la voie personnelle, et la remise l'arrête
+    faute de connexion, comme sans pool. L'option B (un prêteur au plafond compte)
+    le ferait attendre l'échéance du prêteur."""
+    from oto_mcp.capabilities import runner_jobs as RJ
+    arrets = []
+    monkeypatch.setattr(RJ.db, "arreter_definitivement",
+                        lambda job_id, appelant, raison: arrets.append(raison))
+    oid = _org("cpl-nu-pp", "cpl-nu-pp-dem", "cpl-nu-pp-p", mode=None)
+    _abonne("cpl-nu-pp-p", statut="paused_limit", reset=_echeance_dans_une_heure(), pret_a=[oid])
+    _travail(oid, "cpl-nu-pp-dem")
+    pris = _claim(oid)
+    from oto_mcp import db
+    assert pris is not None and db.par_le_pool(pris) is False
+    servi = RJ._avec_cle(pris, _F, "w-pool", worker=True, org_key_only=True)
+    assert "sandbox_id" not in servi and arrets
+
+
+def test_sans_mode_REGLE_une_FLOTTE_attend_un_preteur_au_plafond(live):
+    """Une flotte n'a pas d'autre voie que le pool : un prêteur au plafond la fait
+    ATTENDRE son échéance — sur la voie personnelle, la remise l'arrêterait."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import _abonnement
+    oid = _org("cpl-fl", "cpl-fl-dem", "cpl-fl-p", mode=None)
+    _abonne("cpl-fl-dem")
+    _abonne("cpl-fl-p", statut="paused_limit", reset=_echeance_dans_une_heure(), pret_a=[oid])
+    _ouvert_ici(oid, "cpl-fl-dem", _F)
+    flotte = db.create_fleet(oid, "cpl-fl-dem", label="f", procedure="p", tools=[])
+    travail = db.enqueue_job(oid, "start", sub="cpl-fl-dem", fleet_id=flotte["id"],
+                             payload={"procedure": "p", "model": "sub:sonnet",
+                                      "model_family": _F})["id"]
+    assert _claim(oid) is None, "ni le forfait du créateur, ni un prêteur au plafond"
+    assert _etat(travail) == {"status": "pending", "attempts": 0}
+    assert _abonnement.par_le_pool(oid, _F, "cpl-fl-dem", flotte=True) is True
+
+
+def test_sans_mode_REGLE_une_FLOTTE_sans_pret_est_REFUSEE_a_la_remise(live, monkeypatch):
+    """Sans aucun prêt, une flotte reste sur la voie personnelle : la remise la
+    refuse en le disant, comme avant — jamais le forfait de son créateur."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import runner_jobs as RJ
+    arrets = []
+    monkeypatch.setattr(RJ.db, "arreter_definitivement",
+                        lambda job_id, appelant, raison: arrets.append(raison))
+    oid = _org("cpl-fl0", "cpl-fl0-dem", mode=None)
+    _abonne("cpl-fl0-dem")
+    _ouvert_ici(oid, "cpl-fl0-dem", _F)
+    flotte = db.create_fleet(oid, "cpl-fl0-dem", label="f", procedure="p", tools=[])
+    db.enqueue_job(oid, "start", sub="cpl-fl0-dem", fleet_id=flotte["id"],
+                   payload={"procedure": "p", "model": "sub:sonnet", "model_family": _F})
+    pris = _claim(oid)
+    assert pris is not None and db.par_le_pool(pris) is False
+    servi = RJ._avec_cle(pris, _F, "w-pool", worker=True, org_key_only=True)
+    assert "flotte" in servi["delegation_refusee"] and "sandbox_id" not in servi
+    assert arrets
+
+
+def test_la_sonde_du_forfait_lit_la_voie_PRISE(live):
+    """`porteur_et_famille` rend la voie que la réservation a écrite : la sonde du
+    forfait ne la recalcule pas."""
+    from oto_mcp import db
+    oid = _org("cpl-sonde", "cpl-sonde-dem", "cpl-sonde-p", mode=None)
+    _abonne("cpl-sonde-p", pret_a=[oid])
+    travail = _travail(oid, "cpl-sonde-dem")
+    _claim(oid)
+    assert db.porteur_et_famille(travail)["pool"] is True
+
+
+def test_le_repli_API_ne_fige_pas_le_defaut(live):
+    """Ouvrir le repli fait naître la ligne de l'org SANS mode : le pool complète
+    toujours."""
+    from oto_mcp.db import org_subscription_pool as P
+    oid = _org("repli-defaut", "rd-dem", "rd-p", mode=None)
+    assert P.set_repli_api(oid, _F, True, "rd-dem")["mode"] is None
+    _abonne("rd-p", pret_a=[oid])
+    assert P.en_pool(oid, _F) is False, "le pool EXCLUSIF reste un choix d'admin"
+    _travail(oid, "rd-dem")
+    assert _forfait(_claim(oid)) == "rd-p"
+
+
+def test_un_PERSONNEL_regle_garde_les_prets_sans_effet(live):
+    oid = _org("perso-regle", "pr-dem", "pr-p", mode="personnel")
+    _abonne("pr-p", pret_a=[oid])
+    _travail(oid, "pr-dem")
+    pris = _claim(oid)
+    assert _forfait(pris) == "pr-dem" and _voie(pris) is False
+
+
+def test_sans_mode_REGLE_la_pose_suit_la_meme_regle(live, monkeypatch):
+    """La pose lit la règle de la réservation (`_abonnement.par_le_pool`) : sans
+    abonnement, un prêt suffit ; une flotte exige un prêt, jamais le forfait de son
+    créateur."""
+    from oto_mcp.capabilities import _abonnement
+    monkeypatch.setattr(_abonnement.access, "has_option", lambda *a, **k: True)
+    oid = _org("cpl-pose", "cpl-pose-dem", "cpl-pose-moi", "cpl-pose-p", mode=None)
+    _abonne("cpl-pose-moi")
+    _ouvert_ici(oid, "cpl-pose-moi", _F)
+    _abonnement.exiger_a_la_pose("cpl-pose-moi", None, _F, org_id=oid)
+    with pytest.raises(Exception) as e:
+        _abonnement.exiger_a_la_pose("cpl-pose-moi", None, _F, org_id=oid, flotte=True)
+    assert e.value.code == "subscription_personal_only"
+    with pytest.raises(Exception) as e:
+        _abonnement.exiger_a_la_pose("cpl-pose-dem", None, _F, org_id=oid)
+    assert e.value.code == "subscription_not_connected"
+    _abonne("cpl-pose-p", pret_a=[oid])
+    _abonnement.exiger_a_la_pose("cpl-pose-dem", None, _F, org_id=oid)
+    _abonnement.exiger_a_la_pose("cpl-pose-moi", None, _F, org_id=oid, flotte=True)
+
+
 def test_un_preteur_AU_PLAFOND_est_saute_jusqu_a_son_echeance(live):
     from oto_mcp.db._conn import _connect
     with _connect() as conn:
@@ -363,7 +556,8 @@ def test_une_flotte_hors_pool_est_ARRETEE_a_la_remise(live, monkeypatch):
     oid = _org("flotte", "flotte-dem", mode="personnel")
     _abonne("flotte-dem")
     job = {"id": 1, "org_id": oid, "sub": "flotte-dem", "fleet_id": 7,
-           "payload": {"model_family": _F, "_plateforme": {"abonnement": "flotte-dem"}}}
+           "payload": {"model_family": _F, "_plateforme": {"abonnement": "flotte-dem",
+                                                           "pool": False}}}
     servi = RJ._avec_cle(job, _F, "w-pool", worker=True, org_key_only=True)
     assert "flotte" in servi["delegation_refusee"] and "sandbox_id" not in servi
     assert arrets

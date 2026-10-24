@@ -230,7 +230,7 @@ def test_la_boucle_entiere_un_rapport_met_en_attente_et_la_file_SAUTE(live):
     db.complete_job(premier, "w-abonnement", ok=True)
     conclu = db.porteur_et_famille(premier)
     assert conclu == {"sub": f, "org_id": 9405, "model_family": _FAMILLE,
-                      "abonnement": f}, (
+                      "abonnement": f, "pool": False}, (
         "de quoi adresser le rapport à l'abonnement qui a servi — en mode personnel, "
         "celui du demandeur — et lire le plafond de SON org")
     with _connect() as conn:

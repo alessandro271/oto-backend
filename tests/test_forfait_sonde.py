@@ -43,10 +43,10 @@ def _monde(monkeypatch):
         if etat["apres"] is not None:
             etat["ligne"] = etat["apres"]
     monkeypatch.setattr(RJ.db, "porteur_et_famille", lambda job_id: {
-        "sub": "demandeur", "org_id": 7, "model_family": _FAMILLE, "abonnement": "demandeur"})
+        "sub": "demandeur", "org_id": 7, "model_family": _FAMILLE, "abonnement": "demandeur",
+        "pool": etat["pool"]})
     monkeypatch.setattr(RJ.db, "tenu_par", lambda job_id, sub: etat["tenu"])
     monkeypatch.setattr(RJ._abonnement, "noter_rapport", _noter)
-    monkeypatch.setattr(RJ._abonnement, "en_pool", lambda org, famille: etat["pool"])
     monkeypatch.setattr(RJ.user_subscriptions, "get_subscription",
                         lambda sub, famille: etat["ligne"])
     monkeypatch.setattr(RJ.db, "rendre_a_la_file",
@@ -191,7 +191,6 @@ def test_seule_une_pause_ANCIENNE_et_de_fenetre_INCONNUE_cede_a_la_sonde():
 def _remise(monkeypatch):
     etat = {"ligne": {"statut": US.CONNECTE, "sandbox_id": "sb"}}
     monkeypatch.setattr(RJ.db, "porteur_du_forfait", lambda job: "demandeur")
-    monkeypatch.setattr(RJ._abonnement, "en_pool", lambda org, famille: False)
     monkeypatch.setattr(RJ.user_subscriptions, "get_subscription",
                         lambda sub, famille: etat["ligne"])
     return etat
@@ -199,7 +198,9 @@ def _remise(monkeypatch):
 
 def _remettre():
     return RJ._avec_abonnement({"id": 11, "org_id": 7, "sub": "demandeur",
-                                "payload": {"model_family": _FAMILLE}}, _FAMILLE, "worker-1")
+                                "payload": {"model_family": _FAMILLE,
+                                            "_plateforme": {"pool": False}}},
+                                _FAMILLE, "worker-1")
 
 
 def test_un_forfait_connecte_ne_se_sonde_pas(_remise):

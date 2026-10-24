@@ -965,7 +965,7 @@ def _trancher_le_forfait(ctx, inp: JobsInput) -> dict:
                                     or (statut == user_subscriptions.PLAFOND
                                         and reprise is None)):
         return {"ok": True, "servable": True}
-    pool = _abonnement.en_pool(conclu.get("org_id"), famille)
+    pool = db.voie_prise(conclu.get("pool"), inp.job_id)
     db.rendre_a_la_file(inp.job_id, ctx.sub,
                         _abonnement.raison_de_l_attente(famille, statut, pool=pool,
                                                         reprise=reprise),
@@ -991,7 +991,9 @@ def _avec_abonnement(job: dict, famille: str, appelant: str) -> dict:
     # mode personnel, un prêteur du pool sinon (`db.porteur_du_forfait`).
     porteur = db.porteur_du_forfait(job)
     ligne = (user_subscriptions.get_subscription(porteur, famille) or {}) if porteur else {}
-    pool = _abonnement.en_pool(job.get("org_id"), famille)
+    # La voie que la RÉSERVATION a prise (`_plateforme.pool`), jamais recalculée : le
+    # pool complète, et la voie se décide par travail (`sql_par_le_pool`).
+    pool = db.par_le_pool(job)
     if job.get("fleet_id") and not pool:
         # Un passage armé pendant le pool, dont l'org est repassée en personnel :
         # servi ici, il ferait payer le forfait de son créateur pour le travail de

@@ -45,8 +45,9 @@ _BAC = "sandbox-a-sable-1"
 
 def _travail(sub=_PORTEUR, famille=_FAMILLE, **extra):
     return {"id": 42, "org_id": 7, "sub": sub,
+            # La voie que la réservation écrit à chaque prise (`_plateforme.pool`).
             "payload": {"procedure": "p", "model": "sub:sonnet",
-                        "model_family": famille},
+                        "model_family": famille, "_plateforme": {"pool": False}},
             **extra}
 
 
@@ -63,10 +64,16 @@ def _refus_sans_base(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _mode_personnel(monkeypatch):
-    """L'org de ces bancs n'a réglé aucun mode : `personnel`, le défaut. Le mode `pool`
-    a ses propres bancs (`test_pool_abonnements*.py`)."""
+    """L'org de ces bancs n'a réglé aucun mode, et personne ne lui prête d'abonnement :
+    chaque travail tourne sur celui de son demandeur. Le pool a ses propres bancs
+    (`test_pool_abonnements*.py`). Les deux lectures sont doublées : sans mode réglé,
+    la voie d'un travail compte les prêts (`_abonnement.par_le_pool`)."""
     from oto_mcp.db import org_subscription_pool
     monkeypatch.setattr(org_subscription_pool, "get_mode", lambda org_id, famille: None)
+    monkeypatch.setattr(org_subscription_pool, "taille_du_pool_a_la_pose",
+                        lambda org_id, famille: 0)
+    monkeypatch.setattr(org_subscription_pool, "taille_du_pool",
+                        lambda org_id, famille: 0)
 
 
 @pytest.fixture(autouse=True)
@@ -701,3 +708,25 @@ def test_a_la_garde_un_etat_REPARABLE_rend_le_travail_au_lieu_de_l_arreter(
         "rendu à la file — pas arrêté")
     assert "repartira" in servi["delegation_refusee"]
     assert servi.get("delegated_token") is None and "sandbox_id" not in servi
+
+
+# ── la voie du pool : écrite par la réservation, lue à la remise (revue du 19/10/2026) ─
+def test_la_remise_LEVE_sans_la_voie_que_la_reservation_ecrit(_abonnements):
+    """Toute prise d'un travail d'abonnement écrit `_plateforme.pool`. Sans elle, la
+    remise ne devine pas qui paie : elle lève, plutôt que de recalculer une voie que
+    la réservation n'a peut-être pas prise."""
+    _abonnements[(_PORTEUR, _FAMILLE)] = {"statut": US.CONNECTE, "sandbox_id": _BAC}
+    job = _travail()
+    del job["payload"]["_plateforme"]
+    with pytest.raises(RuntimeError, match="aucune voie"):
+        _servi(job)
+
+
+def test_la_voie_du_pool_suit_la_sonde_de_la_reservation():
+    """La réservation d'un worker qui sonde juge l'abonnement du demandeur avec la
+    MÊME pause que sa clause personnelle (`pause_en_vigueur(sonde=True)`) ; le repli,
+    jamais."""
+    from oto_mcp.db import runner_jobs as DBRJ
+    assert US.pause_en_vigueur("ab", sonde=True) in DBRJ._par_le_pool(sonde=True)
+    assert "updated_at" not in DBRJ._par_le_pool()
+    assert DBRJ._par_le_pool() in DBRJ._jointures_de_repli(80)
