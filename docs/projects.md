@@ -74,7 +74,7 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > **sans rien supprimer** — de quoi annoncer « ceci supprimera N pages » avant de le faire.
 > Le compte n'est pas une estimation prise à part : c'est le `RETURNING` de la suppression
 > récursive elle-même. Un `archive` non destructif (le vocabulaire déjà en place pour les
-> procédures et les projets) reste **à faire** : c'est un changement de modèle, hors de ce lot.
+> procédures et les projets) existe depuis le 23/10/2026 (§ suivant, signal #1087).
 > ⚠️ **La FK auto-référente n'interdit AUCUN cycle** (2026-09-01) : elle exige que la page
 > visée existe, pas que l'arbre soit acyclique — `UPDATE docs SET parent_id = <un
 > descendant>` passait, et les trois descentes récursives (compter, supprimer, déplacer)
@@ -114,6 +114,38 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > forme FIXE : `fields`, qui projette une page, y est refusé (`unsupported_fields`). Même
 > porte que `op=get` (une page partagée seule a donc aussi son plan) ; `outline` est servi
 > au lecteur d'un projet publié. Banc : `tests/test_doc_lecture_section_1266.py`.
+
+> **Archiver une page, et dater sa vérification (signal #1087, 23/10/2026).** Des pages
+> « Dernier état connu » datées en dur dans leur corps remontaient dans `oto_search` à
+> égalité avec des pages fraîches, et la seule sortie était `op=delete`, irréversible.
+> Deux gestes, chacun explicite, jamais déduits (`capabilities/docs/archivage.py`,
+> `db/doc_archivage.py`) :
+> - **`op=archive`** pose `docs.archived_at` sur la page ET son sous-arbre vivant, à UN
+>   instant (`NOW()` d'une seule instruction, descente bornée par `CYCLE`) : ils sortent
+>   d'`oto_search` (lexical et sémantique) et d'`op=list`, qui le DIT
+>   (`archived_hidden: N`) et les remontre sur `include_archived: true` (refusé ailleurs,
+>   `unsupported_include_archived`). Rien n'est détruit ; la page se lit par `op=get`,
+>   son plan, ses versions, ses backlinks comme avant. Idempotent (la date reste celle du
+>   premier retrait). **`op=unarchive`** rend exactement CE geste — les pages qui portent
+>   le même instant —, pas une sous-page archivée avant, pour son compte.
+>   ⚠️ **Pourquoi le sous-arbre** : une sous-page vivante sous une archivée serait listée
+>   sous un parent que la liste ne montre pas, et cherchable sous un parent qui ne l'est
+>   plus. D'où le pendant : on ne range pas une page vivante sous une archivée — `create`,
+>   `bulk_create`, `move` et le désarchivage d'une enfant refusent en `409
+>   parent_archived`, en nommant le parent.
+> - **`op=verify`** pose `verified_at`/`verified_by` = « relue, et jugée encore vraie ».
+>   Pas `updated_at`, qu'une coquille corrigée fait bouger : le geste ne touche ni le
+>   corps, ni `updated_at`, ni les versions ; la réponse rend `previous_verified_at`. La
+>   page sert les trois colonnes sur `op=get` et `op=list` quand elles sont posées —
+>   absentes, elles disent « jamais archivée / jamais vérifiée », et la liste reste au
+>   budget de son nombre de pages (`test_list_view_budget`).
+> Droit des trois gestes : celui des autres gestes de page, `write` sur le projet
+> (`common.can` → `ownership.can_access`) ; une page illisible reste un 404. Colonnes
+> nullables sans défaut, révision `20261024_0900_docs_archivage` et démarrage sous garde
+> de catalogue (même DDL). **Pas encore** : le TTL par type de page et le travail qui
+> signale les pages en retard de vérification (demandés par le même signal) ; le rail du
+> tableau de bord, l'export, l'app de pages et le fil des changements récents montrent
+> encore une page archivée. Banc : `tests/test_doc_archivage_1087.py` (base réelle).
 
 > **Un `unlink` qui n'a rien retiré le DIT (#699, 04/09).** `op=unlink` répondait `ok: true`
 > sur un no-op — le lien visé figurait encore dans les `links` de la réponse à ce même appel.

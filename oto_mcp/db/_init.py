@@ -13,7 +13,7 @@ import time
 
 import psycopg
 
-from . import (_prerequis, access_shadow, alertes_agents, index_concurrent, index_releve, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
+from . import (_prerequis, access_shadow, alertes_agents, doc_archivage, index_concurrent, index_releve, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
                projects, recipes, revision, runner_fleets, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
@@ -690,6 +690,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `20261023_1230_fleet_trigger` : ordre indifférent entre elles.
     if _colonne_absente(conn, "runner_fleets", runner_fleets.COLONNE_TRIGGER_ID):
         conn.execute(runner_fleets.DDL_COLONNE_TRIGGER_ID)
+    # L'archivage et la date de vérification d'une page — les mêmes que pose la révision
+    # `20261024_0900_docs_archivage` : ordre indifférent entre elles.
+    if any(_colonne_absente(conn, "docs", c) for c in doc_archivage.COLONNES):
+        conn.execute(doc_archivage.DDL_COLONNES)
     # Les surcharges du temps gagné d'une org — la même que pose la révision `0066` :
     # ordre indifférent entre elles.
     if _colonne_absente(conn, "orgs", runner_jobs.COLONNE_TEMPS_GAGNE):

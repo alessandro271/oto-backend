@@ -42,6 +42,7 @@ from . import (
     google,
     datastore,
     projects,
+    doc_archivage,
     doc_grants,
     tokens,
     upload_tokens,
@@ -95,7 +96,8 @@ from . import (
 _MODULES = (
     _conn, _schema, _init, users, tenants, unipile, connector_grants,
     connector_instances, grants, keys, usage,
-    platform_instructions, visibility, emails, google, datastore, projects, doc_grants,
+    platform_instructions, visibility, emails, google, datastore, projects, doc_archivage,
+    doc_grants,
     tokens, upload_tokens, billing, billing_invoices, guides, legal, search, aux_embed,
     datastore_embed, run_thread, runner_jobs, runner_triggers, runner_hooks,
     runner_fleets, runner_fleets_preneur, runner_workers, user_subscriptions,

@@ -454,14 +454,16 @@ def _prose_query(table: str, text_expr: str, select_cols: str, headline_col: str
 
 
 def search_docs_fts(q: str, project_ids: list[int], *, limit: int = 20) -> list[dict]:
-    """Pages (docs) des projets accessibles — kind=page."""
+    """Pages (docs) des projets accessibles — kind=page. Une page ARCHIVÉE n'en sort pas
+    (signal #1087) : l'archivage retire de la découverte, pas de l'accès — la page reste
+    lisible par son id (`docs/search-and-kb.md` §Une page archivée)."""
     if not project_ids:
         return []
     return _prose_query(
         "docs", DOCS_TEXT,
         "id, project_id, title, description, updated_at",
         "coalesce(body_md,'')",
-        "project_id = ANY(%s)", (project_ids,), q, limit,
+        "project_id = ANY(%s) AND archived_at IS NULL", (project_ids,), q, limit,
         rank_vec=rank_expr("docs"))
 
 
@@ -531,7 +533,7 @@ def search_docs_semantic(query_literal: str, project_ids: list[int], *,
     TOUJOURS `limit` pages, même sans rapport avec la requête → à 500 pages, un
     repli sémantique noierait le lexical sous du bruit (oto-backend#6). `body_excerpt`
     (début du corps) sert de passage de repli pour un hit sémantique pur (sans
-    surlignage lexical)."""
+    surlignage lexical). Une page archivée n'en sort pas, comme au lexical."""
     if not project_ids:
         return []
     # Une page matche si son embedding PRINCIPAL (doc_embeddings) OU un chunk de
@@ -542,11 +544,11 @@ def search_docs_semantic(query_literal: str, project_ids: list[int], *,
         "WITH cand AS ("
         "  (SELECT e.doc_id, e.embedding <=> %s::halfvec AS distance "
         "     FROM doc_embeddings e JOIN docs d ON d.id = e.doc_id "
-        "     WHERE d.project_id = ANY(%s) ORDER BY e.embedding <=> %s::halfvec LIMIT %s) "
+        "     WHERE d.project_id = ANY(%s) AND d.archived_at IS NULL ORDER BY e.embedding <=> %s::halfvec LIMIT %s) "
         "  UNION ALL "
         "  (SELECT c.doc_id, c.embedding <=> %s::halfvec AS distance "
         "     FROM doc_chunk_embeddings c JOIN docs d ON d.id = c.doc_id "
-        "     WHERE d.project_id = ANY(%s) ORDER BY c.embedding <=> %s::halfvec LIMIT %s)"
+        "     WHERE d.project_id = ANY(%s) AND d.archived_at IS NULL ORDER BY c.embedding <=> %s::halfvec LIMIT %s)"
         "), best AS ("
         "  SELECT doc_id, min(distance) AS distance FROM cand WHERE distance < %s GROUP BY doc_id"
         ") "

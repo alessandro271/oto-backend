@@ -85,7 +85,7 @@ ECRITURES = {
     "service.org.suspension": {"suspend", "resume"},
     "admin.outreach": {"test", "send", "optout_clear"},
     "me.doc": {"create", "bulk_create", "update", "patch", "delete", "move", "revert",
-               "set_public"},
+               "set_public", "archive", "unarchive", "verify"},
     "me.function": {"create", "propose", "run", "test", "publish", "refuse"},
     "me.kb": {"create", "ensure"},
     "me.node.edit": {"create", "update", "move", "delete"},

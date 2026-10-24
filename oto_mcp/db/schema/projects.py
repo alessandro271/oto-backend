@@ -128,7 +128,13 @@ CREATE TABLE IF NOT EXISTS docs (
     -- oto#274 : le compte de la dernière modification, posé avec `updated_at` (création,
     -- écriture ; NULL après un déplacement ou un écrivain inconnu). Base existante :
     -- révision Alembic `0013_pages_versions_regroupees`, qui le remplit.
-    updated_by TEXT
+    updated_by TEXT,
+    -- Signal #1087 (`db/doc_archivage.py`) : retirée de la découverte (recherche, liste
+    -- par défaut) sans être détruite ; et « relue et jugée encore vraie », par un geste
+    -- explicite. Base existante : révision `20261024_0900_docs_archivage`.
+    archived_at TIMESTAMPTZ,
+    verified_at TIMESTAMPTZ,
+    verified_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_docs_project ON docs(project_id);
 CREATE INDEX IF NOT EXISTS idx_docs_parent ON docs(parent_id);

@@ -35,6 +35,25 @@ partagé à une personne, ne se cherchent que depuis l'org perso — même seam 
 (pas d'inversion de couche). `oto_doc(op=search)` = rerouté, déprécié. Fichiers matchés sur
 `filename+title+description` (jamais `summary`, colonne morte).
 
+## Une page archivée : hors de la découverte, pas hors de l'accès (23/10/2026)
+
+Signal #1087 : `oto_doc op=archive` (`docs/projects.md` §Archiver une page) retire une
+page — et son sous-arbre vivant — d'`oto_search`, lexical (`search_docs_fts`) et
+sémantique (`search_docs_semantic`, les deux kNN), par la même clause `archived_at IS
+NULL` que les briefs et les procédures portent déjà.
+
+⚠️ **Ce que devient l'invariant « cherchable ⇔ lisible ».** Il protège l'ACCÈS : rien ne
+se trouve qu'on ne puisse lire, et le scope de chaque source est celui de sa lecture
+(`accessible_project_ids`). L'archive ne touche pas à l'accès — une page archivée reste
+lisible par son id, par quiconque lit son projet (ou la page partagée seule) — et ne
+retire que la DÉCOUVERTE. Le sens « cherchable ⇒ lisible » est donc intact (on cherche
+moins, jamais plus large) ; le sens réciproque est **levé pour les seules archivées, par
+décision** : une page archivée est lisible sans être cherchable, et c'est exactement ce
+que le geste promet. Elle se retrouve par `oto_doc op=list include_archived=true`, ou par
+une page qui la cite (`[[…]]`, `op=backlinks`). Aucune option de recherche ne la remontre :
+la réponse serait un second chemin de découverte à scoper et à garder, pour un besoin
+que la liste sert.
+
 ## L'org d'un résultat : où vit l'objet, pas par où on l'atteint (21/09/2026)
 
 Signal #1005 (et #1006, son doublon sur `data_list_datastores`) : un agent qui audite

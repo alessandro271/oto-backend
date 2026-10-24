@@ -73,6 +73,12 @@ def view(row: dict, sub: Optional[str] = None) -> dict:
     out = {k: row.get(k) for k in
            ("id", "project_id", "parent_id", "title", "description", "position",
             "body_md", "kind", "created_at", "updated_at", "updated_by")}
+    # `archived_at` (#1087) : retirée de la découverte, lisible ici ; `verified_at` /
+    # `verified_by` : la dernière relecture DÉCLARÉE (op=verify), jamais `updated_at`.
+    # Servis seulement quand ils sont posés : la liste paie au NOMBRE de pages
+    # (test_list_view_budget), et l'absence dit « jamais archivée / jamais vérifiée ».
+    out.update({k: row[k] for k in ("archived_at", "verified_at", "verified_by")
+                if row.get(k)})
     # `updated_by` (oto#274) : le compte de la dernière modification, avec sa date —
     # un identifiant, que l'écran résout en nom ; `null` = inconnu (page déplacée
     # depuis, écrivain anonyme), jamais deviné.

@@ -14,7 +14,7 @@ from typing import Optional
 
 from ... import db
 from .. import _publication
-from . import common, view
+from . import archivage, common, view
 from .common import require
 
 
@@ -26,6 +26,7 @@ def create(sub: Optional[str], inp) -> dict:
         parent = db.get_doc_by_id(int(inp.parent_id))
         require(parent and parent["project_id"] == inp.project_id, "bad_parent",
                 "Invalid parent (another project, or nonexistent).")
+        archivage.refuser_parent_archive(parent)
     trace: dict = {}
     did = db.create_doc(int(inp.project_id), inp.title.strip(), parent_id=inp.parent_id,
                         body_md=inp.body_md or "", kind=(inp.kind or "doc"), created_by=sub,
@@ -45,6 +46,7 @@ def bulk_create(sub: Optional[str], inp) -> dict:
         par = db.get_doc_by_id(int(inp.parent_id))
         require(par and par["project_id"] == inp.project_id, "bad_parent",
                 "Invalid `parent_id` (another project, or nonexistent).")
+        archivage.refuser_parent_archive(par)
     created: list[int] = []
     for i, p in enumerate(inp.pages):
         title = str(p.get("title") or "").strip()
@@ -144,6 +146,7 @@ def move(sub: Optional[str], inp, row: dict, pid: int) -> dict:
             parent = db.get_doc_by_id(int(inp.parent_id))
             require(parent and parent["project_id"] == tgt, "bad_parent",
                     "Invalid parent (must be a page of the target project).")
+            archivage.refuser_parent_archive(parent)
         n = db.move_doc_to_project(int(inp.doc_id), tgt,
                                    inp.parent_id if "parent_id" in inp.model_fields_set else None,
                                    position=inp.position)
@@ -160,6 +163,7 @@ def move(sub: Optional[str], inp, row: dict, pid: int) -> dict:
         parent = db.get_doc_by_id(int(inp.parent_id))
         require(parent and parent["project_id"] == pid, "bad_parent",
                 "Invalid parent (another project, or nonexistent).")
+        archivage.refuser_parent_archive(parent)
     # Trois intentions distinguées par `model_fields_set` (JSON null ≠ absent) :
     # parent FOURNI (id ou null=racine) = reparenter là ; absent + `position` posé =
     # réordonner DANS la fratrie courante ; absent + rien = racine (historique).

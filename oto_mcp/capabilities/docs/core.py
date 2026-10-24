@@ -22,14 +22,14 @@ from .._authz import PROJECT_SHARED_READ
 from .. import _portee, _publication
 from .._types import Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
-from . import common, history, partage, patch, reads, view, writes
+from . import archivage, common, history, partage, patch, reads, view, writes
 from .common import require
 
 
 class DocInput(BaseModel):
     op: Literal["create", "bulk_create", "list", "search", "get", "update", "patch",
                 "delete", "move", "revisions", "revert", "set_public", "backlinks",
-                "shared_with_me", "outline"]
+                "shared_with_me", "outline", "archive", "unarchive", "verify"]
     project_id: Optional[int] = None   # create / list / search
     doc_id: Optional[int] = None       # get / update / delete / move
     query: Optional[str] = None        # search : termes recherchés dans titre + corps
@@ -61,6 +61,8 @@ class DocInput(BaseModel):
         "shared with the organization you are acting in (and your teams in it) — in "
         "your PERSONAL org, those shared with you as a person too. Omitted = both, "
         "across all your organizations. Served in any organization."))
+    # list (#1087) : True = remontre aussi les pages ARCHIVÉES (retirées par défaut).
+    include_archived: Optional[bool] = None
     # delete (#657) : True = ne supprime RIEN, rend seulement ce que la suppression
     # emporterait (de quoi annoncer « ceci supprimera N pages » avant de la faire).
     # patch (oto#171) : True = n'écrit rien, rend la région que le patch retirerait.
@@ -105,6 +107,10 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         require(inp.op == "shared_with_me", "unsupported_scope_arg",
                 "`scope` only applies to op=shared_with_me (the scope of the pages "
                 "received). Remove it.")
+    if inp.include_archived is not None:
+        require(inp.op == "list", "unsupported_include_archived",
+                "`include_archived` only applies to op=list. An archived page is read "
+                "with op=get like any other. Remove it.")
     if inp.dry_run is not None:
         require(inp.op in ("delete", "patch"), "unsupported_dry_run",
                 "`dry_run` only applies to op=delete and op=patch — the other ops "
@@ -153,6 +159,15 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
 
     if inp.op == "outline":
         return reads.outline(sub, inp, row, pid)
+
+    if inp.op == "archive":
+        return archivage.archive(sub, inp, row, pid)
+
+    if inp.op == "unarchive":
+        return archivage.unarchive(sub, inp, row, pid)
+
+    if inp.op == "verify":
+        return archivage.verify(sub, inp, row, pid)
 
     if inp.op == "revisions":
         return history.revisions(sub, inp, pid)
@@ -304,6 +319,11 @@ CAPABILITIES += [
             "organization. Such a page is readable "
             "with op=get ALONE: its project, sibling pages, sub-pages, revisions and "
             "backlinks stay closed, and it is read-only) "
+            "/ archive (doc_id → the page AND its live sub-pages leave oto_search and "
+            "op=list — `include_archived: true` lists them — but stay readable with op=get; "
+            "nothing is destroyed; unarchive undoes that same gesture) / verify (doc_id → "
+            "stamps `verified_at`/`verified_by` = re-read and still true; body, "
+            "`updated_at` and versions untouched) "
             "/ set_public (public: true → shareable public read-only link to THIS PAGE "
             "ALONE: the reader gets its title and body, and nothing else — not the "
             "project, not the sibling pages, not this page's own sub-pages, which each "

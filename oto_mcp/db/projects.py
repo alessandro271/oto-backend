@@ -904,8 +904,9 @@ def projects_pinning_instance(project_ids: list[int], connector: str) -> list[di
 
 
 # --- Docs (pages markdown arborescentes d'un projet, incrément 3) -------------
+# `archived_at`, `verified_at`, `verified_by` : `db/doc_archivage.py` (signal #1087).
 _DOC_COLS = ("id, project_id, parent_id, title, description, position, body_md, kind, public_token, "
-             "created_by, created_at, updated_at, updated_by")
+             "created_by, created_at, updated_at, updated_by, archived_at, verified_at, verified_by")
 
 
 def create_doc(project_id: int, title: str, *, parent_id: Optional[int] = None,

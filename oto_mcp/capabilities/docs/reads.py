@@ -22,10 +22,18 @@ def liste(sub: Optional[str], inp) -> dict:
     # corps (37 pages = 201 K caractères, refusés par le client). `body_length`
     # remplace `body_md` ; `fields=["*"]` rend le brut. (`fields` est validé en tête
     # du dispatcher, pour toutes les ops d'un coup — voir `view.FIELDS_OPS`.)
+    pages = db.list_docs_for_project(int(inp.project_id))
+    # #1087 : une page ARCHIVÉE sort de la liste par défaut — et la liste DIT combien
+    # elle en retire, sinon « 12 pages » se lirait comme le projet entier.
+    archivees = sum(1 for d in pages if d.get("archived_at"))
+    if not inp.include_archived:
+        pages = [d for d in pages if not d.get("archived_at")]
     rows, notice = output_projection.summarize(
-        [view.view(d, sub) for d in db.list_docs_for_project(int(inp.project_id))],
+        [view.view(d, sub) for d in pages],
         body_fields=("body_md",), fields=inp.fields, always=view.ALWAYS)
     return {"project_id": inp.project_id, "docs": rows,
+            **({"archived_hidden": archivees} if archivees and not inp.include_archived
+               else {}),
             **({"projection": notice} if notice else {})}
 
 

@@ -49,7 +49,10 @@ public_token TEXT,
 created_by TEXT,
 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-updated_by TEXT
+updated_by TEXT,
+archived_at TIMESTAMPTZ,
+verified_at TIMESTAMPTZ,
+verified_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_docs_project ON docs(project_id);
 CREATE INDEX IF NOT EXISTS idx_docs_parent ON docs(parent_id);
