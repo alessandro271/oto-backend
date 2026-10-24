@@ -29,7 +29,7 @@ from .common import require
 class DocInput(BaseModel):
     op: Literal["create", "bulk_create", "list", "search", "get", "update", "patch",
                 "delete", "move", "revisions", "revert", "set_public", "backlinks",
-                "shared_with_me"]
+                "shared_with_me", "outline"]
     project_id: Optional[int] = None   # create / list / search
     doc_id: Optional[int] = None       # get / update / delete / move
     query: Optional[str] = None        # search : termes recherchés dans titre + corps
@@ -41,8 +41,10 @@ class DocInput(BaseModel):
     position: Optional[int] = None     # move : INDEX cible (0-based) dans la fratrie
     public: Optional[bool] = None      # set_public : True = partager publiquement, False = retirer
     expected_rev: Optional[str] = None  # update/patch : rev (ETag) lue par le client → conflit optimiste
-    section: Optional[str] = None       # patch : titre (heading markdown) de la section ciblée
-    # patch : la RÉGION sans titre visée, sur un axe SÉPARÉ de `section` (cf. op=patch).
+    # patch ET get (#1266) : titre (heading markdown) de la section ciblée — la MÊME
+    # résolution pour lire et pour écrire (`docs/region`).
+    section: Optional[str] = None
+    # patch ET get : la RÉGION sans titre visée, sur un axe SÉPARÉ de `section`.
     region: Optional[Literal["preamble"]] = None
     mode: Optional[Literal["replace", "append", "prepend", "delete"]] = None  # patch : défaut replace
     to_project: Optional[int] = None    # move : projet cible (déplacer la page + son sous-arbre)
@@ -149,6 +151,9 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
     if inp.op == "get":
         return reads.get(sub, inp, row, pid)
 
+    if inp.op == "outline":
+        return reads.outline(sub, inp, row, pid)
+
     if inp.op == "revisions":
         return history.revisions(sub, inp, pid)
 
@@ -212,7 +217,10 @@ CAPABILITIES += [
             "query → full-text hits {id,title,kind,snippet}: LOCATE a page, then get its "
             "content) / get (the whole page, incl. `rev`, an ETag; pass `fields=[…]` to read "
             'ONLY those columns — `fields=["id","rev"]` gets the rev for an optimistic patch '
-            "without paying for the body) / update (title/body_md/kind, full body; "
+            "without paying for the body; `section`=a heading, or `region=\"preamble\"`, "
+            "reads ONLY that region, addressed exactly as op=patch addresses it — heading "
+            "and sub-sections included) / outline (doc_id → the headings: level, line, `length` of each "
+            "section — pick the one to get or patch without reading the page) / update (title/body_md/kind, full body; "
             "snapshots the prior version; pass `expected_rev` from op=get for optimistic "
             "conflict detection → 409 if the page changed since) / patch (edit ONE region in "
             "place, WITHOUT re-emitting the page — this is how you edit a page too long to "

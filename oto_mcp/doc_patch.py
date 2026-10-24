@@ -197,6 +197,44 @@ def subsections(body: str, heading: str) -> list[str]:
             for m in (_HEADING.match(ln) for ln in lines[i + 1:j]) if m]
 
 
+def outline(body: str) -> list[dict]:
+    """Le PLAN d'un corps : chaque titre, son niveau, sa ligne et l'emprise de sa section
+    (signal #1266 — lire une page de 170 000 caractères pour en connaître les titres
+    coûtait la page entière).
+
+    `line` et `to_line` sont 1-based et suivent la portée du patch : une section court
+    jusqu'au prochain titre de niveau ≤, ses sous-sections comprises. `length` = les
+    caractères de cette emprise, titre compris — ce que coûterait sa lecture."""
+    lines = (body or "").split("\n")
+    titres = [(i, len(m.group(1)), m.group(2).strip())
+              for i, m in enumerate(_HEADING.match(ln) for ln in lines) if m]
+    out = []
+    for k, (i, niveau, texte) in enumerate(titres):
+        fin = next((j for j, n, _t in titres[k + 1:] if n <= niveau), len(lines))
+        out.append({"heading": texte, "level": niveau, "line": i + 1, "to_line": fin,
+                    "length": len("\n".join(lines[i:fin]))})
+    return out
+
+
+def read_section(body: str, heading: str) -> dict:
+    """LIRE la section `heading`, résolue EXACTEMENT comme `patch_section` la résout
+    (`_locate` : texte du titre, niveau et casse ignorés ; plusieurs titres = refus).
+
+    Rend `{heading, level, from_line, to_line, body_md, subsections}` : `body_md` porte
+    le titre et TOUT ce que la section contient, sous-sections comprises — l'emprise de
+    `mode='delete'`. Lève `SectionNotFound` / `AmbiguousSection`, comme le patch."""
+    lines = (body or "").split("\n")
+    found = _locate(lines, _norm(heading), heading)
+    if found is None:
+        raise SectionNotFound(heading, headings(body))
+    i, niveau, fin = found
+    return {"heading": _HEADING.match(lines[i]).group(2).strip(), "level": niveau,
+            "from_line": i + 1, "to_line": fin, "body_md": "\n".join(lines[i:fin]),
+            "subsections": [m.group(2).strip()
+                            for m in (_HEADING.match(ln) for ln in lines[i + 1:fin])
+                            if m]}
+
+
 def emprise(body: str, heading: str | None, mode: str) -> dict | None:
     """Ce qu'un patch EMPORTE du corps actuel, avant de l'écrire (oto#171).
 

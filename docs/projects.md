@@ -97,6 +97,24 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > est gardée (`doc_revisions.face`) ; la page sert `updated_by`, l'auteur de la dernière
 > modification (`null` après un déplacement), sur `op=get` et `op=list`.
 
+> **Lire une section, ou le plan, sans payer la page (signal #1266, 23/10/2026).** Une
+> ingestion de rattrapage lisait par `op=get` des pages de 127 à 175 K caractères pour en
+> consulter une section : la réponse dépassait le plafond du client, et le run sautait de
+> la source faute de budget. **`op=outline`** (`doc_id`) rend le plan — chaque titre, son
+> niveau, sa ligne, la ligne où sa section finit et sa `length` (ce que coûterait sa
+> lecture) —, plus `preamble_length` et `body_md_length`, jamais le corps.
+> **`op=get section=…`** (ou `region="preamble"`) rend UNE région : le titre et tout ce que
+> la section contient, sous-sections comprises (l'emprise de `op=patch mode=delete`), avec
+> `from_line`/`to_line`, `subsections` et le `rev` de la page entière (à repasser au patch).
+> ⚠️ **L'adressage est celui du patch, par le même code** : `doc_patch.read_section`
+> résout par `_locate` (texte du titre, niveau et casse ignorés), et les refus passent par
+> la traduction unique de `docs/region.py` (`_refus`) — une section introuvable rend
+> `404 unknown_section` avec la liste des sections disponibles (et le rappel du
+> préambule), plusieurs titres homonymes `409 ambiguous_section`. Une région lue est une
+> forme FIXE : `fields`, qui projette une page, y est refusé (`unsupported_fields`). Même
+> porte que `op=get` (une page partagée seule a donc aussi son plan) ; `outline` est servi
+> au lecteur d'un projet publié. Banc : `tests/test_doc_lecture_section_1266.py`.
+
 > **Un `unlink` qui n'a rien retiré le DIT (#699, 04/09).** `op=unlink` répondait `ok: true`
 > sur un no-op — le lien visé figurait encore dans les `links` de la réponse à ce même appel.
 > Deux causes, une seule correction. (1) Le **rowcount** de `remove_project_link` existait et

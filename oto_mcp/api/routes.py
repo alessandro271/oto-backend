@@ -162,6 +162,7 @@ _READ_OPS = frozenset({
     "shares",   # avec qui un agent est partagé (`runner.triggers`)
     "summary",  # ce que la page Agents trace, par agent (`runner.jobs`)
     "links", "graph",  # les liens entre agents, et les chaînes (`runner.triggers`)
+    "outline",  # le plan d'une page, ses titres sans son corps (`me.doc`, #1266)
 })
 
 

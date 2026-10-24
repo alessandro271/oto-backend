@@ -1,5 +1,5 @@
-"""Ce qui LIT une page ou l'arbre, sans rien écrire : `list`, `search`, `get`,
-`backlinks`.
+"""Ce qui LIT une page ou l'arbre, sans rien écrire : `list`, `search`, `get` (la page,
+ou UNE de ses régions), `outline` (son plan), `backlinks`.
 
 `list` et `search` résolvent leur projet par `project_id` ; `get` et `backlinks`
 reçoivent la ligne déjà résolue par le gate `doc_id` du dispatcher.
@@ -10,7 +10,8 @@ from typing import Optional
 
 from ... import db, output_projection
 from .._types import ResolvedCtx
-from . import common, view
+from ... import doc_patch
+from . import common, region, view
 from .common import require
 
 
@@ -51,14 +52,57 @@ def get(sub: Optional[str], inp, row: dict, pid: int) -> dict:
     # La SEULE lecture qu'ouvre un partage de page (#1084) — cf. `common.acces_a_la_page`.
     acces = common.acces_a_la_page(sub, row)
     require(acces is not None, "forbidden", "Access refused.", 403)
-    # Une lecture nue rend la page entière ; `fields` est HONORÉ quand il est là
-    # (#461/#525 : lire le seul `rev` avant un patch ne doit plus coûter la page).
-    out = view.projected(row, sub, inp.fields, brut_par_defaut=True)
+    if inp.section is not None or inp.region is not None:
+        out = _une_region(sub, inp, row)
+    else:
+        # Une lecture nue rend la page entière ; `fields` est HONORÉ quand il est là
+        # (#461/#525 : lire le seul `rev` avant un patch ne doit plus coûter la page).
+        out = view.projected(row, sub, inp.fields, brut_par_defaut=True)
     if acces == common.PAR_LA_PAGE:
         # L'adresse servie ouvre la page DANS son projet, que ce lecteur ne lit pas : un
         # lien mort se subit, un `None` se dit (`view.doc_url`).
         out["url"] = None
     return out
+
+
+def _une_region(sub: Optional[str], inp, row: dict) -> dict:
+    """`op=get section=…|region="preamble"` : UNE région de la page, adressée comme
+    `op=patch` l'adresse (signal #1266 — une page de 170 000 caractères se lisait
+    entière pour une section). La résolution et ses refus sont ceux du patch
+    (`region.lire`) : une section introuvable rend `unknown_section` avec la liste
+    des sections, plusieurs titres homonymes `ambiguous_section`.
+
+    Forme FIXE (identité, `rev` de la page entière, la région) : `fields` y est
+    refusé plutôt qu'avalé — il projette une PAGE, pas une région."""
+    vise_section = bool(inp.section and inp.section.strip())
+    require(not (vise_section and inp.region), "ambiguous_target",
+            "`section` and `region` designate two different targets: pass only one.")
+    require(vise_section or inp.region, "missing_target",
+            "`section` is empty: pass a heading text, or "
+            f"{region.POIGNEE_PREAMBULE}, or neither to read the whole page.")
+    require(inp.fields is None, "unsupported_fields",
+            "`fields` projects a whole page: a section read returns a fixed shape. "
+            "Remove `fields`, or drop `section`/`region`.")
+    corps = row.get("body_md") or ""
+    lu = region.lire(corps, inp.section if vise_section else None, region.PAGE)
+    return {"id": row["id"], "project_id": row["project_id"], "title": row.get("title"),
+            "url": view.doc_url(sub, row),
+            "rev": db.doc_rev(row.get("title"), corps),
+            "body_md_length": len(corps), **lu}
+
+
+def outline(sub: Optional[str], inp, row: dict, pid: int) -> dict:
+    """`op=outline` : le PLAN de la page — ses titres, leur niveau, leur ligne et ce que
+    coûterait la lecture de chaque section (signal #1266). De quoi choisir la section à
+    lire (`op=get section=`) ou à patcher, sans payer le corps. Même porte que `get`."""
+    require(common.acces_a_la_page(sub, row) is not None, "forbidden",
+            "Access refused.", 403)
+    corps = row.get("body_md") or ""
+    preambule = doc_patch.preamble(corps)
+    return {"id": row["id"], "project_id": row["project_id"], "title": row.get("title"),
+            "rev": db.doc_rev(row.get("title"), corps), "body_md_length": len(corps),
+            "preamble_length": len(preambule) if preambule.strip() else 0,
+            "sections": doc_patch.outline(corps)}
 
 
 def backlinks(sub: Optional[str], inp, row: dict, pid: int) -> dict:

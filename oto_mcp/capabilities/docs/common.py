@@ -29,7 +29,7 @@ DOC_RTYPE = "doc"
 # `search` en est ABSENT : il délègue à `search_mod.search(sub, …)`, dont le scoping
 # est bâti sur un `sub` (projets accessibles). Le destinataire lit l'arbre (`list`)
 # puis la page (`get`) — pas de chemin de recherche tant qu'il n'est pas scopé.
-SHARED_READ_OPS = frozenset({"list", "get", "revisions", "backlinks"})
+SHARED_READ_OPS = frozenset({"list", "get", "outline", "revisions", "backlinks"})
 
 
 def face_de_l_appel() -> str:
@@ -69,7 +69,7 @@ def acces_a_la_page(sub: Optional[str], row: dict) -> Optional[str]:
     """LIRE une page : `PAR_LE_PROJET`, `PAR_LA_PAGE`, ou None (refus).
 
     ⚠️ **C'est la seule porte qui honore un partage de page, et elle ne sert que
-    `op=get`.** Toute autre op (`list`, `search`, `revisions`, `backlinks`, les
+    `op=get` et `op=outline`** (le plan de la MÊME page, #1266). Toute autre op (`list`, `search`, `revisions`, `backlinks`, les
     écritures) reste gardée par `can()` sur le PROJET : un destinataire qui n'a que la
     page n'atteint ni ses sœurs, ni ses sous-pages, ni son historique, ni ce qui la cite.
     Le grant est lu sur `(doc, id)` de CETTE ligne — jamais sur le projet, jamais sur un

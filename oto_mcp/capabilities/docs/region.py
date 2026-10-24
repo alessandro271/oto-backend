@@ -1,5 +1,6 @@
-"""Éditer UNE région d'un corps markdown sans le réémettre — la grammaire COMMUNE
-d'`oto_doc op=patch` (une page) et d'`oto_guide op=patch` (un guide).
+"""Éditer — ou LIRE — UNE région d'un corps markdown sans le faire voyager entier : la
+grammaire COMMUNE d'`oto_doc op=patch` et `op=get section=` (une page) et d'`oto_guide
+op=patch` (un guide).
 
 Une seule source pour la forme de l'appel (cible, mode, contenu), l'application du
 moteur `doc_patch` et la traduction de ses refus : deux copies des mêmes phrases
@@ -15,6 +16,7 @@ titre — le jour où ça arrive, rien ne le signalerait.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import NamedTuple, Optional
 
@@ -115,27 +117,14 @@ class Patche(NamedTuple):
     emporte: Optional[list]  # les lignes retirées (`doc_patch.emprise`), None si rien
 
 
-def appliquer(corps: str, section: Optional[str], body_md: Optional[str], mode: str,
-              objet: Objet, affiche: Optional[str] = None) -> Patche:
-    """Le patch appliqué à `corps`, ou un refus NOMMÉ. `section` None = le préambule.
-    `affiche` = la section telle que l'appelant l'a écrite, pour les refus (défaut :
-    `section`).
-
-    Une section court jusqu'au prochain titre de niveau ≤ : un `replace` — ou un
-    `delete` — sur un `###` emporte ses `####`. On ne refuse pas : on rend ce qui part
-    (`sous_sections`), à l'outil de l'ANNONCER (signal #334). Calculé dans le même
-    `try` que le patch : sur un titre AMBIGU, dire quels enfants partiraient est
-    impossible, et le refus doit sortir par le même chemin (#869)."""
-    nom = section if affiche is None else affiche
+@contextmanager
+def _refus(corps: str, nom: Optional[str], objet: Objet):
+    """Les refus du moteur `doc_patch`, traduits UNE fois pour l'écriture (`appliquer`)
+    et pour la lecture d'une région (`lire`) : un `section` se résout et se refuse de
+    la même façon qu'on lise ou qu'on patche — deux traductions divergeraient au
+    premier mot."""
     try:
-        enfants = (doc_patch.subsections(corps, section)
-                   if section and mode in ("replace", "delete") else [])
-        if section:
-            nouveau = doc_patch.patch_section(corps, section, body_md, mode=mode)
-        else:
-            nouveau = doc_patch.patch_preamble(corps, body_md, mode=mode)
-        # Après le patch, qui a déjà refusé une cible absente ou ambiguë.
-        emporte = doc_patch.emprise(corps, section, mode)
+        yield
     except doc_patch.SectionNotFound as e:
         raise AuthzDenied(404, "unknown_section", refus_section_introuvable(
             nom, e.available, corps, objet)) from None
@@ -163,4 +152,46 @@ def appliquer(corps: str, section: Optional[str], body_md: Optional[str], mode: 
             f"{objet.entier} here, and deleting {objet.pronom} would empty "
             f"{objet.pronom}. If that is what you want: {objet.reecrire} with "
             f"the new body, or op=delete for {objet.le}.") from None
+
+
+def appliquer(corps: str, section: Optional[str], body_md: Optional[str], mode: str,
+              objet: Objet, affiche: Optional[str] = None) -> Patche:
+    """Le patch appliqué à `corps`, ou un refus NOMMÉ. `section` None = le préambule.
+    `affiche` = la section telle que l'appelant l'a écrite, pour les refus (défaut :
+    `section`).
+
+    Une section court jusqu'au prochain titre de niveau ≤ : un `replace` — ou un
+    `delete` — sur un `###` emporte ses `####`. On ne refuse pas : on rend ce qui part
+    (`sous_sections`), à l'outil de l'ANNONCER (signal #334). Calculé dans le même
+    `try` que le patch : sur un titre AMBIGU, dire quels enfants partiraient est
+    impossible, et le refus doit sortir par le même chemin (#869)."""
+    nom = section if affiche is None else affiche
+    with _refus(corps, nom, objet):
+        enfants = (doc_patch.subsections(corps, section)
+                   if section and mode in ("replace", "delete") else [])
+        if section:
+            nouveau = doc_patch.patch_section(corps, section, body_md, mode=mode)
+        else:
+            nouveau = doc_patch.patch_preamble(corps, body_md, mode=mode)
+        # Après le patch, qui a déjà refusé une cible absente ou ambiguë.
+        emporte = doc_patch.emprise(corps, section, mode)
     return Patche(nouveau, enfants, emporte)
+
+
+def lire(corps: str, section: Optional[str], objet: Objet,
+         affiche: Optional[str] = None) -> dict:
+    """LIRE la région qu'un patch viserait avec la MÊME cible (signal #1266) : la
+    section `section` (titre compris, sous-sections comprises), ou le préambule si
+    `section` est None. Mêmes refus que le patch — `unknown_section` liste les
+    sections disponibles, `ambiguous_section` les candidats."""
+    nom = section if affiche is None else affiche
+    if section:
+        with _refus(corps, nom, objet):
+            return doc_patch.read_section(corps, section)
+    texte = doc_patch.preamble(corps)
+    if not texte.strip():
+        raise AuthzDenied(
+            404, "empty_preamble",
+            f"{objet.ce} has no preamble: its first heading opens the body.")
+    return {"region": doc_patch.REGION_PREAMBLE, "from_line": 1,
+            "to_line": len(texte.split("\n")), "body_md": texte}
