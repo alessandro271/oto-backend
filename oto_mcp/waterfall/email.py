@@ -107,8 +107,9 @@ EMAIL_STEPS: tuple[Step, ...] = (
          lambda i: {"contacts": [_lusha_contact(i)], "reveal": ["emails"]},
          _lusha_email, "Lusha credits per revealed email",
          explains="Lusha's database — from a LinkedIn profile, or name and company."),
-    # The shared key serves Forager's phone lookups only: an email lookup is the
-    # caller's own key's (`providers/forager.py`).
+    # The shared key serves Forager's phone lookups by default (`tools/forager.py::
+    # platform_ops`, an instance setting): the cascade keeps an email lookup on the
+    # caller's own key whatever the instance opens.
     Step("forager", "forager_person", (("linkedin_url",),),
          lambda i: {"op": "work_emails",
                     "linkedin_public_identifier": _slug(i["linkedin_url"])},

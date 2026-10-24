@@ -12,9 +12,10 @@ are strings; cast to `int` before using them in a search `filters` dict.
 Credential = `X-API-KEY` header + an optional `account_id` (generic
 multi-field model, ADR 0011 — resolved via
 `access.resolve_credential("forager").fields`, not `resolve_api_key`).
-The SHARED (platform) key, granted per org, serves ONE lookup only:
-`forager_person op="phone_numbers"` (`PLATFORM_OPS`); every other op needs the
-customer's own key.
+The SHARED (platform) key, granted per org, serves the ops THIS INSTANCE chose
+(`platform_ops`, the `platform.ops` connector setting); unset, a person's phone
+numbers only. Every other op needs the customer's own key, and `forager_account`
+always does.
 `account_id` scopes every datastorage/subscriptions call and is normally
 resolved automatically from `GET /api/users/current/` (`ForagerClient`,
 oto-core) — it only needs to be entered explicitly if the key has access to
@@ -55,11 +56,88 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access, session_org
 from ..connectors import verify as connector_verify
 
-# What OUR shared (platform) Forager key serves: a person's phone numbers, and nothing
-# else. Every other op bills our account for a result the partner does not sell, so on
-# the platform key it is refused, naming the customer's own key. A BYO key runs
-# every op, as before.
-PLATFORM_OPS = frozenset({("forager_person", "phone_numbers")})
+# Every op of every tool, as their `Literal`s declare them — what the setting below may
+# name. `forager_account` is absent on purpose: it reads the account the key belongs to
+# (balance, spend log), and on the shared key that account is ours.
+OPS: dict[str, frozenset[str]] = {
+    "forager_job_post": frozenset({"search", "totals"}),
+    "forager_organization": frozenset({"search", "totals", "website"}),
+    "forager_person": frozenset({
+        "detail", "work_emails", "personal_emails", "phone_numbers",
+        "reverse_by_email", "reverse_by_phone", "role_search", "role_search_totals"}),
+    "forager_feedback": frozenset({"personal_email", "phone_number", "work_email"}),
+    "forager_autocomplete": frozenset({
+        "industries", "organizations", "organization_keywords", "locations",
+        "person_skills", "web_technologies"}),
+}
+
+# What OUR shared (platform) Forager key serves is a choice of the INSTANCE, not of the
+# code: an org granted the key for one lookup must not get every other one without
+# anyone deciding it. The `platform.ops` setting (`connector_settings`, platform scope,
+# `oto_admin_connector_setting`) lists them, comma-separated: `tool:op` names one op,
+# `tool` every op of that tool. Unset, the shared key serves what it always served.
+PLATFORM_OPS_KEY = "platform.ops"
+PLATFORM_OPS_DEFAULT = "forager_person:phone_numbers"
+
+# Tools that cost no Forager credit, on any key: they note `units=0`.
+FREE_TOOLS = frozenset({"forager_feedback", "forager_autocomplete"})
+
+
+def parse_platform_ops(value: str) -> frozenset[tuple[str, Optional[str]]]:
+    """`platform.ops` as `(tool, op)` pairs, `op=None` for every op of the tool.
+    Raises `ValueError` naming what it does not know — the admin console refuses the
+    value with it, rather than storing a list that would silently serve less."""
+    out = set()
+    for item in (x.strip() for x in value.split(",")):
+        if not item:
+            continue
+        tool, _, op = item.partition(":")
+        tool, op = tool.strip(), op.strip() or None
+        if tool not in OPS:
+            raise ValueError(f"{tool!r} is not a Forager tool the shared key can serve "
+                             f"(one of: {', '.join(sorted(OPS))})")
+        if op is not None and op not in OPS[tool]:
+            raise ValueError(f"{tool} has no op {op!r} (one of: {', '.join(sorted(OPS[tool]))})")
+        out.add((tool, op))
+    return frozenset(out)
+
+
+def platform_ops() -> frozenset[tuple[str, Optional[str]]]:
+    """What the shared key serves on this instance, read at each call. Unset: the
+    default. A stored value the tool no longer understands RAISES — serving the
+    default instead would hide that the instance's choice is not applied (the console
+    refuses such a value, `parse_platform_ops`; only a code change can strand one)."""
+    from ..db import connector_settings
+    value = connector_settings.get_connector_setting(
+        "platform", "platform", "forager", PLATFORM_OPS_KEY)
+    if value is None:
+        return parse_platform_ops(PLATFORM_OPS_DEFAULT)
+    try:
+        return parse_platform_ops(value)
+    except ValueError as e:
+        raise RuntimeError(f"forager: the instance setting `{PLATFORM_OPS_KEY}` "
+                           f"({value!r}) is not understood: {e} — fix it with "
+                           "oto_admin_connector_setting") from e
+
+
+#: Ops that answer `[]` on no match, and that Forager does not bill then (module
+#: docstring): a miss is served nothing, and notes `units=0`.
+BILLED_ON_A_HIT = frozenset({"work_emails", "personal_emails", "phone_numbers"})
+
+
+def units(tool: str, op: Optional[str], result) -> int:
+    """What ONE call served on the shared key consumes (`units`, the quota axis): 0 for
+    a free tool, a `*_totals` count (absent from Forager's price list) or a miss of an
+    op billed on a hit only; 1 otherwise."""
+    if tool in FREE_TOOLS or (op or "").endswith("totals"):
+        return 0
+    if op in BILLED_ON_A_HIT and not result:
+        return 0
+    return 1
+
+
+def _served(tool: str, op: Optional[str], ops) -> bool:
+    return (tool, None) in ops or (tool, op) in ops
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:
@@ -87,23 +165,38 @@ def register(mcp: FastMCP) -> None:
 
     connector_verify.register("forager", _verify)
 
-    def _client(tool: str, op: Optional[str] = None) -> tuple[ForagerClient, bool]:
-        """`(client, is_platform)`. The cascade runs whole (own key > platform grant);
-        on the platform key, anything outside `PLATFORM_OPS` is refused BEFORE a
-        credit is spent."""
+    def _client(tool: str, op: Optional[str] = None):
+        """`(client, served)`. The cascade runs whole (own key > platform grant); on the
+        platform key, an op this instance does not serve (`platform_ops`) is refused
+        BEFORE a credit is spent, naming what the shared key serves.
+
+        `served(result)` returns `result` — on the platform key, after noting the
+        `units` it consumed (`units`). Every tool passes the ANSWER through it, so the
+        note is written once, and only once Forager has answered: a call that raises
+        notes nothing, and the settlement debits no quota on a raise anyway
+        (`access/reglement.py`). On the customer's own key it notes nothing."""
         rc = access.resolve_credential("forager", want="auto")
-        if rc.is_platform and (tool, op) not in PLATFORM_OPS:
-            from ..auth.hooks import current_user_sub_from_token
-            from .. import links
-            sub = current_user_sub_from_token()
-            raise _bad(
-                f"{tool}{f' op={op!r}' if op else ''} needs your own Forager key: the "
-                "shared key only covers phone lookups (forager_person "
-                "op='phone_numbers'). Set your own key"
-                f"{links.ou_poser_la_cle(sub, org=access.current_org(sub), connecteur='forager')}.")
+        if rc.is_platform:
+            ops = platform_ops()
+            if tool not in OPS or not _served(tool, op, ops):
+                from ..auth.hooks import current_user_sub_from_token
+                from .. import links
+                sub = current_user_sub_from_token()
+                served = ", ".join(sorted(t if o is None else f"{t} op={o!r}" for t, o in ops))
+                raise _bad(
+                    f"{tool}{f' op={op!r}' if op else ''} needs your own Forager key: the "
+                    f"shared key here covers {served or 'nothing'}. Set your own key"
+                    f"{links.ou_poser_la_cle(sub, org=access.current_org(sub), connecteur='forager')}.")
         creds = rc.fields
-        return (ForagerClient(api_key=creds.get("api_key"),
-                              account_id=creds.get("account_id")), rc.is_platform)
+        client = ForagerClient(api_key=creds.get("api_key"),
+                               account_id=creds.get("account_id"))
+        if not rc.is_platform:
+            return client, lambda result: result
+
+        def served(result):
+            session_org.note_call_trace(units=units(tool, op, result))
+            return result
+        return client, served
 
     def _bad(msg: str) -> McpError:
         return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
@@ -153,13 +246,13 @@ def register(mcp: FastMCP) -> None:
         - locations / locations_exclude ([int] IDs — resolve via
           `forager_autocomplete(op="locations", q=...)`)
         """
-        client, _ = _client("forager_job_post", op)
+        client, served = _client("forager_job_post", op)
         f = filters or {}
         try:
             if op == "search":
-                return client.search_job_posts(**f)
+                return served(client.search_job_posts(**f))
             if op == "totals":
-                return client.search_job_posts_totals(**f)
+                return served(client.search_job_posts_totals(**f))
         except ValueError as e:
             raise _bad(str(e))
         raise _bad("op must be 'search' or 'totals'")
@@ -193,7 +286,7 @@ def register(mcp: FastMCP) -> None:
         `op="website"`: bills a credit — pass exactly ONE of `domain`,
         `organization_id`, `organization_linkedin_public_identifier`.
         """
-        client, _ = _client("forager_organization", op)
+        client, served = _client("forager_organization", op)
         try:
             if op in ("search", "totals"):
                 _refuse_ignored(
@@ -202,7 +295,7 @@ def register(mcp: FastMCP) -> None:
                     organization_linkedin_public_identifier=organization_linkedin_public_identifier,
                 )
                 f = filters or {}
-                return client.search_organizations(**f) if op == "search" else client.search_organizations_totals(**f)
+                return served(client.search_organizations(**f) if op == "search" else client.search_organizations_totals(**f))
             if op == "website":
                 _refuse_filters(op, filters)
                 given = [x for x in (domain, organization_id, organization_linkedin_public_identifier) if _present(x)]
@@ -211,10 +304,10 @@ def register(mcp: FastMCP) -> None:
                         "op='website' requires exactly one of domain / organization_id / "
                         "organization_linkedin_public_identifier"
                     )
-                return client.lookup_website(
+                return served(client.lookup_website(
                     domain=domain, organization_id=organization_id,
                     organization_linkedin_public_identifier=organization_linkedin_public_identifier,
-                )
+                ))
         except ValueError as e:
             raise _bad(str(e))
         raise _bad("op must be 'search', 'totals' or 'website'")
@@ -238,8 +331,8 @@ def register(mcp: FastMCP) -> None:
         """A person's profile, contact details, or a role-based search across people.
 
         Each op below bills a credit. On the SHARED key (granted by oto, no key of
-        your own), only `op="phone_numbers"` runs; every other op asks for your own
-        Forager key.
+        your own), only the ops this instance serves run — by default
+        `op="phone_numbers"`; every other op asks for your own Forager key.
 
         `op="detail"`/`"work_emails"`/`"personal_emails"`/`"phone_numbers"`:
         pass exactly ONE of `person_id` / `linkedin_public_identifier`.
@@ -272,7 +365,7 @@ def register(mcp: FastMCP) -> None:
         `role_search_totals` also breaks down `total_persons`/
         `total_organizations` alongside `total_search_results`.
         """
-        client, is_platform = _client("forager_person", op)
+        client, served = _client("forager_person", op)
 
         try:
             if op in ("detail", "work_emails", "personal_emails", "phone_numbers"):
@@ -290,14 +383,14 @@ def register(mcp: FastMCP) -> None:
                 if len(given) != 1:
                     raise _bad(f"op='{op}' requires exactly one of person_id / linkedin_public_identifier")
                 if op == "detail":
-                    return client.lookup_person_detail(person_id=person_id, linkedin_public_identifier=linkedin_public_identifier)
+                    return served(client.lookup_person_detail(person_id=person_id, linkedin_public_identifier=linkedin_public_identifier))
                 if op == "work_emails":
-                    return client.lookup_person_work_emails(
+                    return served(client.lookup_person_work_emails(
                         person_id=person_id, linkedin_public_identifier=linkedin_public_identifier,
                         do_contacts_enrichment=do_contacts_enrichment,
-                    )
+                    ))
                 if op == "personal_emails":
-                    return client.lookup_person_personal_emails(person_id=person_id, linkedin_public_identifier=linkedin_public_identifier)
+                    return served(client.lookup_person_personal_emails(person_id=person_id, linkedin_public_identifier=linkedin_public_identifier))
                 phones = client.lookup_person_phone_numbers(person_id=person_id, linkedin_public_identifier=linkedin_public_identifier)
                 # Metering (partner billing), UNCONDITIONAL like `fullenrich_result`: the
                 # consumer filters on `key_mode`. `found_phones` = how many PEOPLE came
@@ -310,9 +403,7 @@ def register(mcp: FastMCP) -> None:
                 trouve = 1 if phones else 0
                 session_org.note_call_trace(found_work_emails=0, found_personal_emails=0,
                                             found_phones=trouve, quantity=trouve)
-                if is_platform:
-                    session_org.note_call_trace(units=1)
-                return phones
+                return served(phones)
 
             if op == "reverse_by_email":
                 _refuse_filters(op, filters)
@@ -321,7 +412,7 @@ def register(mcp: FastMCP) -> None:
                     person_id=person_id, linkedin_public_identifier=linkedin_public_identifier,
                     phone_number=phone_number, do_contacts_enrichment=do_contacts_enrichment,
                 )
-                return client.lookup_person_by_email(_need(email, "email", op))
+                return served(client.lookup_person_by_email(_need(email, "email", op)))
 
             if op == "reverse_by_phone":
                 _refuse_filters(op, filters)
@@ -330,7 +421,7 @@ def register(mcp: FastMCP) -> None:
                     person_id=person_id, linkedin_public_identifier=linkedin_public_identifier,
                     email=email, do_contacts_enrichment=do_contacts_enrichment,
                 )
-                return client.lookup_person_by_phone_number(_need(phone_number, "phone_number", op))
+                return served(client.lookup_person_by_phone_number(_need(phone_number, "phone_number", op)))
 
             if op in ("role_search", "role_search_totals"):
                 _refuse_ignored(
@@ -339,7 +430,7 @@ def register(mcp: FastMCP) -> None:
                     email=email, phone_number=phone_number, do_contacts_enrichment=do_contacts_enrichment,
                 )
                 f = filters or {}
-                return client.search_person_roles(**f) if op == "role_search" else client.search_person_roles_totals(**f)
+                return served(client.search_person_roles(**f) if op == "role_search" else client.search_person_roles_totals(**f))
         except ValueError as e:
             raise _bad(str(e))
 
@@ -371,20 +462,20 @@ def register(mcp: FastMCP) -> None:
         (the live-call outcome). Requires `phone_number`.
         `name`/`person_id` are optional context, not required for either.
         """
-        client, _ = _client("forager_feedback", op)
+        client, served = _client("forager_feedback", op)
         try:
             if op in ("personal_email", "work_email"):
                 _refuse_ignored(op, "use op='phone_number' for a phone number", phone_number=phone_number)
                 email = _need(email, "email", op)
                 if op == "personal_email":
-                    return client.submit_personal_email_feedback(email, contact_status, is_correct_person, name=name, person_id=person_id)
-                return client.submit_work_email_feedback(email, contact_status, is_correct_person, name=name, person_id=person_id)
+                    return served(client.submit_personal_email_feedback(email, contact_status, is_correct_person, name=name, person_id=person_id))
+                return served(client.submit_work_email_feedback(email, contact_status, is_correct_person, name=name, person_id=person_id))
             if op == "phone_number":
                 _refuse_ignored(op, "use op='personal_email'/'work_email' for an email", email=email)
-                return client.submit_phone_number_feedback(
+                return served(client.submit_phone_number_feedback(
                     _need(phone_number, "phone_number", op), contact_status, is_correct_person,
                     name=name, person_id=person_id,
-                )
+                ))
         except ValueError as e:
             raise _bad(str(e))
         raise _bad("op must be 'personal_email', 'phone_number' or 'work_email'")
@@ -407,9 +498,9 @@ def register(mcp: FastMCP) -> None:
         as a STRING (confirmed live) — cast to `int` before putting it in a
         `filters` dict, whose fields are typed as integer arrays.
         """
-        client, _ = _client("forager_autocomplete", op)
+        client, served = _client("forager_autocomplete", op)
         try:
-            return getattr(client, f"autocomplete_{op}")(q, page=page)
+            return served(getattr(client, f"autocomplete_{op}")(q, page=page))
         except ValueError as e:
             raise _bad(str(e))
 
@@ -435,21 +526,21 @@ def register(mcp: FastMCP) -> None:
         `op="balance_totals"`: total credits spent in
         `[date_created_start, date_created_end]` — no `page`.
         """
-        client, _ = _client("forager_account", op)
+        client, served = _client("forager_account", op)
         try:
             if op == "me":
                 _refuse_ignored(
                     op, "op='me' has no date range",
                     date_created_start=date_created_start, date_created_end=date_created_end, page=page,
                 )
-                return client.get_current_user()
+                return served(client.get_current_user())
             if op == "balance_log":
-                return client.list_balance_change_logs(
+                return served(client.list_balance_change_logs(
                     date_created_start=date_created_start, date_created_end=date_created_end, page=page,
-                )
+                ))
             if op == "balance_totals":
                 _refuse_ignored(op, "page does not apply to balance_totals", page=page)
-                return client.get_balance_change_totals(date_created_start=date_created_start, date_created_end=date_created_end)
+                return served(client.get_balance_change_totals(date_created_start=date_created_start, date_created_end=date_created_end))
         except ValueError as e:
             raise _bad(str(e))
         raise _bad("op must be 'me', 'balance_log' or 'balance_totals'")
