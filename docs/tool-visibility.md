@@ -79,6 +79,42 @@ Source de vérité = tables PG `user_disabled_tools(sub, tool_name)` (négatif) 
 > org », ADR 0030 §8 ; ou une org active qui a changé depuis) ne verra ni ne pourra jamais
 > toucher cette ligne-là par ce chemin, quel que soit le nombre de tentatives.
 
+## Une clé utilisable installe son connecteur (22/10/2026)
+
+**La règle.** Un connecteur EXPOSÉ à un membre, dans une org, qu'il n'a pas encore
+installé, s'installe pour lui quand une clé l'y sert — la sienne, celle de son équipe
+ACTIVE, celle de l'org (`access.status_for` : `mode` ∈ user, group, org) — ou qu'il n'en
+demande aucune (`secret_kind` `none` : l'open data — pas les six waterfalls, `settings`,
+qui servent par les clés des fournisseurs de l'appelant, ni un connecteur sans clé qui
+dépense d'office celle d'un autre — `web`, dont le deuxième palier retombe sur la clé
+serper, celle de la plateforme comprise : `Connector.spends_keys_of`). C'est la règle du semis
+de première session (org, équipe active, open data ; oto-backend#1307), tenue pour tout
+membre et tout run hébergé, à chaque session, et plus seulement à la toute première.
+`connectors/usable.py` l'écrit dans la sélection (`user_selected_connectors`, provenance
+`cle`) :
+
+- **où** : à la poignée de main (`session_visibility`, juste après le semis) ; au plus une
+  fois par `TTL` (30 min) par `(sub, org)` — marque `connector_selection_reconciled`, PRISE
+  avant le calcul (une instruction : une rafale de runs hébergés d'une même personne ne
+  paie qu'un instantané) — et aussitôt après toute écriture du coffre qui peut servir le
+  membre (`credentials_store._upsert` efface les marques : membre → lui dans l'org,
+  `user` → lui partout, org → tous ses membres, équipe → ses membres) ;
+- **ce qu'elle ne fait jamais** : rien n'est mis en pause ni retiré ; une ligne déjà là
+  (kit, poussée, installation du membre, pause du membre) garde son état et sa
+  provenance ; un connecteur que le membre a RETIRÉ (`connector_selection_removed`) ne
+  revient pas ; une clé du tenant ou de la plateforme (`platform`, `over_quota`, `tenant`)
+  n'installe rien — le catalogue la propose, elle ne monte pas chez tout le monde ; une
+  étape en attente (`pending_action`) ou une entrée absente de l'instantané n'installe rien ;
+- **une clé refusée** (`health_ko`) installe quand même : elle est là pour être réparée,
+  l'agent doit voir l'échec ;
+- **un échec** n'écrit rien, rend le tour (la session suivante rejoue) et se journalise
+  en erreur ; la boîte monte ce que la table porte.
+
+Ce que l'écriture du coffre ne voit pas — rejoindre une équipe, changer d'équipe active,
+une org qui expose un connecteur — s'installe à la passe suivante, au plus `TTL` plus tard.
+⚠️ Le run hébergé monte toujours contre l'org MAISON du délégant (§ « La toolbox est celle
+de l'org MAISON » ci-dessus) : la règle hérite de ce choix, elle ne le corrige pas.
+
 ## Surfaces BÊTA : une population CHOISIE, pas une découvrabilité (2026-09-01)
 
 **Troisième grain de masquage, et il ne se confond avec aucun des deux autres.** Un

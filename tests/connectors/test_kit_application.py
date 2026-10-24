@@ -19,9 +19,16 @@ import os
 
 import pytest
 
+from oto_mcp import providers as _providers
+from oto_mcp.connectors import usable as _usable
+
 from _datastore_rest import call, stub_authz
 
 CONNECTEURS = ("hunter", "kaspr", "folk", "osm")
+# Ce que la session installe d'office parmi eux — l'open data (`osm`) : une clé utilisable,
+# ou aucune à apporter, installe son connecteur (`connectors/usable.py`). La boîte RÉELLE.
+OPEN_DATA = {c for c in CONNECTEURS
+             if _usable.installs(_providers.REGISTRY[c], None)}
 
 
 @pytest.fixture(scope="module")
@@ -106,7 +113,7 @@ def test_poser_le_kit_installe_chez_les_membres_deja_entres(live, monkeypatch):
     admin, m1, m2 = "k2-pose-admin", "k2-pose-m1", "k2-pose-m2"
     org = _org("Kit2 pose", admin, m1, m2)
     for m in (m1, m2):
-        assert _vus_par_l_agent(m, org) == set()      # semés, kit vide : rien
+        assert _vus_par_l_agent(m, org) == OPEN_DATA    # semés, kit vide : l'open data seul
     corps = _geste(monkeypatch, "connectors.recommend", admin, org, connectors=["hunter"])
     ch = _ch(corps, "hunter")
     assert corps["members"] == 3 and ch["change"] == "added" and ch["installed"] == 3
@@ -114,7 +121,7 @@ def test_poser_le_kit_installe_chez_les_membres_deja_entres(live, monkeypatch):
     for m in (m1, m2):
         assert _ligne(m, org, "hunter") == {"state": "active", "origin": "kit"}
         # Ce que reçoit son agent à la PROCHAINE conversation.
-        assert _vus_par_l_agent(m, org) == {"hunter"}
+        assert _vus_par_l_agent(m, org) == {"hunter"} | OPEN_DATA
     assert "NEXT conversation" in corps["note"]
 
 
@@ -142,7 +149,7 @@ def test_seule_la_difference_du_kit_s_applique(live, monkeypatch):
     from oto_mcp import org_store
     admin, m = "k2-diff-admin", "k2-diff-m"
     org = _org("Kit2 diff", admin, m)
-    assert _vus_par_l_agent(m, org) == set()
+    assert _vus_par_l_agent(m, org) == OPEN_DATA
     org_store.set_org_default_connectors(org, ["hunter"])       # un kit posé AVANT la règle
     corps = _geste(monkeypatch, "connectors.recommend", admin, org, connectors=["hunter", "kaspr"])
     assert [c["connector"] for c in corps["changes"]] == ["kaspr"]
@@ -158,7 +165,7 @@ def test_ajouter_ce_qui_est_deja_au_kit_dit_pourquoi_et_comment(live, monkeypatc
     from oto_mcp import org_store
     admin, m = "k2-deja-admin", "k2-deja-m"
     org = _org("Kit2 deja", admin, m)
-    assert _vus_par_l_agent(m, org) == set()
+    assert _vus_par_l_agent(m, org) == OPEN_DATA
     org_store.set_org_default_connectors(org, ["folk"])
     corps = _geste(monkeypatch, "connectors.bulk_select", admin, org, name="folk")
     assert (corps["activated"], corps["added_to_org_defaults"]) == (0, False)
@@ -217,7 +224,7 @@ def test_un_membre_pas_encore_venu_recoit_la_ligne_et_son_semis_la_garde(live, m
     assert not sel.is_seeded(n, org)
     _geste(monkeypatch, "connectors.recommend", admin, org, connectors=["folk"])
     assert _ligne(n, org, "folk") == {"state": "active", "origin": "kit"}
-    assert _vus_par_l_agent(n, org) == {"folk"}                      # premier passage
+    assert _vus_par_l_agent(n, org) == {"folk"} | OPEN_DATA          # premier passage
     assert sel.is_seeded(n, org)
     assert _ligne(n, org, "folk") == {"state": "active", "origin": "kit"}
 

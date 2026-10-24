@@ -19,9 +19,16 @@ import os
 
 import pytest
 
+from oto_mcp import providers as _providers
+from oto_mcp.connectors import usable as _usable
+
 from _datastore_rest import call, stub_authz
 
 CONNECTEURS = ("hunter", "kaspr", "folk", "osm")
+# Ce que la session installe d'office parmi eux — l'open data (`osm`) : une clé utilisable,
+# ou aucune à apporter, installe son connecteur (`connectors/usable.py`). La boîte RÉELLE.
+OPEN_DATA = {c for c in CONNECTEURS
+             if _usable.installs(_providers.REGISTRY[c], None)}
 
 
 @pytest.fixture(scope="module")
@@ -100,33 +107,36 @@ def _surcharges(sub: str, org: int) -> int:
 # ── Q1 : un retrait du kit ne retire que ce que le kit a posé ─────────────────────
 
 def test_retirer_du_kit_desinstalle_seulement_ce_que_le_kit_a_pose(live, monkeypatch):
+    # `kaspr` (une clé à apporter, aucune ici) et non l'open data : `osm` se réinstalle
+    # de lui-même à la session suivante (provenance `cle`) — ce banc mesure ce que le
+    # RETRAIT DU KIT désinstalle, pas l'open data.
     from oto_mcp import db
     admin, pause, lui, pousse, ancien = (f"k4-q1-{x}" for x in
                                          ("admin", "pause", "lui", "pousse", "ancien"))
     org = _org("Kit4 Q1", admin, pause, lui, pousse, ancien)
-    _membre(monkeypatch, "connectors.select", lui, org, "osm")        # l'a installé lui-même
-    code, _ = _pousse(monkeypatch, admin, org, "osm", pousse)          # poussé par un admin
+    _membre(monkeypatch, "connectors.select", lui, org, "kaspr")        # l'a installé lui-même
+    code, _ = _pousse(monkeypatch, admin, org, "kaspr", pousse)          # poussé par un admin
     assert code == 200
     with db._connect() as c:                                           # antérieur à la trace
         c.execute("INSERT INTO user_selected_connectors (sub, org_id, connector, state) "
-                  "VALUES (%s, %s, 'osm', 'active')", (ancien, org))
+                  "VALUES (%s, %s, 'kaspr', 'active')", (ancien, org))
     code, corps = _rest(monkeypatch, "connectors.recommend", admin, org,
-                        path={"id": str(org)}, body={"connectors": ["osm"]})
+                        path={"id": str(org)}, body={"connectors": ["kaspr"]})
     assert code == 200
-    _membre(monkeypatch, "connectors.pause", pause, org, "osm")       # posé par le kit, en pause
-    assert _ligne(pause, org, "osm") == {"state": "paused", "origin": "kit"}
+    _membre(monkeypatch, "connectors.pause", pause, org, "kaspr")       # posé par le kit, en pause
+    assert _ligne(pause, org, "kaspr") == {"state": "paused", "origin": "kit"}
     code, corps = _rest(monkeypatch, "connectors.unset_default", admin, org,
-                        path={"id": str(org), "name": "osm"})
+                        path={"id": str(org), "name": "kaspr"})
     assert code == 200, corps
     (ch,) = corps["changes"]
     assert ch["change"] == "removed" and ch["uninstalled"] == 2       # admin + pause
     assert ch["kept"] == {"membre": 1, "admin": 1, "inconnue": 1}
     for s in (admin, pause):
-        assert _ligne(s, org, "osm") is None
-        assert "osm" not in _vus_par_l_agent(s, org)
+        assert _ligne(s, org, "kaspr") is None
+        assert "kaspr" not in _vus_par_l_agent(s, org)
     for s, origine in ((lui, "membre"), (pousse, "admin"), (ancien, "inconnue")):
-        assert _ligne(s, org, "osm") == {"state": "active", "origin": origine}
-        assert "osm" in _vus_par_l_agent(s, org)
+        assert _ligne(s, org, "kaspr") == {"state": "active", "origin": origine}
+        assert "kaspr" in _vus_par_l_agent(s, org)
 
 
 def test_poser_un_kit_plus_court_retire_pareil(live, monkeypatch):
@@ -149,12 +159,12 @@ def test_la_poussee_installe_chez_le_membre_et_son_agent_le_voit(live, monkeypat
     admin, m, autre = "k4-q2-admin", "k4-q2-m", "k4-q2-autre"
     org = _org("Kit4 Q2", admin, m, autre)
     for s in (m, autre):
-        assert _vus_par_l_agent(s, org) == set()
+        assert _vus_par_l_agent(s, org) == OPEN_DATA
     code, corps = _pousse(monkeypatch, admin, org, "hunter", m)
     assert code == 200, corps
     assert corps["ok"] is True and corps["result"] == "installed" and corps["member"] == m
     assert _ligne(m, org, "hunter") == {"state": "active", "origin": "admin"}
-    assert _vus_par_l_agent(m, org) == {"hunter"}                     # sa prochaine conversation
+    assert _vus_par_l_agent(m, org) == {"hunter"} | OPEN_DATA                     # sa prochaine conversation
     assert _ligne(autre, org, "hunter") is None                        # lui seul
     assert not org_store.get_org_default_connectors(org)              # le kit n'est pas touché
     assert _surcharges(m, org) == 0                                    # plus de préférence par outil

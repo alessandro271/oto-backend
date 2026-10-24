@@ -243,6 +243,12 @@ class Connector:
     # without a parameter (`connectors/flow.py`), and the front no longer has a channel
     # selector to render — the card IS the channel.
     hosted_channel: str | None = None
+    # The connectors whose key this one SPENDS on its own, without the caller choosing
+    # it — an escalation tier that falls back on a paid reader (the platform key
+    # included, quota and billing). Such a connector asks for no key of its own
+    # (`secret_kind="none"`) but is not free: it is never installed by default as open
+    # data (`connectors/usable.py`), the member installs it.
+    spends_keys_of: tuple[str, ...] = ()
 
     @property
     def org_shareable(self) -> bool:
@@ -559,7 +565,8 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        credential_fields=(), modules=(), hosted_auth=False,
        personal_cross_org=False, cardinality="", account_axis_static=False,
        account_noun="",
-       field_discriminator="", credential_of=None, hosted_channel=None) -> Connector:
+       field_discriminator="", credential_of=None, hosted_channel=None,
+       spends_keys_of=()) -> Connector:
     """Factory for a registry entry — called by `providers/<name>.py`.
 
     Adding a FIELD per connector = adding it to `Connector` AND here, then
@@ -578,4 +585,5 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         account_axis_static=account_axis_static,
         account_noun=account_noun, field_discriminator=field_discriminator,
         credential_of=credential_of, hosted_channel=hosted_channel,
+        spends_keys_of=tuple(spends_keys_of),
     )

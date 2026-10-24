@@ -164,8 +164,10 @@ class MyConnectorRow(BaseModel):
     # `not_selected`. `kit` = installed by your organization (removal from the kit
     # removes it); `membre` = by you; `admin` = pushed to you by an admin; `socle` =
     # by default by the platform; `inconnue` = set before the platform
-    # tracked it — the latter is never removed by an org gesture.
-    origin: Optional[Literal["socle", "kit", "admin", "membre", "inconnue"]] = None
+    # tracked it — the latter is never removed by an org gesture; `cle` = installed
+    # because a key of yours, of your active team or of your org serves you here
+    # (`connectors/usable.py`) — never removed by an org gesture either.
+    origin: Optional[Literal["socle", "kit", "admin", "membre", "inconnue", "cle"]] = None
     # Date ("YYYY-MM-DD HH:MM:SS", UTC) at which YOU removed this connector — present only when
     # `state` = `not_selected` and the removal came from you. No org gesture (kit,
     # push) reinstalls it while it is set; reinstalling it yourself clears it.

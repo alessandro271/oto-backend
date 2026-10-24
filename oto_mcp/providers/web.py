@@ -14,6 +14,10 @@ from ._model import _c
 # Browserbase via the platform config).
 CONNECTOR = _c(
     "web", ["web"], secret_kind="none",
+    # Tier ② falls back on its own on the caller's serper key — the platform's
+    # included, debited and billed per credit (`tools/web.py::_serper_scrape`): not
+    # free, so not installed by default as open data.
+    spends_keys_of=("serper",),
     label="Web page reader",
     help="read a public web page, even when it resists — fetch, then "
          "scraper, then disposable browser (paid, on request) — or view a "

@@ -15,8 +15,27 @@ import pytest
 
 from _datastore_rest import call, stub_authz
 
+from oto_mcp import providers as _providers
+from oto_mcp.connectors import usable as _usable
+
 CONNECTEURS = ("hunter", "kaspr", "folk", "osm")
-OUTILS = [f"{c}_{v}" for c in CONNECTEURS for v in ("a", "b")] + ["oto_whoami", "data_rows"]
+# L'open data que la session installe d'office à tout membre (`connectors/usable.py` :
+# une clé utilisable, ou aucune à apporter, installe son connecteur) — `osm` compris. La
+# boîte décrite ici est la boîte RÉELLE : chacun y porte ses deux outils.
+OPEN_DATA = sorted(n for n, c in _providers.REGISTRY.items() if _usable.installs(c, None))
+# Un outil se range sous le connecteur de son NAMESPACE (`droit` sert `juris_*`…).
+_NS = {c: _providers.REGISTRY[c].namespaces[0] for c in set(CONNECTEURS) | set(OPEN_DATA)}
+OUTILS = ([f"{_NS[c]}_{v}" for c in sorted(_NS) for v in ("a", "b")]
+          + ["oto_whoami", "data_rows"])
+SPINE = ["data_rows", "oto_whoami"]
+OUTILS_OPEN_DATA = [f"{_NS[c]}_{v}" for c in OPEN_DATA for v in ("a", "b")]
+
+
+def _attendus(*kit: str) -> list[tuple]:
+    """Les connecteurs vus, par nom : ceux du kit (provenance `kit`), plus l'open data
+    qu'aucun geste n'a posé (provenance `cle`)."""
+    return sorted([(c, 2, "kit") for c in kit]
+                  + [(c, 2, "cle") for c in OPEN_DATA if c not in kit])
 
 
 class _Instance:
@@ -83,13 +102,15 @@ def _geste(monkeypatch, cle, sub, org, **kw):
     return corps
 
 
-def test_org_sans_kit_ne_voit_que_le_spine(live, instance, monkeypatch):
+def test_org_sans_kit_voit_le_spine_et_l_open_data(live, instance, monkeypatch):
     sub = "e10-vide"
     org = _org("E10 sans kit", sub)
+    assert "osm" in OPEN_DATA and "hunter" not in OPEN_DATA
     out = _route(monkeypatch, sub, org)
     assert out["available"] is True and out["org_id"] == org
-    assert out["tools"] == _poignee_de_main(instance, sub, org) == ["data_rows", "oto_whoami"]
-    assert out["connectors"] == [] and out["spine_tools"] == 2 and out["tools_total"] == len(OUTILS)
+    assert out["tools"] == _poignee_de_main(instance, sub, org) == sorted(SPINE + OUTILS_OPEN_DATA)
+    assert sorted((c["name"], c["tools"], c["origin"]) for c in out["connectors"]) == _attendus()
+    assert out["spine_tools"] == 2 and out["tools_total"] == len(OUTILS)
     assert out["installed_not_seen"] == []
 
 
@@ -100,8 +121,8 @@ def test_org_avec_kit_voit_les_outils_du_kit(live, instance, monkeypatch):
     out = _route(monkeypatch, m, org)
     assert out["tools"] == _poignee_de_main(instance, m, org)
     assert set(out["tools"]) >= {"hunter_a", "hunter_b", "kaspr_a", "kaspr_b"}
-    assert [(c["name"], c["tools"], c["origin"]) for c in out["connectors"]] == [
-        ("hunter", 2, "kit"), ("kaspr", 2, "kit")]
+    assert sorted((c["name"], c["tools"], c["origin"]) for c in out["connectors"]) == \
+        _attendus("hunter", "kaspr")
 
 
 def test_connecteur_du_kit_coupe_est_installe_mais_pas_vu_et_dit_pourquoi(live, instance, monkeypatch):
@@ -111,14 +132,16 @@ def test_connecteur_du_kit_coupe_est_installe_mais_pas_vu_et_dit_pourquoi(live, 
     _geste(monkeypatch, "connectors.activation.set_org", admin, org, name="folk", body={"enabled": False})
     out = _route(monkeypatch, m, org)
     assert out["tools"] == _poignee_de_main(instance, m, org)
-    assert [c["name"] for c in out["connectors"]] == ["osm"]
+    assert sorted((c["name"], c["tools"], c["origin"]) for c in out["connectors"]) == \
+        _attendus("osm")
     assert out["installed_not_seen"] == [
         {"name": "folk", "label": out["installed_not_seen"][0]["label"], "state": "active",
          "origin": "kit", "reason": "cut"}]
     # Réouverture : sans geste de rattrapage, la route le voit — comme l'agent.
     _geste(monkeypatch, "connectors.activation.set_org", admin, org, name="folk", body={"enabled": True})
     out = _route(monkeypatch, m, org)
-    assert [c["name"] for c in out["connectors"]] == ["folk", "osm"] and out["installed_not_seen"] == []
+    assert sorted((c["name"], c["tools"], c["origin"]) for c in out["connectors"]) == \
+        _attendus("folk", "osm") and out["installed_not_seen"] == []
 
 
 def test_la_pause_est_nommee(live, instance, monkeypatch):
@@ -128,7 +151,7 @@ def test_la_pause_est_nommee(live, instance, monkeypatch):
     assert call("connectors.select", sub=m, path_params={"name": "hunter"})[0] == 200
     assert call("connectors.pause", sub=m, path_params={"name": "hunter"})[0] == 200
     out = _route(monkeypatch, m, org)
-    assert out["tools"] == _poignee_de_main(instance, m, org) == ["data_rows", "oto_whoami"]
+    assert out["tools"] == _poignee_de_main(instance, m, org) == sorted(SPINE + OUTILS_OPEN_DATA)
     assert {(x["name"], x["state"], x["origin"], x["reason"]) for x in out["installed_not_seen"]} == {
         ("hunter", "paused", "membre", "paused")}
 

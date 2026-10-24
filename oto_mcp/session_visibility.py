@@ -25,6 +25,7 @@ from .connectors import access_level_gate
 from .connectors import activation as connector_activation
 from .connectors import orphelins as connector_orphelins
 from .connectors import selection as connector_selection
+from .connectors import usable as connector_usable
 from .error_taxonomy import _is_client_disconnect
 from .tool_visibility import (
     BETA_OPTION,
@@ -234,6 +235,19 @@ def _compute_couches(sub: str, active_org, prof_org, role_plateforme: str,
             origins = {n: connector_selection.KIT for n in org_defaults}
             origins.update({n: connector_selection.SOCLE for n in socle})
             connector_selection.seed_active(sub, origins, prof_org)
+        # Une clé utilisable installe son connecteur (`connectors/usable.py`) : la
+        # sienne, celle de l'équipe active, celle de l'org, ou aucune à apporter —
+        # ICI, à la session, pour tout membre et tout run hébergé, au plus une fois par
+        # TTL et à chaque écriture du coffre qui le sert. N'ajoute que ce qui n'a pas de
+        # ligne : une pause ou un retrait du membre tient. Un échec n'écrit rien, rend
+        # le tour (la session suivante rejoue) et se journalise en ERREUR ; la boîte
+        # monte ce que la table porte déjà.
+        if active_org is not None:
+            try:
+                connector_usable.run_if_due(sub, active_org, access.current_group(sub))
+            except Exception:
+                logger.exception("selection reconcile failed for %s in org %s: retried "
+                                 "at the next session", sub, active_org)
         _sel = connector_selection.list_selection(sub, prof_org)
         couches[COUCHE_SELECTION] = {
             n for n in all_names

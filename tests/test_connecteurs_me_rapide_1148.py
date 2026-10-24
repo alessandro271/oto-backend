@@ -49,6 +49,11 @@ import _jeu_connecteurs_1148 as jeu_1148
 _BORNE_LISTE = 55
 _BORNE_CIBLEE = 65
 _BORNE_STATUT = 32
+# La règle « une clé utilisable installe son connecteur » (`connectors/usable.py`), jouée
+# à la poignée de main au plus une fois par TTL : l'instantané (`status_for`), l'exposition,
+# la sélection, les retraits, puis UNE écriture quel que soit le nombre de connecteurs
+# installés : la borne de `status_for`, plus ces quatre lectures-écritures et une marge.
+_BORNE_RECONCILIATION = _BORNE_STATUT + 8
 
 
 @pytest.fixture(scope="module")
@@ -182,6 +187,29 @@ def test_le_nombre_de_requetes_ne_suit_pas_le_nombre_de_connecteurs(jeu):
                   meta={"scopes": "openid", "granted_at": "2026-09-04T00:00:00"})
     apres = {nom: _compter(appels[nom])[1] for nom in avant}
     assert apres == avant, f"le compte de requêtes suit les connecteurs branchés : {avant} → {apres}"
+
+
+def test_la_regle_de_session_est_bornee_et_son_tour_coute_une_instruction(jeu):
+    """La passe qui installe ce qu'une clé sert (`usable.reconcile`) reste dans le budget
+    de `status_for` plus quatre instructions, quel que soit le nombre de connecteurs
+    installés ; à chaque autre poignée de main, le tour (`usable.claim`) coûte UNE
+    instruction. Les lignes posées sont retirées après : le jeu sert aux autres bancs."""
+    from oto_mcp import db
+    from oto_mcp.connectors import usable
+    try:
+        installes, n = _compter(lambda: usable.reconcile(jeu.sub, jeu.org, jeu.equipe))
+        assert len(installes) > 5, "le jeu n'installe presque rien : l'écriture n'est pas mesurée"
+        assert n <= _BORNE_RECONCILIATION, (
+            f"la règle de session : {n} requêtes SQL (borne {_BORNE_RECONCILIATION})")
+        usable.claim(jeu.sub, jeu.org)          # pose la marque : le tour suivant est perdu
+        gagne, n_tour = _compter(lambda: usable.claim(jeu.sub, jeu.org))
+        assert gagne is False and n_tour == 1, (gagne, n_tour)
+    finally:
+        with db._connect() as c:
+            c.execute("DELETE FROM user_selected_connectors "
+                      "WHERE sub = %s AND org_id = %s AND origin = %s",
+                      (jeu.sub, jeu.org, usable.ORIGIN))
+            c.execute("DELETE FROM connector_selection_reconciled WHERE sub = %s", (jeu.sub,))
 
 
 def test_le_registre_mesure_est_celui_du_serveur(jeu):

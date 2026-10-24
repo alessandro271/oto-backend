@@ -21,9 +21,16 @@ import os
 
 import pytest
 
+from oto_mcp import providers as _providers
+from oto_mcp.connectors import usable as _usable
+
 from _datastore_rest import call, stub_authz
 
 CONNECTEURS = ("hunter", "kaspr", "folk", "osm")
+# Ce que la session installe d'office parmi eux — l'open data (`osm`) : une clé utilisable,
+# ou aucune à apporter, installe son connecteur (`connectors/usable.py`). La boîte RÉELLE.
+OPEN_DATA = {c for c in CONNECTEURS
+             if _usable.installs(_providers.REGISTRY[c], None)}
 
 
 @pytest.fixture(scope="module")
@@ -164,15 +171,15 @@ def test_coupe_apres_coup_reste_au_kit_s_installe_masque_et_revient_seul(live, m
     admin, ancien, arrivant = "k3-apres-admin", "k3-apres-ancien", "k3-apres-arrivant"
     org = _org("Kit3 apres", admin, ancien)
     code, corps = _kit(monkeypatch, admin, org, ["folk"])
-    assert code == 200 and _vus_par_l_agent(ancien, org) == {"folk"}
+    assert code == 200 and _vus_par_l_agent(ancien, org) == {"folk"} | OPEN_DATA
     # L'org coupe folk : la réponse dit qu'il est au kit, et ce que ça fait.
     corps = _coupe(monkeypatch, admin, org, "folk", False)
     assert corps["in_kit"] is True and "cutting does not remove it from there" in corps["kit_note"]
-    assert _vus_par_l_agent(ancien, org) == set()          # masqué chez l'ancien…
+    assert _vus_par_l_agent(ancien, org) == OPEN_DATA          # masqué chez l'ancien…
     assert _ligne(ancien, org, "folk") == {"state": "active", "origin": "kit"}   # … installé
     # Un membre arrive PENDANT la coupure : son semis installe le kit ENTIER.
     org_store.add_org_member(org, arrivant, "org_member")
-    assert _vus_par_l_agent(arrivant, org) == set()
+    assert _vus_par_l_agent(arrivant, org) == OPEN_DATA
     assert _ligne(arrivant, org, "folk") == {"state": "active", "origin": "kit"}
     # Un geste du kit liste le connecteur coupé, et le dit.
     code, corps = _kit(monkeypatch, admin, org, ["folk", "osm"])
