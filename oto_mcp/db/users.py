@@ -492,6 +492,9 @@ _SUB_COLUMNS = [
     # déclencheurs : une flotte rattachée à un identifiant mort devient invisible au
     # compte fusionné, et son auteur n'est plus lisible dans l'audit d'un passage.
     ("runner_fleets", "sub"),
+    # `runner_trigger_links.created_by` = qui a POSÉ un lien entre agents — colonne
+    # d'AUTEUR, hors PK et sans FK : relue par l'écran des liens, elle suit la personne.
+    ("runner_trigger_links", "created_by"),
     ("tool_calls", "effective_sub"),
     # Le JOURNAL des acceptations légales (#487) — la source de vérité du gate, donc
     # ce qui décide si le compte fusionné se voit redemander ses CGU. Aucune unicité :
