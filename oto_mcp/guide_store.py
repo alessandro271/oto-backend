@@ -262,18 +262,21 @@ def get_init_guide(scope: str, owner_id: Optional[str] = None) -> dict:
     from . import db
     owner, slug = _init_ref(scope, owner_id)
     row = db.get_init_guide_db(scope, owner, slug)
+    # `rev` (signal #1203) : ce qu'une écriture repasse en `expected_rev` pour refuser
+    # d'écraser un readme posé entre-temps — `REV_ABSENT` quand il n'y a rien.
     return {"body_md": (row or {}).get("body_md") or "",
-            "updated_at": (row or {}).get("updated_at")}
+            "updated_at": (row or {}).get("updated_at"), "rev": db.rev_de_couche(row)}
 
 
-def set_init_guide(scope: str, owner_id: Optional[str], body_md: str) -> dict:
+def set_init_guide(scope: str, owner_id: Optional[str], body_md: str, *,
+                   expected_rev: Optional[str] = None) -> dict:
     """Écrit un readme init (upsert). Renvoie `{body_md, updated_at}`. Scopes dans
     `guides` seulement (platform/user au barreau 1)."""
     if scope not in _INIT_IN_GUIDES:
         raise GuideError(f"set_init_guide: scope `{scope}` pas encore dans guides.")
     from . import db
     owner, slug = _init_ref(scope, owner_id)
-    row = db.set_init_guide_db(scope, owner, slug, body_md)
+    row = db.set_init_guide_db(scope, owner, slug, body_md, expected_rev=expected_rev)
     if row is None:
         raise GuideDeliveryConflict(
             f"`{slug}` (scope {scope}) porte déjà un guide À CHARGER (`delivery="
@@ -281,7 +284,8 @@ def set_init_guide(scope: str, owner_id: Optional[str], body_md: str) -> dict:
             f"corps — refusé, rien n'a été écrit. Lis-le avec "
             f"`oto_guide(op='read', scope='{scope}', slug='{slug}')` ; s'il n'a plus "
             f"lieu d'être, retire-le (`op='delete'`) avant d'écrire le readme.")
-    return {"body_md": row.get("body_md") or "", "updated_at": row.get("updated_at")}
+    return {"body_md": row.get("body_md") or "", "updated_at": row.get("updated_at"),
+            "rev": db.rev_de_couche(row), "previous_rev": row.get("previous_rev")}
 
 
 def seed_init_guide(scope: str, ident: Optional[str], body_md: str) -> None:
@@ -405,7 +409,8 @@ _ONDEMAND_EDITABLE_MSG = "scope éditable = platform | tenant | org | user."
 
 
 def set_guide(scope: str, owner_id: str, slug: str, body_md: str,
-              title: str = "", description: str = "") -> dict:
+              title: str = "", description: str = "", *,
+              expected_rev: Optional[str] = None) -> dict:
     """Crée/met à jour un guide on-demand (scope `platform`|`tenant`|`org`|`user` —
     l'AUTZ par scope est du ressort de l'appelant : platform_admin (platform, tenant) /
     org_admin / self). Slug strict. Renvoie `{slug, scope, title, description}`.
@@ -421,7 +426,8 @@ def set_guide(scope: str, owner_id: str, slug: str, body_md: str,
         raise GuideError("body_md requis.")
     from . import db
     row = db.set_guide_db(scope, str(owner_id), slug, body_md.strip(),
-                          (title or "").strip(), (description or "").strip())
+                          (title or "").strip(), (description or "").strip(),
+                          expected_rev=expected_rev)
     if row is None:
         raise GuideDeliveryConflict(
             f"`{slug}` (scope {scope}) n'est pas un guide à charger : c'est le readme "
@@ -431,7 +437,8 @@ def set_guide(scope: str, owner_id: str, slug: str, body_md: str,
             f"readme : `oto_guide(op='write', scope='{scope}', delivery='init')`. "
             f"Pour un guide à charger : choisis un autre slug que `{slug}`.")
     return {"slug": slug, "scope": scope, "title": row["title"],
-            "description": row["description"]}
+            "description": row["description"], "rev": db.rev_de_couche(row),
+            "previous_rev": row.get("previous_rev")}
 
 
 def patch_guide(scope: str, owner_id: str, slug: str, appliquer, *,
@@ -466,11 +473,12 @@ def patch_guide(scope: str, owner_id: str, slug: str, appliquer, *,
             "body_md_length": len(row["body_md"] or "")}
 
 
-def delete_guide(scope: str, owner_id: str, slug: str) -> bool:
+def delete_guide(scope: str, owner_id: str, slug: str, *,
+                 expected_rev: Optional[str] = None) -> bool:
     if scope not in _ONDEMAND_EDITABLE:
         raise GuideError(_ONDEMAND_EDITABLE_MSG)
     from . import db
-    return db.delete_guide_db(scope, str(owner_id), slug)
+    return db.delete_guide_db(scope, str(owner_id), slug, expected_rev=expected_rev)
 
 
 def guides_index_md(sub: Optional[str] = None, org_id: Optional[int] = None) -> str:

@@ -19,12 +19,13 @@ class _FakeGuidesDB:
     def get_guide_db(self, scope, owner_id, slug):
         return self.rows.get((scope, str(owner_id), slug))
 
-    def set_guide_db(self, scope, owner_id, slug, body_md, title, description):
+    def set_guide_db(self, scope, owner_id, slug, body_md, title, description, *,
+                     expected_rev=None):
         row = {"slug": slug, "title": title, "description": description, "body_md": body_md}
         self.rows[(scope, str(owner_id), slug)] = row
         return row
 
-    def delete_guide_db(self, scope, owner_id, slug):
+    def delete_guide_db(self, scope, owner_id, slug, *, expected_rev=None):
         return self.rows.pop((scope, str(owner_id), slug), None) is not None
 
 
@@ -71,8 +72,11 @@ def test_set_guide_validates(db):
         G.set_guide("org", "42", "Bad Slug", "b")       # slug invalide
     with pytest.raises(G.GuideError):
         G.set_guide("user", "u1", "ok", "   ")          # corps vide
+    from oto_mcp.db.guides import guide_rev
     out = G.set_guide("org", "42", "ok-slug", "corps", "T", "D")
-    assert out == {"slug": "ok-slug", "scope": "org", "title": "T", "description": "D"}
+    # `rev` / `previous_rev` (signal #1203) : ce que l'écriture a posé, et remplacé.
+    assert out == {"slug": "ok-slug", "scope": "org", "title": "T", "description": "D",
+                   "rev": guide_rev("T", "D", "corps"), "previous_rev": None}
     # platform est désormais éditable au niveau STORE (l'autz vit dans les surfaces)
     out = G.set_guide("platform", G.PLATFORM_OWNER, "pf-slug", "corps", "T", "D")
     assert out["scope"] == "platform"
@@ -93,11 +97,12 @@ def tool(monkeypatch):
     calls = {}
     monkeypatch.setattr(G, "list_guides_for", lambda sub, org: [{"slug": "z", "scope": "user"}])
 
-    def _set(scope, owner_id, slug, body_md, title="", description=""):
+    def _set(scope, owner_id, slug, body_md, title="", description="", *,
+             expected_rev=None):
         calls["set"] = ((scope, owner_id, slug, body_md, title, description), {})
         return {"slug": slug, "scope": scope}
 
-    def _del(scope, owner_id, slug):
+    def _del(scope, owner_id, slug, *, expected_rev=None):
         calls["del"] = (scope, owner_id, slug)
         return True
 

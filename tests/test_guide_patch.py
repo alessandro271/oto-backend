@@ -376,14 +376,19 @@ def test_la_rev_suit_le_titre_et_la_description_aussi(base):
     assert _op(op="read", slug="journal", scope="user")["rev"] != rev
 
 
-@pytest.mark.parametrize("op", ["list", "read", "write", "delete"])
-@pytest.mark.parametrize("arg, valeur", [
-    ("expected_rev", "0" * 16), ("section", "Règles"), ("region", "preamble"),
-    ("mode", "append"),
+# `expected_rev` n'est plus propre au patch depuis le signal #1203 : `op=write` et
+# `op=delete` l'HONORENT (test_guide_ecriture_gardee_1203) ; il reste refusé sur les
+# lectures, où il ferait croire à un contrôle qui n'a pas lieu.
+@pytest.mark.parametrize("op, arg, valeur", [
+    (op, arg, valeur)
+    for op in ("list", "read", "write", "delete")
+    for arg, valeur in (("expected_rev", "0" * 16), ("section", "Règles"),
+                        ("region", "preamble"), ("mode", "append"))
+    if not (arg == "expected_rev" and op in ("write", "delete"))
 ])
 def test_un_argument_de_patch_n_est_pas_avale_par_une_autre_op(base, op, arg, valeur):
-    """Un `expected_rev` accepté-et-ignoré par `op=write` ferait croire à un contrôle
-    de conflit qui n'a pas lieu."""
+    """Un argument de patch accepté-et-ignoré par une autre op ferait croire à un
+    geste qui n'a pas lieu."""
     refus = _refus(op=op, slug="journal", scope="user", body_md="x", **{arg: valeur})
     assert (refus.status, refus.code) == (400, "unsupported_patch_arg")
     assert base.corps("user", "u1", "journal") == _JOURNAL

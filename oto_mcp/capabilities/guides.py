@@ -22,9 +22,9 @@ sémantique d'exécution, ADR 0042 Décision 3) et la **fiche profil** (structur
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 from .. import db, group_store, guide_store, ownership, session_org, tool_alias
 from ._authz import SUB_ONLY, refus_de_famille, refus_hors_vue
@@ -66,6 +66,23 @@ class GuideSetInput(BaseModel):
                      "pas suffisant (un caractère accentué pèse deux octets)."))
     title: str = ""
     description: str = ""
+    # Signal #1203 : le `rev` lu — l'écriture est refusée (409 `conflict`) si le guide a
+    # changé depuis. Facultatif sur cette surface : l'omettre écrase ce qui est en
+    # place, le défaut historique (`oto_guide_v2` l'exige, côté MCP).
+    expected_rev: Optional[str] = Field(None, description=(
+        "Le `rev` rendu par la lecture : refusé en 409 `conflict` si le guide a changé "
+        "depuis. `absent` = il n'y a rien à cette adresse. Omis = écrase ce qui est en "
+        "place."))
+
+
+class GuideDeleteInput(GuideRefInput):
+    """L'adresse d'un guide, plus le `rev` lu : on ne supprime pas — ni ne vide un
+    readme — ce qu'on n'a pas lu (signal #1203). Une classe à part pour que la
+    LECTURE (`me.guides.get`, même adresse) ne publie pas un argument qu'elle
+    ignorerait."""
+    expected_rev: Optional[str] = Field(None, description=(
+        "Le `rev` rendu par la lecture : refusé en 409 `conflict` si le guide a changé "
+        "depuis. Omis = supprime ce qui est en place."))
 
 
 class GuideOpInput(BaseModel):
@@ -91,8 +108,8 @@ class GuideOpInput(BaseModel):
             "op=patch: replace (default) | append | prepend | delete (the target, "
             "heading included; no `body_md`)."))
     expected_rev: Optional[str] = Field(default=None, description=(
-        "op=patch: the `rev` from op=read or a previous patch — refused if the guide "
-        "changed since."))
+        "op=patch|write|delete: the `rev` from op=read (or a previous write) — refused "
+        "409 `conflict` if the guide changed since; `absent` = nothing there yet."))
 
 
 def _target_org(ctx: ResolvedCtx, owner_id: Optional[str]) -> int:
@@ -273,6 +290,8 @@ class GuideView(BaseModel):
     description: Optional[str] = None
     updated_at: Optional[str] = None
     rev: Optional[str] = None
+    # Après une écriture : le `rev` de ce qu'elle a remplacé (`absent` = rien).
+    previous_rev: Optional[str] = None
 
 
 class GuideDeleted(BaseModel):
@@ -284,15 +303,52 @@ class GuideDeleted(BaseModel):
     delivery: Optional[str] = None
 
 
+class GuidePatched(BaseModel):
+    """L'ACCUSÉ d'`op=patch` — jamais le corps (`guide_store.patch_guide`), plus ce que
+    le patch a emporté quand il a emporté quelque chose."""
+    scope: str
+    slug: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    updated_at: Optional[str] = None
+    rev: str
+    body_md_length: int
+    removed: Optional[dict] = None
+    removed_subsections: Optional[list[str]] = None
+    warning: Optional[str] = None
+
+
+class GuideOpOut(RootModel):
+    """L'union des verbes d'`oto_guide_v2` (`Output` décrit, il ne valide pas) : la
+    liste, la lecture ou l'écriture (`GuideView`, enveloppe commune), la suppression,
+    le patch. `oto_guide` porte la même forme ; il reste à sa dette de sortie."""
+    root: Union[GuideList, GuideView, GuideDeleted, GuidePatched]
+
+
 def _list(ctx: ResolvedCtx, inp: _NoInput) -> dict:
     """Catalogue des guides on-demand visibles : plateforme ∪ org active ∪ perso (DB)."""
     return {"guides": guide_store.list_guides_for(ctx.sub, ctx.org_id)}
 
 
 def _init_view(scope: str, slug: str, state: dict) -> dict:
-    """Forme d'un readme init, alignée sur celle d'un guide on-demand."""
-    return {"scope": scope, "slug": slug, "delivery": "init",
-            "body_md": state.get("body_md") or "", "updated_at": state.get("updated_at")}
+    """Forme d'un readme init, alignée sur celle d'un guide on-demand — `rev` compris
+    (signal #1203), `previous_rev` après une écriture."""
+    out = {"scope": scope, "slug": slug, "delivery": "init",
+           "body_md": state.get("body_md") or "", "updated_at": state.get("updated_at"),
+           "rev": state.get("rev")}
+    if state.get("previous_rev") is not None:
+        out["previous_rev"] = state["previous_rev"]
+    return out
+
+
+def _conflit(e: "db.GuideConflict") -> AuthzDenied:
+    """Le refus d'une écriture dont le `expected_rev` n'est plus le rev en place
+    (signal #1203) — le même code que `op=patch`, la même sortie : relire."""
+    return AuthzDenied(
+        409, "conflict",
+        f"The guide changed since you read it (current rev {e.current_rev}). Nothing "
+        "was written. Read it again (op=read), merge what someone else wrote, and "
+        "write with the new `rev`.")
 
 
 def _avec_rev(g: dict) -> dict:
@@ -372,9 +428,12 @@ def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
         ident, slug = _init_ref(ctx, inp.scope, inp.slug, write=True,
                                 owner_id=inp.owner_id)
         try:
-            state = guide_store.set_init_guide(inp.scope, ident, body)
+            state = guide_store.set_init_guide(inp.scope, ident, body,
+                                               expected_rev=inp.expected_rev)
         except guide_store.GuideDeliveryConflict as e:
             raise AuthzDenied(409, "delivery_conflict", str(e))
+        except db.GuideConflict as e:
+            raise _conflit(e)
         return _init_view(inp.scope, slug, state)
     owner_id = _owner_for_write(ctx, inp.scope, inp.owner_id, ondemand=True)
     if not inp.slug:
@@ -387,7 +446,10 @@ def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
         ownership.maison_de(str(owner_id))
     try:
         return guide_store.set_guide(inp.scope, owner_id, inp.slug, body,
-                                     inp.title or "", inp.description or "")
+                                     inp.title or "", inp.description or "",
+                                     expected_rev=inp.expected_rev)
+    except db.GuideConflict as e:
+        raise _conflit(e)
     # ⚠️ AVANT `GuideError`, dont c'est une sous-classe : sans cet ordre le conflit de
     # livraison sortirait en 400 `invalid_guide` — « ta saisie est mal formée » — alors
     # que la saisie est valide et que c'est l'ÉTAT en place qui refuse.
@@ -399,7 +461,7 @@ def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
         raise refus_de_famille(e)
 
 
-def _delete(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
+def _delete(ctx: ResolvedCtx, inp: GuideDeleteInput) -> dict:
     if inp.delivery == "init":
         # Retirer une couche injectée = la vider (pas de ligne à supprimer : le rendu
         # omet déjà les couches vides).
@@ -410,23 +472,31 @@ def _delete(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
         # cette branche il sortirait en 500 « erreur interne » — un refus prévu
         # rendu comme une panne, et l'appelant n'a alors rien à faire de la réponse.
         try:
-            guide_store.set_init_guide(inp.scope, ident, "")
+            guide_store.set_init_guide(inp.scope, ident, "", expected_rev=inp.expected_rev)
         except guide_store.GuideDeliveryConflict as e:
             raise AuthzDenied(409, "delivery_conflict", str(e))
+        except db.GuideConflict as e:
+            raise _conflit(e)
         return {"scope": inp.scope, "slug": slug, "delivery": "init", "deleted": True}
     owner_id = _owner_for_write(ctx, inp.scope, inp.owner_id, ondemand=True)
     if not inp.slug:
         raise AuthzDenied(400, "missing_slug", "`slug` is required for an on-demand guide.")
-    deleted = guide_store.delete_guide(inp.scope, owner_id, inp.slug)
+    try:
+        deleted = guide_store.delete_guide(inp.scope, owner_id, inp.slug,
+                                           expected_rev=inp.expected_rev)
+    except db.GuideConflict as e:
+        raise _conflit(e)
     if not deleted:
         raise AuthzDenied(404, "not_found", f"Guide `{inp.slug}` (scope {inp.scope}) absent.")
     return {"scope": inp.scope, "slug": inp.slug, "deleted": True}
 
 
 # Les arguments qui n'ont de sens que pour `op=patch`. Refusés sur toute autre op,
-# jamais avalés : un `expected_rev` ignoré par `op=write` laisserait croire à un
-# contrôle de conflit qui n'a pas lieu.
-_PATCH_ONLY = ("section", "region", "mode", "expected_rev")
+# jamais avalés. `expected_rev` n'en est plus depuis le signal #1203 : `op=write` et
+# `op=delete` l'honorent — il reste refusé sur les LECTURES (`_ECRITURES`), où il
+# laisserait croire à un contrôle qui n'a pas lieu.
+_PATCH_ONLY = ("section", "region", "mode")
+_ECRITURES = ("patch", "write", "delete")
 
 
 def _patch(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
@@ -574,6 +644,11 @@ def _guide_op(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
                 400, "unsupported_patch_arg",
                 f"{', '.join(f'`{n}`' for n in en_trop)}: op=patch only — op={inp.op} "
                 "would ignore it. Remove it, or use op=patch.")
+    if inp.expected_rev is not None and inp.op not in _ECRITURES:
+        raise AuthzDenied(
+            400, "unsupported_patch_arg",
+            f"`expected_rev`: op=patch, op=write and op=delete only — op={inp.op} "
+            "would ignore it. Remove it.")
     if inp.op == "list":
         return _list(ctx, _NoInput())
     init = inp.delivery == "init"
@@ -592,25 +667,18 @@ def _guide_op(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
         return lu
     scope = inp.scope or "user"
     if inp.op == "delete":
-        return _delete(ctx, GuideRefInput(scope=scope, slug=inp.slug or "",
-                                          delivery=inp.delivery, owner_id=inp.owner_id))
+        return _delete(ctx, GuideDeleteInput(scope=scope, slug=inp.slug or "",
+                                             delivery=inp.delivery, owner_id=inp.owner_id,
+                                             expected_rev=inp.expected_rev))
     if inp.op == "patch":
         return _patch(ctx, inp)
     return _set(ctx, GuideSetInput(scope=scope, slug=inp.slug or "", delivery=inp.delivery,
                                    owner_id=inp.owner_id, body_md=inp.body_md or "",
-                                   title=inp.title or "", description=inp.description or ""))
+                                   title=inp.title or "", description=inp.description or "",
+                                   expected_rev=inp.expected_rev))
 
 
-# Autz = SUB_ONLY (authentifié) + garde par SCOPE inline (platform_admin / org_admin / self) :
-# le combinateur ne peut pas dériver l'org d'un champ `scope` libre.
-# UNE capacité, deux faces (ADR 0042 §Convergence des surfaces) : `oto_guide` op-aware côté
-# MCP + les routes `/api/me/guides…` côté dashboard, mêmes handlers. Jusqu'au 2026-07-28 la
-# face MCP était un tool écrit à la main (`tools/guide.py`) qui redéclarait sa propre autz.
-CAPABILITIES += [
-    Capability(
-        key="me.guide", handler=_guide_op, Input=GuideOpInput, authz=SUB_ONLY,
-        description=(
-            "Load or author oto INSTRUCTION PROSE — a how-to loaded when needed, or a readme "
+_DESCRIPTION_GUIDE = ("Load or author oto INSTRUCTION PROSE — a how-to loaded when needed, or a readme "
             "injected into every session. Two axes: `scope` = platform | tenant | org | group | "
             "user (who writes it, whom it applies to) and `delivery` = 'on-demand' (default: a "
             "guide you load for a task) | 'init' (a readme concatenated into what you receive "
@@ -626,15 +694,69 @@ CAPABILITIES += [
             "append to a long guide or a journal): same grammar as `oto_doc` op=patch, same "
             "writers as op=write, and the reply is a receipt, not the body. `expected_rev` = "
             "the `rev` of op=read: refused if the guide changed since. "
+            "op=write / delete take `expected_rev` too (the `rev` of op=read — readmes "
+            "included; `absent` when there was nothing): refused 409 `conflict` if "
+            "someone changed it since, nothing written. "
             "Read the relevant guide BEFORE a non-trivial task (e.g. bulk-load). "
             "This is PROSE: a repeatable process with slots is a procedure (`oto_procedure`), "
-            "and what oto knows about the user is their profile card (`oto_profile`)."),
+            "and what oto knows about the user is their profile card (`oto_profile`).")
+
+_ERREUR_FAMILLE = DeclaredError(
+    409, "family_conflict",
+    "une PROCÉDURE porte ce slug dans la même portée (oto#100) — à l'écriture, un "
+    "guide neuf ne s'y crée pas ; à la lecture par l'agent, le guide en double n'est "
+    "pas servi. Le refus nomme la procédure ; rien n'est écrit")
+_ERREUR_CONFLIT = DeclaredError(
+    409, "conflict",
+    "`expected_rev` n'est plus le rev en place : le guide a changé depuis la lecture "
+    "(signal #1203) ; rien n'est écrit")
+
+
+def _guide_op_strict(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
+    """`oto_guide_v2` : `expected_rev` EXIGÉ sur op=write/delete (signal #1203), puis le
+    MÊME dispatch que la surface héritée — deux handlers seraient deux comportements."""
+    if inp.op in ("write", "delete") and inp.expected_rev is None:
+        raise AuthzDenied(
+            400, "expected_rev_required",
+            f"op={inp.op} requires `expected_rev` on this tool: read the guide first "
+            "(op=read returns `rev`; `absent` when there is nothing yet), then write "
+            "with it — a guide or readme written meanwhile by someone else is then "
+            "refused instead of overwritten. Nothing was written.")
+    return _guide_op(ctx, inp)
+
+
+# Autz = SUB_ONLY (authentifié) + garde par SCOPE inline (platform_admin / org_admin / self) :
+# le combinateur ne peut pas dériver l'org d'un champ `scope` libre.
+# UNE capacité, deux faces (ADR 0042 §Convergence des surfaces) : `oto_guide` op-aware côté
+# MCP + les routes `/api/me/guides…` côté dashboard, mêmes handlers. Jusqu'au 2026-07-28 la
+# face MCP était un tool écrit à la main (`tools/guide.py`) qui redéclarait sa propre autz.
+CAPABILITIES += [
+    Capability(
+        key="me.guide", handler=_guide_op, Input=GuideOpInput, authz=SUB_ONLY,
+        description=(_DESCRIPTION_GUIDE + " ⚠️ Here `expected_rev` is OPTIONAL on "
+                     "op=write/delete: omitted, the write REPLACES whatever is there, "
+                     "unseen — the legacy default; oto_guide_v2 requires it."),
         mcp="oto_guide",
-        errors=(DeclaredError(409, "family_conflict",
-                              "une PROCÉDURE porte ce slug dans la même portée "
-                              "(oto#100) — à l'écriture, un guide neuf ne s'y crée pas ; "
-                              "à la lecture par l'agent, le guide en double n'est pas "
-                              "servi. Le refus nomme la procédure ; rien n'est écrit"),),
+        errors=(_ERREUR_FAMILLE, _ERREUR_CONFLIT),
+    ),
+    # La surface STRICTE (signal #1203, docs/tool-visibility.md §Un contrat servi ne se
+    # durcit pas : il se double) : `expected_rev` y est EXIGÉ sur op=write/delete. Le
+    # même handler et la même entrée — seule l'exigence change, posée avant lui
+    # (`_guide_op_strict`). Bêta : une population choisie pendant que les appelants
+    # migrent, sans date-couperet.
+    Capability(
+        key="me.guide.v2", handler=_guide_op_strict, Input=GuideOpInput, authz=SUB_ONLY,
+        description=("BETA. Same surface as oto_guide, with a STRICT write contract: "
+                     "op=write and op=delete REQUIRE `expected_rev` — read first "
+                     "(op=read returns `rev`), so a guide or readme someone else wrote "
+                     "meanwhile is never overwritten unseen. " + _DESCRIPTION_GUIDE),
+        mcp="oto_guide_v2",
+        Output=GuideOpOut,
+        errors=(_ERREUR_FAMILLE, _ERREUR_CONFLIT,
+                DeclaredError(400, "expected_rev_required",
+                              "op=write/delete sans `expected_rev` sur la surface "
+                              "stricte — relire (op=read rend `rev`), puis écrire avec "
+                              "lui ; rien n'est écrit")),
     ),
     Capability(
         key="me.guides.list", handler=_list, Input=_NoInput, authz=SUB_ONLY, mcp=None,
@@ -665,7 +787,8 @@ CAPABILITIES += [
                 DeclaredError(409, "family_conflict",
                               "une PROCÉDURE porte déjà ce slug dans la même portée "
                               "(oto#100) — un guide neuf ne s'y crée pas ; le refus "
-                              "nomme la procédure, rien n'est écrit"),),
+                              "nomme la procédure, rien n'est écrit"),
+                _ERREUR_CONFLIT),
         description=(
             "Create/update a guide (scope=platform|org|group|user|tenant). "
             "`delivery='init'` writes that scope's injected readme (empty body clears it). "
@@ -683,12 +806,14 @@ CAPABILITIES += [
               RestBinding("PUT", "/api/groups/{id}/guides/{scope}/{slug}", {"id": "owner_id"})),
     ),
     Capability(
-        key="me.guides.delete", handler=_delete, Input=GuideRefInput, authz=SUB_ONLY, mcp=None,
+        key="me.guides.delete", handler=_delete, Input=GuideDeleteInput, authz=SUB_ONLY,
+        mcp=None,
         Output=GuideDeleted,
         errors=(DeclaredError(409, "delivery_conflict",
                               "ce `(scope, slug)` porte une couche de l'AUTRE "
                               "livraison — vider un readme injecté ne retire pas un "
-                              "guide à charger ; rien n'est écrit"),),
+                              "guide à charger ; rien n'est écrit"),
+                _ERREUR_CONFLIT),
         description=("Delete a guide (scope=platform|tenant|org|group|user) — same writers as "
                      "`me.guides.set`: a tenant's on-demand guide by its tenant admin or a "
                      "platform admin."),

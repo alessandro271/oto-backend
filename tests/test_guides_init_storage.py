@@ -16,7 +16,7 @@ class _FakeGuides:
         r = self.rows.get((scope, str(owner_id), slug))
         return r if (r and r["delivery"] == "init") else None
 
-    def set_init_guide_db(self, scope, owner_id, slug, body_md):
+    def set_init_guide_db(self, scope, owner_id, slug, body_md, *, expected_rev=None):
         row = {"scope": scope, "owner_id": str(owner_id), "slug": slug,
                "body_md": body_md or "", "delivery": "init", "updated_at": "T"}
         self.rows[(scope, str(owner_id), slug)] = row
@@ -32,7 +32,8 @@ class _FakeGuides:
         return [v for (s, o, _), v in sorted(self.rows.items())
                 if s == scope and o == str(owner_id) and v["delivery"] == "on-demand"]
 
-    def set_guide_db(self, scope, owner_id, slug, body_md, title="", description=""):
+    def set_guide_db(self, scope, owner_id, slug, body_md, title="", description="", *,
+                     expected_rev=None):
         row = {"scope": scope, "owner_id": str(owner_id), "slug": slug, "title": title,
                "description": description, "body_md": body_md, "delivery": "on-demand"}
         self.rows[(scope, str(owner_id), slug)] = row
@@ -50,7 +51,9 @@ def db(monkeypatch):
 
 
 def test_user_init_roundtrip(db):
-    assert G.get_init_guide("user", "u1") == {"body_md": "", "updated_at": None}
+    # `rev` (signal #1203) : `absent` tant que la couche n'a pas de contenu.
+    assert G.get_init_guide("user", "u1") == {"body_md": "", "updated_at": None,
+                                              "rev": "absent"}
     out = G.set_init_guide("user", "u1", "  hello  ")
     assert out["body_md"] == "  hello  " and out["updated_at"] == "T"
     assert G.get_init_guide("user", "u1")["body_md"] == "  hello  "

@@ -520,5 +520,45 @@ voyager ni le corps à l'aller, ni le corps au retour.
   canonique comme un guide à charger rend `409 delivery_conflict`.
 - **Face MCP seule** : les routes `/api/me/guides/…` n'ont pas de verbe de patch.
   `GET` y rend désormais `rev` (ajout au contrat, `GuideView`). Les arguments du patch
-  passés à une autre op sont refusés (`unsupported_patch_arg`) — `op=write` n'honore
-  pas `expected_rev`, et l'avaler ferait croire à un contrôle qui n'a pas lieu.
+  passés à une autre op sont refusés (`unsupported_patch_arg`) ; `expected_rev`, lui,
+  vaut aussi pour `op=write` et `op=delete` depuis le 23/10/2026 (§ suivant) et reste
+  refusé sur les lectures.
+
+## Écrire un guide sans écraser ce qu'un autre vient d'écrire (signal #1203, 23/10/2026)
+
+Un agent d'onboarding a remplacé par `op=write` le readme d'une org qu'un tiers venait
+de poser, entre deux lectures de son contexte : `op=write` REMPLACE, rien ne compare, et
+rien ne rend la version d'avant. **La garde est un contrôle optimiste**, le même que
+celui des pages et d'`op=patch` :
+
+- **La lecture rend un `rev`**, readme compris (`op=read delivery='init'`, `GET …/guides/
+  {scope}/readme?delivery=init` : `rev` y manquait). C'est l'ETag du contenu
+  (`db.guide_rev`, aucune colonne). Ce qui n'a pas de contenu — aucune ligne, ou un
+  readme vidé — a le rev **`absent`** (`db.REV_ABSENT`) : un écrivain qui crée le
+  repasse, et une création concurrente le fait alors échouer au lieu d'être écrasée.
+- **L'écriture le renvoie** en `expected_rev` — `op=write`, `op=delete` (vider un readme
+  ou supprimer un guide à charger, c'est aussi le réécrire), et leurs faces REST
+  (`PUT`/`DELETE /api/me/guides/{scope}/{slug}`, corps ou paramètre). En cas d'écart :
+  **`409 conflict`**, le code d'`op=patch` et des pages, avec le rev en place ; rien n'est
+  écrit. L'écriture rend `rev` (le nouveau) et **`previous_rev`** (ce qu'elle a remplacé,
+  `absent` = rien) : un écrasement qui ne correspond pas à la lecture se voit dans l'accusé.
+- **Sous verrou, sans fenêtre** (`db/guides.py::_exiger_la_version`) : le verrou du slug
+  (commun aux guides et aux procédures) puis la ligne `FOR UPDATE`, dans la transaction
+  de l'écriture. Le readme prend ce verrou à CHAQUE écriture, garde ou pas : sur une clé
+  encore vide il n'y a pas de ligne à verrouiller, et une écriture non gardée se serait
+  glissée entre le contrôle et l'upsert d'une écriture gardée.
+- ⚠️ **Le contrat ne se durcit pas en place, il se double** (`docs/tool-visibility.md`) :
+  sur `oto_guide` et sur REST, `expected_rev` est FACULTATIF — l'omettre écrase ce qui
+  est en place, défaut historique écrit dans la description servie. **`oto_guide_v2`**
+  (bêta, `BETA_TOOLS`) l'EXIGE sur `op=write`/`op=delete` (`400
+  expected_rev_required`) ; même entrée, même dispatch (`_guide_op_strict` ne fait que
+  poser l'exigence avant `_guide_op`). L'écriture de la console plateforme
+  (`oto_admin_platform_instructions`) n'est pas gardée.
+- ⚠️ **Aucun historique de révision des nœuds n'existe** (vérifié le 23/10/2026 : seuls
+  `doc_revisions`, `org_instruction_revisions` et `datastore_row_revisions` versionnent ;
+  `nodes` n'a ni table de révisions ni colonne de version). La version remplacée d'un
+  guide ou d'un readme n'est donc PAS relisible : la garde empêche l'écrasement à
+  l'aveugle, elle ne rend pas ce qui a été écrasé en connaissance de cause. Un historique
+  des couches serait une table neuve — à décider à part.
+- Banc : `tests/test_guide_ecriture_gardee_1203.py` (base réelle : écrasement refusé,
+  création concurrente, readme, suppression, surface stricte).

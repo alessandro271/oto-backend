@@ -121,6 +121,10 @@ BETA_TOOLS: frozenset[str] = frozenset({
     # part de VIDE et son contrat est PROVISOIRE — ce premier lot stocke et versionne,
     # il n'exécute pas encore. ⚠️ Nom NEUF : `oto_function` naît avec ce lot.
     "oto_function",
+    # L'écriture de guide au contrat STRICT (signal #1203) : `expected_rev` exigé sur
+    # op=write/delete. Elle double `oto_guide` au lieu de le durcir — même régime que
+    # `oto_resource_v2`, cf. `oto_mcp/capabilities/guides.py::_guide_op_strict`.
+    "oto_guide_v2",
     # `oto_recipe` en est SORTI le 19/10/2026 : la recette s'ouvre à tous, agents
     # hébergés compris (le jeton d'un travail porte la liste d'outils de son
     # déclencheur, `outils_du_travail.py`) — /help/recipes la présente déjà ainsi.

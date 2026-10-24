@@ -158,13 +158,14 @@ def ecrit(registre, monkeypatch):
     from oto_mcp import db
     faits = []
 
-    def _set(scope, owner, slug, body, title, description):
+    def _set(scope, owner, slug, body, title, description, *, expected_rev=None):
         faits.append((scope, owner, slug, body))
         return {"title": title, "description": description}
 
     monkeypatch.setattr(db, "set_guide_db", _set)
     monkeypatch.setattr(db, "delete_guide_db",
-                        lambda scope, owner, slug: bool(faits.append(("del", scope, owner, slug))) or True)
+                        lambda scope, owner, slug, *, expected_rev=None:
+                        bool(faits.append(("del", scope, owner, slug))) or True)
     return faits
 
 
@@ -211,7 +212,7 @@ def test_le_guide_d_un_tenant_se_retire(ecrit, monkeypatch):
     from oto_mcp.capabilities._types import ResolvedCtx
     _admin(monkeypatch, True)
     G._delete(ResolvedCtx(sub="bn01jfy76a5n", org_id=None),
-              G.GuideRefInput(scope="tenant", owner_id="acme", slug="dessin"))
+              G.GuideDeleteInput(scope="tenant", owner_id="acme", slug="dessin"))
     assert ecrit == [("del", "tenant", "acme", "dessin")]
 
 
@@ -226,7 +227,7 @@ def test_l_admin_du_tenant_ecrit_le_guide_de_SON_tenant(ecrit, monkeypatch):
     G._set(ResolvedCtx(sub="acme:u-9", org_id=None),
            G.GuideSetInput(scope="tenant", owner_id="acme", slug="dessin", body_md="Dessine."))
     G._delete(ResolvedCtx(sub="acme:u-9", org_id=None),
-              G.GuideRefInput(scope="tenant", owner_id="acme", slug="dessin"))
+              G.GuideDeleteInput(scope="tenant", owner_id="acme", slug="dessin"))
     assert ecrit == [("tenant", "acme", "dessin", "Dessine."),
                      ("del", "tenant", "acme", "dessin")]
 

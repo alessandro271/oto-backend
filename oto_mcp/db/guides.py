@@ -237,7 +237,8 @@ def get_guide_db(scope: str, owner_id: str, slug: str) -> Optional[dict]:
 
 
 def set_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
-                 title: str = "", description: str = "") -> Optional[dict]:
+                 title: str = "", description: str = "", *,
+                 expected_rev: Optional[str] = None) -> Optional[dict]:
     """Crée ou met à jour (upsert par `(scope, owner_id, slug)`) un guide ON-DEMAND.
 
     La mise à jour ne touche QUE la prose — `delivery` n'est posé qu'à l'insertion,
@@ -258,11 +259,17 @@ def set_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
 
     **Lève `SlugDeLAutreFamille` quand la CRÉATION tomberait sur le slug d'une
     procédure** de la même portée (oto#100) — rien n'est alors écrit. Mettre à jour un
-    guide qui existe déjà reste permis, doublon ou non."""
+    guide qui existe déjà reste permis, doublon ou non.
+
+    **Lève `GuideConflict` si `expected_rev` n'est pas le rev en place** (signal
+    #1203, `REV_ABSENT` = « il n'y a rien ») — rien n'est alors écrit. La ligne rendue
+    porte `previous_rev`, le rev de ce que l'écriture a remplacé."""
     with _connect() as conn:
         # Une CRÉATION ne fait pas coexister un guide et une procédure (oto#100) —
-        # sous le verrou commun aux deux familles, avant la sonde et l'écriture.
-        verrouiller_le_slug(conn, scope, str(owner_id), slug)
+        # sous le verrou commun aux deux familles (pris par `_exiger_la_version`),
+        # avant la sonde et l'écriture.
+        previous_rev = _exiger_la_version(conn, scope, owner_id, slug, "on-demand",
+                                          expected_rev)
         previous_body = _body_before_write(conn, scope, owner_id, slug)
         if previous_body is None:
             _exiger_aucune_procedure(conn, scope, str(owner_id), slug)
@@ -287,7 +294,7 @@ def set_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
         if row is None:                       # une couche `init` occupe la clé
             return None
         _maintain_projections(conn, row, body_md if body_md != previous_body else None)
-        return dict(row)
+        return {**dict(row), "previous_rev": previous_rev}
 
 
 def empreinte_de_couche(title: str, description: str, body_md: str) -> str:
@@ -310,6 +317,38 @@ def guide_rev(title: Optional[str], description: Optional[str],
     pour une page, sur les trois champs qu'une écriture de guide pose. Ni colonne de
     version ni migration ; deux écritures au même contenu = même rev."""
     return empreinte_de_couche(title or "", description or "", body_md or "")[:16]
+
+
+# Le `rev` de ce qui n'a PAS de contenu à cette clé : aucune ligne, ou un readme vidé
+# (signal #1203). C'est ce que rend la lecture d'un readme vide, et ce qu'un écrivain
+# repasse pour dire « j'écris là où il n'y a rien » — une création concurrente le fait
+# alors échouer au lieu d'être écrasée.
+REV_ABSENT = "absent"
+
+
+def rev_de_couche(row: Optional[dict]) -> str:
+    """Le `rev` d'une couche lue (`_COLS`), ou `REV_ABSENT` sans contenu."""
+    if not row or not (row.get("body_md") or "").strip():
+        return REV_ABSENT
+    return guide_rev(row.get("title"), row.get("description"), row.get("body_md"))
+
+
+def _exiger_la_version(conn, scope: str, owner_id: str, slug: str, delivery: str,
+                       expected_rev: Optional[str]) -> Optional[str]:
+    """Le `rev` en place à cette clé, pour cette livraison — sous le verrou du slug et
+    de la ligne, donc sans fenêtre entre le contrôle et l'écriture qui suit dans
+    `conn`. Lève `GuideConflict` si `expected_rev` est donné et diffère (signal #1203 :
+    un readme d'org posé par un tiers entre la lecture et l'écriture d'un agent était
+    remplacé sans que personne ne le voie). Rend le rev d'AVANT l'écriture."""
+    verrouiller_le_slug(conn, scope, str(owner_id), slug)
+    courant = conn.execute(
+        f"SELECT {_COLS} FROM nodes WHERE public_id = {_PID} "
+        "AND props->>'delivery' = %s FOR UPDATE",
+        (scope, str(owner_id), slug, delivery)).fetchone()
+    rev = rev_de_couche(dict(courant) if courant else None)
+    if expected_rev is not None and expected_rev != rev:
+        raise GuideConflict(rev)
+    return rev
 
 
 class SemisConflitDeLivraison(ValueError):
@@ -472,8 +511,14 @@ def patch_guide_db(scope: str, owner_id: str, slug: str, appliquer, *,
         return dict(row)
 
 
-def delete_guide_db(scope: str, owner_id: str, slug: str) -> bool:
+def delete_guide_db(scope: str, owner_id: str, slug: str, *,
+                    expected_rev: Optional[str] = None) -> bool:
+    """Supprime un guide ON-DEMAND. `expected_rev` (signal #1203) : `GuideConflict` si
+    le guide a changé depuis la lecture de l'appelant — on ne supprime pas ce qu'on
+    n'a pas lu. Rien n'est alors supprimé."""
     with _connect() as conn:
+        if expected_rev is not None:
+            _exiger_la_version(conn, scope, owner_id, slug, "on-demand", expected_rev)
         cur = conn.execute(
             f"DELETE FROM nodes WHERE public_id = {_PID} "
             "AND props->>'delivery' = 'on-demand'",
@@ -490,7 +535,7 @@ def get_init_guide_db(scope: str, owner_id: str, slug: str) -> Optional[dict]:
 
 
 def set_init_guide_db(scope: str, owner_id: str, slug: str,
-                      body_md: str) -> Optional[dict]:
+                      body_md: str, *, expected_rev: Optional[str] = None) -> Optional[dict]:
     """Upsert d'un readme INIT (édition admin/org/user). Corps vide = readme effacé,
     la ligne reste (comme les ex-tables).
 
@@ -500,8 +545,18 @@ def set_init_guide_db(scope: str, owner_id: str, slug: str,
     ouvert. Il est plus étroit (les slugs d'init sont canoniques : `readme` pour
     org/group/user, la clé du bloc pour la plateforme), mais un guide on-demand nommé
     `readme` rendrait sinon le readme injecté de ce périmètre silencieusement
-    remplaçable par son écriture — et réciproquement."""
+    remplaçable par son écriture — et réciproquement.
+
+    **Lève `GuideConflict` si `expected_rev` n'est pas le rev en place** (signal #1203 :
+    le readme d'une org posé par un tiers pendant un onboarding, remplacé sans que
+    personne ne le voie) — rien n'est alors écrit. `REV_ABSENT` = « il n'y a rien »,
+    ce que rend la lecture d'un readme vide. La ligne rendue porte `previous_rev`."""
     with _connect() as conn:
+        # Le verrou du slug est pris à CHAQUE écriture, garde ou pas : sans lui, une
+        # écriture non gardée se glisserait entre le contrôle d'une écriture gardée
+        # et son upsert, sur une clé encore vide (aucune ligne à verrouiller).
+        previous_rev = _exiger_la_version(conn, scope, owner_id, slug, "init",
+                                          expected_rev)
         previous_body = _body_before_write(conn, scope, owner_id, slug)
         row = conn.execute(
             f"INSERT INTO nodes (public_id, kind, owner_type, owner_id, props) "
@@ -519,7 +574,7 @@ def set_init_guide_db(scope: str, owner_id: str, slug: str,
         if row is None:                       # une couche `on-demand` occupe la clé
             return None
         _maintain_projections(conn, row, (body_md or "") if body_md != previous_body else None)
-        return dict(row)
+        return {**dict(row), "previous_rev": previous_rev}
 
 
 def contexte_non_lu(sub: str, org_id: int,

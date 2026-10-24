@@ -88,7 +88,7 @@ se voit que si un admin a posé l'option `beta` sur l'UTILISATEUR ou sur son ORG
 (`oto_admin_set_option`, lue par le seam unique `access.has_option`) : l'utilisateur ne
 peut pas se l'accorder, et aucun override perso ne le lève.
 
-`BETA_TOOLS` (source unique, `tool_visibility.py`) porte **deux** familles, entrées pour
+`BETA_TOOLS` (source unique, `tool_visibility.py`) porte **trois** familles, entrées pour
 des raisons différentes.
 
 **1. Les trois verbes du nouvel univers de contenu** — `oto_node`, `oto_node_rows`,
@@ -112,6 +112,11 @@ montré de vrais appelants dessus, dont un `op=list` qui serait passé de « fon
 > population choisie pendant que les appelants migrent, **sans date-couperet** : c'est
 > l'inverse d'un alias déprécié (`docs/alias-deprecies.md`), où l'ancien nom part à une
 > date écrite. Ici l'ancien contrat reste tant que quelqu'un s'en sert.
+
+**3. `oto_guide_v2`, la même raison** (signal #1203, 23/10/2026) : l'écriture d'un guide
+ou d'un readme accepte `expected_rev` partout, et ne l'EXIGE que sur la surface doublée —
+sur `oto_guide`, l'omettre écrase ce qui est en place, défaut écrit dans sa description
+servie avec le nom de la stricte (`docs/guides.md` §Écrire un guide sans écraser).
 
 **Une sortie de la bêta.** `oto_fleet` y était entré le 2026-09-01 (surface neuve,
 contrat provisoire) ; il en est SORTI le 2026-09-24, quand les agents hébergés se sont
