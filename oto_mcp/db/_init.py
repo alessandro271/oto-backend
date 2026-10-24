@@ -694,6 +694,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `20261024_0900_docs_archivage` : ordre indifférent entre elles.
     if any(_colonne_absente(conn, "docs", c) for c in doc_archivage.COLONNES):
         conn.execute(doc_archivage.DDL_COLONNES)
+    # Le partage par défaut d'une org — la même que pose la révision
+    # `20261024_1101_default_sharing` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "orgs", runner_triggers.COLONNE_PARTAGE_PAR_DEFAUT):
+        conn.execute(runner_triggers.DDL_COLONNE_PARTAGE_PAR_DEFAUT)
     # Les surcharges du temps gagné d'une org — la même que pose la révision `0066` :
     # ordre indifférent entre elles.
     if _colonne_absente(conn, "orgs", runner_jobs.COLONNE_TEMPS_GAGNE):

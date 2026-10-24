@@ -44,7 +44,11 @@ CREATE TABLE IF NOT EXISTS orgs (
     -- Les minutes par type de résultat que l'org substitue aux défauts du temps
     -- gagné des agents (`time_saved.py`) : `{"record": 2, …}`. NULL = les défauts.
     -- Base existante : révision `0066_orgs_time_saved_minutes`.
-    time_saved_minutes JSONB
+    time_saved_minutes JSONB,
+    -- Ce qu'un objet NEUF de l'org reçoit d'office, par type (`{"agent": "lecture"}`,
+    -- `capabilities/orgs/partage_par_defaut.py`). NULL = rien. Base existante :
+    -- révision `20261024_1101_default_sharing`.
+    default_sharing JSONB
 );
 """
 

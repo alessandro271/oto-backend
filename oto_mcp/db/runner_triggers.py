@@ -47,6 +47,40 @@ DDL_COLONNE_UPDATED_AT = (f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS
 #: Le fragment que TOUTE écriture de configuration ajoute à son `SET`, et elles seules.
 _DATE_DU_CHANGEMENT = f"{COLONNE_UPDATED_AT} = NOW()"
 
+# --- Le partage par défaut d'une org (`capabilities/orgs/partage_par_defaut.py`) ----
+# Ce qu'un objet NEUF de l'org reçoit d'office, par type : `{"agent": "lecture"}`.
+# NULL = rien, pour chaque type — l'état de toutes les orgs d'avant. Posée par la
+# révision `20261024_1101_default_sharing` ET par le démarrage, sous garde de
+# catalogue — même DDL. La colonne est ici parce que les agents en sont le seul
+# lecteur ; elle se lit et s'écrit BRUTE, la validation est au module de capacité.
+COLONNE_PARTAGE_PAR_DEFAUT = "default_sharing"
+DDL_COLONNE_PARTAGE_PAR_DEFAUT = (f"ALTER TABLE orgs ADD COLUMN IF NOT EXISTS "
+                                  f"{COLONNE_PARTAGE_PAR_DEFAUT} JSONB")
+#: Le `granted_by` d'un partage NÉ du réglage, jamais d'un geste : on le retire
+#: (`granted_by = MARQUE_PARTAGE_PAR_DEFAUT`) sans toucher aux partages faits à la main.
+MARQUE_PARTAGE_PAR_DEFAUT = "reglage:partage_par_defaut"
+
+
+def partage_par_defaut_stocke(org_id: int) -> Any:
+    """La valeur STOCKÉE, telle quelle — None si l'org n'en pose aucune ou est inconnue."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {COLONNE_PARTAGE_PAR_DEFAUT} AS v FROM orgs WHERE id = %s", (org_id,)
+        ).fetchone()
+    return row["v"] if row else None
+
+
+def poser_partage_par_defaut(org_id: int, valeur: Optional[dict]) -> bool:
+    """Pose (ou retire, `None`) le partage par défaut de l'org. False si l'org est absente."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"UPDATE orgs SET {COLONNE_PARTAGE_PAR_DEFAUT} = %s::jsonb WHERE id = %s "
+            "RETURNING id",
+            (json.dumps(valeur) if valeur is not None else None, org_id),
+        ).fetchone()
+    return row is not None
+
+
 _COLS = ("id, org_id, sub, label, folder, procedure, project_id, tools, "
          "outils_plateforme AS platform_tools, "
          "input, max_steps, "
@@ -169,6 +203,32 @@ def _forfait_prete(alias_trigger: str) -> str:
             "  AND g.principal_type = 'user' AND g.principal_id = %s "
             f"  AND g.permission = 'write' AND g.granted_by = {alias_trigger}.sub "
             f"  AND {PARTAGE_VIVANT_G})")
+
+
+def visibilites_d_agents(ids: list[int], org_id: int) -> dict[int, dict]:
+    """Qui VOIT chacun des agents `ids`, au-delà de son propriétaire et des admins :
+    `{"org": "editor"|"viewer"|None, "people": n}` — le rôle du partage VIVANT à
+    l'org entière, et le nombre de personnes ou d'équipes nommées. UNE requête pour
+    toute une liste ; un agent sans partage vaut `{"org": None, "people": 0}`."""
+    out = {int(i): {"org": None, "people": 0} for i in ids}
+    if not ids:
+        return out
+    from ._partage_vivant import PARTAGE_VIVANT
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT resource_id, "
+            "  max(permission) FILTER (WHERE principal_type = 'org' "
+            "                            AND principal_id = %s) AS org, "
+            "  count(*) FILTER (WHERE principal_type <> 'org') AS people "
+            "FROM resource_grants WHERE resource_type = 'runner_trigger' "
+            f"  AND resource_id = ANY(%s) AND {PARTAGE_VIVANT} GROUP BY resource_id",
+            (str(org_id), [str(i) for i in ids]),
+        ).fetchall()
+    for r in rows:
+        out[int(r["resource_id"])] = {
+            "org": {"write": "editor", "read": "viewer"}.get(r["org"] or ""),
+            "people": int(r["people"] or 0)}
+    return out
 
 
 def forfaits_pretes(ids: list[int], sub: str) -> set[int]:

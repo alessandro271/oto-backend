@@ -32,8 +32,9 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from .orgs import partage_par_defaut
 from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
-               _modele, _source_du_hook, runner_jobs)
+               _modele, _portee, _source_du_hook, runner_jobs)
 from .. import (db, deprecations, org_store, outils_du_travail, ownership,
                 procedure_retiree, roles, runner_hook, runner_models, runner_tick,
                 session_visibility, tool_alias, tool_registry, verrou_org)
@@ -189,6 +190,11 @@ class TriggerInput(BaseModel):
     # ne touche à rien ; `""` sur `update` = revenir au modèle du worker.
     model: Optional[str] = None
     enabled: Optional[bool] = None
+    private: Optional[bool] = Field(default=None, description=(
+        "create: `true` = only you (and org admins) see this agent, even when the "
+        "org shares new agents by default. Default: what the org's `partage_par_defaut` "
+        "says — private unless an admin set it. Nothing opens it further at creation; "
+        "share it later with op=share."))
     # ── le WEBHOOK ────────────────────────────────────────────────────────────
     #: `schedule` (défaut) ou `webhook`. Posé à la CRÉATION et jamais après : un
     #: agent ne change pas de coup d'envoi en cours de route.
@@ -334,6 +340,14 @@ class ToolWarning(BaseModel):
     needed_by: Optional[str] = None
 
 
+class AgentVisibility(BaseModel):
+    """Qui voit un agent au-delà de son propriétaire et des admins de l'org."""
+    #: Le rôle du partage à l'org ENTIÈRE ; `null` = l'org ne le voit pas.
+    org: Optional[Literal["editor", "viewer"]] = None
+    #: Personnes et équipes nommées une à une.
+    people: int = 0
+
+
 class Trigger(BaseModel):
     """Un déclencheur tel que servi (les colonnes de `_COLS`, db/runner_triggers) :
     la procédure à jouer, quand (cron + tz), avec quels outils, et l'état de
@@ -430,6 +444,10 @@ class Trigger(BaseModel):
     my_access: Optional[str] = None
     can_edit: Optional[bool] = None
     can_share: Optional[bool] = None
+    #: Qui le VOIT au-delà de son propriétaire et des admins (`_acces_agent.
+    #: avec_visibilites`) : `{"org": "editor"|"viewer"|null, "people": n}`.
+    #: `org=null, people=0` = privé. Absent = backend plus ancien.
+    visibility: Optional[AgentVisibility] = None
 
 
 class RunnerArme(BaseModel):
@@ -1311,6 +1329,9 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         secret = hache = None
         if webhook:
             secret, hache = runner_hook.nouveau_secret()
+        # Lu AVANT la création, même pour un agent privé : un réglage illisible lève
+        # (`default_sharing_unreadable`) sans laisser derrière lui un agent créé.
+        role = partage_par_defaut.role_a_la_naissance(ctx.org_id, "agent")
         t = db.create_trigger(
             ctx.org_id, ctx.sub, procedure=inp.procedure,
             cron=inp.cron or None, tz=tz,
@@ -1335,6 +1356,16 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             # naissait allumé, et la seule façon de le poser éteint était un
             # `update` juste après — donc une fenêtre où il pouvait tourner.
             enabled=inp.enabled is not False)
+        # Un agent NAÎT privé ; seul le réglage de son org (`partage_par_defaut`, posé
+        # par un admin) l'ouvre d'office, et jamais en écriture. Le créateur peut rester
+        # privé (`private=true`), jamais ouvrir au-delà du réglage (`role`, lu avant
+        # la création).
+        if role and not inp.private:
+            _acces_agent.ouvrir_a_l_org(ctx, t, role)
+            _portee.observer(ctx, ressource_type="runner_trigger", ressource_id=t["id"],
+                             ressource_nom=inp.label or inp.procedure, vers="org",
+                             geste="oto_trigger op=create")
+        t = _acces_agent.avec_visibilites(ctx.org_id, [t])[0]
         # ⚠️ Un webhook NAÎT avec une adresse privée, TOUJOURS (décidé le
         # 25/09/2026) : l'id numérique se parcourt, et une source stocke une URL
         # aléatoire aussi bien qu'une numérique — rien ne justifie de la choisir.
@@ -1367,7 +1398,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         return {"triggers": [_acces_agent.avec_acces(
                                  t, niveaux[int(t["id"])],
                                  ferme=_acces_agent.forfait_ferme(ctx.sub, t, pretes))
-                             for t in _servis_en_liste(ctx.org_id, vus)],
+                             for t in _acces_agent.avec_visibilites(
+                                 ctx.org_id, _servis_en_liste(ctx.org_id, vus))],
                 "runner": _modele.etat_servi(db.runner_arme(ctx.org_id), ctx.org_id)}
 
     if inp.trigger_ids is not None:
@@ -1380,7 +1412,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         t = db.get_trigger(inp.trigger_id, ctx.org_id)
         n = _acces_agent.exiger(ctx, t, _acces_agent.ECRIRE + ("viewer",))
         return {"trigger": _acces_agent.avec_acces(
-                    _avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t)), n,
+                    _acces_agent.avec_visibilites(
+                        ctx.org_id, [_avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t))])[0], n,
                     ferme=_acces_agent.forfait_ferme(ctx.sub, t)),
                 "runner": _modele.etat_servi(db.runner_arme(ctx.org_id), ctx.org_id)}
 
@@ -2442,10 +2475,14 @@ CAPABILITIES += [
             "(`source_connected`). op=disconnect_source removes the registrations at "
             "the sender; `delete` does it too. Both return `remote_cleanup_failed` "
             "for any the sender would not remove. "
-            "ACCESS: an agent belongs to its owner and runs AS them. list/get only "
+            "ACCESS: an agent belongs to its owner and runs AS them. It is born "
+            "private, unless an org admin set `partage_par_defaut` (oto_org_settings) "
+            "to let the org see new agents — `private=true` on create keeps it to you "
+            "and org admins. list/get only "
             "return agents you own, that are shared with you, or all of them for an "
             "org admin; each carries `my_access` (owner/admin/editor/viewer), "
-            "`can_edit`, `can_share`. op=share (owner or org admin; `share_with_email` "
+            "`can_edit`, `can_share`, and `visibility` ({org: editor|viewer|null, "
+            "people: n}; org null and people 0 = private). op=share (owner or org admin; `share_with_email` "
             "or `share_with_sub` of a member of THIS org, or `everyone=true`; `role` "
             "editor|viewer) / unshare / shares. An editor may update, enable, disable "
             "and clear the queue — the agent still runs as its owner. On an agent "

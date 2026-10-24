@@ -13,5 +13,6 @@ suspended_by TEXT,
 suspended_reason TEXT,
 suspended_tenant_id BIGINT,
 trial_ends_at TIMESTAMPTZ,
-time_saved_minutes JSONB
+time_saved_minutes JSONB,
+default_sharing JSONB
 );

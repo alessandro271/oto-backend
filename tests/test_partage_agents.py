@@ -64,6 +64,12 @@ def org(monkeypatch):
         return {7: best} if best and 7 in ids else {}
     monkeypatch.setattr(db, "partages_d_agents", _partages)
 
+    def _visibilites(ids, o):
+        org_role = partages.get(("org", str(o)))
+        gens = sum(1 for (t, _) in partages if t != "org")
+        return {int(i): {"org": org_role, "people": gens} for i in ids}
+    monkeypatch.setattr(db, "visibilites_d_agents", _visibilites)
+
     class _Scope:
         def __init__(self, sub):
             self.sub = sub
@@ -133,6 +139,91 @@ def test_partage_a_toute_l_org_le_rend_visible_et_modifiable(org):
     assert t["my_access"] == "editor"
     _appel(AUTRE, op="update", trigger_id=7, label="renommé")
     assert org["ecrit"] == {"label": "renommé"}
+
+
+def test_chaque_agent_servi_dit_qui_le_voit(org):
+    t, = _appel(PROPRIETAIRE, op="list")["triggers"]
+    assert t["visibility"] == {"org": None, "people": 2}
+    org["partages"][("org", str(ORG))] = "editor"
+    assert _appel(PROPRIETAIRE, op="get", trigger_id=7)["trigger"]["visibility"] == {
+        "org": "editor", "people": 2}
+
+
+# ── naître : privé, sauf le réglage de l'org (`partage_par_defaut`) ───────────
+
+@pytest.fixture
+def creation(org, monkeypatch):
+    """Une création : la procédure se lit, rien ne tourne déjà dessus ; le réglage de
+    l'org est `org["reglage"]` (la valeur STOCKÉE), et chaque partage posé garde son
+    `granted_by`."""
+    db = RT.db
+    org["partages"].clear()
+    org["reglage"] = None
+    org["auteurs"] = {}
+    org["cree"] = False
+    monkeypatch.setattr(db, "partage_par_defaut_stocke",
+                        lambda o: org["reglage"] if o == ORG else None)
+    monkeypatch.setattr(db, "triggers_for_procedure", lambda o, p: [])
+    monkeypatch.setattr(db, "create_trigger", lambda o, sub, **k: org.update(cree=True) or {
+        "id": 7, "org_id": o, "sub": sub, **k})
+
+    def _grant(kind, rid, ptype, pid, role=None, granted_by=None, **k):
+        org["partages"][(ptype, pid)] = role
+        org["auteurs"][(ptype, pid)] = granted_by
+    monkeypatch.setattr(ownership, "grant", _grant)
+    return org
+
+
+def _creer(monkeypatch, **kw):
+    # Ce banc ne parle ni du modèle, ni du runner, ni des clés : seulement du partage.
+    for nom in ("famille_declaree", "exige_un_modele", "exige_un_runner", "exige_servi"):
+        monkeypatch.setattr(RT._modele, nom, lambda *a, **k: None)
+    monkeypatch.setattr(RT._cle_exigee, "exiger_a_la_pose", lambda *a, **k: None)
+    monkeypatch.setattr(RT._abonnement, "exiger_a_la_pose", lambda *a, **k: None)
+    return _appel(PROPRIETAIRE, op="create", procedure="veille", cron="0 8 * * *",
+                  tools=["a"], model="claude-sonnet-5", **kw)["trigger"]
+
+
+def test_sans_reglage_un_agent_nait_prive(creation, monkeypatch):
+    t = _creer(monkeypatch)
+    assert creation["partages"] == {}, "le code ne partage jamais d'office un objet neuf"
+    assert t["visibility"] == {"org": None, "people": 0}
+    creation["reglage"] = {}
+    _creer(monkeypatch, private=False)
+    assert creation["partages"] == {}, "`private=false` n'ouvre pas au-delà du réglage"
+
+
+def test_en_lecture_l_org_voit_l_agent_sans_pouvoir_le_modifier(creation, monkeypatch):
+    creation["reglage"] = {"agent": "lecture"}
+    t = _creer(monkeypatch)
+    assert creation["partages"] == {("org", str(ORG)): "viewer"}
+    assert creation["auteurs"] == {("org", str(ORG)): RT.db.MARQUE_PARTAGE_PAR_DEFAUT}, (
+        "le partage né du réglage est MARQUÉ : il se retire sans toucher aux autres")
+    assert t["visibility"] == {"org": "viewer", "people": 0}
+    vu, = _appel(AUTRE, op="list")["triggers"]
+    assert (vu["my_access"], vu["can_edit"]) == ("viewer", False)
+    e = _refus(AUTRE, op="update", trigger_id=7, label="renommé")
+    assert (e.status, e.code) == (403, "trigger_edit_forbidden")
+
+
+def test_private_l_emporte_sur_le_reglage(creation, monkeypatch):
+    creation["reglage"] = {"agent": "lecture"}
+    t = _creer(monkeypatch, private=True)
+    assert creation["partages"] == {}
+    assert t["visibility"] == {"org": None, "people": 0}
+
+
+@pytest.mark.parametrize("stocke", [{"agent": "ecriture"}, {"agent": "tous"},
+                                    {"tableau": "lecture"}, ["agent"], "lecture"])
+def test_un_reglage_illisible_leve_avant_toute_creation(creation, monkeypatch, stocke):
+    """Ni `aucun` ni autre chose : un réglage qu'on ne sait pas lire ne se devine pas —
+    et aucun agent n'est créé derrière le refus. `ecriture` stocké pour un agent est
+    illisible : rien ne peut l'avoir posé."""
+    creation["reglage"] = stocke
+    with pytest.raises(AuthzDenied) as e:
+        _creer(monkeypatch)
+    assert (e.value.status, e.value.code) == (409, "default_sharing_unreadable")
+    assert creation["cree"] is False and creation["partages"] == {}
 
 
 # ── modifier ─────────────────────────────────────────────────────────────────

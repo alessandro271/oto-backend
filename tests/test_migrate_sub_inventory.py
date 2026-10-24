@@ -407,6 +407,7 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("nodes", "data"), ("nodes", "props"), ("org_instructions", "slots"),
         ("org_instruction_revisions", "slots"), ("orgs", "email_settings"),
         ("orgs", "field_filters"), ("orgs", "time_saved_minutes"),
+        ("orgs", "default_sharing"),
         ("process_shares", "preview_shape"),
         ("process_shares", "preview_views"), ("project_links", "config"),
         # L'affichage d'une recette : étiquettes, phrases, crédits déclarés par étape.

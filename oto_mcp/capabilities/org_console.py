@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from . import scheduled_emails
 from .connectors import sharing as connectors_sharing
 from .groups import core as groups, guide as groups_guide, invites as groups_invites, members as groups_members
-from .orgs import core as orgs, email_settings as orgs_email_settings, field_filters as orgs_field_filters, invites as orgs_invites, mfa as orgs_mfa, model_subscriptions as orgs_model_subscriptions, update as orgs_update
+from .orgs import core as orgs, email_settings as orgs_email_settings, field_filters as orgs_field_filters, invites as orgs_invites, mfa as orgs_mfa, model_subscriptions as orgs_model_subscriptions, partage_par_defaut as orgs_partage_par_defaut, update as orgs_update
 from ._authz import (
     BY_OP,
     GROUP_ADMIN_OF,
@@ -89,7 +89,8 @@ def _org(ctx: ResolvedCtx, inp: OrgInput) -> dict:
 # ── oto_org_settings : get / set / preview × domaine email|mfa|field_filters|model_subscriptions ─
 class OrgSettingsInput(BaseModel):
     op: Literal["get", "set", "preview"]
-    domain: Literal["email", "mfa", "field_filters", "model_subscriptions", "time_saved"]
+    domain: Literal["email", "mfa", "field_filters", "model_subscriptions", "time_saved",
+                    "partage_par_defaut"]
     org_id: int
     # email (set) :
     connector: Optional[str] = None          # scaleway | resend
@@ -116,6 +117,8 @@ class OrgSettingsInput(BaseModel):
     # time_saved (set) : minutes par type de résultat — {"record": 2, …} ; une
     # valeur null rend le défaut à ce type, `{}` les rend tous.
     minutes: Optional[dict[str, Optional[float]]] = None
+    # partage_par_defaut (set) : par type d'objet neuf — {"agent": "aucun"|"lecture"}.
+    partage: Optional[dict[str, str]] = None
 
 
 def _temps_gagne(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
@@ -158,10 +161,22 @@ def _temps_gagne(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
             "research_cap_per_run": time_saved.RESEARCH_CAP_PER_RUN}
 
 
+def _partage_par_defaut(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
+    """Ce qu'un objet NEUF de l'org reçoit d'office (`orgs/partage_par_defaut.py`)."""
+    ppd = orgs_partage_par_defaut
+    if inp.op == "get":
+        return ppd.servi(inp.org_id, ppd.lire(inp.org_id))
+    if inp.op == "set":
+        return ppd.servi(inp.org_id, ppd.poser(inp.org_id, inp.partage))
+    raise AuthzDenied(400, "unsupported_op", "preview n'existe que pour field_filters.")
+
+
 def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     es, mfa, ff = orgs_email_settings, orgs_mfa, orgs_field_filters
     if inp.domain == "time_saved":
         return _temps_gagne(ctx, inp)
+    if inp.domain == "partage_par_defaut":
+        return _partage_par_defaut(ctx, inp)
     if inp.domain == "model_subscriptions":
         return _plafond_abonnements(ctx, inp)
     if inp.domain == "email":
@@ -371,7 +386,12 @@ CAPABILITIES += [
             "(minutes per result type behind the agents' time saved — report, action, record, "
             "research; the defaults are estimates, the org may override them; get returns "
             "each kind's default and applied minutes; set takes "
-            "`minutes` {kind: 0..240 | null} — null restores that kind's default, `{}` all). "
+            "`minutes` {kind: 0..240 | null} — null restores that kind's default, `{}` all) "
+            "| partage_par_defaut (what a NEW object of the org is shared with by "
+            "default, per type: set takes `partage` {agent: aucun|lecture}; default "
+            "`aucun` = born private; `lecture` = the whole org may see new agents, not "
+            "edit them; their creator may still keep one private. `ecriture` is refused "
+            "for agents: a scheduled run runs as its owner). "
             "op=get is member, set is org admin."),
         mcp="oto_org_settings",
     ),

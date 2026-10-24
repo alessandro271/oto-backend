@@ -690,3 +690,19 @@ def projets_sans_partages(monkeypatch):
     lui-même est couvert par `test_projects.py`."""
     from oto_mcp import ownership
     monkeypatch.setattr(ownership, "list_grants", lambda rtype, rid: [])
+
+
+@pytest.fixture
+def agents_sans_partages(monkeypatch):
+    """Pour un banc qui double la base des agents et ne parle pas de leur partage : la
+    création lit le partage par défaut de l'org (`db.partage_par_defaut_stocke`, rendu
+    vide : l'agent naît privé) et chaque agent servi dit qui le voit
+    (`db.visibilites_d_agents`) — deux lectures qu'un tel banc n'a pas. Rend les
+    lectures de visibilité reçues."""
+    from oto_mcp import db
+    vus: dict[str, list] = {"visibilites": []}
+    monkeypatch.setattr(db, "partage_par_defaut_stocke", lambda org: None)
+    monkeypatch.setattr(db, "visibilites_d_agents", lambda ids, org: (
+        vus["visibilites"].append(list(ids))
+        or {int(i): {"org": None, "people": 0} for i in ids}))
+    return vus

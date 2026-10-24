@@ -1913,11 +1913,33 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
 - **Retirer un partage ne renouvelle pas le secret du webhook** : un éditeur ne l'a
   jamais vu (rendu une fois, à qui le pose — propriétaire ou admin, seuls à pouvoir le
   renouveler).
+- **Un agent naît privé ; l'org peut l'ouvrir d'office en lecture** (23/10/2026). Le
+  code ne partage jamais d'office un objet neuf. Un admin de l'org pose
+  `oto_org_settings domain=partage_par_defaut` (`{agent: aucun|lecture}`, colonne
+  `orgs.default_sharing`, défaut `aucun`, révision `20261024_1101_default_sharing`) ;
+  en `lecture`, `create` pose un partage `viewer` à l'org entière
+  (`_acces_agent.ouvrir_a_l_org`), sauf `private=true`. Le créateur ne peut pas ouvrir
+  au-delà. Le partage né du réglage est MARQUÉ (`granted_by = 'reglage:partage_par_defaut'`)
+  et se retire sans toucher aux partages faits à la main ; il ne prête pas un abonnement
+  personnel (ci-dessus). Une valeur stockée illisible lève `default_sharing_unreadable`,
+  avant toute création.
+  - ⚠️ **`ecriture` est refusé pour un agent** (`default_sharing_write_unsupported`).
+    `oto_trigger op=run` enfile sous l'APPELANT (`sub=ctx.sub`), mais l'horloge
+    (`runner_tick`) et le webhook (`runner_hook`) enfilent sous le PROPRIÉTAIRE
+    (`sub=t["sub"]`), et le jeton de délégation est émis au porteur du travail
+    (`runner_jobs._delegue`). Un membre qui modifierait l'agent d'un collègue ferait donc
+    exécuter ses consignes, au prochain run planifié, avec les connexions personnelles du
+    propriétaire — sans « lanceur » à qui rattacher ce run. Une écriture d'office à toute
+    l'org confierait cette identité sans geste du propriétaire ; elle reste un partage
+    nommé (`op=share`).
+  - Les agents d'avant restent tels quels : rien ne les ouvre rétroactivement.
+- **Chaque agent servi dit qui le voit** : `visibility = {org: editor|viewer|null,
+  people: n}` sur `list`/`get`/`create` (`db.visibilites_d_agents`, une lecture pour
+  toute la liste). `org=null, people=0` = privé (propriétaire et admins seuls) ; le front
+  l'affiche sur chaque ligne, comme les tableaux.
 - **Les agents d'avant restent ouverts** : la révision `0035_agents_partages_a_l_org`
-  pose un partage `editor` à l'org sur chaque agent existant ; son propriétaire le
-  retire depuis l'écran. Un agent créé ensuite naît privé. ⚠️ **La révision se joue
-  AVANT le déploiement du code** (`oto-mcp migrer upgrade head`) : sans elle, chaque
-  agent existant devient privé d'un coup.
+  a posé un partage `editor` à l'org sur chaque agent existant au 02/10/2026 ; son
+  propriétaire le retire depuis l'écran.
 - **La file de l'org reste lisible, pas ce qu'un agent exécute** : `runner.jobs`
   (`list`, `get`) sert toujours les travaux de toute l'org, mais la charge d'un travail
   enfilé par un agent que l'appelant ne peut pas MODIFIER est réduite à de quoi le
