@@ -154,8 +154,8 @@ class TriggerInput(BaseModel):
         "create/update: the project the agent works in — its runs use that project's "
         "slots and accounts. One of the projects its procedure is filed in (omitted = "
         "the first one; another is refused, `project_not_of_procedure`); a procedure in "
-        "no project is filed there. One agent of each kind per procedure AND project: for "
-        "a procedure to work for two projects, give it an agent in each."))
+        "no project is filed there. A procedure can have several agents, in one project "
+        "or across its projects — each with its own instructions, schedule and tools."))
     input: Optional[str] = None
     #: `run_now` seulement : ce que l'appelant passe au run qu'il lance — le résultat
     #: d'un premier agent pour le second d'une chaîne. AJOUTÉ à l'instruction de l'agent,
@@ -660,6 +660,8 @@ def _projet_de_la_pose(ctx: ResolvedCtx, slug: Optional[str], projets: list[int]
     l'org, un agent travaille dans UN d'entre eux (`_projet_de_l_agent`) — chaque run se
     fait dans un projet, qui décide des tableaux de ses slots et des comptes qu'il
     utilise. Pour qu'une procédure travaille pour deux projets : un agent dans chacun.
+    Une procédure peut avoir plusieurs agents, dans un même projet aussi : chacun a ses
+    instructions, et peut n'en jouer qu'une partie.
     `projets` = ceux de la procédure (`db.projets_des_procedures`), le premier lié
     d'abord. Donc :
     - un projet demandé est l'un d'eux, ou REFUSÉ, avec le geste qui y range la
@@ -685,33 +687,6 @@ def _projet_de_la_pose(ctx: ResolvedCtx, slug: Optional[str], projets: list[int]
             f"project_id={int(demande)} target_type=procedure target_ref={slug}`) — elle "
             "garde ses autres projets — ou choisis l'un des siens.")
     return int(demande), False
-
-
-def _exiger_seul_de_son_genre(ctx: ResolvedCtx, actuel: dict, slug: str,
-                              projet: Optional[int], projets: list[int]) -> None:
-    """Une retouche qui change la procédure ou le projet d'un agent ne doit pas en faire
-    le second de son genre pour cette procédure dans ce projet — la règle que `create`
-    tient (`already_scheduled`). Le même refus, nommé, que la pose."""
-    genre = actuel.get("kind") or "schedule"
-    premier = projets[0] if projets else None
-    autre = next((d for d in db.triggers_for_procedure(ctx.org_id, slug)
-                  if int(d["id"]) != int(actuel["id"])
-                  and (d.get("kind") or "schedule") == genre
-                  and (d.get("project_id") if d.get("project_id") is not None else premier)
-                  == projet), None)
-    if autre is None:
-        return
-    if _acces_agent.niveau(ctx.sub, ctx.org_id, autre) is None:
-        raise AuthzDenied(
-            409, "already_scheduled",
-            f"`{slug}` porte déjà une automatisation de ce genre dans ce projet, qui n'est "
-            "pas partagée avec toi — un objet ne porte qu'une automatisation de chaque "
-            "genre par projet.")
-    raise AuthzDenied(
-        409, "already_scheduled",
-        f"`{slug}` a déjà une automatisation de ce genre dans ce projet (#{autre['id']}) — "
-        "un objet ne porte qu'une automatisation de chaque genre par projet. Modifie "
-        "celle-là, ou pose celle-ci dans un autre des projets de la procédure.")
 
 
 def _ranger_la_procedure(ctx: ResolvedCtx, slug: str, project_id: int) -> None:
@@ -1360,50 +1335,15 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # programmé sans jamais tourner. À la création, le propriétaire EST
         # l'appelant — rien à comparer, seule la connexion se vérifie.
         _abonnement.exiger_a_la_pose(ctx.sub, None, famille, org_id=ctx.org_id)
-        # ⚠️ UN SEUL agent programmé par objet (tranché le 03/09). L'agent est une
-        # PROPRIÉTÉ de la procédure, pas une collection : deux agents sur le même
-        # objet, c'est deux réponses à « est-ce que ça tourne ? », et l'écran
-        # devrait en choisir une. Le refus dit lequel existe, pour qu'on puisse
-        # le modifier plutôt que d'en créer un second.
-        # ⚠️ UN SEUL agent PAR COUP D'ENVOI et par objet. La règle du 03/09 tenait
-        # « un objet ne porte qu'un agent » quand il n'existait qu'une façon de le
-        # déclencher ; elle devient « un programmé ET un déclenché », parce qu'une
-        # veille du matin et une réaction à un événement sont deux automatisations
-        # différentes de la même procédure — pas deux réponses à la même question.
-        # Deux du MÊME genre restent refusées, pour la raison d'origine.
-        # ⚠️ ET PAR PROJET (24/10/2026) : une procédure rangée dans deux projets
-        # travaille pour chacun par son propre agent — c'est la seule façon pour elle de
-        # le faire (`_projet_de_la_pose`). La question « est-ce que ça tourne ? » se pose
-        # alors par projet, et chaque projet garde une seule réponse. Un agent sans
-        # projet à lui compte dans le premier de sa procédure, là où il travaille.
+        # Plusieurs agents peuvent suivre la même procédure, dans un même projet comme
+        # dans plusieurs (levé le 24/10/2026). La règle du 03/09 (« un objet ne porte
+        # qu'une automatisation de chaque genre ») supposait que deux agents d'une
+        # procédure feraient le même travail. Ils ne le font pas : chacun a ses propres
+        # instructions, son horaire et ses outils, et une procédure en plusieurs
+        # sections se partage entre eux — l'un propose le vendredi, l'autre envoie le
+        # lundi. La règle ne tenait d'ailleurs qu'à la pose : pointer un agent existant
+        # sur la procédure la contournait, et c'est ainsi que ces partages existaient.
         genre = "webhook" if webhook else "schedule"
-        premier = projets[0] if projets else None
-        deja = [d for d in db.triggers_for_procedure(ctx.org_id, inp.procedure)
-                if (d.get("kind") or "schedule") == genre
-                and (d.get("project_id") if d.get("project_id") is not None else premier)
-                == projet]
-        if deja:
-            # Un agent que l'appelant ne voit pas ne se décrit pas : ni son numéro, ni
-            # sa cadence (« aucun refus ne décrit un agent invisible »). Le refus reste
-            # nommé ; seul l'agent visible est désigné.
-            if _acces_agent.niveau(ctx.sub, ctx.org_id, deja[0]) is None:
-                raise AuthzDenied(
-                    409, "already_scheduled",
-                    f"`{inp.procedure}` porte déjà une automatisation de ce genre, qui "
-                    "n'est pas partagée avec toi — un objet ne porte qu'une "
-                    "automatisation de chaque genre. Demande l'accès à son "
-                    "propriétaire ou à un admin de l'org.")
-            quoi = ("déjà une automatisation webhook" if webhook else
-                    f"déjà une automatisation horaire (cadencement "
-                    f"`{deja[0]['cron']}`)")
-            ici = f" dans le projet #{projet}" if projet is not None else ""
-            raise AuthzDenied(
-                409, "already_scheduled",
-                f"`{inp.procedure}` a {quoi}{ici} (#{deja[0]['id']}). Modifie-la plutôt "
-                "que d'en créer une seconde — un objet ne porte qu'une "
-                "automatisation de chaque genre par projet. Pour qu'elle travaille "
-                "aussi pour un autre de ses projets, pose l'agent dans celui-là "
-                "(`project_id`).")
         secret = hache = None
         if webhook:
             secret, hache = runner_hook.nouveau_secret()
@@ -1944,11 +1884,6 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 champs["project_id"] = projet
             if ranger and projet is not None:
                 a_ranger = (slug, int(projet))
-            # Où il travaillait : son projet, sinon le premier de sa procédure d'alors.
-            avant = (garde if garde is not None else
-                     db.maison_de_la_procedure(ctx.org_id, _actuel().get("procedure")))
-            if slug != _actuel().get("procedure") or projet != avant:
-                _exiger_seul_de_son_genre(ctx, _actuel(), slug, projet, projets)
     if "tools" in champs:
         exiger_aucun_ajout_d_agent(_actuel(), champs["tools"])
     if inp.platform_tools is not None:

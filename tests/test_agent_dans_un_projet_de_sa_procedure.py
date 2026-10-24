@@ -7,7 +7,8 @@ donne un agent dans chacun. Les bancs :
 - la pose et la retouche : le premier projet par défaut, un autre des siens accepté, un
   projet hors d'eux refusé avec le geste qui y range la procédure, une procédure rangée
   nulle part rangée là où l'agent travaille — après l'écriture, jamais avant ;
-- un agent de chaque genre par procédure ET par projet ;
+- plusieurs agents par procédure, dans un même projet aussi (la limite d'un agent de
+  chaque genre est levée) ;
 - le run et la lecture d'un agent sans projet à lui : le premier de sa procédure ;
 - sur base réelle, la lecture des projets d'une procédure : ceux de l'org, non archivés,
   sous l'une ou l'autre écriture du lien, le premier lié d'abord.
@@ -123,37 +124,16 @@ def test_un_refus_apres_le_projet_ne_range_rien(banc, monkeypatch):
     assert banc["liens"] == []
 
 
-# ── un agent de chaque genre par procédure ET par projet ──────────────────────
+# ── plusieurs agents par procédure ────────────────────────────────────────────
 
-def test_un_second_agent_du_meme_genre_dans_un_autre_projet_est_accepte(banc):
+@pytest.mark.parametrize("projet", [10, 20])
+def test_un_second_agent_programme_est_accepte_dans_un_projet_comme_dans_l_autre(banc, projet):
+    """Deux agents d'une procédure ne font pas forcément le même travail : chacun a ses
+    instructions, et une procédure en sections se partage entre eux."""
     banc["agents"].append({"id": 4, "kind": "schedule", "project_id": 10, "cron": "0 8 * * *"})
-    _pose(project_id=20)
-    assert banc["pose"]["project_id"] == 20
-
-
-def test_un_second_agent_du_meme_genre_dans_le_meme_projet_est_refuse(banc):
-    banc["agents"].append({"id": 4, "kind": "schedule", "project_id": 20, "cron": "0 8 * * *"})
-    with pytest.raises(AuthzDenied) as e:
-        _pose(project_id=20)
-    assert e.value.code == "already_scheduled"
-    assert "#20" in e.value.message and "par projet" in e.value.message
-
-
-def test_un_agent_sans_projet_compte_dans_le_premier_de_sa_procedure(banc):
-    """L'agent d'avant la règle, sans projet à lui, travaille dans le premier projet de
-    sa procédure : c'est là qu'il occupe la place, pas ailleurs."""
-    banc["agents"].append({"id": 4, "kind": "schedule", "project_id": None, "cron": "0 8 * * *"})
-    with pytest.raises(AuthzDenied) as e:
-        _pose()
-    assert e.value.code == "already_scheduled"
-    _pose(project_id=20)
-    assert banc["pose"]["project_id"] == 20
-
-
-def test_un_webhook_et_un_programme_cohabitent_dans_le_meme_projet(banc):
-    banc["agents"].append({"id": 4, "kind": "webhook", "project_id": 10})
-    _pose()
-    assert banc["pose"]["project_id"] == 10
+    _pose(project_id=projet, input="Applique UNIQUEMENT la section B.")
+    assert banc["pose"]["project_id"] == projet
+    assert banc["pose"]["input"] == "Applique UNIQUEMENT la section B."
 
 
 # ── la retouche ───────────────────────────────────────────────────────────────
@@ -190,12 +170,11 @@ def test_retoucher_le_projet_hors_de_la_procedure_est_refuse(retouche):
     assert "ecrit" not in retouche
 
 
-def test_retoucher_vers_un_projet_deja_occupe_est_refuse(retouche):
+def test_retoucher_vers_un_projet_ou_travaille_un_autre_agent_est_accepte(retouche):
     retouche["actuel"]["procedure"] = "veille"
     retouche["agents"].append({"id": 4, "kind": "schedule", "project_id": 10})
-    with pytest.raises(AuthzDenied) as e:
-        _appel(op="update", trigger_id=3, project_id=10)
-    assert e.value.code == "already_scheduled"
+    _appel(op="update", trigger_id=3, project_id=10)
+    assert retouche["ecrit"]["project_id"] == 10
 
 
 def test_une_retouche_ordinaire_ne_lit_pas_les_projets(retouche, monkeypatch):
