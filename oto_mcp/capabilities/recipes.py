@@ -489,14 +489,25 @@ def _lister_org(org_id: int) -> list[dict]:
     return [{**f, "display": _affichage_de(f, corps.get(f["id"]))} for f in fiches]
 
 
+def _iso(quand: Any) -> Optional[str]:
+    """Une date de la base en ISO 8601. ⚠️ La fabrique de lignes (`db/_conn.py`,
+    `_str_dict_row`) rend les dates en TEXTE (« 2026-10-02 00:00:00 », UTC) : un
+    `.isoformat()` sur ce texte levait, et la route répondait 500 pour toute org
+    qui a une recette (prod, 25 octobre 2026)."""
+    if quand is None:
+        return None
+    if hasattr(quand, "isoformat"):
+        return quand.isoformat()
+    return str(quand).replace(" ", "T", 1)
+
+
 async def _org_recipes(ctx: ResolvedCtx, inp: OrgRecipesInput) -> dict:
     fiches = await run_in_threadpool(_lister_org, inp.org_id)
     return {"recipes": [{
         "slug": f["slug"], "title": f["title"], "description": f["description"] or "",
         "status": "published" if f["published_version"] else "proposed",
         "published_version": f["published_version"], "latest_version": f["latest_version"],
-        "updated_at": f["updated_at"].isoformat() if f.get("updated_at") is not None
-        else None,
+        "updated_at": _iso(f.get("updated_at")),
         "display": f.get("display"),
     } for f in fiches]}
 
