@@ -4,7 +4,12 @@ undo — with JSON. Contract: the front's `src/lib/copilot/protocol.ts` and `tra
 
 Who may use it: an org member, in the org they view (`X-Oto-Org`), whose `sub` is in the
 instance's allowlist `OTO_COPILOT_SUBS` — empty by default, so nobody until an operator
-names someone. Never while viewing as someone else.
+names someone. Never while viewing as someone else. **An interactive session only**: an
+`oto_` token — a person's, a delegated one, an org key —, a worker secret or a service
+identity is refused (403 `api_token_forbidden`), twice: by the authentication
+(`RestBinding.allow_api_token=False`) and here, on the request's source (`geste`). A
+token would turn the panel into a model endpoint paid by the instance, driven by a script.
+And never past the account's daily spend ceiling (429 `copilot_daily_cap`, `depense.py`).
 
 Every refusal that happens once the stream is open comes as an `error` event followed
 by `done`, inside a 200: the panel shows it in the conversation. Only the refusals that
@@ -24,13 +29,13 @@ import anyio
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from ... import session_org
+from ... import geste, session_org
 from ...db import copilot as store
 from .._authz import ORG_MEMBER
 from .._types import (AuthzDenied, Capability, DeclaredError, EventStream, ResolvedCtx,
                       RestBinding)
 from ..registry import CAPABILITIES
-from . import annulation, boucle, cle as cles, consigne, outils
+from . import annulation, boucle, cle as cles, consigne, depense, outils
 from .boucle import ev
 
 logger = logging.getLogger(__name__)
@@ -53,6 +58,12 @@ def autorises() -> frozenset:
 
 
 def _garde(ctx: ResolvedCtx) -> None:
+    g = geste.courant()
+    if g is None or g.source != geste.CONSOLE:
+        # Fail-closed: no request source known is not a session.
+        raise AuthzDenied(403, "api_token_forbidden",
+                          "The in-app agent answers an interactive session only: an API "
+                          "or delegated token cannot use it.")
     if session_org.current_view_as_bound_org() is not None:
         raise AuthzDenied(403, "copilot_view_as",
                           "The in-app agent is off while viewing as someone else.")
@@ -286,13 +297,22 @@ async def _reprise(ctx: ResolvedCtx, thread_id: str, avant):
         yield e
 
 
+async def _plafond(ctx: ResolvedCtx) -> None:
+    """Refused before the stream opens when the account has reached today's ceiling
+    (the loop checks again before each model call)."""
+    if await run_in_threadpool(depense.atteint, ctx.sub):
+        raise AuthzDenied(429, "copilot_daily_cap", depense.message_de_refus())
+
+
 async def _turn(ctx: ResolvedCtx, inp: TurnInput) -> EventStream:
     _garde(ctx)
+    await _plafond(ctx)
     return EventStream(_sse(_tour(ctx, inp)))
 
 
 async def _client_result(ctx: ResolvedCtx, inp: ClientResultInput) -> EventStream:
     _garde(ctx)
+    await _plafond(ctx)
     outils_client = ([t.model_dump() for t in inp.client_tools]
                      if inp.client_tools is not None else None)
     return EventStream(_sse(_reprise(ctx, inp.thread_id, lambda f: boucle.repondre_page(
@@ -301,6 +321,7 @@ async def _client_result(ctx: ResolvedCtx, inp: ClientResultInput) -> EventStrea
 
 async def _approval(ctx: ResolvedCtx, inp: ApprovalInput) -> EventStream:
     _garde(ctx)
+    await _plafond(ctx)
     return EventStream(_sse(_reprise(ctx, inp.thread_id, lambda f: boucle.repondre_carte(
         f, inp.approval_id, inp.decision == "approve", inp.edits, bool(inp.remember)))))
 
@@ -314,40 +335,52 @@ def _revert(ctx: ResolvedCtx, inp: RevertInput) -> dict:
     jeton = session_org.set_call_org(int(ligne["org_id"])) if ligne.get("org_id") else None
     try:
         out = annulation.defaire(ctx.sub, ligne)
-    except Exception as e:
-        logger.warning("copilot : annulation %s refusée", inp.revert_id, exc_info=True)
-        raise AuthzDenied(409, "undo_failed", f"Undo failed: {str(e)[:300]}") from None
+    except Exception:
+        # The store's own words stay in the log: they can name a table, a column or a
+        # rule of another account's data. The client gets the named refusal.
+        logger.exception("copilot : annulation %s refusée", inp.revert_id)
+        raise AuthzDenied(409, "undo_failed",
+                          "Undo failed: the change could not be put back, or only in "
+                          "part. Check the table before trying again.") from None
     finally:
         if jeton is not None:
             session_org.reset_call_org(jeton)
     return {"ok": True, "undone": ligne.get("label") or "", "skipped": int(out["skipped"])}
 
 
-_PORTE = (DeclaredError(403, "copilot_not_enabled",
+_PORTE = (DeclaredError(403, "api_token_forbidden",
+                        "an API or delegated token, not an interactive session"),
+          DeclaredError(403, "copilot_not_enabled",
                         "the account is not in the instance's allowlist"),
           DeclaredError(403, "copilot_view_as", "the request views as someone else"))
+_PLAFOND = DeclaredError(429, "copilot_daily_cap",
+                         "the account has reached today's spend ceiling "
+                         "(`OTO_COPILOT_DAILY_CAP_USD`)")
 
 CAPABILITIES += [
     Capability(
         key="copilot.turn", handler=_turn, Input=TurnInput, Output=CopilotEvent,
-        authz=ORG_MEMBER, mcp=None, errors=_PORTE,
-        rest=RestBinding("POST", "/api/copilot/turns", media=_SSE, provisoire=True),
+        authz=ORG_MEMBER, mcp=None, errors=(*_PORTE, _PLAFOND),
+        rest=RestBinding("POST", "/api/copilot/turns", media=_SSE, provisoire=True,
+                         allow_api_token=False),
         description="The in-app agent: one message of the person, answered as an event "
                     "stream (SSE). Opens a conversation when `thread_id` is null or not "
                     "the caller's; the first event names it (`thread`). Pauses on an "
                     "approval card or a page action; the matching route resumes it."),
     Capability(
         key="copilot.client_result", handler=_client_result, Input=ClientResultInput,
-        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None, errors=_PORTE,
+        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None, errors=(*_PORTE, _PLAFOND),
         rest=RestBinding("POST", "/api/copilot/threads/{thread_id}/client-results",
-                         media=_SSE, provisoire=True),
+                         media=_SSE, provisoire=True,
+                         allow_api_token=False),
         description="The page's answer to the in-app agent's page action (`call_id`), "
                     "and the page's actions now (`client_tools`); resumes the stream."),
     Capability(
         key="copilot.approval", handler=_approval, Input=ApprovalInput,
-        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None, errors=_PORTE,
+        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None, errors=(*_PORTE, _PLAFOND),
         rest=RestBinding("POST", "/api/copilot/threads/{thread_id}/approvals/{approval_id}",
-                         media=_SSE, provisoire=True),
+                         media=_SSE, provisoire=True,
+                         allow_api_token=False),
         description="The person's answer to an approval card: approve or reject, the "
                     "fields edited on the card (only those it offered), and whether to stop "
                     "asking for this kind of change in this conversation (plain writes "
@@ -359,7 +392,8 @@ CAPABILITIES += [
                 DeclaredError(404, "nothing_to_undo",
                               "already undone, expired, or another account's"),
                 DeclaredError(409, "undo_failed", "the store refused to put it back")),
-        rest=RestBinding("POST", "/api/copilot/actions/{revert_id}/revert", provisoire=True),
+        rest=RestBinding("POST", "/api/copilot/actions/{revert_id}/revert", provisoire=True,
+                         allow_api_token=False),
         description="Undoes one change the in-app agent made, once, before it expires: "
                     "only rows and cells that still hold what the agent wrote."),
 ]

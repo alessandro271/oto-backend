@@ -126,6 +126,33 @@ def test_lecture_passe_ecriture_demande(monkeypatch):
     assert carte_["rememberable"] is True and carte_["id"] == "w"
 
 
+def test_la_carte_dit_quand_rien_ne_se_defait(monkeypatch):
+    from oto_mcp.capabilities.copilot import annulation
+    fil = _fil(queue=[{"id": "w", "name": "data_write",
+                       "input": {"datastore": 1, "row": {"a": "b"}}}])
+    evs, _ = _drainer(fil, _boite("data_write"), monkeypatch, [])
+    assert annulation.SANS_ANNULATION not in evs[-1]["title"]
+    fil = _fil(queue=[{"id": "d", "name": "oto_doc",
+                       "input": {"op": "create", "title": "Note"}}])
+    evs, _ = _drainer(fil, _boite("oto_doc"), monkeypatch, [])
+    assert evs[-1]["type"] == "approval_required"
+    assert evs[-1]["title"].endswith(annulation.SANS_ANNULATION)
+
+
+def test_annulation_promise_mais_non_preparee_le_dit(monkeypatch):
+    from oto_mcp.capabilities.copilot import annulation
+
+    def casse(*a, **k):
+        raise RuntimeError("journal")
+    monkeypatch.setattr(annulation, "preparer", casse)
+    bloc = {"id": "w", "name": "data_write", "input": {"datastore": 1, "row": {"a": "b"}},
+            "approved": True}
+    evs, _ = _drainer(_fil(queue=[bloc]), _boite("data_write"), monkeypatch, [])
+    res = evs[-1]
+    assert res["type"] == "tool_result" and res["ok"] and "revert_id" not in res
+    assert res["summary"].endswith("no undo for this change")
+
+
 def test_ecriture_retenue_passe_destructif_jamais(monkeypatch):
     appels: list = []
     fil = _fil(mode="act", remembered=["data_delete_row:"], queue=[

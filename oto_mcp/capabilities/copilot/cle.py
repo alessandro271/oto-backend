@@ -75,12 +75,16 @@ def resoudre(org_id: Optional[int], sub: str) -> Cle:
         raise SansCle("no_model_key", "This organization has no model key, and the shared "
                       "key is not open to it: add an Anthropic key in Connectors, or ask "
                       "whoever administers this instance for access.", 402)
+    # The key's config names the provider workspace its calls are billed to. Unreadable,
+    # the call is REFUSED, never sent without it: a call outside its workspace lands on
+    # another budget and another rate limit than the one the key was granted under.
     try:
         workspace = (partagee.config or {}).get("workspace_id") or None
     except Exception:
-        logger.warning("copilot : config de la clé partagée illisible pour l'org %s — "
-                       "servie sans workspace", org_id, exc_info=True)
-        workspace = None
+        logger.exception("copilot : config de la clé partagée illisible pour l'org %s — "
+                         "appel refusé", org_id)
+        raise SansCle("model_key_unreadable", "The model key could not be read right "
+                      "now. Try again in a moment.", 503) from None
     return Cle(partagee.key, workspace,
                budget.rang_refacture(partagee.mode, partagee.entity_id))
 

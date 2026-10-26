@@ -18,6 +18,9 @@ from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
 A, B, HORS = "usr_copilot_a", "usr_copilot_b", "usr_copilot_hors"
+#: Spends past a ceiling lowered for one test: its own account, so the day's spend of
+#: the others stays far below the default ceiling.
+C = "usr_copilot_c"
 
 
 class _Claims:
@@ -49,7 +52,7 @@ def monde(pg_dsn):
         from oto_mcp.server import _build_mcp
         init_db()
         oid = org_store.create_org("Org du copilote", created_by=A)
-        for sub in (A, B, HORS):
+        for sub in (A, B, C, HORS):
             db.upsert_user(sub, email=f"{sub}@copilot.invalid", name=sub)
             org_store.add_org_member(oid, sub, "org_admin")
             org_store.set_active_org(sub, oid)
@@ -77,14 +80,18 @@ class _Modele:
     def __init__(self):
         self.script: list[dict] = []
         self.requetes: list[dict] = []
+        self.usage = {"input_tokens": 1, "output_tokens": 1}
 
-    async def flux(self, cle, workspace, corps):
+    async def flux(self, cle, workspace, corps, releve=None):
         self.requetes.append(corps)
+        usage = dict(self.usage)
+        if releve is not None:
+            releve["usage"] = usage
         msg = self.script.pop(0)
         for b in msg["content"]:
             if b.get("type") == "text":
                 yield ("text", b["text"])
-        yield ("end", {**msg, "usage": {"input_tokens": 1, "output_tokens": 1}})
+        yield ("end", {**msg, "usage": usage})
 
 
 @pytest.fixture
@@ -94,7 +101,7 @@ def modele(monde, monkeypatch):
     monkeypatch.setattr(m, "flux", faux.flux)
     monkeypatch.setattr(cle, "resoudre",
                         lambda org, sub: cle.Cle("sk-test", None, None))
-    monkeypatch.setenv("OTO_COPILOT_SUBS", f"{A},{B}")
+    monkeypatch.setenv("OTO_COPILOT_SUBS", f"{A},{B},{C}")
     return faux
 
 
@@ -262,3 +269,97 @@ def test_conversation_d_un_autre_jamais_reprise(monde, modele):
     modele.script = [_fin("hello")]
     evs = _evs(_tour(monde, B, "continue", thread_id=thread))
     assert evs[0]["thread_id"] != thread
+
+
+# --- the corrections of the review --------------------------------------------------
+
+@pytest.mark.parametrize("kind", ["user", "delegation"])
+def test_un_jeton_oto_est_refuse_nomme(monde, modele, kind):
+    """A person's API token, or a delegated one, never reaches the in-app agent: the
+    authentication refuses it on all four routes, named."""
+    from oto_mcp import db
+    jeton = db.create_api_token(A, label="copilot-test", kind=kind)
+    h = {"Authorization": f"Bearer {jeton}", "X-Oto-Org": str(monde["org"])}
+    for chemin in ("/api/copilot/turns", "/api/copilot/threads/thr_x/client-results",
+                   "/api/copilot/threads/thr_x/approvals/tu_x",
+                   "/api/copilot/actions/rv_x/revert"):
+        r = monde["client"].post(chemin, headers=h, json={})
+        assert r.status_code == 403, (chemin, r.text)
+        assert r.json()["error"] == "api_token_forbidden", chemin
+
+
+def test_plafond_atteint_refuse_avant_le_flux(monde, modele, monkeypatch):
+    from oto_mcp.db import copilot as store
+    monkeypatch.setenv("OTO_COPILOT_DAILY_CAP_USD", "0.5")
+    store.ajouter_depense(C, 600_000)               # 0.60 $
+    r = _tour(monde, C, "hello")
+    assert r.status_code == 429 and r.json()["error"] == "copilot_daily_cap"
+    assert modele.requetes == []
+
+
+def test_plafond_franchi_refuse_l_appel_suivant_dans_le_flux(monde, modele, monkeypatch):
+    """Measured on what the provider reported: a call of 1 M input tokens (4 $) crosses a
+    3 $ ceiling; the NEXT model call of the same leg is refused, named, never sent."""
+    from oto_mcp.db import copilot as store
+    monkeypatch.setenv("OTO_COPILOT_DAILY_CAP_USD", str(store.depense_du_jour(C) / 1e6 + 3))
+    modele.usage = {"input_tokens": 1_000_000, "output_tokens": 0}
+    modele.script = [_outil("tu_cap", "data_list_datastores", {}), _fin("never")]
+    evs = _evs(_tour(monde, C, "list"))
+    assert len(modele.requetes) == 1
+    assert evs[-2]["type"] == "error" and "limit" in evs[-2]["message"]
+    assert evs[-1]["type"] == "done"
+
+
+def test_la_requete_suivante_relit_l_historique_au_cache(monde, modele):
+    """The breakpoint is on the last message of what is SENT, never stored: the next
+    request carries it on ITS last message only."""
+    modele.script = [_outil("tu_h", "data_list_datastores", {}), _fin("ok")]
+    _evs(_tour(monde, A, "tables?"))
+    for corps in modele.requetes[-2:]:
+        poses = [i for i, m in enumerate(corps["messages"]) for b in m["content"]
+                 if isinstance(b, dict) and "cache_control" in b]
+        assert poses == [len(corps["messages"]) - 1]
+
+
+def test_echec_d_annulation_sans_le_message_du_store(monde, modele, monkeypatch):
+    from oto_mcp.capabilities.copilot import annulation
+    from oto_mcp.db import copilot as store
+    thread = f"thr_{uuid.uuid4().hex}"
+    store.creer(thread, A, monde["org"], None, "")
+    store.offrir_annulation("rv_" + thread, thread, A, "x", "rows",
+                            {"geste_id": "g", "repere": 0}, 3600)
+
+    def casse(sub, ligne):
+        raise ValueError("table secrete_interne colonne privee")
+    monkeypatch.setattr(annulation, "defaire", casse)
+    r = monde["client"].post(f"/api/copilot/actions/rv_{thread}/revert",
+                             headers=_h(A, monde["org"]), json={})
+    assert r.status_code == 409 and r.json()["error"] == "undo_failed"
+    assert "secrete_interne" not in r.text
+
+
+def test_maintenance_purge_a_trente_jours(monde):
+    from oto_mcp import maintenance
+    from oto_mcp.db import copilot as store
+    from oto_mcp.db._conn import _connect
+    vieux, frais = f"thr_{uuid.uuid4().hex}", f"thr_{uuid.uuid4().hex}"
+    for t in (vieux, frais):
+        store.creer(t, B, monde["org"], None, "")
+        store.offrir_annulation("rv_" + t, t, B, "x", "rows", {}, 3600)
+    with _connect() as c:
+        c.execute("UPDATE copilot_threads SET last_seen = NOW() - interval '31 days' "
+                  "WHERE id = %s", (vieux,))
+        c.execute("INSERT INTO copilot_spend (sub, day, usd_micros) VALUES "
+                  "(%s, (NOW() AT TIME ZONE 'UTC')::date - 31, 5)", (B,))
+    assert maintenance.copilot(dry_run=True)["threads"] >= 1
+    out = maintenance.copilot()
+    assert out["threads"] >= 1 and out["spend_days"] >= 1
+    with _connect() as c:
+        fils = {r["id"] for r in c.execute(
+            "SELECT id FROM copilot_threads WHERE id IN (%s, %s)", (vieux, frais))}
+        undos = {r["id"] for r in c.execute(
+            "SELECT id FROM copilot_undos WHERE thread_id IN (%s, %s)", (vieux, frais))}
+        anciens = c.execute("SELECT COUNT(*) AS n FROM copilot_spend WHERE sub = %s AND "
+                            "day < (NOW() AT TIME ZONE 'UTC')::date - 30", (B,)).fetchone()
+    assert fils == {frais} and undos == {"rv_" + frais} and anciens["n"] == 0
+    assert "copilot" in maintenance._ALL

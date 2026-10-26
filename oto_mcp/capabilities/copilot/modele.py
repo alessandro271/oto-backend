@@ -40,18 +40,42 @@ class ErreurModele(Exception):
         self.message, self.statut = message, statut
 
 
+def _messages_en_cache(messages: list[dict]) -> list[dict]:
+    """The messages as sent, with a cache breakpoint on the LAST block of the last
+    message: the whole history is read back from the cache by the next step, instead of
+    being paid in full at every step (without it, a conversation of n steps costs about
+    n² input tokens).
+
+    A COPY: the stored history is never touched. Written into it, the breakpoint would
+    stay on every earlier message and the request would carry more than the API's four;
+    and the history is replayed unchanged (thinking blocks included)."""
+    if not messages:
+        return messages
+    dernier = dict(messages[-1])
+    contenu = dernier.get("content")
+    if isinstance(contenu, str):
+        contenu = [{"type": "text", "text": contenu}]
+    if not isinstance(contenu, list) or not contenu:
+        return messages
+    contenu = list(contenu)
+    contenu[-1] = {**contenu[-1], "cache_control": {"type": "ephemeral"}}
+    dernier["content"] = contenu
+    return [*messages[:-1], dernier]
+
+
 def corps_de_requete(system: str, outils: list[dict], messages: list[dict]) -> dict:
-    """The request body: prompt caching on the system prompt and on the tools (the
-    breakpoint the caller put on the last core tool), adaptive thinking with progress
-    notes, effort set explicitly (this model's default is the same, but saying it keeps
-    the request stable across model defaults)."""
+    """The request body: prompt caching on the system prompt, on the tools (the
+    breakpoint the caller put on the last core tool) and on the last message (the
+    history, `_messages_en_cache`) — three of the API's four breakpoints —, adaptive
+    thinking with progress notes, effort set explicitly (this model's default is the
+    same, but saying it keeps the request stable across model defaults)."""
     return {
         "model": MODELE,
         "max_tokens": MAX_TOKENS,
         "stream": True,
         "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         "tools": outils,
-        "messages": messages,
+        "messages": _messages_en_cache(messages),
         "thinking": {"type": "adaptive", "display": "updates"},
         "output_config": {"effort": EFFORT},
     }
@@ -136,14 +160,21 @@ class Assembleur:
                 "stop_reason": self.stop_reason, "usage": dict(self.usage)}
 
 
-async def flux(cle: str, workspace: Optional[str], corps: dict) -> AsyncIterator[tuple]:
+async def flux(cle: str, workspace: Optional[str], corps: dict,
+               releve: Optional[dict] = None) -> AsyncIterator[tuple]:
     """Streams one model call: yields `("text", s)`, `("thinking", s)`, `("block", type)`
-    as they come, then `("end", message)`. Raises `ErreurModele`."""
+    as they come, then `("end", message)`. Raises `ErreurModele`.
+
+    `releve["usage"]` is the provider's token counts AS THEY ARRIVE (the same dict the
+    final message carries): a call cut mid-stream (a closed tab, an error) is still
+    counted at what it consumed (`depense`)."""
     entetes = {"x-api-key": cle, "anthropic-version": VERSION,
                "anthropic-beta": ",".join(BETAS), "content-type": "application/json"}
     if workspace:
         entetes["anthropic-workspace-id"] = workspace
     assembleur = Assembleur()
+    if releve is not None:
+        releve["usage"] = assembleur.usage
     # No cancel scope around the yields (an async generator must not hold one across a
     # `yield`): the bound is checked on each line, the read timeout covers a silent stall.
     limite = time.monotonic() + DUREE_MAX_S

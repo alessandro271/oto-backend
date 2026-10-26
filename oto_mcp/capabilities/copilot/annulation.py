@@ -42,6 +42,21 @@ MAX_REVISIONS = 1000
 _ABSENT = object()
 
 
+#: The writes an Undo can be offered for (`preparer` → `offre`). Any other write — a
+#: send, a launch, a doc, a column dropped — has none, and its card says so
+#: (`SANS_ANNULATION`).
+ANNULABLES = frozenset({"data_create_datastore", "data_patch_schema", "data_write",
+                        "data_update_where", "data_delete_row"})
+#: What a card adds when what it asks for cannot be undone from the panel.
+SANS_ANNULATION = "This can't be undone from here."
+
+
+def annulable(target: str) -> bool:
+    """Whether a write to `target` may be offered an Undo. A promise of at most: a bulk
+    change (`MAX_REVISIONS`) or a journal switched off still gets none."""
+    return target in ANNULABLES
+
+
 @dataclass
 class Preparation:
     target: str
@@ -55,7 +70,7 @@ class Preparation:
 
 def preparer(sub: str, target: str, args: dict, geste_id: str) -> Optional[Preparation]:
     """BEFORE a write. Sync (call it off the loop). None = this call gets no Undo."""
-    if not target.startswith("data_"):
+    if not annulable(target):
         return None
     prep = Preparation(target, geste_id, repere=historique.dernier_id())
     if target == "data_patch_schema" and args.get("datastore") is not None:

@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ... import geste
 from ...db import copilot as store
-from . import annulation, carte, classement, cle as cles, modele
+from . import annulation, carte, classement, cle as cles, depense, modele
 from .outils import Boite, executer
 from .texte import FiltreSuite, couper
 
@@ -75,12 +75,16 @@ async def _lancer_outil(fil: dict, b: Boite, bloc: dict) -> AsyncIterator[dict]:
              write=sorte != classement.LECTURE)
     gid = geste.nouvel_identifiant()
     prep = None
+    #: An Undo the card promised (an undoable write) but that could not be prepared:
+    #: the call still runs — the person approved IT —, and the step says it has none.
+    sans_annulation = False
     if sorte != classement.LECTURE:
         try:
             prep = await run_in_threadpool(annulation.preparer, fil["sub"], target, targs, gid)
         except Exception:
             logger.warning("copilot : préparation de l'annulation impossible — l'appel "
-                           "part sans annulation", exc_info=True)
+                           "part sans annulation, et l'étape le dit", exc_info=True)
+            sans_annulation = annulation.annulable(target)
     try:
         issue = await executer(b, fil["sub"], name, args, org=fil["org_id"],
                                projet=fil["project_id"], run_id=fil["run_id"], geste_id=gid)
@@ -120,7 +124,10 @@ async def _lancer_outil(fil: dict, b: Boite, bloc: dict) -> AsyncIterator[dict]:
     if fil["queue"] and fil["queue"][0].get("id") == bloc["id"]:
         fil["queue"].pop(0)
     fil["results"].append(_resultat(bloc["id"], contenu, not ok))
-    yield ev("tool_result", id=bloc["id"], ok=ok, summary=carte.resume(texte),
+    resume = carte.resume(texte)
+    if ok and sans_annulation:
+        resume = f"{resume} · no undo for this change"
+    yield ev("tool_result", id=bloc["id"], ok=ok, summary=resume,
              changed=change, revert_id=revert_id)
 
 
@@ -158,7 +165,10 @@ async def drainer(fil: dict, b: Boite, etat: dict) -> AsyncIterator[dict]:
         if sorte != classement.LECTURE and not dispense and not bloc.get("approved"):
             fil["pending"] = {"kind": "approval", "block": bloc, "sorte": sorte}
             etat["pause"] = True
-            yield ev("approval_required", id=bloc["id"], title=carte.phrase(name, args),
+            titre = carte.phrase(name, args)
+            if not annulation.annulable(target):
+                titre = f"{titre} {annulation.SANS_ANNULATION}"
+            yield ev("approval_required", id=bloc["id"], title=titre,
                      steps=[{"title": carte.libelle(name, args),
                              "detail": carte.detail(name, args)}],
                      destructive=classement.rouge(target, targs),
@@ -179,6 +189,8 @@ def _outils_du_modele(fil: dict, b: Boite) -> list[dict]:
 async def _un_appel(fil: dict, b: Boite, cle: cles.Cle, sortie: dict) -> AsyncIterator[dict]:
     """One model call, reserved before and settled after; yields text and progress, and
     leaves the assistant message in `sortie["message"]`."""
+    if await run_in_threadpool(depense.atteint, fil["sub"]):
+        raise cles.SansCle(depense.CODE, depense.message_de_refus(), 429)
     rang = int(fil.get("model_calls") or 0) + 1
     uid = cles.uid_du_tour(fil["id"], rang)
     await run_in_threadpool(cles.reserver, cle, uid, fil["sub"], fil["org_id"],
@@ -188,9 +200,10 @@ async def _un_appel(fil: dict, b: Boite, cle: cles.Cle, sortie: dict) -> AsyncIt
     tampon: list[dict] = []
     filtre = FiltreSuite(lambda t: tampon.append(ev("text_delta", text=t)))
     progres, regle, rien_recu = "", False, True
+    releve: dict = {}
     corps = modele.corps_de_requete(fil["system"], _outils_du_modele(fil, b), fil["messages"])
     try:
-        async for quoi, val in modele.flux(cle.secret, cle.workspace, corps):
+        async for quoi, val in modele.flux(cle.secret, cle.workspace, corps, releve=releve):
             rien_recu = False
             if quoi == "block":
                 progres = ""
@@ -218,9 +231,21 @@ async def _un_appel(fil: dict, b: Boite, cle: cles.Cle, sortie: dict) -> AsyncIt
             regle = True
         raise
     finally:
-        if not regle:
-            with anyio.CancelScope(shield=True):
+        # The daily ceiling counts what the provider reported, the call finished or cut.
+        with anyio.CancelScope(shield=True):
+            await run_in_threadpool(_noter_depense, fil, releve.get("usage") or {})
+            if not regle:
                 await run_in_threadpool(cles.clore, cle, uid)
+
+
+def _noter_depense(fil: dict, usage: dict) -> None:
+    """Adds one call to the person's spend of the day. Logged, never raised: the call
+    has happened, and its answer must not be lost to a failed counter."""
+    try:
+        depense.noter(fil["sub"], modele.MODELE, usage)
+    except Exception:
+        logger.exception("copilot : dépense de l'appel non comptée (conversation %s, "
+                         "jetons %s)", fil["id"], usage)
 
 
 async def conduire(fil: dict, b: Boite, cle: cles.Cle) -> AsyncIterator[dict]:

@@ -150,3 +150,50 @@ def tableau_vide(ns_id: int) -> bool:
         row = conn.execute("SELECT EXISTS (SELECT 1 FROM datastore_rows WHERE ns_id = %s) "
                            "AS plein", (int(ns_id),)).fetchone()
     return not row["plein"]
+
+
+def ajouter_depense(sub: str, micro_usd: int) -> None:
+    """Ajoute le coût d'un appel au modèle à la dépense du jour (UTC) de `sub`, en
+    millionièmes de dollar (`capabilities/copilot/depense.py`)."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO copilot_spend (sub, day, usd_micros) "
+            "VALUES (%s, (NOW() AT TIME ZONE 'UTC')::date, %s) "
+            "ON CONFLICT (sub, day) DO UPDATE "
+            "SET usd_micros = copilot_spend.usd_micros + EXCLUDED.usd_micros",
+            (sub, int(micro_usd)))
+
+
+def depense_du_jour(sub: str) -> int:
+    """La dépense du jour (UTC) de `sub`, en millionièmes de dollar ; 0 sans appel."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT usd_micros FROM copilot_spend WHERE sub = %s "
+            "AND day = (NOW() AT TIME ZONE 'UTC')::date", (sub,)).fetchone()
+    return int(row["usd_micros"]) if row else 0
+
+
+def compter_purgeables(jours: int) -> dict:
+    """Ce que `purger(jours)` retirerait (maintenance à blanc)."""
+    with _connect() as conn:
+        fils = conn.execute(
+            "SELECT COUNT(*) AS n FROM copilot_threads "
+            "WHERE last_seen < NOW() - make_interval(days => %s)", (int(jours),)).fetchone()
+        jours_ = conn.execute(
+            "SELECT COUNT(*) AS n FROM copilot_spend "
+            "WHERE day < (NOW() AT TIME ZONE 'UTC')::date - %s", (int(jours),)).fetchone()
+    return {"threads": int(fils["n"]), "spend_days": int(jours_["n"])}
+
+
+def purger(jours: int) -> dict:
+    """Retire les conversations sans vie depuis `jours` (leurs annulations partent avec,
+    `ON DELETE CASCADE`) et les jours de dépense plus vieux que `jours`. Une conversation
+    dont une étape tient le verrou n'est pas retirée."""
+    with _connect() as conn:
+        fils = conn.execute(
+            "DELETE FROM copilot_threads WHERE last_seen < NOW() - make_interval(days => %s) "
+            "AND (busy_until IS NULL OR busy_until < NOW())", (int(jours),)).rowcount
+        jours_ = conn.execute(
+            "DELETE FROM copilot_spend WHERE day < (NOW() AT TIME ZONE 'UTC')::date - %s",
+            (int(jours),)).rowcount
+    return {"threads": int(fils), "spend_days": int(jours_)}

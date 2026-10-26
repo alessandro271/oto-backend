@@ -1,6 +1,6 @@
 """DDL de l'agent intégré à l'application (« copilot », `docs/copilot.md`).
 
-Deux tables, et seulement l'état d'une conversation en cours :
+Trois tables, et seulement l'état d'une conversation en cours et la dépense du jour :
 
 - `copilot_threads` : une conversation, LIÉE au compte qui l'a ouverte (`sub`) et à
   l'org consultée (`org_id`). Ses messages (forme de l'API du modèle, blocs de
@@ -11,7 +11,10 @@ Deux tables, et seulement l'état d'une conversation en cours :
   vert, préprod — une seule base).
 - `copilot_undos` : ce qu'un changement fait par l'agent sait défaire, une fois, avant
   son échéance.
+- `copilot_spend` : ce que chaque compte a fait dépenser au modèle, par jour UTC, en
+  millionièmes de dollar — le plafond quotidien (`capabilities/copilot/depense.py`).
 
+Les trois se purgent à 30 jours par la maintenance (`oto-mcp maintenance copilot`).
 Ce n'est PAS le journal : chaque appel d'outil est déjà dans `tool_calls`, sous le run
 de la conversation. Ces tables se purgent sans rien amputer.
 """
@@ -57,5 +60,14 @@ CREATE TABLE IF NOT EXISTS copilot_undos (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,
     used_at TIMESTAMPTZ
+);
+
+-- La dépense du jour (UTC) d'un compte, en millionièmes de dollar : le plafond
+-- quotidien de l'agent intégré.
+CREATE TABLE IF NOT EXISTS copilot_spend (
+    sub TEXT NOT NULL,
+    day DATE NOT NULL,
+    usd_micros BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (sub, day)
 );
 """

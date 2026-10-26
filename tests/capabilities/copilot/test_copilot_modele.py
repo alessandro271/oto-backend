@@ -90,3 +90,48 @@ def test_corps_de_requete():
     assert c["output_config"] == {"effort": "medium"} and c["model"] == "claude-opus-5-5"
     assert c["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert c["stream"] is True
+
+
+def test_cache_sur_le_dernier_message_d_une_copie():
+    """The history is cached up to the last message of what is sent; the stored history
+    is never touched (no breakpoint left behind on earlier messages)."""
+    historique = [{"role": "user", "content": [{"type": "text", "text": "a"}]},
+                  {"role": "assistant", "content": [{"type": "text", "text": "b"}]},
+                  {"role": "user", "content": [
+                      {"type": "tool_result", "tool_use_id": "t", "content": "c"},
+                      {"type": "text", "text": "d"}]}]
+    avant = repr(historique)
+    c = modele.corps_de_requete("sys", [], historique)
+    envoyes = c["messages"]
+    assert envoyes[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in envoyes[-1]["content"][0]
+    assert all("cache_control" not in b for m in envoyes[:-1] for b in m["content"])
+    assert repr(historique) == avant
+    texte = modele.corps_de_requete("sys", [], [{"role": "user", "content": "x"}])
+    assert texte["messages"][0]["content"] == [
+        {"type": "text", "text": "x", "cache_control": {"type": "ephemeral"}}]
+
+
+def test_flux_releve_l_usage_au_fil_de_l_eau(monkeypatch):
+    """A call cut mid-stream still reports what it consumed (the daily ceiling)."""
+    import asyncio
+
+    import httpx
+
+    def handler(request):
+        corps = (
+            'data: {"type":"message_start","message":{"usage":'
+            '{"input_tokens":120,"cache_read_input_tokens":30,"output_tokens":1}}}\n\n'
+            'data: {"type":"error","error":{"message":"overloaded"}}\n\n')
+        return httpx.Response(200, text=corps)
+    _brancher(monkeypatch, handler)
+    releve: dict = {}
+
+    async def go():
+        async for _ in modele.flux("sk-test", None, {"model": modele.MODELE},
+                                   releve=releve):
+            pass
+    with pytest.raises(modele.ErreurModele):
+        asyncio.run(go())
+    assert releve["usage"]["input_tokens"] == 120
+    assert releve["usage"]["cache_read_input_tokens"] == 30

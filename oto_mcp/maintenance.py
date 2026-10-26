@@ -33,6 +33,9 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                           veille et les jours clos qui suivent le dernier
                                           consolidé, au plus 7 (#1147) — l'historique se
                                           rattrape à la main (scripts/rattraper_journal_jour.py)
+    oto-mcp maintenance copilot       purge des conversations de l'agent intégré sans vie
+                                          depuis 30 jours (leurs annulations avec) et de
+                                          ses jours de dépense de plus de 30 jours
     oto-mcp maintenance all           ceux du timer quotidien, dans l'ordre
 
     oto-mcp maintenance index-concurrents <révision>
@@ -590,6 +593,24 @@ def apollo_phones(*, dry_run: bool = False) -> dict:
     return {"purged": apollo_reveals.purger()}
 
 
+#: Ce que l'agent intégré garde d'une conversation sans vie, et de sa dépense d'un jour.
+COPILOT_RETENTION_JOURS = 30
+
+
+def copilot(*, dry_run: bool = False) -> dict:
+    """Purge l'état de l'agent intégré (`docs/copilot.md`) : les conversations sans vie
+    depuis `COPILOT_RETENTION_JOURS` jours — leurs annulations partent avec elles — et
+    les jours de dépense plus anciens (le plafond ne lit que le jour courant). Rien du
+    journal : chaque appel d'outil reste dans `tool_calls`. Ici et pas au boot : son
+    coût suit la taille des tables."""
+    from .db import copilot as store
+    if dry_run:
+        return {"retention_days": COPILOT_RETENTION_JOURS,
+                **store.compter_purgeables(COPILOT_RETENTION_JOURS)}
+    return {"retention_days": COPILOT_RETENTION_JOURS,
+            **store.purger(COPILOT_RETENTION_JOURS)}
+
+
 def digest_lecteurs(*, dry_run: bool = False) -> dict:
     """Résumé quotidien des lecteurs d'une procédure partagée, un mail par propriétaire.
 
@@ -629,6 +650,7 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "apollo-phones": apollo_phones,
     "activation": activation,
     "digest-lecteurs": digest_lecteurs,
+    "copilot": copilot,
 }
 # Travaux dont l'écriture est un ACTE, pas une routine : à blanc par défaut, et
 # c'est `--apply` qui écrit. Ils ne sont dans aucun timer et jamais dans `all`.
@@ -650,7 +672,7 @@ _ACTES = ("journal-tokens", "residu-projete", "cles-plateforme-au-format")
 # ⚠️ `journal-jour` est EN TÊTE de `_ALL` : la veille doit être consolidée tôt, avant
 # qu'un travail plus long (re-projection, index) ne consomme la fenêtre du timer.
 _ALL = ("journal-jour", "retention", "revisions", "blocks", "key-indexes", "alertes-credential",
-        "instagram-tokens", "unipile-fin-de-droit", "apollo-phones", "activation", "digest-lecteurs")
+        "instagram-tokens", "unipile-fin-de-droit", "apollo-phones", "activation", "digest-lecteurs", "copilot")
 
 
 def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:

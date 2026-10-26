@@ -6,7 +6,8 @@ description: >-
   en flux (SSE), les outils de la personne exécutés en interne comme la cible d'`oto_call`,
   une porte d'approbation bâtie sur les DÉCLARATIONS des outils, des conversations en base
   liées à leur compte, une annulation lue dans le journal des révisions, et des appels au
-  modèle réservés puis réglés au budget d'unités. Fermé par défaut (`OTO_COPILOT_SUBS`).
+  modèle réservés puis réglés au budget d'unités, sous un plafond de dépense par compte et par
+  jour. Session interactive seulement. Fermé par défaut (`OTO_COPILOT_SUBS`).
 ---
 
 # L'agent intégré à l'application (copilot)
@@ -32,6 +33,11 @@ de développement du front en était la spécification exécutable.
   identité, org et geste, et rend ses échecs DANS le flux (`error` puis `done`).
 - **Qui** : membre de l'org consultée (`X-Oto-Org`), et `sub` dans `OTO_COPILOT_SUBS`
   (vide = personne → 403 `copilot_not_enabled`). Jamais en « voir en tant que » (403).
+- **Une session interactive, jamais un jeton** : un jeton `oto_` (d'une personne, délégué,
+  clé d'org), un secret de worker ou une identité de service est refusé, 403
+  `api_token_forbidden`, deux fois — à l'authentification (`RestBinding.allow_api_token=False`)
+  et dans la capacité, sur la source de la requête (`geste` ≠ `console`). Un jeton ferait du
+  panneau un point d'accès au modèle payé par l'instance, piloté par un script.
   ⚠️ Pas de 404 sur la route des tours : le front y lit « backend absent ».
 - Une conversation est **liée à son `sub`** : un autre compte reçoit « introuvable », une
   autre org en ouvre une neuve.
@@ -40,8 +46,12 @@ de développement du front en était la spécification exécutable.
 
 Messages Anthropic en flux (`claude-opus-5-5`, effort `medium`, réflexion adaptative
 `display: "updates"` sous la bêta `thinking-display-updates-2026-08-18` : les notes entre
-deux appels d'outils deviennent les événements `progress`), cache sur le prompt système et
-sur le dernier outil du socle. **L'historique ne se réécrit jamais** : les blocs de
+deux appels d'outils deviennent les événements `progress`), cache sur le prompt système,
+sur le dernier outil du socle et sur le DERNIER MESSAGE : l'historique se relit au cache
+d'une étape à l'autre au lieu d'être repayé entier à chaque étape (sans lui, une
+conversation de n étapes coûte de l'ordre de n² jetons d'entrée). Le point de cache est
+posé sur une COPIE envoyée, jamais dans l'historique stocké (il resterait sinon sur chaque
+message passé, au-delà des quatre points de l'API). **L'historique ne se réécrit jamais** : les blocs de
 réflexion repartent tels quels, un tour interrompu se solde en AJOUTANT des résultats
 « interrompu ». `<next>a | b</next>` en fin de réponse devient `suggestions`, jamais du
 texte. Un résultat d'outil est coupé à 80 000 caractères, et la coupe est dite au modèle.
@@ -82,7 +92,12 @@ révisions du geste de l'appel, relues depuis un repère pris juste avant, et se
 cellules qui portent encore ce que l'agent a écrit (une cellule modifiée depuis est laissée
 et comptée). Un tableau créé n'est supprimé que vide ; une modification de champs n'est
 défaite que si le schéma stocké est encore celui que l'agent a laissé. Une fois, une heure.
-Seuls les `data_*` en ont une.
+Seuls les `data_*` qui écrivent des lignes ou des champs en ont une
+(`annulation.ANNULABLES`) : **toute autre carte le dit** (« This can't be undone from
+here. ») — un envoi, un lancement, un doc, une colonne supprimée. Une annulation promise
+qui n'a pas pu se préparer laisse l'appel partir (la personne l'a approuvé) et l'étape
+le dit (« no undo for this change »). Un échec de l'annulation rend 409 `undo_failed`
+sans le message du store, qui reste au journal.
 
 ## Payer le modèle (`cle.py`)
 
@@ -94,12 +109,41 @@ PARTAGÉE accordée à l'org — refacturée (plateforme, tenant primaire), chaq
 pas tenue (mode `report` sans les lignes du barème pour le modèle) REFUSE l'appel, à la
 différence d'un agent hébergé ; seul le mode `off`, choix explicite de l'opérateur, laisse
 passer. Une erreur HTTP du fournisseur libère la réservation ; un flux coupé la règle au
-montant réservé.
+montant réservé. La config de la clé partagée illisible (son workspace) REFUSE l'appel
+(`model_key_unreadable`), jamais un appel parti hors de son workspace.
+
+## Le plafond de dépense (`depense.py`)
+
+**Par compte et par jour UTC, en dollars** (`OTO_COPILOT_DAILY_CAP_USD`, 20 par défaut ; une
+valeur qui n'est pas un montant positif lève). **Indépendant d'`OTO_CREDITS_MODE` et de la
+clé** : il borne ce qu'un compte fait dépenser chez le fournisseur en un jour, que le
+budget d'unités soit en `off`, en `report` ou que l'org paie sa propre clé. Mesuré sur la
+dépense RÉELLE : les quatre comptes de jetons que le flux rapporte (un appel coupé compte ce
+qu'il a consommé) × le prix public du fournisseur pour le modèle (`PRIX_PAR_MTOK`). Ce
+n'est pas le barème d'unités — qui est en unités, sans monnaie (le commerce tient les
+prix) — : c'est ce qu'un appel COÛTE à l'instance. Vérifié avant que le flux s'ouvre
+(429 `copilot_daily_cap`) et avant chaque appel au modèle (refus nommé dans le flux) ; un
+appel peut franchir le plafond, le suivant est refusé. Table `copilot_spend`.
+
+## Ouvrir à quelqu'un
+
+L'allowlist reste VIDE au tag. Avant d'y poser un `sub` sur une instance :
+
+1. **lire `OTO_CREDITS_MODE` de l'instance** (`report` par défaut) et le barème : en
+   `enforce` sans les quatre lignes `anthropic/messages:claude-opus-5-5`, chaque appel sur
+   une clé refacturée est refusé (`credits_unpriced`) ; en `report` sans elles, aussi (la
+   règle propre à l'agent intégré, plus haut) ; en `off`, rien n'est mesuré au budget
+   d'unités — seul le plafond quotidien borne la dépense ;
+2. vérifier `OTO_COPILOT_DAILY_CAP_USD` (absente = 20 $ par compte et par jour) ;
+3. poser `OTO_COPILOT_SUBS`.
 
 ## L'état (`db/copilot.py`, révision `20261025_2100_copilot`)
 
 `copilot_threads` (messages, file, carte en attente, sortes retenues, actions de page, mode,
-run, rang du prochain appel, verrou) et `copilot_undos`. **Une étape à la fois** par
+run, rang du prochain appel, verrou), `copilot_undos` et `copilot_spend`. **Purgés à
+30 jours par la maintenance** (`oto-mcp maintenance copilot`, dans `all`, jamais au boot) :
+les conversations sans vie depuis 30 jours (leurs annulations avec), les jours de dépense
+plus anciens. **Une étape à la fois** par
 conversation, par un verrou EN BASE à échéance (bleu, vert et préprod partagent la base).
 Les runs des conversations inactives depuis 30 minutes se closent paresseusement, au tour
 suivant de la personne ; une conversation reprise rouvre un run.

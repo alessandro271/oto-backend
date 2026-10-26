@@ -114,8 +114,10 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
         # The in-app agent's conversations and undo entries are SHORT-LIVED (an idle
         # thread closes after 30 min, an undo expires after an hour) and bound to the
         # sub that opened them: after a merge the old ones read "not found" and the
-        # person starts a new one. Nothing to carry over.
-        ("copilot_threads", "sub"), ("copilot_undos", "sub"),
+        # person starts a new one. Nothing to carry over. Its daily spend is a counter
+        # of the current UTC day under the sub that spent it: after a merge, the new sub
+        # starts its day at zero — at most one day's ceiling more, never a lost record.
+        ("copilot_threads", "sub"), ("copilot_undos", "sub"), ("copilot_spend", "sub"),
         # Le COMPTE DE SERVICE d'une org (clés d'org, #1188) n'est pas une identité Logto :
         # aucune bascule de tenant ni fusion de comptes ne le vise, il n'a rien à suivre.
         ("org_service_accounts", "sub"),

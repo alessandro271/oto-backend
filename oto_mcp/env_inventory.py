@@ -357,7 +357,15 @@ _REGLAGES: tuple[Variable, ...] = (
              "les `sub` autorisés, séparés par des virgules. Vide (défaut) = personne — les "
              "quatre routes `/api/copilot/*` répondent 403 `copilot_not_enabled`. Lu à "
              "chaque requête.",
-             ("oto_mcp/capabilities/copilot/routes.py:51",)),
+             ("oto_mcp/capabilities/copilot/routes.py:56",)),
+    Variable("OTO_COPILOT_DAILY_CAP_USD", Classe.REGLAGE, "20",
+             "L'agent intégré à l'application : plafond de dépense au modèle PAR COMPTE ET "
+             "PAR JOUR UTC, en dollars (prix publics du fournisseur × jetons rapportés, "
+             "`capabilities/copilot/depense.py`), quelle que soit la clé et quel que soit "
+             "`OTO_CREDITS_MODE`. Atteint : 429 `copilot_daily_cap` avant le flux, refus "
+             "nommé dans le flux avant l'appel suivant. Lu à chaque appel ; une valeur "
+             "qui n'est pas un montant positif lève (jamais le défaut en silence).",
+             ("oto_mcp/capabilities/copilot/depense.py:59",)),
     Variable("OTO_CREDITS_MODE", Classe.REGLAGE, "report",
              "Budget d'unités au moment de l'appel (`access/credits.py`) : `report` "
              "(défaut) réserve et règle sans jamais refuser, et journalise ce "

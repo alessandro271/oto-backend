@@ -1,6 +1,6 @@
-"""La révision `20261025_2100_copilot` pose les deux tables de l'agent intégré.
+"""La révision `20261025_2100_copilot` pose les trois tables de l'agent intégré.
 
-Deux tables NEUVES que le démarrage pose aussi (même fragment) : la révision doit les
+Trois tables NEUVES que le démarrage pose aussi (même fragment) : la révision doit les
 poser sur une base d'AVANT, ne rien faire sur une base que le démarrage a déjà servie,
 et les retirer au retour arrière. Jouée sur une vraie base.
 """
@@ -13,7 +13,7 @@ import pytest
 RACINE = Path(__file__).resolve().parent.parent
 _PRECEDENTE = "20261024_1101_default_sharing"
 _REVISION = "20261025_2100_copilot"
-_TABLES = ["copilot_threads", "copilot_undos"]
+_TABLES = ["copilot_spend", "copilot_threads", "copilot_undos"]
 
 
 def _alembic():
@@ -39,6 +39,7 @@ def base_d_avant(live, pg_module_dsn):
     from alembic import command
 
     with psycopg.connect(pg_module_dsn, autocommit=True) as c:
+        c.execute("DROP TABLE copilot_spend")
         c.execute("DROP TABLE copilot_undos")
         c.execute("DROP TABLE copilot_threads")
     command.stamp(_alembic(), _PRECEDENTE)

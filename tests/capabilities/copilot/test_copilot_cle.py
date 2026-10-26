@@ -78,8 +78,10 @@ def test_echec_http_libere_flux_coupe_regle(monkeypatch):
     """The HTTP-error path releases the hold; a stream cut after output settles it."""
     import asyncio
 
-    from oto_mcp.capabilities.copilot import boucle, modele
+    from oto_mcp.capabilities.copilot import boucle, depense, modele
     appels = []
+    monkeypatch.setattr(depense, "atteint", lambda sub: False)
+    monkeypatch.setattr(depense, "noter", lambda *a: 0)
     monkeypatch.setattr(cle, "reserver", lambda *a: None)
     monkeypatch.setattr(cle, "liberer", lambda c, uid: appels.append(("liberer", uid)))
     monkeypatch.setattr(cle, "clore", lambda c, uid: appels.append(("clore", uid)))
@@ -100,14 +102,35 @@ def test_echec_http_libere_flux_coupe_regle(monkeypatch):
                     pass
         asyncio.run(go())
 
-    async def refus_http(*a):
+    async def refus_http(*a, **k):
         raise modele.ErreurModele("bad", 400)
         yield  # pragma: no cover
 
-    async def coupe(*a):
+    async def coupe(*a, **k):
         yield ("text", "partial")
         raise modele.ErreurModele("cut")
 
     jouer(refus_http)
     jouer(coupe)
     assert [a[0] for a in appels] == ["liberer", "clore"]
+
+
+def test_config_de_cle_partagee_illisible_refuse(monkeypatch):
+    """The shared key's config (its workspace) unreadable: refused, named — never a call
+    sent outside the workspace the key was granted under."""
+    from oto_mcp.capabilities import _cle_exigee
+    from oto_mcp.capabilities.copilot import cle as cles
+
+    class Partagee:
+        key, mode, entity_id = "sk-test", "platform", None
+
+        @property
+        def config(self):
+            raise ValueError("vault hiccup")
+    monkeypatch.setattr(cles, "_cle_de_modele", lambda org, depot: (None, None))
+    monkeypatch.setattr(cles, "_depot_pose", lambda org, depot: False)
+    monkeypatch.setattr(_cle_exigee, "cle_exigee", lambda org, depot: False)
+    monkeypatch.setattr(_cle_exigee, "cle_partagee", lambda *a, **k: Partagee())
+    with pytest.raises(cles.SansCle) as e:
+        cles.resoudre(1, "s")
+    assert (e.value.code, e.value.statut) == ("model_key_unreadable", 503)
