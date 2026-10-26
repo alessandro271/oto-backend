@@ -100,6 +100,29 @@ def _famille_bodacc(famille: Optional[str]) -> Optional[str]:
         "(`modification`).")))
 
 
+def _cloture_liquidation(events: list[dict]) -> Optional[dict]:
+    """The most recent BODACC judgment CLOSING a liquidation among `events`
+    (newest first), or None. The SIRENE register does not always record the end
+    of a company whose liquidation was closed: `etat_administratif` stays "A"
+    while the same call carries the closing judgment. Only a liquidation closure
+    counts — closing a safeguard plan leaves a living company."""
+    for e in events:
+        if e.get("familleavis") != "collective":
+            continue
+        jugement = e.get("jugement") if isinstance(e.get("jugement"), dict) else {}
+        nature = (jugement.get("nature") or "").lower()
+        if "clôture" not in nature and "cloture" not in nature:
+            continue
+        if "insuffisance d'actif" in nature or "liquidation" in nature:
+            return {k: v for k, v in {
+                "nature": jugement.get("nature"),
+                "date_jugement": jugement.get("date"),
+                "date_parution": e.get("dateparution"),
+                "id": e.get("id"),
+            }.items() if v is not None}
+    return None
+
+
 _NAF_LABELS: dict[str, str] = {}
 
 
@@ -446,6 +469,16 @@ def register(mcp: FastMCP) -> None:
             ],
             "events_total": events_data.get("total_count", 0),
         }
+        cloture = _cloture_liquidation(events_data.get("results", []))
+        if cloture:
+            out["procedure_collective_cloturee"] = cloture
+            if out["identity"].get("etat_administratif") == "A":
+                out["etat_administratif_avertissement"] = (
+                    "`identity.etat_administratif` is \"A\" (active) in the SIRENE "
+                    f"register, but BODACC published a judgment closing its liquidation "
+                    f"({cloture.get('nature')}, {cloture.get('date_jugement') or cloture.get('date_parution')}): "
+                    "the register has not recorded the cessation. Treat the company "
+                    "as closed, not as active.")
         if finances_note:
             out["finances_note"] = finances_note
         if partial_errors:
@@ -466,6 +499,14 @@ def register(mcp: FastMCP) -> None:
         must take the first one that carries one. Do not conclude "no revenue"
         from `latest_bilan` alone. Seen on Norauto: last year
         (simplified) silent, €974,718,176 the year before.
+
+        ⚠️ **`identity.etat_administratif` is the SIRENE register's state, which
+        does NOT follow collective proceedings**: a company whose liquidation was
+        closed years ago can still read "A". When the BODACC events read here
+        (the 10 most recent) carry a judgment closing a liquidation,
+        `procedure_collective_cloturee` gives it (nature, date) and
+        `etat_administratif_avertissement` flags the contradiction. Older
+        proceedings: `fr_events(siren, famille="collective")`.
 
         BATCH: pass `sirens=[…]` (max 20 per call, chunk beyond) to qualify a
         LIST in one call — returns `{profiles: […], count}`, one profile per
