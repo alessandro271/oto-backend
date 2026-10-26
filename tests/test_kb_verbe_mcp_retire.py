@@ -235,3 +235,22 @@ def test_aucun_texte_servi_ne_nomme_plus_le_verbe_retire():
     assert "oto_doc" in servis["carte des namespaces"], "contrôle positif du balayage"
     citants = sorted(k for k, v in servis.items() if RETIRE in v)
     assert not citants, f"`{RETIRE}` encore cité par : {citants}"
+
+
+@pytest.mark.parametrize("op", ["list", "read"])
+def test_un_agent_heberge_lit_le_remplacant_d_un_nom_retire(op, monkeypatch):
+    """Retour d'usage du 21/10 : un agent hébergé dont la liste d'outils a été migrée
+    appelait `linkedin_unipile_chat` et lisait « pas dans la liste de l'agent, ajoute-le »
+    — la garde du travail passait AVANT l'enveloppe qui nomme le remplaçant. Le nom
+    retiré est refusé en premier, sur la pile RÉELLEMENT montée, middlewares compris."""
+    from oto_mcp import outils_du_travail
+
+    monkeypatch.setattr(outils_du_travail, "refus",
+                        lambda name: f"`{name}` is not in this hosted agent's tool list.")
+    with pytest.raises(McpError) as e:
+        asyncio.run(static_mcp().call_tool("linkedin_unipile_chat", {"op": op},
+                                           run_middleware=True))
+    msg = e.value.error.message
+    assert "tool_not_in_job" not in msg and "hosted agent" not in msg
+    assert f'op={op} → `linkedin_unipile(op="{op}", …)`' in msg
+    assert e.value.error.data["oto"]["code"] == "unknown_tool"

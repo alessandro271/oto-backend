@@ -5,10 +5,12 @@ import logging
 from typing import Optional
 
 from fastmcp.server.middleware import Middleware
+from mcp.types import ErrorData, INVALID_PARAMS
 from starlette.concurrency import run_in_threadpool
 
-from .. import (access, call_axes, guide_run, outils_du_travail, providers, redaction,
-               run_org, session_org, verrou_org)
+from .. import (access, call_axes, guide_run, outils_du_travail, outils_retires, providers,
+               redaction, run_org, session_org, verrou_org)
+from ..mcp_errors import McpError
 from ..access import credits as budget
 from ..auth.hooks import current_user_sub_from_token
 from ..connectors import access_level_gate, activation_gate
@@ -163,6 +165,17 @@ class CallContextMiddleware(Middleware):
     async def on_call_tool(self, context, call_next):
         name = getattr(context.message, "name", "") or ""
         args = getattr(context.message, "arguments", None) or {}
+        # A RETIRED name is refused FIRST, naming the call that works. The gates below
+        # (a hosted job's tool list, connector activation) run before the error
+        # envelope that classifies an unknown name: a hosted agent whose list was
+        # migrated called `linkedin_unipile_chat` and read "not in this hosted agent's
+        # tool list — add it", an instruction that cannot be followed.
+        retire = outils_retires.retrait(name)
+        if retire is not None:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS, message=retire.message,
+                data={"oto": {"code": "unknown_tool", "retryable": False,
+                              "hint": retire.hint}}))
         # Pose chaque axe-contexte fourni pour CE tool, en collectant sa fonction de
         # reset AU MOMENT de la pose → reset LIFO dans le `finally` même si une pose
         # ultérieure lève (les tokens déjà posés sont toujours nettoyés).
