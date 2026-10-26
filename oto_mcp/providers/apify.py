@@ -18,7 +18,7 @@ CONNECTOR = _c(
     label="Apify",
     help="hosted scrapers: LinkedIn profiles, employees and posts, job boards, websites, Google Maps — and the whole Apify Store",
     href="https://apify.com",
-    # `apify_actors`: the actors we run most, each as its own tool.
+    # `apify_actors`: the common actors, each as its own tool.
     modules=("apify", "apify_actors"),
 )
 

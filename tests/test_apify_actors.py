@@ -58,7 +58,7 @@ CAS = {
         {"startUrls": [{"url": "https://www.example.com"}], "maxDepth": 1,
          "maxRequestsPerStartUrl": 4, "sameDomain": True, "mergeContacts": True,
          "proxyConfig": {"useApifyProxy": True}},
-        None),
+        1),
     "apify_website_crawl": (
         {"urls": ["https://example.com/docs"], "max_pages": 5},
         A.WEBSITE_CRAWL,
@@ -204,3 +204,48 @@ def test_a_failed_run_is_answered_with_its_run_not_thrown():
         out = _tool("apify_indeed_jobs").fn(title="x")
     assert out["run_id"] == RUN and out["status"] == "FAILED"
     assert "apify_run_status" in out["error"]
+
+
+def test_website_contacts_caps_its_billed_results_at_one_row_per_site():
+    _, inst, _ = _lancer("apify_website_contacts",
+                         {"urls": ["https://a.example", "https://b.example",
+                                   "https://c.example"]})
+    assert inst.run.call_args.kwargs["max_items"] == 3
+
+
+@pytest.mark.parametrize("name", sorted(CAS))
+def test_the_ceiling_is_accepted_up_to_25_dollars(name):
+    _, inst, _ = _lancer(name, {**CAS[name][0], "max_total_charge_usd": 25})
+    assert inst.run.call_args.kwargs["max_total_charge_usd"] == 25
+
+
+@pytest.mark.parametrize("usd", [25.01, 100, 0, -1])
+@pytest.mark.parametrize("name", sorted(CAS))
+def test_a_ceiling_out_of_bounds_is_refused_by_name_before_the_run(name, usd):
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
+            patch("oto.tools.apify.client.ApifyClient") as cls:
+        with pytest.raises(McpError) as e:
+            _tool(name).fn(**{**CAS[name][0], "max_total_charge_usd": usd})
+        cls.return_value.run.assert_not_called()
+    assert "max_total_charge_usd" in str(e.value) and "apify_run_sync" in str(e.value)
+
+
+@pytest.mark.parametrize("name", sorted(CAS))
+def test_the_ceiling_and_its_bound_are_declared_in_the_served_text(name):
+    prop = _tool(name).parameters["properties"]["max_total_charge_usd"]
+    assert prop["default"] == 5.0 and "$25 at most" in prop["description"], name
+
+
+def test_no_platform_usage_figure_is_written_in_the_module_or_served():
+    """The platform key's run counts are account data: never in a public docstring
+    nor in what a tool serves."""
+    import re
+    from fastmcp import FastMCP
+
+    m = FastMCP("t")
+    A.register(m)
+    textes = [A.__doc__ or ""] + [t.description or "" for t in asyncio.run(m._list_tools())]
+    for texte in textes:
+        assert "totalRuns" not in texte
+        assert not re.search(r"\d[\d,.]*k?\s+runs\b|\bruns?\s+\d", texte), texte[:120]
+        assert not re.search(r"\bmost used\b|\bwe run most\b", texte), texte[:120]
