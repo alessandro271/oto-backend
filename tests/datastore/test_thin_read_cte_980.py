@@ -35,6 +35,8 @@ pytest.importorskip("psycopg")
 SUB = "usr_thin_980"
 PRIORITES = ["1", "2", "3", "4", "5"]
 CATEGORIES = ["nord", "sud", "est", "ouest"]
+_LIGNES = 6000
+_PAR_LOT = 200
 
 
 def _remplissage_incompressible(n_octets: int) -> str:
@@ -49,7 +51,7 @@ def _remplissage_incompressible(n_octets: int) -> str:
 
 @pytest.fixture(scope="module")
 def vivier(live):
-    """Un tableau réel, ~600 lignes, chacune assez grosse pour être TOASTée.
+    """Un tableau réel, 6 000 lignes, chacune assez grosse pour être TOASTée.
 
     `live` (conftest.py) pose déjà `DATABASE_URL` sur une base neuve du module
     et y rejoue `init_db()` — c'est le harnais unique du repo, pas une fixture
@@ -60,17 +62,24 @@ def vivier(live):
     db.upsert_user(SUB, email=f"{SUB}@thin980.invalid", name=SUB)
     ns = "t980-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
-    with _connect() as conn:
-        for i in range(6000):
-            row_id = f"r-{i:04d}"
-            data = {
+    # Par LOTS, une transaction courte chacun — jamais les 6 000 lignes dans une
+    # seule. Une transaction qui écrit porte un xid et retient l'horizon du CLUSTER
+    # (`pg_snapshot_xmin`) tant qu'elle court : 98 s en CI le 26/10/2026, pendant
+    # lesquelles le banc des échéances du budget d'unités, dans la même part sur une
+    # autre base, ne voyait pas son mouvement (`tests/_credits_horizon.py`).
+    for debut in range(0, _LIGNES, _PAR_LOT):
+        lot = [
+            (ns_id, f"r-{i:04d}", json.dumps({
                 "priorite": PRIORITES[i % len(PRIORITES)],
                 "categorie": CATEGORIES[i % len(CATEGORIES)],
                 "padding": _remplissage_incompressible(2000),
-            }
-            conn.execute(
+            }))
+            for i in range(debut, min(debut + _PAR_LOT, _LIGNES))
+        ]
+        with _connect() as conn:
+            conn.cursor().executemany(
                 "INSERT INTO datastore_rows (ns_id, row_id, data) VALUES (%s, %s, %s::jsonb)",
-                (ns_id, row_id, json.dumps(data)),
+                lot,
             )
     return ns_id
 
