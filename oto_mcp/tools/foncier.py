@@ -937,6 +937,14 @@ def register(mcp: FastMCP) -> None:
         adresse (reverse-geocoded BAN), lat/lon. Most recent first (nearest first
         for "comparables_adresse").
 
+        ⚠️ **Dense communes (Paris arrondissements) can time out on a FIRST call.**
+        The public DVF+ API takes 20 to 35 s to serve the first page of one
+        arrondissement-year it has not served lately (measured 26/10/2026: 75115,
+        75116, 75117), beyond this tool's wait; once served, the same query
+        answers in ~1 s. Each year warms up on its own, so a few calls may be
+        needed. A timeout here says nothing about the data: retry once or twice
+        before concluding.
+
         With `with_dpe=True` (op="comparables_adresse" only), each sale is enriched
         with ADEME energy data: a HOUSE gets its matched `dpe` (etiquette +
         `dpe_match` confidence by proximity & surface); a FLAT gets `dpe_immeuble`
