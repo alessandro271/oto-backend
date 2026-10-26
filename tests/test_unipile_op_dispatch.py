@@ -341,3 +341,61 @@ def test_linkedin_read_pose_la_reference_des_pieces(client):
     out = _tool("linkedin_unipile")(op="read", chat_id="c1")
     assert out["items"][0]["attachments"][0]["source"] == {
         "kind": "unipile", "channel": "linkedin", "url": url}
+
+
+_FIL = {"id": "c1", "name": None, "timestamp": "2026-10-20T08:00:00Z",
+        "attendee_name": "Jeanne", "unread_count": 0,
+        "last_message": {"id": "m9", "sender_id": "p-2", "text": "x" * 5000,
+                         "attachments": []}}
+
+
+def test_chat_list_projette_et_tronque_sur_demande(client):
+    """#1353 : une page de 20 fils pesait ~100 000 caractères, le texte intégral du
+    dernier message compris. `fields` (clé pointée pour une sous-clé) et
+    `text_max_chars` allègent la page ; `id` reste pour enchaîner `op="read"`."""
+    client.list_chats.return_value = {"data": [_FIL], "items": [_FIL],
+                                      "next_cursor": "k2", "cursor": "k2"}
+    out = _tool("linkedin_unipile")(
+        op="list", fields=["timestamp", "last_message.sender_id", "last_message.text"],
+        text_max_chars=200)
+    assert out["cursor"] == "k2" and "data" not in out and "next_cursor" not in out
+    (fil,) = out["items"]
+    assert fil == {"id": "c1", "timestamp": "2026-10-20T08:00:00Z",
+                   "last_message": {"sender_id": "p-2", "text": "x" * 200 + "…"}}
+
+
+def test_chat_list_tronque_sans_projeter(client):
+    client.list_chats.return_value = {"items": [_FIL], "cursor": None}
+    (fil,) = _tool("linkedin_unipile")(op="list", text_max_chars=100)["items"]
+    assert fil["last_message"]["text_truncated"] is True
+    assert len(fil["last_message"]["text"]) == 101 and fil["attendee_name"] == "Jeanne"
+
+
+def test_chat_list_sans_reglage_rend_la_page_telle_quelle(client):
+    page = {"items": [_FIL], "data": [_FIL], "cursor": None}
+    client.list_chats.return_value = page
+    assert _tool("linkedin_unipile")(op="list") is page
+
+
+def test_chat_list_refuse_un_champ_absent_de_la_page(client):
+    client.list_chats.return_value = {"items": [_FIL], "cursor": None}
+    with pytest.raises(McpError, match="last_message.sendr"):
+        _tool("linkedin_unipile")(op="list", fields=["last_message.sendr"])
+
+
+def test_chat_read_tronque_les_messages(client, monkeypatch):
+    from oto_mcp.tools import unipile_messagerie
+    monkeypatch.setattr(unipile_messagerie, "references_des_pieces", lambda p, c: p)
+    client.list_messages.return_value = {"items": [{"id": "m1", "text": "y" * 900}]}
+    (msg,) = _tool("linkedin_unipile")(op="read", chat_id="c1", text_max_chars=50)["items"]
+    assert msg["text"] == "y" * 50 + "…" and msg["text_truncated"] is True
+
+
+def test_profil_par_url_complete_part_en_slug(client):
+    """#1353 : `identifier` = URL complète → faux 403 ; ramenée au slug avant l'appel."""
+    _tool("linkedin_unipile_profile")(
+        op="person", identifier="https://www.linkedin.com/in/jean-dupont/?trk=x")
+    assert client.get_profile.call_args.args[0] == "jean-dupont"
+    _tool("linkedin_unipile_profile")(
+        op="company", identifier="https://www.linkedin.com/company/acme-corp/")
+    assert client.get_company.call_args.args[0] == "acme-corp"

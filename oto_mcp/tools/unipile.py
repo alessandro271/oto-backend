@@ -23,6 +23,7 @@ import logging
 import time
 import unicodedata
 from typing import Literal, Optional
+from urllib.parse import unquote, urlsplit
 
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
@@ -266,15 +267,33 @@ def _slim_search(res, *, facettes=(), page_suivante=False):
     return out
 
 
-def _canonical_li_identifier(identifier: str) -> str:
+def _canonical_li_identifier(identifier: str, genre: str = "in") -> str:
     """Canonicalize a LinkedIn `public_identifier` (vanity slug): LinkedIn
     ALWAYS generates it in ASCII (transliterates accents at creation, e.g.
     `renée-lefèvre` → `renee-lefevre`). An accented slug typed by the agent
     makes the Unipile API return a MISLEADING 403 "Insufficient permissions"
     (#180) → we strip the diacritics before the call. No-op on an already ASCII slug
-    or an opaque provider_id (`ACoAA…`, no accent) — idempotent."""
+    or an opaque provider_id (`ACoAA…`, no accent) — idempotent.
+
+    A full profile URL (`https://www.linkedin.com/<genre>/<slug>/?…`) gets the SAME
+    misleading 403 (#1353): it is brought back to its slug (`genre` = `in` for a
+    member, `company` for a company). Any other LinkedIn URL (Sales Navigator, a post,
+    the other genre) is refused by name rather than sent."""
+    ident = identifier.strip()
+    if "linkedin.com" in ident.lower() or ident.lower().startswith(("http:", "https:")):
+        parts = urlsplit(ident if "://" in ident else "https://" + ident)
+        segments = [unquote(x) for x in parts.path.split("/") if x]
+        if (not parts.hostname or not parts.hostname.lower().endswith("linkedin.com")
+                or len(segments) < 2 or segments[0].lower() != genre):
+            quoi = "a member" if genre == "in" else "a company"
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"`identifier` is a URL that is not {quoi}'s LinkedIn page "
+                f"(`linkedin.com/{genre}/<slug>`): {identifier!r}. Pass the public "
+                "slug (the segment after "
+                f"`/{genre}/`) or the URN (`ACoAA…`); nothing was sent.")))
+        ident = segments[1]
     return "".join(
-        c for c in unicodedata.normalize("NFKD", identifier)
+        c for c in unicodedata.normalize("NFKD", ident)
         if not unicodedata.combining(c)
     )
 
@@ -317,6 +336,79 @@ def _slim(payload, fields: Optional[list[str]] = None,
     if "data" in payload and isinstance(payload.get("data"), list):
         payload["data"] = payload["items"]   # `_norm` aliases both: keep consistent
     return payload
+
+
+def _page_de_messagerie(page, fields: Optional[list[str]],
+                        text_max_chars: Optional[int]):
+    """A messaging page (threads or messages) slimmed on request (#1353).
+
+    A daily sweep of replies needs, per thread, its id, name, date, last sender and an
+    excerpt: the full `last_message.text` made a page of 20 threads weigh ~100,000
+    characters. Opt-in — nothing changes without `fields`/`text_max_chars`:
+    - `fields`: kept keys; a dotted one (`last_message.sender_id`) keeps that sub-key
+      of the object. `id` always stays (to chain `op="read"`). A key no item carries
+      is refused, naming the keys present — never silently dropped;
+    - `text_max_chars`: excerpt of `text` and `last_message.text`, the cut marked
+      (`text_truncated`).
+    The page then comes as ONE list (`items`) and ONE cursor (`cursor`): oto-core serves
+    both twice (`data`, `next_cursor`), which doubled the weight."""
+    if not fields and text_max_chars is None:
+        return page
+    if text_max_chars is not None and text_max_chars <= 0:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+            "`text_max_chars` must be > 0 (omit it for the full text).")))
+    if fields is not None and not fields:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+            "`fields` is an empty list: omit it for every field, or name the keys.")))
+    if not isinstance(page, dict):
+        return page
+    items = page.get("items")
+    if not isinstance(items, list):
+        items = page.get("data") if isinstance(page.get("data"), list) else []
+    out = {k: v for k, v in page.items() if k not in ("data", "next_cursor", "items")}
+    if "cursor" not in out and "next_cursor" in page:
+        out["cursor"] = page["next_cursor"]
+
+    def _tronque(obj: dict) -> dict:
+        v = obj.get("text")
+        if text_max_chars and isinstance(v, str) and len(v) > text_max_chars:
+            obj = {**obj, "text": v[:text_max_chars] + "…", "text_truncated": True}
+        return obj
+
+    def _un(it):
+        if not isinstance(it, dict):
+            return it
+        it = _tronque(it)
+        if isinstance(it.get("last_message"), dict):
+            it = {**it, "last_message": _tronque(it["last_message"])}
+        if not fields:
+            return it
+        garde: dict = {"id": it["id"]} if "id" in it else {}
+        for f in fields:
+            tete, _, queue = f.partition(".")
+            if tete not in it:
+                continue
+            if not queue:
+                garde[tete] = it[tete]
+            elif isinstance(it[tete], dict) and queue in it[tete]:
+                sous = garde.get(tete) if isinstance(garde.get(tete), dict) else {}
+                garde[tete] = {**sous, queue: it[tete][queue]}
+        return garde
+
+    if fields and items:
+        def _porte(it, f):
+            tete, _, queue = f.partition(".")
+            if not isinstance(it, dict) or tete not in it:
+                return False
+            return not queue or (isinstance(it[tete], dict) and queue in it[tete])
+        inconnues = [f for f in fields if not any(_porte(it, f) for it in items)]
+        if inconnues:
+            presentes = sorted({k for it in items if isinstance(it, dict) for k in it})
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"`fields`: key(s) absent from every item of the page: {inconnues}. "
+                f"Keys present: {presentes} (a sub-key is named `parent.key`).")))
+    out["items"] = [_un(i) for i in items]
+    return out
 
 
 def _page_de_relations(page, fields: Optional[list] = None):
@@ -1262,7 +1354,8 @@ def register(mcp: FastMCP) -> None:
         on a member (endorsing a skill, a Sales Navigator / Recruiter action) is
         `linkedin_unipile_act` (op="endorse" / "update_member").
 
-        `identifier` = **public slug** (`marie-dupont`) or **URN** (`ACoAA…`). NOT the
+        `identifier` = **public slug** (`marie-dupont`; a full `linkedin.com/in/…` or
+        `/company/…` URL is brought back to it) or **URN** (`ACoAA…`). NOT the
         numeric `member_id` from `linkedin_unipile_search`: the v2 API rejects it
         (`400 Invalid User ID`) — go through the slug, which these ops resolve for you.
 
@@ -1321,7 +1414,8 @@ def register(mcp: FastMCP) -> None:
             return _scrape(sub, lambda: unipile_client().get_profile(ident, sections=sections))
 
         if op == "company":
-            ident = _canonical_li_identifier(_need(identifier, "identifier", op))
+            ident = _canonical_li_identifier(_need(identifier, "identifier", op),
+                                             "company")
             key = (sub, ident.lower())
             hit = _COMPANY_CACHE.get(key)
             if hit and time.time() - hit[0] < _COMPANY_TTL:
@@ -1367,6 +1461,8 @@ def register(mcp: FastMCP) -> None:
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
         with_names: bool = True,
+        fields: Optional[list[str]] = None,
+        text_max_chars: Optional[int] = None,
     ) -> dict:
         """Reads LinkedIn messaging (DM) via Unipile. Sending, reacting and changing a
         thread — like every act on LinkedIn — is `linkedin_unipile_act`.
@@ -1396,13 +1492,25 @@ def register(mcp: FastMCP) -> None:
         - **"attendees"**: participants of a thread (`chat_id`).
         - **"contacts"**: your messaging contact book (counterparts). Paginated.
 
+        A page of threads with their full last message is heavy (~100,000 characters
+        for 20): for a sweep, slim it with `fields` (e.g. `["id", "name",
+        "timestamp", "last_message.sender_id", "last_message.text"]`) and
+        `text_max_chars` (e.g. 200) — op="list" and op="read".
+
         Args:
             op: list (default) | read | attendees | contacts.
             chat_id: thread id (read, attendees).
             limit: page size (list, read, contacts).
             cursor: pagination (list, contacts).
             with_names: op="list" — enrichment of counterpart names.
+            fields: op="list"/"read" — keys kept per item (`parent.key` for a sub-key;
+                `id` always kept); a key absent from the whole page is refused.
+                Omitted = every field.
+            text_max_chars: op="list"/"read" — excerpt length of `text` and
+                `last_message.text`, the cut marked `text_truncated`. Omitted = full.
         """
+        if (fields is not None or text_max_chars is not None) and op not in ("list", "read"):
+            raise _bad(f"`fields`/`text_max_chars` apply to op='list'/'read', not op='{op}'.")
         client = unipile_client()
 
         if op == "list":
@@ -1412,14 +1520,16 @@ def register(mcp: FastMCP) -> None:
             if limit is not None and not 1 <= limit <= _CHAT_LIST_MAX:
                 raise _bad(f"op='list': `limit` ranges from 1 to {_CHAT_LIST_MAX} "
                            "(LinkedIn's limit) — paginate with `cursor`.")
-            return client.list_chats(limit=limit if limit is not None else 20,
-                                     cursor=cursor, with_attendee_names=with_names)
+            return _page_de_messagerie(
+                client.list_chats(limit=limit if limit is not None else 20,
+                                  cursor=cursor, with_attendee_names=with_names),
+                fields, text_max_chars)
 
         if op == "read":
-            return unipile_messagerie.references_des_pieces(
+            return _page_de_messagerie(unipile_messagerie.references_des_pieces(
                 client.list_messages(_need(chat_id, "chat_id", op),
                                      limit=limit if limit is not None else 30),
-                "linkedin")
+                "linkedin"), fields, text_max_chars)
 
         if op == "attendees":
             return client.list_chat_attendees(_need(chat_id, "chat_id", op))
