@@ -45,6 +45,7 @@ def client(monkeypatch):
     from oto_mcp.tools import gmail as G
 
     inst = MagicMock()
+    inst.get_signature.return_value = "<div>Signature</div>"   # du HTML, comme Gmail
     factory = MagicMock(return_value=inst)
     monkeypatch.setattr(G, "_client_for_user", factory)
     monkeypatch.setattr("oto_mcp.access.current_user_sub_or_raise", lambda: "sub-1")

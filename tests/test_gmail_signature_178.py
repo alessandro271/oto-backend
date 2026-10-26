@@ -126,3 +126,45 @@ def test_le_texte_servi_annonce_la_signature():
         assert "signature" in t.description and "none_configured" in t.description, nom
         assert t.parameters["properties"]["sign"]["default"] is True, nom
         assert "signature" in t.parameters["properties"]["sign"]["description"], nom
+
+
+@pytest.mark.parametrize("signature", [
+    "-- <br>Alexis",
+    '<div dir="ltr">--&nbsp;<br>Alexis</div>',
+    "<div>\n  <span>--</span><br>Alexis</div>",
+])
+def test_une_signature_qui_porte_son_separateur_n_en_recoit_pas_un_second(
+        monkeypatch, signature):
+    """#1345 : la signature Gmail du compte commence déjà par `--` → un seul séparateur."""
+    cli = _FauxClient(signature=signature)
+    _compose(monkeypatch, cli, body="Bonjour", to="j@x.fr", subject="s")
+    (_, kw), = cli.appels
+    assert kw["html"].endswith("<br>" + signature)
+    assert "<br>--<br>" not in kw["html"]
+
+
+def test_un_brouillon_rend_son_lien_web_sous_le_compte_resolu(monkeypatch):
+    """#1345 : un brouillon rend un lien cliquable, sous le compte qui l'a écrit
+    (celui que la résolution de l'appel a noté)."""
+    from oto_mcp import session_org
+
+    class _Cli(_FauxClient):
+        def create_draft(self, **kw):
+            self.appels.append(("create_draft", kw))
+            return {"id": "r-1", "message_id": "18f0a1b2c3", "threadId": "t1"}
+
+    monkeypatch.setattr(session_org, "current_call_trace",
+                        lambda: {"resolved_account": "moi@exemple.fr"})
+    out = _compose(monkeypatch, _Cli(), body="Bonjour", to="j@x.fr", subject="s")
+    assert out["web_link"] == (
+        "https://mail.google.com/mail/u/moi@exemple.fr/#drafts?compose=18f0a1b2c3")
+
+
+def test_un_envoi_ne_rend_pas_de_lien_de_brouillon(monkeypatch):
+    from oto_mcp import session_org
+
+    monkeypatch.setattr(session_org, "current_call_trace",
+                        lambda: {"resolved_account": "moi@exemple.fr"})
+    out = _compose(monkeypatch, _FauxClient(), body="Bonjour", to="j@x.fr",
+                   subject="s", mode="send")
+    assert "web_link" not in out

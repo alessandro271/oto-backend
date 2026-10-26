@@ -42,7 +42,8 @@ def _joue(coro):
 @pytest.fixture
 def wired(monkeypatch):
     from oto_mcp.tools import gmail as G
-    monkeypatch.setattr(G, "_client_for_user", lambda account=None: MagicMock())
+    monkeypatch.setattr(G, "_client_for_user", lambda account=None: MagicMock(
+        get_signature=MagicMock(return_value="<div>Signature</div>")))
     monkeypatch.setattr("oto_mcp.access.current_user_sub_or_raise", lambda: "sub-1")
     return G
 

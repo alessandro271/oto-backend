@@ -25,12 +25,13 @@ import os
 import shutil
 import tempfile
 from typing import Literal, Optional, Union
+from urllib.parse import quote
 
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, file_content, file_source
+from .. import access, file_content, file_source, session_org
 from .lecture import ACTE, SIMULATION, documente
 from ..auth import google as google_oauth
 
@@ -141,7 +142,33 @@ def _signed_html(body: str, html: Optional[str], markdown: bool, signature: str)
         import html as html_mod
         corps = ('<div dir="ltr">' + html_mod.escape(body).replace("\n", "<br>")
                  + "</div>")
+    if _porte_son_separateur(signature):
+        return f"{corps}<br>{signature}"
     return f"{corps}<br>--<br>{signature}"
+
+
+def _porte_son_separateur(signature: str) -> bool:
+    """True when the account's signature already opens with its own `--` (typed by
+    the person in Gmail's settings): adding ours would show two in a row (#1345).
+    Read on the visible text — tags removed, entities decoded, leading blanks
+    (non-breaking spaces included) skipped."""
+    import html as html_mod
+    import re
+    texte = html_mod.unescape(re.sub(r"<[^>]*>", "", signature))
+    return texte.lstrip(" \t\r\n\u00a0").startswith("--")
+
+
+def _lien_brouillon(message_id: Optional[str], account: Optional[str]) -> Optional[str]:
+    """The Gmail web link of a draft, under the account that wrote it (#1345): a
+    procedure can then note where the draft waits. The account is the one named, or
+    the one the call resolved (`_account` of the call trace); None outside an MCP call
+    with no account named. The `#drafts?compose=` form is the Gmail web client's own
+    address of an open draft, not a documented API contract."""
+    email = account or (session_org.current_call_trace() or {}).get("resolved_account")
+    if not message_id or not email:
+        return None
+    return (f"https://mail.google.com/mail/u/{quote(email, safe='@')}/"
+            f"#drafts?compose={quote(message_id, safe='')}")
 
 
 # The composition arguments, shared by `gmail(op="draft")` and `gmail_act(op="send")`:
@@ -172,8 +199,8 @@ _COMPOSITION_ARGS = """\
     account: email of the Google account to use — same choice as `_account`."""
 
 _SIGNATURE_DOC = """\
-The sending account's Gmail signature is appended by default, after `--`, like the Gmail
-web client does (the API never adds it on its own) — so do NOT write a sign-off block of
+The sending account's Gmail signature is appended by default, after `--` (none added when
+the signature already opens with its own), like the Gmail web client does (the API never adds it on its own) — so do NOT write a sign-off block of
 your own in `body`. `signature` in the answer says what happened: "appended",
 "none_configured" (the account has no signature — nothing was added), or "disabled"
 (`sign=False`)."""
@@ -197,8 +224,9 @@ archives or deletes: that is `gmail_act`, the tool your client asks you to confi
 - **"drafts"**: the drafts. Returns {{drafts: [{{id, message_id, to, subject, date,
   snippet}}], count}} — a draft `id` is what `gmail_act(op="send", draft_id=…)` sends.
 - **"draft"**: WRITE A DRAFT — a new message (`to`, `subject`, `body`) or a threaded reply
-  (`reply_to`). It does NOT leave the mailbox. Returns `kind: "draft"` and its `id`: send
-  it with `gmail_act(op="send", draft_id=<id>)` once the person agrees.
+  (`reply_to`). It does NOT leave the mailbox. Returns `kind: "draft"`, its `id` and
+  `web_link` (the draft opened in Gmail web, to note where it waits): send it with
+  `gmail_act(op="send", draft_id=<id>)` once the person agrees.
   ⚠️ A fresh draft can be MISSING from an already-open Gmail tab for a while (the API has
   it, the client view lags): tell the person to reload or search `in:drafts`.
 - **"accounts"**: the Gmail accounts this call can use — the user's own, then the
@@ -260,7 +288,7 @@ def _refuse_composition(op: str, **valeurs) -> None:
 
 
 async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, cc, bcc, html,
-                    from_name, markdown, attachments, sign) -> dict:
+                    from_name, markdown, attachments, sign, account=None) -> dict:
     """Write a draft (`envoyer=False`) or send (`True`) — the ONE composition path of both
     tools: signature, attachments, reply or new message."""
     if not body:
@@ -307,6 +335,10 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, cc, b
         Paid for on 14/08: three emails sent to a client."""
         out = dict(res) if isinstance(res, dict) else {"result": res}
         out["kind"] = "sent" if envoyer else "draft"
+        if not envoyer:
+            lien = _lien_brouillon(out.get("message_id"), account)
+            if lien:
+                out["web_link"] = lien
         out["signature"] = signature_etat
         return out
 
@@ -424,7 +456,7 @@ def register(mcp: FastMCP) -> None:
         return await _composer(
             client, envoyer=False, body=body, to=to, subject=subject, reply_to=reply_to,
             cc=cc, bcc=bcc, html=html, from_name=from_name, markdown=markdown,
-            attachments=attachments, sign=sign)
+            attachments=attachments, sign=sign, account=account)
 
     @mcp.tool(name="gmail_act", annotations=ACTE)
     @documente(_GMAIL_ACT_DOC)
