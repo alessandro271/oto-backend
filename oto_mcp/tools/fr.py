@@ -100,6 +100,22 @@ def _famille_bodacc(famille: Optional[str]) -> Optional[str]:
         "(`modification`).")))
 
 
+_NAF_LABELS: dict[str, str] = {}
+
+
+def _naf_labels() -> dict[str, str]:
+    """NAF rév. 2 code → label, read once from the connector library's nomenclature.
+    An empty table is a broken install, never "no label": it raises."""
+    if not _NAF_LABELS:
+        from oto.tools.sirene import load_naf_codes
+        codes = load_naf_codes()
+        if not codes:
+            raise RuntimeError("NAF nomenclature missing from oto.tools.sirene "
+                               "(data/naf_codes.txt): reinstall oto-core")
+        _NAF_LABELS.update(codes)
+    return _NAF_LABELS
+
+
 def _depots_sans_donnees(notices: list[dict], dates_rendues: list) -> dict:
     """The accounts filings BODACC publishes (`dpc` notices) whose closing date is
     not among `dates_rendues` — filed, but absent from the usable INPI dataset
@@ -338,16 +354,27 @@ def register(mcp: FastMCP) -> None:
     def _pick(d: dict, keys: tuple) -> dict:
         return {k: d[k] for k in keys if k in d and d[k] is not None}
 
+    def _with_naf_label(d: dict) -> dict:
+        """`activite_principale_libelle` beside the code: the upstream serves the
+        NAF code alone ("58.11Z"), and a qualification that must quote "the code
+        and its words" was left to justify a target on a bare code. Absent when
+        the code is outside NAF rév. 2 (older nomenclature of a closed company):
+        no label is better than a wrong one."""
+        libelle = _naf_labels().get(d.get("activite_principale") or "")
+        if libelle:
+            d["activite_principale_libelle"] = libelle
+        return d
+
     def _compact_identity(identity: dict) -> dict:
-        out = _pick(identity, _IDENTITY_KEEP)
+        out = _with_naf_label(_pick(identity, _IDENTITY_KEEP))
         out.update(_pick(identity.get("complements") or {}, _COMPLEMENT_KEEP))
         siege = identity.get("siege")
         if isinstance(siege, dict):
-            out["siege"] = _pick(siege, _ETAB_KEEP)
+            out["siege"] = _with_naf_label(_pick(siege, _ETAB_KEEP))
         dirigeants = identity.get("dirigeants") or []
         out["dirigeants"] = [_pick(d, _DIRIGEANT_KEEP) for d in dirigeants[:10]]
         etabs = identity.get("matching_etablissements") or []
-        out["etablissements"] = [_pick(e, _ETAB_KEEP) for e in etabs[:25]]
+        out["etablissements"] = [_with_naf_label(_pick(e, _ETAB_KEEP)) for e in etabs[:25]]
         if len(etabs) > 25:
             out["_etablissements_truncated"] = len(etabs)
         return out
@@ -427,8 +454,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=LECTURE)
     def fr_get(siren: str | None = None, sirens: list | None = None) -> dict:
-        """Full company profile by SIREN: identity (siège, directors, NAF,
-        employees) + 7 top financial ratios from the latest INPI/BCE filing
+        """Full company profile by SIREN: identity (siège, directors, NAF code
+        with its rév. 2 label `activite_principale_libelle`, employees) + 7 top financial ratios from the latest INPI/BCE filing
         + recent BODACC legal events. Aggregates 3 open data sources in parallel.
         Use this as first call when investigating a company.
 
