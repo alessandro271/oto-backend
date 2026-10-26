@@ -118,14 +118,33 @@ def _borrower_sub(org: int, to: str) -> str:
     return to
 
 
-def _lent_account(eid: str, connector: str, account: str) -> str:
+def _equipes_a_cle(org: int, sub: str, connector: str) -> list[dict]:
+    """The caller's teams in `org` whose OWN row holds `connector` (a loan to the team
+    is not its key) — what the caller may take for « my instance » (#1343)."""
+    return [g for g in group_store.list_groups_for_user(sub, org)
+            if credentials_store.list_accounts("group", str(g["group_id"]), connector)]
+
+
+def _lent_account(org: int, sub: str, connector: str, account: str) -> str:
     """The account of the lender's row to lend: the one named, otherwise the only one.
-    Several and none named = a refusal that lists them; none at all = no instance."""
+    Several and none named = a refusal that lists them; none at all = no instance —
+    or, when a team of the caller holds the key, a refusal that says only a personal
+    key lends and how that team key reaches another team (#1343)."""
+    eid = credentials_store.member_id(org, sub)
     accounts = [r["account"] for r in credentials_store.list_accounts(
         credentials_store.MEMBER, eid, connector)]
     if account and account in accounts:
         return account
     if not accounts:
+        equipes = _equipes_a_cle(org, sub, connector)
+        if equipes:
+            noms = ", ".join(f"#{g['group_id']} \"{g['name']}\"" for g in equipes)
+            raise AuthzDenied(400, "team_key_not_lendable",
+                              f"The `{connector}` key you see is a TEAM key (team {noms}), "
+                              "and only a personal key is lent: a team key is not lent to "
+                              "another team. To serve another team, set the key in that "
+                              "team too (by one of its team admins), or once for the "
+                              "whole org (by an org admin). Nothing was lent.")
         raise AuthzDenied(404, "no_instance",
                           f"No `{connector}` instance set in this org — nothing to lend "
                           f"(configure your key first).")
@@ -233,7 +252,7 @@ def _get_loan_state(ctx: ResolvedCtx, inp: LoanStateInput) -> dict:
     connector = providers.credential_provider(inp.connector)
     org = _active_org(ctx, "read a loan")
     eid = credentials_store.member_id(org, ctx.sub)
-    account = _lent_account(eid, connector, inp.account)
+    account = _lent_account(org, ctx.sub, connector, inp.account)
     _, side = credentials_store.get_instance_sharing(
         credentials_store.MEMBER, eid, connector, account)
     par_cible = (credentials_store.services_pretes(
@@ -283,7 +302,7 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
                               f"No team #{inp.to_group} in your current org.")
         entry = f"group:{inp.to_group}"
     eid = credentials_store.member_id(org, ctx.sub)
-    account = _lent_account(eid, connector, inp.account)
+    account = _lent_account(org, ctx.sub, connector, inp.account)
     _, side = credentials_store.get_instance_sharing(
         credentials_store.MEMBER, eid, connector, account)
     side = list(side or [])

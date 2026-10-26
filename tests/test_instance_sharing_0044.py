@@ -112,12 +112,20 @@ def test_guard_member_owner_still_works(monkeypatch):
 
 # ── oto_lend_instance : write path de share_side ──────────────────────────────
 def _lend_wiring(monkeypatch, *, existing_side=None, write_ok=True, accounts=("",),
-                 meta=None):
+                 meta=None, team_keys=()):
+    """`accounts` = the caller's OWN member rows; `team_keys` = ids of the caller's teams
+    whose own row holds the connector (#1343)."""
     captured = {}
     monkeypatch.setattr(providers, "connector_for_provider", lambda c: object())
     monkeypatch.setattr(credentials_store, "list_accounts",
-                        lambda et, eid, conn: [{"account": a, "meta": dict(meta or {})}
-                                               for a in accounts])
+                        lambda et, eid, conn: (
+                            [{"account": a, "meta": dict(meta or {})} for a in accounts]
+                            if et == credentials_store.MEMBER
+                            else [{"account": "", "meta": {}}]
+                            if et == "group" and int(eid) in team_keys else []))
+    monkeypatch.setattr(group_store, "list_groups_for_user",
+                        lambda sub, org: [{"group_id": g, "name": f"team-{g}"}
+                                          for g in (51, 47)])
     monkeypatch.setattr(credentials_store, "services_pretes", lambda *a, **k: {})
     monkeypatch.setattr(access, "current_org", lambda sub: 35)
     monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
@@ -266,6 +274,20 @@ def test_lend_sans_aucune_ligne_dit_no_instance(monkeypatch):
         connectors_sharing._lend_instance(
             _ctx("alice"), connectors_sharing.LendInstanceInput(connector="zoho", to="bob"))
     assert e.value.code == "no_instance" and "share_side" not in cap
+
+
+@pytest.mark.parametrize("account", ["", "group:51:sivan"])
+def test_preter_une_cle_d_equipe_dit_que_seule_une_cle_perso_se_prete(monkeypatch, account):
+    """#1343 : la clé est celle d'une équipe de l'appelant, pas la sienne. Le refus
+    `no_instance` (« configure your key first ») disait qu'elle n'existait pas."""
+    cap = _lend_wiring(monkeypatch, accounts=(), team_keys=(51,))
+    monkeypatch.setattr(group_store, "get_group", lambda gid: {"id": gid, "org_id": 35})
+    with pytest.raises(AuthzDenied) as e:
+        connectors_sharing._lend_instance(_ctx("alice"), connectors_sharing.LendInstanceInput(
+            connector="sivan", to_group=47, account=account))
+    assert e.value.code == "team_key_not_lendable"
+    assert "#51" in e.value.message and "#47" not in e.value.message
+    assert "only a personal key" in e.value.message and "share_side" not in cap
 
 
 @pytest.mark.parametrize("carte", ["outlook", "microsoft"])
