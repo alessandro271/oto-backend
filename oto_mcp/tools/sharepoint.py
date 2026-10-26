@@ -241,9 +241,10 @@ def register(mcp: FastMCP) -> None:
         - **"download"**: READ a file's content. Word and PowerPoint documents are
           converted to PDF by Microsoft and their TEXT returned inline (plus
           `raw_url`); small text files inline; spreadsheets (.xlsx) inline as CSV
-          (`sheet`, `max_rows`); anything else as a short-lived signed URL.
-          `as_pdf=true` converts another Office type, `as_pdf=false` returns the
-          original bytes. Up to 50 MB.
+          (`sheet`, `max_rows`) plus `raw_url`, a short-lived signed URL to the
+          original workbook (formats kept); anything else as a short-lived signed
+          URL. `as_pdf=true` converts another Office type, `as_pdf=false` skips the
+          conversion (the document itself, rendered by the rules above). Up to 50 MB.
         - **"upload"**: ⚠️ WRITES — drop a file `name` into the folder
           `item_id`/`path` (root when omitted), from `content_base64` (any file),
           `content_text` (UTF-8 text) or `source` (a file the SERVER fetches, so

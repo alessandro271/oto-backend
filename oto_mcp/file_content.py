@@ -70,10 +70,10 @@ def render_for_agent(data: bytes, filename: str, mime: str, *, sub: str, prefix:
       feuille `sheet` (nom ou index) et borné à `max_rows` lignes par feuille et à
       `INLINE_TEXT_CAP` caractères. `sheet`/`max_rows` sur un autre format lèvent
       `SpreadsheetError` (`not_a_spreadsheet`) : jamais ignorés en silence.
-      **Tronqué** → le fichier BRUT complet est AUSSI déposé en privé : `raw_url`
-      + `raw_expires_in` (signal #1152, 24/09/2026 : un tableur de 2 414 lignes rendu
-      à 200 n'avait aucun chemin vers ses données — or on le veut entier pour le
-      charger dans un tableau ou le ranger). Le CSV inline reste : c'est lui que
+      TOUJOURS, comme pour un PDF, le fichier BRUT est AUSSI déposé en privé :
+      `raw_url` + `raw_expires_in` (signal #1152 : un tableur tronqué n'avait aucun
+      chemin vers ses données ; #1347 : même entier, le CSV perd formats, largeurs et
+      types d'un classeur à modifier). Le CSV inline reste : c'est lui que
       l'agent lit. Stockage indisponible → `raw_unavailable` le DIT, le rendu inline
       n'échoue pas pour autant ;
     - PDF → INLINE son texte extrait : `{encoding: "text", format: "pdf-text",
@@ -98,8 +98,9 @@ def render_for_agent(data: bytes, filename: str, mime: str, *, sub: str, prefix:
                             "rows_rendered": s.rows_rendered, "truncated": s.truncated}
                            for s in r.sheets],
                    sheet_names=list(r.sheet_names), truncated=r.truncated)
-        if r.truncated:
-            _joindre_le_brut(out, data, filename, mime, sub=sub, prefix=prefix)
+        # ALWAYS the original, truncated or not (#1347): the CSV loses formats,
+        # widths and types — a workbook to edit and send back needs its bytes.
+        _joindre_le_brut(out, data, filename, mime, sub=sub, prefix=prefix)
         return out
     if sheet is not None or max_rows is not None:
         raise SpreadsheetError(
@@ -136,7 +137,7 @@ def render_for_agent(data: bytes, filename: str, mime: str, *, sub: str, prefix:
 
 def _joindre_le_brut(out: dict, data: bytes, filename: str, mime: str, *, sub: str,
                      prefix: str) -> None:
-    """Dépose le fichier ORIGINAL (tableur tronqué, PDF rendu en texte) et en rend
+    """Dépose le fichier ORIGINAL (tableur rendu en CSV, PDF rendu en texte) et en rend
     l'URL signée.
 
     Un stockage absent ne fait pas échouer le rendu : le texte inline est juste et

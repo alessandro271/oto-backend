@@ -5,7 +5,7 @@
 Documents: Silae returns them base64-encoded (PDF or XLSX; a DSN content in an
 undocumented encoding). They go out through `file_content.render_for_agent`, the single
 home of the inline-vs-signed-URL rule: a PDF as its extracted text plus `raw_url` to the
-original, an XLSX as CSV per sheet (bounded; `raw_url` when truncated), a binary or a
+original, an XLSX as CSV per sheet (bounded) plus `raw_url` to the original, a binary or a
 large text as a short-lived signed URL — never the base64 in the agent's context. A DSN
 content is decoded to text when it is text (UTF-8, else Windows-1252, the charset Silae
 documents for its values) and says which encoding it read.
@@ -100,7 +100,7 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """A payroll report Silae generates for ONE dossier per call: a PDF comes back as
         its text plus `raw_url` (signed, temporary) to the original, an XLSX as CSV
-        (bounded; `raw_url` when truncated).
+        (bounded) plus `raw_url` to the original.
 
         `report`: "charges_table" (tableau des charges), "contributions_detail" (détail
         des cotisations, 12 months at most), "declaration_summaries" (the month's

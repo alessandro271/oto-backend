@@ -176,7 +176,7 @@ def test_une_archive_demesuree_est_refusee_avant_lecture():
 
 def _pas_de_s3(monkeypatch):
     def _interdit(*a, **k):
-        raise AssertionError("un tableur ne part plus en URL signée")
+        raise AssertionError("rien ne doit être déposé ici")
     monkeypatch.setattr(media_store, "upload_private", _interdit)
 
 
@@ -204,7 +204,7 @@ def test_render_for_agent_rend_un_xlsx_en_csv_inline(monkeypatch):
 
 
 def test_render_for_agent_transmet_sheet_et_max_rows(monkeypatch):
-    _pas_de_s3(monkeypatch)
+    _s3_qui_note(monkeypatch)
     out = file_content.render_for_agent(XLSX, "devis.xlsx", MIME, sub="s", prefix="p",
                                         sheet="Articles", max_rows=1000)
     assert [s["name"] for s in out["sheets"]] == ["Articles"]
@@ -228,11 +228,14 @@ def test_un_tableur_tronque_donne_aussi_le_fichier_brut(monkeypatch):
     assert deposes == [("gmail-attachments", "s", XLSX, MIME, "devis.xlsx")]
 
 
-def test_un_tableur_entier_ne_depose_rien(monkeypatch):
-    _pas_de_s3(monkeypatch)
+def test_un_tableur_entier_donne_aussi_ses_octets_d_origine(monkeypatch):
+    """#1347 : un classeur à modifier se renvoie avec sa mise en forme ; le CSV la
+    perd. Entier ou tronqué, l'original part en URL signée."""
+    deposes = _s3_qui_note(monkeypatch)
     out = file_content.render_for_agent(XLSX, "devis.xlsx", MIME, sub="s", prefix="p",
                                         sheet="Articles", max_rows=1000)
-    assert out["truncated"] is False and "raw_url" not in out
+    assert out["truncated"] is False and out["raw_url"] == "https://signed/brut"
+    assert deposes == [("p", "s", XLSX, MIME, "devis.xlsx")]
 
 
 def test_sans_stockage_le_tronque_le_dit_sans_echouer(monkeypatch):

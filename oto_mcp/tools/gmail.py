@@ -192,7 +192,7 @@ archives or deletes: that is `gmail_act`, the tool your client asks you to confi
   extracted text plus `raw_url`, a short-lived signed URL to the original (a scanned or
   protected PDF has no text: `text_unavailable` says why); an .xlsx as CSV per sheet
   (`sheet`, `max_rows` — default 200, max 5000; if `truncated`, ask one sheet or raise
-  `max_rows`, and `raw_url` gives the full file); anything else as a short-lived signed
+  `max_rows`; `raw_url` always gives the original file); anything else as a short-lived signed
   URL `{{encoding: "url", url, expires_in}}`.
 - **"drafts"**: the drafts. Returns {{drafts: [{{id, message_id, to, subject, date,
   snippet}}], count}} — a draft `id` is what `gmail_act(op="send", draft_id=…)` sends.
