@@ -597,6 +597,31 @@ def ORG_MEMBER_OPT(field: str):
     return rule
 
 
+#: Le refus nommé de `PLATFORM_OPERATOR_OPT` : écrire un bien de la PLATEFORME.
+CODE_PLATEFORME_SEULE = "platform_only"
+
+
+def PLATFORM_OPERATOR_OPT(field: str):
+    """Écrire un bien de la PLATEFORME (une recette `scope="platform"`) : un opérateur
+    plateforme (`access.is_platform_operator`), puis la sémantique d'`ORG_MEMBER_OPT`
+    pour l'org de l'appel — ce qu'une épreuve appelle se facture à l'org de l'opérateur.
+
+    Refus nommé `platform_only` (403), pas `forbidden` : il dit QUEL mur, et que la
+    lecture reste ouverte. Le rôle AVANT l'org (#632) : dire « choisis une org » à qui
+    ne peut pas écrire ne mènerait qu'à ce même refus, une étape plus loin."""
+    membre = ORG_MEMBER_OPT(field)
+
+    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+        sub = _require_sub(raw)
+        if not access.is_platform_operator(sub):
+            raise AuthzDenied(403, CODE_PLATEFORME_SEULE,
+                              "Writing to the platform scope is reserved to platform "
+                              "operators; reading and running stay open to everyone.")
+        return membre(raw, inp)
+    rule.platform_floor = "operator"
+    return rule
+
+
 def _group_opt(field: str, allowed, refus):
     """Fabrique commune de `GROUP_MEMBER_OPT` / `GROUP_ADMIN_OPT` : équipe explicite
     `input.<field>`, sinon l'équipe ACTIVE de la session, puis la garde `allowed`.

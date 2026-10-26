@@ -532,6 +532,12 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 Les fiches des recettes de l'org, sans corps, membre de l'org (`capabilities/recipes.py`,
 `org.recipes`, REST seule) : `docs/recettes.md` §Lecture REST.
 
+## Recettes de la plateforme (PROVISOIRE) — `GET /api/platform/recipes`
+
+Les fiches des recettes de la plateforme, lançables depuis toute org, sans corps, tout
+compte authentifié (`capabilities/recipes.py`, `platform.recipes`, REST seule). Même forme
+que `GET /api/orgs/{id}/recipes` : `docs/recettes.md` §Les recettes de la plateforme.
+
 ## Surface nœuds (PROVISOIRE) — `/api/me/shell`, `/api/me/nodes/{id}`, `/api/me/nodes/{id}/rows`
 
 Trois lectures précoces du modèle de nœuds (`capabilities/shell.py`, `node_view.py`,

@@ -1021,8 +1021,9 @@ def _outils_cites_par_la_procedure(org: int, slug: str,
 
 def _outils_de_la_recette_publiee(org: int, recette: str) -> list[str]:
     """Sync (base) : les outils que cite la version PUBLIÉE de la recette `recette` de
-    l'org — rien pour un slug qui n'en est pas une, ou une recette jamais publiée."""
-    fiche = db_recipes.get_recipe("org", str(org), recette)
+    l'org, sinon de la plateforme (même résolution qu'`oto_recipe` sans `scope`) — rien
+    pour un slug qui n'en est pas une, ou une recette jamais publiée."""
+    fiche = db_recipes.get_recipe_or_platform("org", str(org), recette)
     if not fiche or not fiche.get("published_version"):
         return []
     version = db_recipes.get_version(fiche["id"], fiche["published_version"])

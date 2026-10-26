@@ -852,6 +852,8 @@ POST /api/me/recipes -> _handler
 OPTIONS /api/me/recipes -> options_handler
 GET,HEAD /api/orgs/{id}/recipes -> _handler
 OPTIONS /api/orgs/{id}/recipes -> options_handler
+GET,HEAD /api/platform/recipes -> _handler
+OPTIONS /api/platform/recipes -> options_handler
 POST /api/copilot/turns -> _handler
 OPTIONS /api/copilot/turns -> options_handler
 POST /api/copilot/threads/{thread_id}/client-results -> _handler

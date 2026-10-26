@@ -27,6 +27,16 @@ ou publier une recette reste un travail d'agent, sur l'outil MCP `oto_recipe` : 
 autre op reçue en REST est refusée nommément (400 `op_not_served_over_rest`), jamais
 servie. Le filtre vit dans le handler, sur `ctx.channel == "rest"` EXPLICITE (même
 motif que `_publication.refuser_si_agent`) : un appel interne sans canal passe.
+
+**Les recettes de la PLATEFORME** (propriétaire `("platform", "platform")`,
+`scope="platform"`) : une procédure de la bibliothèque publique nomme sa recette
+(`oto_recipe <slug>`), et toute org qui la copie doit pouvoir la lancer. Les écrire
+(create, propose, describe, test, publish) est réservé aux opérateurs plateforme
+(`PLATFORM_OPERATOR_OPT`, 403 `platform_only`) ; les lire et les lancer est ouvert à
+tous. Sans `scope`, get, versions et run cherchent la recette de l'org, PUIS celle
+de la plateforme — la recette de l'org gagne toujours ; les écritures sans `scope` ne
+visent que l'org, jamais la plateforme. Une recette de la plateforme s'exécute comme
+toute autre : identité, org et droits sur le tableau de QUI la lance.
 """
 from __future__ import annotations
 
@@ -40,12 +50,28 @@ from ..db import recipes as db_recipes
 from ..functions import executor as bac
 from ..recipes import affichage, code, contrat, moteur
 from . import _code_humain
-from ._authz import BY_OP, ORG_MEMBER_OF, ORG_MEMBER_OPT, SUB_ONLY
+from ._authz import (BY_OP, CODE_PLATEFORME_SEULE, ORG_MEMBER_OF, ORG_MEMBER_OPT,
+                     PLATFORM_OPERATOR_OPT, SUB_ONLY)
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
-_PORTEE = BY_OP({None: ORG_MEMBER_OPT("org"), "org": ORG_MEMBER_OPT("org"),
-                 "user": SUB_ONLY}, fields=("scope",))
+_PORTEE = {None: ORG_MEMBER_OPT("org"), "org": ORG_MEMBER_OPT("org"), "user": SUB_ONLY}
+#: Lire et lancer : une recette de la plateforme est ouverte à tout compte, dans l'org de
+#: l'appel (`org=` reste épinglé et gardé, comme sans `scope`).
+_PORTEE_LECTURE = BY_OP({**_PORTEE, "platform": ORG_MEMBER_OPT("org")}, fields=("scope",))
+#: Écrire, éprouver, publier : la plateforme à ses seuls opérateurs.
+_PORTEE_ECRITURE = BY_OP({**_PORTEE, "platform": PLATFORM_OPERATOR_OPT("org")},
+                         fields=("scope",))
+_OPS_LECTURE = ("list", "get", "versions", "sample", "run")
+_OPS_ECRITURE = ("create", "propose", "describe", "test", "publish")
+#: Sans `scope`, ces ops trouvent la recette de l'org, sinon celle de la plateforme. Les
+#: écritures n'y sont pas, ni `test` : sans `scope`, elles ne visent que l'org — éprouver
+#: une version non publiée de la plateforme reste aux opérateurs, sous `scope="platform"`.
+_OPS_REPLI_PLATEFORME = ("get", "versions", "run")
+_REFUS_PLATEFORME = DeclaredError(
+    403, CODE_PLATEFORME_SEULE,
+    "`scope='platform'`: create, propose, describe, test and publish are reserved to "
+    "platform operators; list, get, versions and run stay open to everyone")
 _APPELANTES = ("sample", "test", "publish", "run")
 
 #: Les ops que la face REST (`POST /api/me/recipes`) sert ; les autres restent à l'outil
@@ -61,7 +87,11 @@ class RecipeInput(BaseModel):
     op: Literal["list", "get", "versions", "create", "propose", "describe", "sample",
                 "test", "publish", "run"]
     slug: Optional[str] = None
-    scope: Optional[Literal["org", "user"]] = None
+    scope: Optional[Literal["org", "user", "platform"]] = Field(default=None, description=(
+        "Whose recipes: your active org (default), `user` (your own), or `platform` "
+        "(open to everyone to read and run; written by platform operators only). "
+        "Without scope, get/versions/run fall back to the platform recipe of that "
+        "slug when the org has none; list shows org, own and platform recipes."))
     org: Optional[int] = None
     version: Optional[int] = Field(default=None, description=(
         "get/test/publish/run: the version (default: the published one, else the latest)."))
@@ -141,6 +171,8 @@ def _affichage(brut: dict) -> Optional[dict]:
 def _proprietaire(ctx: ResolvedCtx, inp: RecipeInput) -> tuple[str, str]:
     if inp.scope == "user":
         return "user", ctx.sub
+    if inp.scope == "platform":
+        return db_recipes.PLATEFORME
     if ctx.org_id is None:
         raise AuthzDenied(400, "no_active_org", "No active org: pass `org=<id>`, or "
                                                 "`scope='user'` for a recipe of your own.")
@@ -162,9 +194,20 @@ def _corps(ctx: ResolvedCtx, brut: Any) -> dict:
 
 
 def _fiche(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
+    """La fiche visée. Sans `scope`, une op de `_OPS_REPLI_PLATEFORME` prend celle de
+    l'org, sinon celle de la plateforme (sans org active : celle de la plateforme, puis
+    `no_active_org`) ; une écriture sans `scope` ne vise que l'org."""
     slug = _besoin(inp.slug, "missing_slug", f"`slug` is required for op={inp.op}.")
+    repli = inp.scope is None and inp.op in _OPS_REPLI_PLATEFORME
+    if repli and ctx.org_id is None:
+        fiche = db_recipes.get_recipe(*db_recipes.PLATEFORME, slug)
+        if fiche is not None:
+            return fiche
     owner = _proprietaire(ctx, inp)
-    fiche = db_recipes.get_recipe(owner[0], owner[1], slug)
+    if repli:
+        fiche = db_recipes.get_recipe_or_platform(owner[0], owner[1], slug)
+    else:
+        fiche = db_recipes.get_recipe(owner[0], owner[1], slug)
     if fiche is None:
         raise AuthzDenied(404, "unknown_recipe", f"No recipe `{slug}` here. "
                                                  "`oto_recipe(op='list')` shows yours.")
@@ -189,9 +232,15 @@ def _gerer(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
     if inp.op == "list":
         if inp.scope == "user":
             owners = [("user", ctx.sub)]
+        elif inp.scope == "platform":
+            owners = [db_recipes.PLATEFORME]
         else:
             owners = [("org", str(ctx.org_id))] if ctx.org_id is not None else []
             owners += [] if inp.scope == "org" else [("user", ctx.sub)]
+        if inp.scope is None:
+            # Les recettes de la plateforme, lançables d'ici : chaque fiche garde son
+            # `owner_type`, qui les distingue.
+            owners.append(db_recipes.PLATEFORME)
         return {"recipes": db_recipes.list_recipes(owners)}
     if inp.op == "create":
         slug = _besoin(inp.slug, "missing_slug", "`slug` is required for create.")
@@ -401,9 +450,8 @@ async def _recipe(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="me.recipe", handler=_recipe, Input=RecipeInput, Output=RecipeOut,
-        authz=BY_OP({op: _PORTEE for op in ("list", "get", "versions", "create", "propose",
-                                            "describe", "sample", "test", "publish",
-                                            "run")}),
+        authz=BY_OP({**{op: _PORTEE_LECTURE for op in _OPS_LECTURE},
+                     **{op: _PORTEE_ECRITURE for op in _OPS_ECRITURE}}),
         description=(
             "RECIPES: move a connector tool's results into a table on the server, with no "
             "model reading or retyping the rows. Only connector tools DECLARED READ-ONLY can "
@@ -435,11 +483,15 @@ CAPABILITIES += [
             "`limits.max_units` is required: a hard cap on what the tool BILLS (its own "
             "units; `units_basis` in the receipt says when it falls back on the recipe's "
             "count). op=run with a `datastore` WRITES rows into that table, with the "
-            "caller's own rights on it. Scope: your active org (default) or "
-            "`scope='user'`. A hosted agent runs recipes like any caller: its identity and "
-            "its job's org. A recipe can also be CODE (`kind: \"code\"`, Python in the "
-            "function sandbox calling tools through `oto.call`): anyone in scope creates "
-            "and runs it, only the platform tests and publishes it. A code recipe may also "
+            "caller's own rights on it. Scope: your active org (default), "
+            "`scope='user'`, or `scope='platform'` (recipes any org can run; only platform "
+            "operators write them). Without scope, get/versions/run use the org's "
+            "recipe, else the platform's of that slug, and list shows both: a platform "
+            "recipe runs with the caller's identity, org and table rights. A hosted agent "
+            "runs recipes like any caller: its identity and its job's org. A recipe can "
+            "also be CODE (`kind: \"code\"`, Python in the function sandbox calling tools "
+            "through `oto.call`): anyone in scope creates and runs it, only the platform "
+            "tests and publishes it. A code recipe may also "
             "create or update CRM records through a closed list of tools, only the writes "
             "it declares (`writes`), at most `limits.max_writes` per run (default 50), in "
             "the run's org, with the caller's own connector account. PROVISIONAL surface."),
@@ -452,7 +504,7 @@ CAPABILITIES += [
         # la capacité ; déclarée lourde (`routes_lourdes`) : un `run` appelle un outil
         # page après page et tient la requête jusqu'à son reçu.
         rest=RestBinding(verb="POST", path="/api/me/recipes", provisoire=True),
-        errors=(_REFUS_HORS_REST, _code_humain.REFUS),
+        errors=(_REFUS_HORS_REST, _REFUS_PLATEFORME, _code_humain.REFUS),
     ),
 ]
 
@@ -463,6 +515,8 @@ CAPABILITIES += [
 # de savoir, sans session MCP, quelles recettes l'org possède et si chacune est en
 # service. Lecture seule, fiches sans corps (le corps d'une recette-code est du
 # code), membre de l'org. Provisoire : la forme suivra ce que la page affiche.
+# Celles de la PLATEFORME se lisent de même (`GET /api/platform/recipes`, tout compte) :
+# même lecture (`_lister`), même forme (`OrgRecipes`).
 
 
 class OrgRecipesInput(BaseModel):
@@ -516,10 +570,10 @@ def _affichage_de(fiche: dict, corps: Any) -> Optional[dict]:
     return {**lues, "source": "derived"} if lues else None
 
 
-def _lister_org(org_id: int) -> list[dict]:
-    """Les fiches de l'org et leur affichage : deux requêtes quel que soit leur nombre
-    (les fiches, puis les corps à lire, tous ensemble)."""
-    fiches = db_recipes.list_recipes([("org", str(org_id))])
+def _lister(owner: tuple[str, str]) -> list[dict]:
+    """Les fiches de ce propriétaire (une org, la plateforme) et leur affichage : deux
+    requêtes quel que soit leur nombre (les fiches, puis les corps à lire, ensemble)."""
+    fiches = db_recipes.list_recipes([owner])
     a_lire = {f["id"]: _numero(f) for f in fiches if not f.get("display") and _numero(f)}
     corps = db_recipes.get_bodies(a_lire)
     return [{**f, "display": _affichage_de(f, corps.get(f["id"]))} for f in fiches]
@@ -537,8 +591,8 @@ def _iso(quand: Any) -> Optional[str]:
     return str(quand).replace(" ", "T", 1)
 
 
-async def _org_recipes(ctx: ResolvedCtx, inp: OrgRecipesInput) -> dict:
-    fiches = await run_in_threadpool(_lister_org, inp.org_id)
+def _forme_rest(fiches: list[dict]) -> dict:
+    """La forme que lisent les pages, la même pour une org et pour la plateforme."""
     return {"recipes": [{
         "slug": f["slug"], "title": f["title"], "description": f["description"] or "",
         "status": "published" if f["published_version"] else "proposed",
@@ -548,6 +602,18 @@ async def _org_recipes(ctx: ResolvedCtx, inp: OrgRecipesInput) -> dict:
     } for f in fiches]}
 
 
+async def _org_recipes(ctx: ResolvedCtx, inp: OrgRecipesInput) -> dict:
+    return _forme_rest(await run_in_threadpool(_lister, ("org", str(inp.org_id))))
+
+
+class PlatformRecipesInput(BaseModel):
+    pass
+
+
+async def _platform_recipes(ctx: ResolvedCtx, inp: PlatformRecipesInput) -> dict:
+    return _forme_rest(await run_in_threadpool(_lister, db_recipes.PLATEFORME))
+
+
 CAPABILITIES += [
     Capability(
         key="org.recipes", handler=_org_recipes, Input=OrgRecipesInput, Output=OrgRecipes,
@@ -555,5 +621,15 @@ CAPABILITIES += [
         rest=RestBinding("GET", "/api/orgs/{id}/recipes", {"id": "org_id"}, provisoire=True),
         description=("The org's recipes (no bodies): slug, title, whether one is in service, "
                      "and the steps a process page draws where it runs one."),
+    ),
+    # Les recettes de la plateforme, lançables depuis toute org : tout compte les lit,
+    # même forme que celles d'une org. REST seule, provisoire comme `org.recipes`.
+    Capability(
+        key="platform.recipes", handler=_platform_recipes, Input=PlatformRecipesInput,
+        Output=OrgRecipes, authz=SUB_ONLY, mcp=None,
+        rest=RestBinding("GET", "/api/platform/recipes", provisoire=True),
+        description=("The platform's recipes, which any org can run (no bodies): slug, "
+                     "title, whether one is in service, and the steps a process page "
+                     "draws where it runs one. Same shape as an org's recipes."),
     ),
 ]

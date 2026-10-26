@@ -17,7 +17,8 @@ RECIPES = """
 -- Une recette : l'identité et le pointeur vers la version publiée.
 CREATE TABLE IF NOT EXISTS recipes (
     id BIGSERIAL PRIMARY KEY,
-    -- Le propriétaire, comme toute ressource possédée (ADR 0049) : 'org' | 'user'.
+    -- Le propriétaire, comme toute ressource possédée (ADR 0049) : 'org' | 'user', ou
+    -- ('platform', 'platform') pour une recette de la plateforme, lançable de toute org.
     owner_type TEXT NOT NULL,
     owner_id TEXT NOT NULL,
     -- La référence lisible, unique chez son propriétaire : c'est elle qu'une procédure

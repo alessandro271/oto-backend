@@ -227,6 +227,8 @@ _LECTURES_VUE_BORNEE: dict[tuple[str, str], frozenset | None] = {
     ("GET", "/api/connectors"): None,
     ("GET", "/api/openapi.json"): None,
     ("GET", "/api/billing/plans"): None,
+    # Les recettes de la plateforme : les mêmes pour tout compte, aucune donnée d'org.
+    ("GET", "/api/platform/recipes"): None,
     # Le compte, vu dans O.
     ("GET", "/api/me"): None,
     ("GET", "/api/me/orgs"): None,
