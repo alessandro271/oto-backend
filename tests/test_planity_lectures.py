@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from _planity_faux import (_employe, _iso, _outil, _salon, coeur,
@@ -28,6 +30,8 @@ from _planity_faux import (_employe, _iso, _outil, _salon, coeur,
 from oto_mcp.mcp_errors import McpError
 
 __all__ = ["coeur"]        # la fixture, importée pour être posée
+
+_PARIS = ZoneInfo("Europe/Paris")
 
 
 #: Ce qui ne doit JAMAIS traverser la frontière d'un outil, à aucune profondeur.
@@ -317,10 +321,28 @@ def test_une_fenetre_qui_finit_aujourd_hui_le_dit(coeur):
     le dernier jour n'est pas fini, donc le rythme journalier est sous-estimé."""
     from oto_mcp.tools import planity_session
 
-    maintenant = int(time.time() * 1000)
-    p = planity_session.periode(maintenant - 6 * 86_400_000, maintenant)
+    maintenant = datetime.now(_PARIS)
+    # Six jours CALENDAIRES plus tôt, à midi : six fois 24 h enjambent un
+    # changement d'heure et tombent, près de minuit, sur le lendemain.
+    debut = (maintenant - timedelta(days=6)).replace(hour=12, minute=0, second=0)
+    p = planity_session.periode(int(debut.timestamp() * 1000),
+                                int(maintenant.timestamp() * 1000))
     assert p["ends_today"] is True and p["complete"] is False
     assert p["days"] == 7 and p["timezone"] == "Europe/Paris"
+
+
+def test_les_jours_d_une_fenetre_sont_calendaires_a_paris(coeur):
+    """Le passage à l'heure d'hiver ne fait ni gagner ni perdre un jour : on
+    compte les dates à Paris que la fenêtre touche, pas des tranches de 24 h."""
+    from oto_mcp.tools import planity_session
+
+    def ms(*a):
+        return int(datetime(*a, tzinfo=_PARIS).timestamp() * 1000)
+
+    # 2026-10-25, 3 h → 2 h : moins de 6 × 24 h séparent ces deux instants.
+    p = planity_session.periode(ms(2026, 10, 21, 0, 5), ms(2026, 10, 26, 23, 5))
+    assert p["from_date"] == "2026-10-21" and p["to_date"] == "2026-10-26"
+    assert p["days"] == 6
 
 
 def test_une_fenetre_close_est_annoncee_complete(coeur):
