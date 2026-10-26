@@ -17,7 +17,9 @@ remplissage par colonne est gardé avec la version. **Seule une version publiée
 recette se juge comme pour une personne : l'identité du porteur, son org (tenue par le
 verrou du jeton, `verrou_org.py`) et ses droits sur le tableau ; les refus du contrat
 valent pour tous (outils de la plateforme et outils à modèle exclus, outil déclaré en
-lecture seulement). Aucune règle propre aux agents.
+lecture seulement). Une seule règle propre aux agents : éprouver ou publier une
+recette-CODE est un geste de personne (`_code_humain`) — c'est exécuter du code non
+publié.
 
 **La face REST (`POST /api/me/recipes`) sert trois ops : `list`, `get` et `run`** —
 ce qu'une page fait d'un geste (nommer les recettes, en lancer une). Écrire, éprouver
@@ -37,6 +39,7 @@ from .. import access, session_org, tool_alias, tool_registry
 from ..db import recipes as db_recipes
 from ..functions import executor as bac
 from ..recipes import affichage, code, contrat, moteur
+from . import _code_humain
 from ._authz import BY_OP, ORG_MEMBER_OF, ORG_MEMBER_OPT, SUB_ONLY
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -86,7 +89,7 @@ class RecipeInput(BaseModel):
         "CRM writes it declares in `writes`, e.g. \"folk_record:create\" — never in a "
         "test, never delete/merge; a batch via `items`/`ids` (≤50) counts one write per "
         "record against `max_writes`) and returns a receipt of counts; test/publish of "
-        "a code recipe are platform-only."))
+        "a code recipe are platform-only, by a person (never from a hosted agent)."))
     display: Optional[dict[str, Any]] = Field(default=None, description=(
         "create/describe: what a process page shows where a process runs this recipe — "
         "{steps: [{label, detail?, credits?, per: contact|company|row}], saves?}: 1 to "
@@ -273,10 +276,13 @@ BORNES_D_EPREUVE = frozenset({None, "max_pages", "spend_cap", "time_budget"})
 
 
 async def _plateforme_pour_le_code(ctx: ResolvedCtx, corps: dict, op: str) -> None:
-    """Éprouver ou publier une recette-CODE : la plateforme seule, comme une fonction.
-    Le code tourne avec les droits de qui l'exécute, pas de qui l'a écrit (#1202)."""
-    if code.est_code(corps) and not await run_in_threadpool(access.is_platform_operator,
-                                                            ctx.sub):
+    """Éprouver ou publier une recette-CODE : la plateforme seule, comme une fonction, et
+    une personne, jamais un agent hébergé (`_code_humain`). Le code tourne avec les
+    droits de qui l'exécute, pas de qui l'a écrit (#1202)."""
+    if not code.est_code(corps):
+        return
+    _code_humain.exiger_une_personne(op)
+    if not await run_in_threadpool(access.is_platform_operator, ctx.sub):
         raise AuthzDenied(403, "platform_only",
                           f"op={op} on a code recipe is reserved to the platform: the code "
                           "runs with the rights of whoever runs it. `create` / `propose` "
@@ -446,7 +452,7 @@ CAPABILITIES += [
         # la capacité ; déclarée lourde (`routes_lourdes`) : un `run` appelle un outil
         # page après page et tient la requête jusqu'à son reçu.
         rest=RestBinding(verb="POST", path="/api/me/recipes", provisoire=True),
-        errors=(_REFUS_HORS_REST,),
+        errors=(_REFUS_HORS_REST, _code_humain.REFUS),
     ),
 ]
 
