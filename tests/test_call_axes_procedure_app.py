@@ -26,3 +26,18 @@ def test_procedure_app_advertises_org_in_listing():
 def test_other_meta_tools_unchanged():
     # L'entrée est nominative : elle n'ouvre pas l'axe à tout le spine `oto_*`.
     assert "_org" not in _params("oto_create_org")
+
+
+# ── #1355 : la notice exige `_run_id` sur chaque appel d'un run ───────────────
+
+def test_procedure_et_email_send_prennent_le_run():
+    """Créer une procédure ou envoyer un mail pendant un run : l'agent qui suit la
+    notice passait `_run_id` et se faisait refuser une « propriété en trop »."""
+    assert "_run_id" in _params("oto_procedure")
+    assert "_run_id" in _params("email_send")
+
+
+def test_email_send_prend_lorg_de_lappel():
+    """Il envoie depuis une adresse de l'org ACTIVE : sans l'axe, l'org maison."""
+    assert "_org" in _params("email_send")
+    assert "_org" in {a.param for a in call_axes.axes_for_listing("email_send", {})}

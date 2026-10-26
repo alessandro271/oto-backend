@@ -124,7 +124,7 @@ async def _search(ctx: ResolvedCtx, inp: SearchInput) -> dict:
     # tenait la boucle mono-loop en prod, gels ≥ 1 s (cf. `docs/event-loop-perf.md`).
     if ctx.org_id is None:
         raise AuthzDenied(400, "no_active_org",
-                          "Aucune org active — passe `org=<id>` ou `oto_use_org`.")
+                          "Aucune org active — passe `_org=<id>` ou `oto_use_org`.")
     q = (inp.q or "").strip()
     if len(q) < 2:
         raise AuthzDenied(400, "query_too_short", "Requête trop courte (≥ 2 caractères).")

@@ -167,7 +167,9 @@ def test_hors_surface_de_correlation_le_jeton_ne_pose_aucun_contexte():
         pass
 
     msg = _Msg()
-    msg.name = "oto_procedure"
+    # `oto_procedure` a rejoint la surface de corrélation (#1355) : l'exemple est un
+    # outil qui en reste hors.
+    msg.name = "oto_trigger"
     msg.arguments = {"op": "list", "_run_id": "run-de-quelqu-un-d-autre"}
     ctx = _Ctx()
     ctx.message = msg
@@ -180,7 +182,7 @@ def test_hors_surface_de_correlation_le_jeton_ne_pose_aucun_contexte():
     assert vu["run"] is None
     # …et l'axe reste hors de la surface ANNONCÉE : le budget de `tools/list` ne
     # bouge pas d'un caractère pour ces 53 outils.
-    assert "_run_id" not in {a.param for a in call_axes.axes_for("oto_procedure")}
+    assert "_run_id" not in {a.param for a in call_axes.axes_for("oto_trigger")}
 
 
 # ── 5. `oto_call` le déclare lui-même, et le replie sur sa cible ─────────────

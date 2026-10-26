@@ -146,7 +146,7 @@ def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
         if match is not None:
             sender, connector = match
             if not roles.is_org_member(sub, org):
-                raise _err("You are not a member of the active org — pass `org=<id>` on this call.")
+                raise _err("You are not a member of the active org — pass `_org=<id>` on this call.")
             transport = providers.EMAIL_CONNECTOR_TRANSPORT.get(connector)
             if transport is None:
                 raise _err(f"Unknown email connector for \"{sender.get('email')}\": {connector!r}.")
@@ -167,7 +167,7 @@ def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
     # Brand path (the instance's sender, `OTO_MAIL_FROM`) — super_admin only
     if from_email is not None:
         raise _err("No active org with a configured sending address. Configure it "
-                   "(`oto_org_settings(domain='email', op='set')`) or pass the right org (`org=<id>`).")
+                   "(`oto_org_settings(domain='email', op='set')`) or pass the right org (`_org=<id>`).")
     if not access.is_super_admin(sub):
         raise _err("Your org has no configured sending address — ask an org_admin "
                    "to add it via `oto_org_settings(domain='email', op='set')`. Sending under "

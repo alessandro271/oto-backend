@@ -436,10 +436,25 @@ def _require_active_org_visible(ctx: ResolvedCtx, row: dict) -> None:
     rid = str(row["id"])
     if ownership.can_access(ctx.sub, RTYPE, rid, "read"):
         owner = ownership.owner_of(RTYPE, rid)
-        oname = (org_store.get_org(int(owner[1])) or {}).get("name") \
-            if owner and owner[0] == "org" else None
-        hint = (f" Il appartient à l'org « {oname} » — passe `org=<id>` sur cet "
-                "appel pour l'ouvrir." if oname else "")
+        oid = int(owner[1]) if owner and owner[0] == "org" else None
+        oname = (org_store.get_org(oid) or {}).get("name") if oid is not None else None
+        # #1355 : le refus nommait `org=<id>`, un paramètre qui n'existe pas, sans l'id.
+        # L'axe est `_org`, et l'id se donne. Repasser `_org=<la même>` n'ouvre rien
+        # quand la vue est bornée ailleurs ou que l'appel y est déjà : le dire.
+        borne = ownership.vue_bornee(ctx.sub)
+        if oname is None:
+            hint = ""
+        elif borne is not None and borne != oid:
+            hint = (f" Il appartient à l'org « {oname} » (#{oid}), mais ta vue est bornée "
+                    f"à l'org #{borne} (vue « en tant que » ou jeton de délégation) : "
+                    "`_org` n'y change rien.")
+        elif ctx.org_id is not None and int(ctx.org_id) == oid:
+            hint = (f" Il appartient à l'org « {oname} » (#{oid}), celle de cet appel, "
+                    "mais il n'y est pas visible pour toi : demande un partage "
+                    "(`oto_resource op=share`) à son propriétaire.")
+        else:
+            hint = (f" Il appartient à l'org « {oname} » — passe `_org={oid}` sur cet "
+                    "appel pour l'ouvrir.")
         raise AuthzDenied(403, "wrong_org_context",
                           f"Projet #{rid} hors de l'org active.{hint}")
     raise AuthzDenied(404, "unknown_project", f"Projet #{rid} inconnu.")
@@ -1787,7 +1802,7 @@ CAPABILITIES += [
             "or with your teams in it + YOUR personal projects created in it (visible to "
             "you only) — a personal project is listed ONLY in the org where it was created; "
             "your PERSONAL org also lists those shared with YOU as a person; pass "
-            "`org=<id>` to see another org's; "
+            "`_org=<id>` to see another org's; "
             "`scope=\"me\"` lists only the projects shared with you as a person, in any "
             "org; every response echoes the effective org in `_org`. An INDEX: names and `brief_md_length`, NOT the briefs — "
             'read one with op=get, or pass `fields=["*"]` for whole records; '

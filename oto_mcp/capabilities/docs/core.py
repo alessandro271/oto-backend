@@ -137,7 +137,7 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         if inp.scope == "org":
             require(ctx.org_id is not None, "no_active_org",
                     "scope=\"org\" lists the pages shared with the organization you act "
-                    "in, and there is none: pass `org=<id>`.")
+                    "in, and there is none: pass `_org=<id>`.")
         # Lentille « moi » (sans `scope`, ou `me`) : servie dans toute org (29/09/2026 :
         # une org perso est une org comme une autre).
         return partage.recus(sub, inp.scope, ctx.org_id)

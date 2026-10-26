@@ -427,8 +427,11 @@ def _is_work_tool(name: str) -> bool:
 # anti-agent (`not_from_a_run`, `not_your_own_fleet`) se décident sur le run de
 # l'appel — et que le runner hébergé ne pose `_run_id` QUE sur un outil qui le
 # déclare. Hors de cette liste, les gardes étaient vertes et inertes.
+# `oto_procedure` et `email_send` (#1355) : la notice exige `_run_id` sur CHAQUE appel
+# d'un run ; créer une procédure ou envoyer un mail pendant un run se faisait refuser
+# comme « propriété en trop » par l'agent qui suivait la consigne.
 _RUN_SPINE_TOOLS = frozenset({"oto_project", "oto_project_files", "oto_doc", "oto_resource",
-                              "oto_fleet"})
+                              "oto_fleet", "oto_procedure", "email_send"})
 
 
 def _is_run_correlatable_tool(name: str) -> bool:
@@ -514,7 +517,10 @@ def _is_org_scopable_tool(name: str) -> bool:
 # maison. `oto_procedure_app` cherche la procédure par `access.current_org` /
 # `current_group`, comme `oto_procedure op=get` (capacité, qui reçoit `_org=` par
 # `_mcp_adapter`) — les deux doivent atteindre la même org.
-_LECTURES_D_ORG_ECRITES_A_LA_MAIN = frozenset({"oto_procedure_app"})
+# `email_send` (#1355) : il envoie depuis une adresse de l'org ACTIVE
+# (`access.current_org`) — sans l'axe, l'envoi partait de l'org maison quand le run en
+# visait une autre, et `_org=` était refusé comme champ inconnu.
+_LECTURES_D_ORG_ECRITES_A_LA_MAIN = frozenset({"oto_procedure_app", "email_send"})
 
 
 async def _pin_org_flat(value: object) -> list[UndoEntry]:

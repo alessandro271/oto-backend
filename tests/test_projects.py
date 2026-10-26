@@ -379,11 +379,40 @@ def test_get_cross_org_member_blocked_with_switch_hint(seams, monkeypatch):
                         lambda pid: dict(ROW, id=pid, owner_id="83") if pid in (7, 8) else None)
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(P.org_store, "get_org", lambda oid: {"id": oid, "name": "Org Exemple"})
+    monkeypatch.setattr(P.ownership, "vue_bornee", lambda sub=None: None)
     ctx = ResolvedCtx(sub="u1", org_id=44)   # org active ≠ 83 (propriétaire)
     with pytest.raises(AuthzDenied) as e:
         P._project(ctx, P.ProjectInput(op="get", project_id=7))
     assert e.value.code == "wrong_org_context" and e.value.status == 403
-    assert "Org Exemple" in e.value.message and "org=<id>" in e.value.message
+    # #1355 : l'axe s'appelle `_org`, et l'id se donne — `org=<id>` n'existe pas.
+    assert "Org Exemple" in e.value.message and "`_org=83`" in e.value.message
+
+
+def test_le_refus_ne_conseille_pas_lorg_deja_passee(seams, monkeypatch):
+    """#1355 : l'appel porte déjà `_org=83` et le projet reste invisible — conseiller
+    `_org=83` enverrait l'agent tourner en rond."""
+    monkeypatch.setattr(P.db, "get_project_by_id",
+                        lambda pid: dict(ROW, id=pid, owner_id="83") if pid in (7, 8) else None)
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
+    monkeypatch.setattr(P.ownership, "visible_in_org", lambda sub, org, t, rid: False)
+    monkeypatch.setattr(P.ownership, "vue_bornee", lambda sub=None: None)
+    monkeypatch.setattr(P.org_store, "get_org", lambda oid: {"id": oid, "name": "Org Exemple"})
+    with pytest.raises(AuthzDenied) as e:
+        P._project(ResolvedCtx(sub="u1", org_id=83), P.ProjectInput(op="get", project_id=7))
+    assert e.value.code == "wrong_org_context"
+    assert "_org=" not in e.value.message and "celle de cet appel" in e.value.message
+
+
+def test_le_refus_dit_la_vue_bornee(seams, monkeypatch):
+    monkeypatch.setattr(P.db, "get_project_by_id",
+                        lambda pid: dict(ROW, id=pid, owner_id="83") if pid in (7, 8) else None)
+    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
+    monkeypatch.setattr(P.ownership, "visible_in_org", lambda sub, org, t, rid: False)
+    monkeypatch.setattr(P.ownership, "vue_bornee", lambda sub=None: 44)
+    monkeypatch.setattr(P.org_store, "get_org", lambda oid: {"id": oid, "name": "Org Exemple"})
+    with pytest.raises(AuthzDenied) as e:
+        P._project(ResolvedCtx(sub="u1", org_id=44), P.ProjectInput(op="get", project_id=7))
+    assert "bornée à l'org #44" in e.value.message and "_org=83" not in e.value.message
 
 
 def test_get_unknown(seams):
