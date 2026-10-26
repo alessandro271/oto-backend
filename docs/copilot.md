@@ -137,7 +137,7 @@ L'allowlist reste VIDE au tag. Avant d'y poser un `sub` sur une instance :
 2. vérifier `OTO_COPILOT_DAILY_CAP_USD` (absente = 20 $ par compte et par jour) ;
 3. poser `OTO_COPILOT_SUBS`.
 
-## L'état (`db/copilot.py`, révision `20261025_2100_copilot`)
+## L'état (`db/copilot.py`, révision `20261026_1337_copilot`)
 
 `copilot_threads` (messages, file, carte en attente, sortes retenues, actions de page, mode,
 run, rang du prochain appel, verrou), `copilot_undos` et `copilot_spend`. **Purgés à

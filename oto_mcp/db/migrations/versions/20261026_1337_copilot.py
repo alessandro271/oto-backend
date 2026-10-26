@@ -19,8 +19,8 @@ IF NOT EXISTS`, même fragment) ; l'ancien code les ignore.
 Retour arrière : retire les trois tables (les conversations en cours, les annulations
 offertes et la dépense du jour se perdent ; le journal des appels, lui, reste entier).
 
-Révision : 20261025_2100_copilot
-Précédente : 20261024_1101_default_sharing
+Révision : 20261026_1337_copilot
+Précédente : 20261026_1256_apps
 """
 from __future__ import annotations
 
@@ -28,8 +28,8 @@ from alembic import op
 
 from oto_mcp.db.schema.copilot import COPILOT
 
-revision = "20261025_2100_copilot"
-down_revision = "20261024_1101_default_sharing"
+revision = "20261026_1337_copilot"
+down_revision = "20261026_1256_apps"
 branch_labels = None
 depends_on = None
 

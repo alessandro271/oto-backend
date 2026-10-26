@@ -401,7 +401,7 @@ sources = [
 ]
 tests = [
   "tests/capabilities/copilot/test_*.py",
-  "tests/test_migration_20261025_copilot.py",
+  "tests/test_migration_20261026_copilot.py",
 ]
 
 [[volet]]
