@@ -408,12 +408,15 @@ def register(mcp: FastMCP) -> None:
     # --- Tree / folders ------------------------------------------------------
     @mcp.tool()
     async def pennylaneged_tree(company_id: int,
-                                item_type: str = "DmsFolder") -> dict:
-        """Reads a company's GED tree.
+                                item_type: str = "DmsFolder",
+                                parent_id: Optional[int] = None) -> dict:
+        """Reads a company's GED tree, one level at a time.
 
         Returns `{items: [{id, name, itemable_type, parent_id, folders_count, …}]}`
         (the API returns an array, wrapped under `items`) — use the `id`/`parent_id`
-        to target a creation `parent_id` or an item to delete.
+        to target a creation `parent_id` or an item to delete. Without `parent_id`,
+        the root level; to open a sub-folder (`folders_count` > 0), call again with
+        its `id` as `parent_id`, once per level.
 
         Args:
             company_id: GED id of the file — ⚠️ **NOT** that of the `pennylane` connector (public
@@ -421,10 +424,29 @@ def register(mcp: FastMCP) -> None:
                 that IMITATES an expired session. It is read in the SPA URL,
                 `app.pennylane.com/companies/<id>/…`, or via `pennylaneged_companies`.
             item_type: type of items listed — `DmsFolder` (folders, default) or `DmsFile`.
+            parent_id: id of the folder whose content is listed (None = GED root).
         """
         cid = int(company_id)
-        qs = urlencode({"item_type": item_type})
-        return await _call(_company_app(cid), f"/companies/{cid}/dms/items/tree?{qs}")
+        params: dict = {"item_type": item_type}
+        if parent_id is not None:
+            params["parent_id"] = int(parent_id)
+        res = await _call(_company_app(cid),
+                          f"/companies/{cid}/dms/items/tree?{urlencode(params)}")
+        if parent_id is not None:
+            # The private route's filter is read from the SPA, not documented: if it
+            # answers with items of ANOTHER folder (the root level, filter ignored),
+            # serving them as the sub-folder's content would be a silent lie.
+            hors = [i for i in res.get("items", [])
+                    if i.get("parent_id") != int(parent_id)]
+            if hors:
+                raise _err(
+                    f"The GED tree route ignored `parent_id={int(parent_id)}`: it "
+                    f"answered items of another folder (parent_id="
+                    f"{hors[0].get('parent_id')}). Sub-folders are not readable "
+                    "through this private route; the firm's public API reads them "
+                    "(`pennylane_firm_tree`, its own `company_id` space).",
+                    code=INTERNAL_ERROR)
+        return res
 
     @mcp.tool()
     async def pennylaneged_create_folder(company_id: int, name: str,

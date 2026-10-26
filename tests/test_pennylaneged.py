@@ -556,3 +556,31 @@ def test_un_refus_sur_une_societe_ne_declare_pas_la_session_morte(substrat):
     with pytest.raises(McpError) as e:
         asyncio.run(_tool("pennylaneged_tree")(company_id=239568))
     assert credential_rejected_in_chain(e.value) is False
+
+
+def test_l_arbre_ouvre_un_sous_dossier_par_son_parent_id(substrat):
+    """#1339 : sans dossier de départ, seuls les dossiers racine étaient lisibles.
+    Un `parent_id` part à la route de l'arbre, et le contenu du dossier revient."""
+    vu: dict = {}
+
+    async def _eval(ctx, app, js, arg):
+        vu["path"] = arg["path"]
+        return {"status": 200, "data": [{"id": 31, "name": "Achats", "parent_id": 30}]}
+
+    substrat.setattr(P.browserbase, "run_page_eval", _eval)
+    out = asyncio.run(_tool("pennylaneged_tree")(company_id=7, parent_id=30))
+    assert vu["path"] == "/companies/7/dms/items/tree?item_type=DmsFolder&parent_id=30"
+    assert out == {"items": [{"id": 31, "name": "Achats", "parent_id": 30}]}
+
+
+def test_un_filtre_parent_ignore_par_la_route_est_refuse(substrat):
+    """La route est privée, son filtre lu dans la SPA : si elle rend les dossiers
+    d'un AUTRE niveau, les servir comme contenu du sous-dossier serait un mensonge
+    silencieux. Le refus nomme la voie publique du cabinet."""
+    async def _eval(ctx, app, js, arg):
+        return {"status": 200, "data": [{"id": 30, "name": "Annuel", "parent_id": None}]}
+
+    substrat.setattr(P.browserbase, "run_page_eval", _eval)
+    with pytest.raises(McpError) as e:
+        asyncio.run(_tool("pennylaneged_tree")(company_id=7, parent_id=30))
+    assert "parent_id=30" in str(e.value) and "pennylane_firm_tree" in str(e.value)
