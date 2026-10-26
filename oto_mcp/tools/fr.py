@@ -100,6 +100,46 @@ def _famille_bodacc(famille: Optional[str]) -> Optional[str]:
         "(`modification`).")))
 
 
+def _depots_sans_donnees(notices: list[dict], dates_rendues: list) -> dict:
+    """The accounts filings BODACC publishes (`dpc` notices) whose closing date is
+    not among `dates_rendues` — filed, but absent from the usable INPI dataset
+    (confidential, not keyed yet). Plus a warning when one closes after the most
+    recent date returned: the figures served are then not the latest filed.
+
+    Notices of other families are ignored, so the BODACC events of `fr_get`
+    (all families mixed) go through the same reading."""
+    rendues = {d for d in dates_rendues if d}
+    depots: dict[str, dict] = {}
+    for n in notices:
+        if n.get("familleavis") != "dpc":
+            continue
+        depot = n.get("depot") if isinstance(n.get("depot"), dict) else {}
+        cloture = depot.get("dateCloture")
+        if not cloture or cloture in rendues or cloture in depots:
+            continue
+        depots[cloture] = {k: v for k, v in {
+            "date_cloture": cloture,
+            "date_parution": n.get("dateparution"),
+            "type_depot": depot.get("typeDepot"),
+            "descriptif": depot.get("descriptif"),
+            "url_complete": n.get("url_complete"),
+            "source": "bodacc",
+        }.items() if v is not None}
+    sans = sorted(depots.values(), key=lambda d: d["date_cloture"], reverse=True)
+    out: dict = {"depots_sans_donnees": sans}
+    derniere = max(rendues) if rendues else None
+    posterieurs = [d["date_cloture"] for d in sans
+                   if derniere is None or d["date_cloture"] > derniere]
+    if posterieurs:
+        out["avertissement"] = (
+            f"{len(posterieurs)} accounts filing(s) published in BODACC close after "
+            f"the most recent exercise with usable figures ({derniere or 'none'}), "
+            f"the latest on {posterieurs[0]}: the company filed more recent accounts "
+            "than the ones returned (confidential or not keyed in the dataset). "
+            "Do not present these figures as its latest.")
+    return out
+
+
 def register(mcp: FastMCP) -> None:
     from ..fod import fr as fod_fr  # company data + keyed INSEE (passthrough) + BOAMP/ACCO index → FOD service
 
@@ -630,6 +670,10 @@ def register(mcp: FastMCP) -> None:
 
     # --- Finances (INPI/BCE, open data) ---
 
+    # How many BODACC "dpc" notices `fr_bilans` reads to name the filings the
+    # INPI dataset does not carry: one per filed year, so 20 covers two decades.
+    _DPC_NOTICES_MAX = 20
+
     @mcp.tool(annotations=LECTURE)
     def fr_bilans(siren: str) -> dict:
         """List available INPI/BCE annual filings for a SIREN.
@@ -637,11 +681,35 @@ def register(mcp: FastMCP) -> None:
         Returns exercise dates, bilan type (C=complet, S=simplifié, K=consolidé),
         confidentiality status, and turnover. Typically 3-9 years of history.
 
+        ⚠️ **`items` holds only the filings whose figures are USABLE** (the
+        annual-accounts dataset): a confidential or not-yet-keyed filing is absent
+        from it, so the first item is NOT necessarily the latest filed year.
+        `depots_sans_donnees` names the filings published in BODACC (accounts
+        filing notices, `dpc`) whose closing date is not in `items` — filed,
+        but without usable figures here — and `avertissement` says when one of
+        them closes AFTER the most recent item: the figures you hold are then
+        older than the company's latest accounts. If BODACC fails, the
+        cross-check is missing and `partial_errors` says so.
+
         Args:
             siren: SIREN number (9 digits).
         """
-        items = inpi.list_exercises(siren)
-        return {"siren": siren, "items": items, "total": len(items)}
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_items = pool.submit(inpi.list_exercises, siren)
+            f_dpc = pool.submit(bodacc.search_by_siren, siren, "dpc", _DPC_NOTICES_MAX)
+        items = f_items.result()
+        out = {"siren": siren, "items": items, "total": len(items)}
+        try:
+            notices = f_dpc.result().get("results", [])
+        # noqa: SILENT — the missing cross-check is rendered in partial_errors
+        except Exception as exc:  # the INPI items stand on their own
+            out["partial_errors"] = {"depots_sans_donnees": f"{type(exc).__name__}: {exc}"}
+            return out
+        out.update(_depots_sans_donnees(
+            notices, [i.get("date_cloture_exercice") for i in items]))
+        return out
 
     @mcp.tool(annotations=LECTURE)
     def fr_bilan(siren: str, date_cloture: str) -> dict:
