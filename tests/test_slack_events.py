@@ -486,7 +486,7 @@ def test_un_SUPER_ADMIN_hors_de_l_org_n_est_pas_un_membre(slack, monkeypatch):
 def test_membres_par_email_lit_org_members_SEUL(monkeypatch):
     """La requête : la ligne `org_members` de CETTE org, email en minuscules, tous
     les comptes (pas de LIMIT) — ni compte de service, ni escalade."""
-    from oto_mcp.org_store import members
+    from oto_mcp import org_store
     vu = {}
 
     class _Conn:
@@ -500,12 +500,12 @@ def test_membres_par_email_lit_org_members_SEUL(monkeypatch):
             vu["sql"], vu["params"] = sql, params
             return types.SimpleNamespace(fetchall=lambda: [{"sub": "a"}, {"sub": "b"}])
 
-    monkeypatch.setattr(members, "_connect", lambda: _Conn())
-    assert members.membres_par_email(ORG, "  Ada@Example.TEST ") == ["a", "b"]
+    monkeypatch.setattr(org_store, "_connect", lambda: _Conn())
+    assert org_store.membres_par_email(ORG, "  Ada@Example.TEST ") == ["a", "b"]
     assert vu["params"] == (ORG, "ada@example.test")
     assert "FROM org_members" in vu["sql"] and "org_service_accounts" not in vu["sql"]
     assert "LIMIT" not in vu["sql"]
-    assert members.membres_par_email(ORG, "pas-une-adresse") == []
+    assert org_store.membres_par_email(ORG, "pas-une-adresse") == []
 
 
 def test_sans_ref_d_instance_rien_ne_part_avec_un_instance_VIDE(monkeypatch):

@@ -405,7 +405,6 @@ def get_org_member_by_email(org_id: int, email: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
-@lecture_d_appel
 def membres_par_email(org_id: int, email: str) -> list[str]:
     """Les `sub` de TOUS les membres réels de l'org (`org_members` : ni l'escalade
     plateforme de `roles.effective_org_role`, ni le compte de service) dont le compte
@@ -424,6 +423,7 @@ def membres_par_email(org_id: int, email: str) -> list[str]:
         return [r["sub"] for r in rows]
 
 
+@lecture_d_appel
 def get_org_role(org_id: int, sub: str) -> Optional[str]:
     with _connect() as conn:
         row = conn.execute(
