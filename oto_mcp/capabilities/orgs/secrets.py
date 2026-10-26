@@ -13,9 +13,9 @@ from typing import Optional
 from pydantic import BaseModel
 
 from ... import providers, credentials_store, org_store
-from ...auth import hubspot as hubspot_oauth
 from .._authz import ORG_ADMIN_OF
 from .._refus_de_pose import REFUS_DE_VERIFICATION, refus_de_pose
+from .._retrait_hubspot import REFUS_DE_DESINSTALLATION, desinstaller_avant_retrait
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
 
 from ..registry import CAPABILITIES
@@ -106,8 +106,7 @@ def _set_secret(ctx: ResolvedCtx, inp: SetSecretInput) -> dict:
 
 def _delete_secret(ctx: ResolvedCtx, inp: DeleteSecretInput) -> dict:
     account = (inp.account or "").strip()
-    if inp.provider == hubspot_oauth.CONNECTOR:
-        hubspot_oauth.uninstall_before_clear("org", str(inp.org_id), account)
+    desinstaller_avant_retrait(inp.provider, "org", str(inp.org_id), account)
     deleted = org_store.delete_org_secret(inp.org_id, inp.provider, account=account)
     return {"ok": True, "org_id": inp.org_id, "provider": inp.provider, "deleted": deleted}
 
@@ -136,6 +135,7 @@ CAPABILITIES += [
         key="org.secret.delete", handler=_delete_secret, Input=DeleteSecretInput,
         authz=ORG_ADMIN_OF("org_id"), Output=OrgSecretDeleted,
         description="Remove an org's shared secret for a provider.",
+        errors=(REFUS_DE_DESINSTALLATION,),
         rest=(RestBinding("DELETE", "/api/orgs/{id}/secrets/{provider}", _ID),
               RestBinding("DELETE", "/api/admin/orgs/{id}/secrets/{provider}", _ID)),
     ),

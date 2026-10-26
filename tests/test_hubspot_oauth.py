@@ -716,7 +716,9 @@ def test_l_autre_app_du_meme_portail_ne_retient_pas_la_desinstallation(retrait):
     assert retrait.desinstallations == ["at-1"]
 
 
-def test_dans_le_doute_sur_les_autres_lignes_on_ne_desinstalle_pas(retrait, monkeypatch):
+def test_autres_lignes_illisibles_le_retrait_est_refuse(retrait, monkeypatch):
+    """Neither guess is safe (cut colleagues / leave the app installed): the removal
+    is refused, nothing is uninstalled."""
     from oto_mcp import credentials_store
 
     def illisible(*a):
@@ -724,7 +726,8 @@ def test_dans_le_doute_sur_les_autres_lignes_on_ne_desinstalle_pas(retrait, monk
 
     monkeypatch.setattr(credentials_store, "holders_by_meta", illisible)
     retrait.coffre.lignes[("member", MEMBRE, "")] = _oauth()
-    retrait.hs.uninstall_before_clear("member", MEMBRE)
+    with pytest.raises(retrait.hs.HubSpotUninstallFailed):
+        retrait.hs.uninstall_before_clear("member", MEMBRE)
     assert retrait.desinstallations == []
 
 
@@ -735,13 +738,71 @@ def test_un_grant_mort_au_retrait_ne_bloque_rien(retrait):
     assert retrait.desinstallations == []
 
 
-def test_un_refus_de_desinstallation_ne_bloque_rien(retrait, monkeypatch):
+@pytest.mark.parametrize("statut", [403, 429, 500])
+def test_un_refus_de_desinstallation_refuse_le_retrait(retrait, monkeypatch, statut):
+    """An app left installed with its rights is worse than a refused removal."""
     retrait.coffre.lignes[("member", MEMBRE, "")] = _oauth()
     retrait.reponses[retrait.hs.TOKEN_URL] = [_Reponse(200, {
         "access_token": "at-1", "expires_in": 1800})]
     monkeypatch.setattr(retrait.hs, "_uninstall_call",
-                        lambda token: _Reponse(403, {"message": "no"}))
+                        lambda token: _Reponse(statut, {"message": "no"}))
+    with pytest.raises(retrait.hs.HubSpotUninstallFailed, match="kept"):
+        retrait.hs.uninstall_before_clear("member", MEMBRE)
+
+
+@pytest.mark.parametrize("statut", [401, 404])
+def test_une_installation_deja_partie_laisse_le_retrait_se_faire(retrait, monkeypatch,
+                                                                 statut):
+    retrait.coffre.lignes[("member", MEMBRE, "")] = _oauth()
+    retrait.reponses[retrait.hs.TOKEN_URL] = [_Reponse(200, {
+        "access_token": "at-1", "expires_in": 1800})]
+    monkeypatch.setattr(retrait.hs, "_uninstall_call",
+                        lambda token: _Reponse(statut, {"message": "gone"}))
     retrait.hs.uninstall_before_clear("member", MEMBRE)
+
+
+def test_hubspot_injoignable_refuse_le_retrait(retrait, monkeypatch):
+    import requests
+
+    def injoignable(token):
+        raise requests.ConnectionError("down")
+
+    retrait.coffre.lignes[("member", MEMBRE, "")] = _oauth()
+    retrait.reponses[retrait.hs.TOKEN_URL] = [_Reponse(200, {
+        "access_token": "at-1", "expires_in": 1800})]
+    monkeypatch.setattr(retrait.hs, "_uninstall_call", injoignable)
+    with pytest.raises(retrait.hs.HubSpotUninstallFailed):
+        retrait.hs.uninstall_before_clear("member", MEMBRE)
+
+
+def test_un_renouvellement_en_panne_refuse_le_retrait(retrait):
+    """A configuration fault on the token endpoint (not a dead grant): refused."""
+    retrait.coffre.lignes[("member", MEMBRE, "")] = _oauth()
+    retrait.reponses[retrait.hs.TOKEN_URL] = [_Reponse(400, {"error": "invalid_client"})]
+    with pytest.raises(retrait.hs.HubSpotUninstallFailed):
+        retrait.hs.uninstall_before_clear("member", MEMBRE)
+    assert retrait.desinstallations == []
+
+
+def test_le_retrait_reprend_le_jeton_en_cache_sans_renouveler(retrait):
+    retrait.coffre.lignes[("member", MEMBRE, "")] = _oauth()
+    retrait.hs._keep(("member", MEMBRE, ""), "rt-1", "at-cache", 1800)
+    retrait.hs.uninstall_before_clear("member", MEMBRE)
+    assert retrait.desinstallations == ["at-cache"] and retrait.appels == []
+    assert retrait.hs._TOKENS == {}
+
+
+def test_un_refus_apres_rotation_garde_le_jeton_neuf(retrait, monkeypatch):
+    """The refresh done for the uninstall rotates the refresh token: it is written
+    back, so the row a refused removal keeps still works."""
+    retrait.coffre.lignes[("member", MEMBRE, "")] = _oauth()
+    retrait.reponses[retrait.hs.TOKEN_URL] = [_Reponse(200, {
+        "access_token": "at-2", "refresh_token": "rt-2", "expires_in": 1800})]
+    monkeypatch.setattr(retrait.hs, "_uninstall_call",
+                        lambda token: _Reponse(500, {}))
+    with pytest.raises(retrait.hs.HubSpotUninstallFailed):
+        retrait.hs.uninstall_before_clear("member", MEMBRE)
+    assert retrait.coffre.lignes[("member", MEMBRE, "")]["secret"] == "rt-2"
 
 
 @pytest.mark.parametrize("ligne", [None, {"secret": "pat-1", "meta": {}},
@@ -788,3 +849,41 @@ def test_les_surfaces_de_retrait_desinstallent_avant_de_retirer(monkeypatch, sur
     inp.provider = "pipedrive"
     cap._delete_secret(None, inp)
     assert ordre == [("clear", "pipedrive")]
+
+
+@pytest.mark.parametrize("surface", ["org", "group", "member"])
+def test_un_echec_de_desinstallation_est_un_refus_nomme_et_garde_la_ligne(monkeypatch,
+                                                                         surface):
+    from oto_mcp.auth import hubspot as hs
+    from oto_mcp.capabilities._types import AuthzDenied
+
+    def echec(et, eid, account):
+        raise hs.HubSpotUninstallFailed("kept")
+
+    effaces: list = []
+    monkeypatch.setattr(hs, "uninstall_before_clear", echec)
+    if surface == "org":
+        from oto_mcp.capabilities.orgs import secrets as cap
+        monkeypatch.setattr(cap.org_store, "delete_org_secret",
+                            lambda *a, **k: effaces.append(a))
+        appel = lambda: cap._delete_secret(None, types.SimpleNamespace(
+            org_id=ORG, provider="hubspot", account=""))
+    elif surface == "group":
+        from oto_mcp.capabilities.groups import secrets as cap
+        monkeypatch.setattr(cap.group_store, "delete_group_secret",
+                            lambda *a, **k: effaces.append(a))
+        appel = lambda: cap._delete_secret(None, types.SimpleNamespace(
+            group_id=7, provider="hubspot", account=""))
+    else:
+        from oto_mcp.capabilities import me_credentials as cap
+        monkeypatch.setattr(cap, "_exiger_credentialable", lambda *a, **k: None)
+        monkeypatch.setattr(cap, "_org_of", lambda sub: ORG)
+        monkeypatch.setattr(cap, "_scoped_entity", lambda ctx, scope, org: ("member", MEMBRE))
+        monkeypatch.setattr(cap.credentials_store, "clear_credential",
+                            lambda *a, **k: effaces.append(a))
+        appel = lambda: cap._clear(types.SimpleNamespace(sub=SUB), types.SimpleNamespace(
+            provider="hubspot", account="", scope="member"))
+    with pytest.raises(AuthzDenied) as e:
+        appel()
+    assert (e.value.status, e.value.code) == (502, "hubspot_uninstall_failed")
+    assert effaces == []

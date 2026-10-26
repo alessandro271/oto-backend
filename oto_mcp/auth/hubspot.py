@@ -577,6 +577,13 @@ def access_token_for(rc) -> str:
 UNINSTALL_URL = f"{_API}/appinstalls/v3/external-install"
 
 
+class HubSpotUninstallFailed(HubSpotOAuthError):
+    """The app could not be uninstalled from the portal, and HubSpot did not say it is
+    already gone: the removal is refused, the row stays, the person retries. Clearing
+    the row anyway would leave the app installed with its rights and nobody here to
+    remove it."""
+
+
 def _uninstall_call(access_token: str) -> requests.Response:
     return requests.delete(UNINSTALL_URL,
                            headers={"Authorization": f"Bearer {access_token}"},
@@ -589,13 +596,15 @@ def _install_held_elsewhere(hub_id, kind: str, row: tuple) -> bool:
     HubSpot's uninstall removes the app from the WHOLE portal (and emails every Super
     Admin of it), the user-level app included: a member removing their personal
     connection would cut every colleague connected through the same app. So the key is
-    (`hub_id`, app), whoever connected. When in doubt (unreadable vault), YES: the row
-    goes anyway, and one uninstall too many breaks live connections."""
+    (`hub_id`, app), whoever connected. An unreadable vault raises: neither guess is
+    safe (one uninstall too many cuts live connections, one too few leaves the app
+    installed with its rights)."""
     try:
         holders = credentials_store.holders_by_meta(CONNECTOR, "hub_id", str(hub_id))
-    # noqa: SILENT — when in doubt we do not uninstall (the row goes anyway)
-    except Exception:
-        return True
+    except Exception as e:
+        logger.warning("hubspot: other holders of the install unreadable (hub_id=%s): %s",
+                       hub_id, type(e).__name__)
+        raise HubSpotUninstallFailed(_RETRY_REMOVAL) from e
     for h in holders:
         if (h["entity_type"], str(h["entity_id"]), h.get("account") or "") == row:
             continue
@@ -605,45 +614,81 @@ def _install_held_elsewhere(hub_id, kind: str, row: tuple) -> bool:
     return False
 
 
+_RETRY_REMOVAL = ("Removing this HubSpot connection also uninstalls the app from the "
+                  "portal, and that failed: the connection is kept. Retry in a moment, "
+                  "or uninstall the app from HubSpot (Settings > Connected apps), then "
+                  "remove the connection here.")
+
+# Uninstall answers that say the install is already gone (token no longer valid, app
+# not installed): the removal goes on, there is nothing left to uninstall.
+_ALREADY_GONE = (401, 404)
+
+
 def uninstall_before_clear(entity_type: str, entity_id: str, account: str = "") -> None:
     """Removing an OAuth row also uninstalls the app from its portal, unless another
-    row holds the same install. Best-effort, like Google's revoke: a refusal, a dead
-    grant or an unreachable HubSpot never stops the removal — the row goes in any case.
-    A pasted key has nothing to uninstall. Synchronous (HTTP), outside any transaction:
-    called by the three removal capabilities (member, org, team) just before they clear
-    the row."""
+    row holds the same install. A failure raises `HubSpotUninstallFailed` and the
+    caller does NOT clear the row: an app left installed with its rights is worse than
+    a refused removal. A dead grant or an install HubSpot says is gone lets the removal
+    go on. A pasted key has nothing to uninstall. Synchronous (HTTP, each call bounded
+    by `_TIMEOUT`), outside any transaction: called by the three removal capabilities
+    (member, org, team) — sync handlers, run off the event loop — just before they
+    clear the row."""
     row = (entity_type, str(entity_id), account or "")
     try:
         current = credentials_store.get_credential_with_meta(
             entity_type, entity_id, CONNECTOR, account=account)
-    # noqa: SILENT — undecryptable row: removed without uninstalling
-    except Exception:
-        logger.warning("hubspot: row unreadable, removed without uninstalling the app")
+    except Exception as e:
+        # Undecryptable: no token to uninstall with, keeping the row would not help.
+        logger.warning("hubspot: row unreadable (%s), removed without uninstalling the "
+                       "app: uninstall it from HubSpot if it is still there",
+                       type(e).__name__)
         return
     meta = (current or {}).get("meta") or {}
     if not current or meta.get("auth") != AUTH_OAUTH or not current.get("secret"):
         return
-    with _LOCK:
-        _TOKENS.pop(_key(row, current["secret"]), None)
+    secret = current["secret"]
     kind, hub_id = app_of(meta), meta.get("hub_id")
     if hub_id is None:
-        logger.info("hubspot: OAuth row removed without uninstalling: no portal on it")
+        logger.warning("hubspot: OAuth row removed without uninstalling: no portal on it")
+        _forget(row, secret)
         return
     if _install_held_elsewhere(hub_id, kind, row):
         logger.info("hubspot: OAuth row removed without uninstalling (hub_id=%s app=%s): "
                     "another row holds the same install", hub_id, kind)
+        _forget(row, secret)
         return
     try:
-        r = _uninstall_call(refresh(current["secret"], kind)["access_token"])
-    except (HubSpotOAuthError, requests.RequestException) as e:
-        logger.warning("hubspot: uninstall skipped (hub_id=%s app=%s): %s",
-                       hub_id, kind, type(e).__name__)
+        # Same path as a tool call: under the row's lock, a rotated refresh token is
+        # written, so a refused removal leaves a row that still works.
+        token = _cached(row, secret) or _renew(row, secret)
+    except HubSpotReauthRequired:
+        logger.info("hubspot: grant already dead, nothing to uninstall (hub_id=%s app=%s)",
+                    hub_id, kind)
+        _forget(row, secret)
         return
-    if r.status_code >= 400:
-        logger.warning("hubspot: uninstall refused (hub_id=%s app=%s): HTTP %s",
-                       hub_id, kind, r.status_code)
-    else:
-        logger.info("hubspot: app uninstalled from portal (hub_id=%s app=%s)", hub_id, kind)
+    except (HubSpotOAuthError, requests.RequestException) as e:
+        logger.warning("hubspot: uninstall failed, removal refused (hub_id=%s app=%s): %s",
+                       hub_id, kind, type(e).__name__)
+        raise HubSpotUninstallFailed(_RETRY_REMOVAL) from e
+    try:
+        r = _uninstall_call(token)
+    except requests.RequestException as e:
+        logger.warning("hubspot: uninstall failed, removal refused (hub_id=%s app=%s): %s",
+                       hub_id, kind, type(e).__name__)
+        raise HubSpotUninstallFailed(_RETRY_REMOVAL) from e
+    if r.status_code >= 400 and r.status_code not in _ALREADY_GONE:
+        logger.warning("hubspot: uninstall refused, removal refused (hub_id=%s app=%s): "
+                       "HTTP %s", hub_id, kind, r.status_code)
+        raise HubSpotUninstallFailed(_RETRY_REMOVAL)
+    logger.info("hubspot: app %s from portal (hub_id=%s app=%s)",
+                "already gone" if r.status_code >= 400 else "uninstalled", hub_id, kind)
+    _forget(row, secret)
+
+
+def _forget(row: tuple, refresh_token: str) -> None:
+    """Drop the row's cached access token — the row is about to go."""
+    with _LOCK:
+        _TOKENS.pop(_key(row, refresh_token), None)
 
 
 def is_oauth(rc) -> bool:
