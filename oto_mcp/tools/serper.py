@@ -121,6 +121,10 @@ def client_for(key: str):
 # account (400 "Not enough credits", or 402) is translated separately, see `a_sec`.
 
 
+#: Boolean syntax the news vertical ignores (#1337): it answers an empty list.
+_BOOLEEN = re.compile(r'\bOR\b|"|\bsite:')
+
+
 def _serper_status(erreur: BaseException) -> "int | None":
     """Status of a refusal answered by Serper, `None` for anything else (a refusal before
     any call, a bug of ours)."""
@@ -348,7 +352,10 @@ def register(mcp: FastMCP) -> None:
         - **"web"** (default): organic results. Accepts `site_filter`
           (e.g. "linkedin.com/in"), `autocorrect`, `location`, `tbs`.
         - **"news"**: Google News — useful to monitor a target's signals
-          (press releases, hires, fundraises). Accepts `tbs`.
+          (press releases, hires, fundraises). Accepts `tbs`. ⚠️ This vertical
+          does NOT honour boolean syntax: `OR`, quoted phrases or `site:` come
+          back as an EMPTY `news` list, not as "no news". Split an `A OR B` query
+          into one call per term, plain words only.
         - **"images"** / **"videos"**: return an `images` / `videos` array
           (title, link, source, dimensions or duration). Accept `tbs`.
         - **"places"**: Google Local — the businesses for a query. Excellent
@@ -409,6 +416,13 @@ def register(mcp: FastMCP) -> None:
         # and a profile without its link would slip through.
         result = url_perimeter.filter_results(_run(method, **args),
                                               url_perimeter.perimeter_of_call())
+        if kind == "news" and not result.get(items) and _BOOLEEN.search(query):
+            # #1337: Google News drops boolean queries silently; an empty list must
+            # not read as "no news".
+            result["avertissement"] = (
+                "Empty result on a boolean query: the news vertical does not honour "
+                "`OR`, quotes or `site:` — this is NOT a sign of no news. Split the "
+                "query into one plain-words call per term.")
         return _project(result, items, full, fields) if kind in ("web", "news") else result
 
 

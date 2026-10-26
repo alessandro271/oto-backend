@@ -168,3 +168,36 @@ def test_scrape_drops_the_duplicated_text_rendition(client):
 def test_lens_takes_an_image_url(client):
     _tool("serper_lens")(url="https://x.test/i.png")
     assert client.search_lens.call_args.kwargs["url"] == "https://x.test/i.png"
+
+
+# --- #1337 : le vertical news ignore la syntaxe booléenne ----------------------
+
+@pytest.mark.parametrize("query", ['acme OR "beta corp" acquisition',
+                                   '"acme" levée', "acme site:lesechos.fr"])
+def test_news_vide_sur_requete_booleenne_porte_un_avertissement(client, query):
+    client.search_news.return_value = {"news": []}
+    out = _tool("serper_search")(query=query, kind="news")
+    assert out["news"] == []
+    assert "NOT a sign of no news" in out["avertissement"]
+
+
+def test_news_vide_sur_requete_simple_reste_muette(client):
+    """Une requête simple vide est une vraie absence : pas d'indice inventé."""
+    client.search_news.return_value = {"news": []}
+    out = _tool("serper_search")(query="acme acquisition", kind="news")
+    assert "avertissement" not in out
+
+
+def test_news_rempli_sur_requete_booleenne_reste_muet(client):
+    client.search_news.return_value = {"news": [{"title": "t", "link": "https://x.fr"}]}
+    out = _tool("serper_search")(query="acme OR beta", kind="news")
+    assert "avertissement" not in out
+
+
+def test_la_description_de_news_dit_de_scinder_un_or():
+    from fastmcp import FastMCP
+    from oto_mcp.tools import serper
+    m = FastMCP("t")
+    serper.register(m)
+    desc = asyncio.run(m.get_tool("serper_search")).description
+    assert "boolean" in desc and "Split" in desc
