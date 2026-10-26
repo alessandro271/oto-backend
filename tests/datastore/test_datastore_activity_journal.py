@@ -584,7 +584,7 @@ def test_trace_only_yields_a_closed_set_of_keys():
     """Le relevé est un seam de service : il ne doit pas devenir une porte par
     laquelle n'importe quel état de résolution finit journalisé.
 
-    DIX clés, six raisons nommées : l'entité datastore résolue (`ns_id`) ;
+    ONZE clés, sept raisons nommées : l'entité datastore résolue (`ns_id`) ;
     l'EMPREINTE d'un run — la version de procédure exécutée + l'instance de connecteur
     résolue (chantier du run, lot J2), et le PALIER de la procédure exécutée
     (`guide_scope`, #1156 : deux paliers portent le même slug) ; le FORÇAGE d'une colonne verrouillée (#658,
@@ -593,12 +593,15 @@ def test_trace_only_yields_a_closed_set_of_keys():
     (`found_*`, 11/09/2026, métrage par résultat — trois entiers, lus par la lentille
     `org.usage.calls`) ; et le run Apify dont un appel relève le coût final
     (`apify_run_id`, 11/10/2026 — le job que la même lentille sert comme `job_id`).
+    Et le SLUG de la procédure qu'un run déroule (#1340), sous la clé que lisent la
+    reconstruction des runs et l'audit de projet (`usage._ARG_PROCEDURE`).
     Une clé s'ajoute ICI, à la main, dans le commit qui la provoque."""
     from oto_mcp import server
     assert server._TRACED_ARGS == ("ns_id", "doctrine_version", "instance",
                                    "readonly_forced", "readonly_forced_bilan",
                                    "found_work_emails", "found_personal_emails",
-                                   "found_phones", "apify_run_id", "guide_scope")
+                                   "found_phones", "apify_run_id", "guide_scope",
+                                   usage._ARG_PROCEDURE)
 
 
 def test_datastore_lens_correlates_on_the_id_without_a_tenant_bound(monkeypatch):

@@ -498,9 +498,15 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # (`user`|`org`|`group`), posé par `run_start` à côté de sa version. Deux paliers
 # portent le même slug : sans lui, la version ne disait pas de quelle copie elle était,
 # et l'empreinte lisait l'org quand le run exécutait la copie perso qui la masquait.
+#
+# `db.usage._ARG_PROCEDURE` (#1340, 26/10/2026) — le SLUG de la procédure qu'un run
+# déroule, sous LA clé que lisent la reconstruction des runs et l'inertie de l'audit de
+# projet. `run_start` la pose lui-même : l'agent passe `guide=` (le nom documenté), et
+# le journal, qui garde les arguments tels que passés, n'écrivait jamais la clé lue —
+# la procédure passait pour « jamais déroulée ». Même clé que la face REST.
 _TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced",
                 "readonly_forced_bilan", "found_work_emails", "found_personal_emails", "found_phones",
-                "apify_run_id", "guide_scope")
+                "apify_run_id", "guide_scope", db.usage._ARG_PROCEDURE)
 
 
 _PREPARED = False

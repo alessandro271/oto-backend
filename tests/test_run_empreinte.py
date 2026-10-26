@@ -25,6 +25,8 @@ from fastmcp import FastMCP
 
 from oto_mcp import access, call_axes, db, org_store, server, session_org
 from oto_mcp.auth import hooks as auth_hooks
+from oto_mcp.db import usage
+from oto_mcp import calllog
 from oto_mcp.middleware.call_context import CallContextMiddleware
 from oto_mcp.tools import guide_run as drt
 
@@ -173,7 +175,8 @@ async def test_une_lecture_de_version_en_panne_nempeche_pas_le_run(monkeypatch,
     monkeypatch.setattr(org_store, "get_instruction", _boom)
     out, trace = await _start(run_start_fn, label="prospection", doctrine="prospection")
     assert out["run_id"] and out["doctrine_version"] is None
-    assert trace == {}
+    # Seul le slug passé est relevé (#1340) : aucune moitié d'empreinte inventée.
+    assert trace == {usage._ARG_PROCEDURE: "prospection"}
     # La panne avalée est CELLE-CI : une autre (base absente plus haut) donnerait le
     # même run sans version, et le test passerait sans avoir éprouvé la sienne.
     assert pannes, "la lecture de version n'a jamais été tentée"
@@ -245,3 +248,27 @@ def test_seule_lallowlist_atteint_les_args_de_la_ligne():
             **{k: v for k, v in trace.items() if k in server._TRACED_ARGS}}
     assert args == {"label": "prospection Q3", "doctrine_version": 7,
                     "guide_scope": "user", "instance": "org:35:pennylane", "ns_id": 160}
+
+
+# ── #1340 : un run ouvert avec `guide=` est un run qui DÉROULE la procédure ──
+
+@pytest.mark.asyncio
+async def test_le_slug_passe_par_guide_atteint_la_cle_que_lit_laudit(monkeypatch,
+                                                                     run_start_fn):
+    """Le bug : le journal garde les arguments tels que passés ; un agent qui suit la
+    description (`guide=`) n'écrivait jamais la clé que lisent la reconstruction des
+    runs et l'inertie de l'audit de projet — la procédure passait pour jamais déroulée.
+    Ici, le chemin du sink : relevé réel, filtré par l'allowlist, versé dans les args."""
+    _wire(monkeypatch, org_procedures={"campagne": {"version": 9, "archived_at": None}})
+    _, trace = await _start(run_start_fn, label="campagne", guide="campagne")
+    ligne = calllog.apply_call_trace(
+        {"tool": "run_start", "args": {"label": "campagne", "guide": "campagne"}},
+        trace, server._TRACED_ARGS)
+    assert ligne["args"][usage._ARG_PROCEDURE] == "campagne"
+
+
+@pytest.mark.asyncio
+async def test_un_run_ad_hoc_ne_nomme_aucune_procedure(monkeypatch, run_start_fn):
+    _wire(monkeypatch)
+    _, trace = await _start(run_start_fn, label="un truc vite fait")
+    assert usage._ARG_PROCEDURE not in trace

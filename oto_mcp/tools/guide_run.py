@@ -208,6 +208,11 @@ def register(mcp: FastMCP) -> None:
         # primes the axis for the agent (who then passes it via `_run_id=`).
         from .. import session_org
         session_org.set_call_run(run_id)
+        # The slug lands in the journal under THE key the run reconstruction and the
+        # project audit read (#1340): the journal keeps the args as passed, and
+        # `guide=` (the documented name) never wrote that key.
+        from ..db import usage as db_usage
+        session_org.note_call_trace(**{db_usage._ARG_PROCEDURE: guide})
         version = await _note_procedure_version(guide)
         await _persist_open(run_id, label, guide)
         return deprecations.avec_les_deux_noms(
