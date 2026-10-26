@@ -54,6 +54,13 @@ from ..connectors import health as connector_health
 #: Marker for tier ② skipped because the Serper account being served is dry.
 A_SEC = "a_sec"
 
+
+class _CranEchoue(str):
+    """Tier ② failed on THIS page (5xx, 404, timeout, network): the verdict is
+    written in `tentatives` and the read goes on (#1336). A failure of the page,
+    not of the tool: raising it lost every attempt already traced."""
+
+
 _TIMEOUT = (10, 30)              # bounds EACH socket — not the whole read
 _DEADLINE_S = 45                 # GLOBAL budget of tier ① (see `_fetch_http`)
 _MAX_FETCH_BYTES = 3_000_000     # max decompressed bytes read (tier ①)
@@ -304,8 +311,11 @@ def register(mcp: FastMCP) -> None:
 
     def _serper_scrape(url: str) -> "Optional[dict] | str":
         """Tier ② — None if the serper key can't be resolved (tier skipped), `A_SEC`
-        if the account of the served key is dry (tier skipped, key marked)."""
-        from .serper import a_sec, client_for, credits_consumed, MSG_A_SEC
+        if the account of the served key is dry (tier skipped, key marked), a
+        `_CranEchoue` if the page failed on this tier (verdict traced, read goes on)."""
+        from .serper import (a_sec, client_for, credits_consumed, MSG_A_SEC,
+                             _serper_status)
+        from oto.tools.serper.client import _SCRAPE_TIMEOUT
 
         try:
             key, is_platform = access.resolve_api_key("serper")
@@ -315,8 +325,18 @@ def register(mcp: FastMCP) -> None:
         # The client SHARED with the `serper_*` tools: a single limiter per key (oto#115).
         try:
             res = client_for(key).scrape_page(url, include_markdown=True)
+        except requests.Timeout:
+            return _CranEchoue(f"timeout after {_SCRAPE_TIMEOUT[1]} s")
+        except requests.ConnectionError as e:
+            return _CranEchoue(f"network: {type(e).__name__}")
         except UpstreamHTTPError as e:
             if a_sec(e) is None:
+                code = _serper_status(e)
+                # Same reading as `serper_scrape`: a 404 or a 5xx is the PAGE refused
+                # (blocked bot, unreachable site), not the scraper down. Any other
+                # refusal (invalid key, bad input) is ours and still raises.
+                if code == 404 or (code is not None and 500 <= code < 600):
+                    return _CranEchoue(f"error HTTP {code}")
                 raise
             # The tier is SKIPPED (the others can still read the page), so
             # `web_read` doesn't raise and the envelope marks nothing: here we mark the
@@ -468,6 +488,8 @@ def register(mcp: FastMCP) -> None:
         if scrape is None:
             tentatives.append({"cran": "serper",
                                "verdict": "skipped — no serper key resolvable"})
+        elif isinstance(scrape, _CranEchoue):
+            tentatives.append({"cran": "serper", "verdict": str(scrape)})
         elif scrape == A_SEC:
             tentatives.append({"cran": "serper",
                                "verdict": "skipped — serper account dry (credits exhausted: "

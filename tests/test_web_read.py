@@ -507,3 +507,52 @@ def test_sur_une_cle_du_client_le_quota_de_la_plateforme_ne_bouge_pas(monkeypatc
 
     assert debits == []
     assert out["cout"]["serper_credits"] == 2, "le coût reste ANNONCÉ, clé du client ou pas"
+
+
+# ── #1336 : un échec du cran ② s'écrit dans `tentatives`, la lecture continue ──
+
+def _erreur_serper(statut):
+    from oto.tools.common.errors import UpstreamHTTPError
+    return UpstreamHTTPError(statut, "boom", service="serper")
+
+
+@pytest.mark.parametrize("panne, verdict", [
+    (_erreur_serper(502), "error HTTP 502"),
+    (_erreur_serper(404), "error HTTP 404"),
+    ("timeout", "timeout after"),
+    ("reseau", "network: ConnectionError"),
+])
+def test_un_echec_du_cran_serper_est_trace_et_la_lecture_continue(monkeypatch, panne,
+                                                                    verdict):
+    import requests
+    if panne == "timeout":
+        panne = requests.Timeout("lent")
+    elif panne == "reseau":
+        panne = requests.ConnectionError("coupé")
+    lire = _web_read(monkeypatch,
+                     fetch={"ok": False, "verdict": "network: SSLError"}, serper=panne)
+    with pytest.raises(McpError) as e:
+        lire(url="https://acme.fr")
+    msg = str(e.value)
+    assert "Page unreadable by fetch and scraper" in msg
+    assert "http: network: SSLError" in msg and "serper: " + verdict in msg
+
+
+def test_un_echec_du_cran_serper_laisse_le_navigateur_lire(monkeypatch):
+    lire = _web_read(monkeypatch,
+                     fetch={"ok": False, "verdict": "HTTP 403", "status": 403},
+                     serper=_erreur_serper(503),
+                     browserbase_page={"content": "Contact : x@acme.fr", "title": "ACME",
+                                       "final_url": "https://acme.fr", "status": 200})
+    out = lire(url="https://acme.fr", browser=True)
+    assert out["chemin"] == "browser"
+    assert out["tentatives"][1] == {"cran": "serper", "verdict": "error HTTP 503"}
+
+
+def test_un_refus_serper_qui_n_est_pas_la_page_leve_toujours(monkeypatch):
+    """Une clé refusée (401) est NOTRE panne : elle ne se déguise pas en page illisible."""
+    from oto.tools.common.errors import UpstreamHTTPError
+    lire = _web_read(monkeypatch, fetch={"ok": False, "verdict": "HTTP 403", "status": 403},
+                     serper=_erreur_serper(401))
+    with pytest.raises(UpstreamHTTPError):
+        lire(url="https://acme.fr")
