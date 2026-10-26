@@ -34,6 +34,10 @@ _LATEST = ("(SELECT MAX(version) FROM recipe_versions v WHERE v.recipe_id = r.id
            "AS latest_version")
 
 
+#: Le propriétaire des recettes de la PLATEFORME : lançables depuis toute org (une
+#: procédure de la bibliothèque publique en nomme une), écrites par ses seuls opérateurs.
+PLATEFORME = ("platform", "platform")
+
 #: « Pas d'argument » pour `describe_recipe(display=…)`, distinct de None (= effacer).
 _INCHANGE: Any = object()
 
@@ -128,6 +132,20 @@ def get_recipe(owner_type: str, owner_id: str, slug: str) -> Optional[dict]:
             f"SELECT {_RECIPE_COLS}, {_LATEST} FROM recipes r "
             "WHERE r.owner_type = %s AND r.owner_id = %s AND r.slug = %s",
             (owner_type, str(owner_id), slug)).fetchone()
+    return dict(row) if row else None
+
+
+def get_recipe_or_platform(owner_type: str, owner_id: str, slug: str) -> Optional[dict]:
+    """La fiche de ce slug chez ce propriétaire, sinon celle de la PLATEFORME, ou `None`.
+    Celle du propriétaire gagne toujours : une org ne perd jamais sa recette au profit
+    d'une recette de la plateforme du même nom. Une requête."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_RECIPE_COLS}, {_LATEST} FROM recipes r WHERE r.slug = %s AND "
+            "((r.owner_type = %s AND r.owner_id = %s) "
+            "OR (r.owner_type = %s AND r.owner_id = %s)) "
+            "ORDER BY (r.owner_type = %s) LIMIT 1",
+            (slug, owner_type, str(owner_id), *PLATEFORME, PLATEFORME[0])).fetchone()
     return dict(row) if row else None
 
 

@@ -319,6 +319,35 @@ et **tient la requête HTTP jusqu'à son reçu**, plusieurs secondes à plusieur
 quatre en cours à la fois par processus laissent le pool aux autres routes. Provisoire
 comme la capacité (`x-oto-provisoire`).
 
+## Les recettes de la plateforme — `scope="platform"`
+
+Une procédure de la bibliothèque publique nomme sa recette dans son schéma
+(`oto_recipe <slug>`) ; toute org qui copie la procédure doit pouvoir la lancer. Ces
+recettes n'appartiennent donc à aucune org : leur propriétaire est la plateforme
+(`owner_type = owner_id = 'platform'`, même table `recipes`).
+
+- **Qui les écrit** : `create`, `propose`, `describe`, `test` et `publish` sous
+  `scope="platform"` sont réservés aux opérateurs plateforme (règle `PLATFORM_OPERATOR_OPT`,
+  refus nommé 403 `platform_only`). `list`, `get`, `versions` et `run` sous
+  `scope="platform"` sont ouverts à tout compte.
+- **La résolution, sans `scope`** : `get`, `versions`, `test` et `run` prennent la recette
+  de l'org active, sinon celle de la plateforme du même slug — **celle de l'org gagne
+  toujours**. Sans org active, celle de la plateforme, sinon `no_active_org`. Les écritures
+  sans `scope` ne visent que l'org, jamais la plateforme : un membre ne modifie pas une
+  recette de la plateforme en omettant `scope`. `scope="org"` et `scope="user"` ne
+  retombent sur rien.
+- **`list` sans `scope`** rend aussi celles de la plateforme ; chaque fiche garde son
+  `owner_type`, qui les distingue.
+- **Un run d'une recette de la plateforme s'exécute comme tout run** : l'identité de QUI
+  la lance, son org (clé du connecteur, facturation, journal) et ses droits sur le tableau.
+  La plateforme ne prête rien ; seule une version publiée s'exécute.
+- **Lire en REST** : `GET /api/platform/recipes` (capacité `platform.recipes`, tout compte,
+  REST seule, `x-oto-provisoire`) — même forme que `GET /api/orgs/{id}/recipes`, même
+  lecture (`_lister`), `display` écrit sinon dérivé du corps. Ouverte en consultation
+  (« voir en tant que ») : aucune donnée d'org.
+- Les avertissements `missing_tools` d'un agent (`oto_trigger`) lisent les outils d'une
+  recette nommée par sa procédure selon la même résolution.
+
 ## Ce qui vient ensuite
 
 Le bloc `async` (soumettre puis collecter : Dropcontact, FullEnrich, Apify), le mode par

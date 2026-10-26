@@ -848,6 +848,8 @@ POST /api/me/recipes -> _handler
 OPTIONS /api/me/recipes -> options_handler
 GET,HEAD /api/orgs/{id}/recipes -> _handler
 OPTIONS /api/orgs/{id}/recipes -> options_handler
+GET,HEAD /api/platform/recipes -> _handler
+OPTIONS /api/platform/recipes -> options_handler
 POST /api/billing/webhook -> webhook
 OPTIONS /api/billing/webhook -> options_handler
 GET,HEAD /api/me/billing/invoices/{id}/pdf -> invoice_pdf

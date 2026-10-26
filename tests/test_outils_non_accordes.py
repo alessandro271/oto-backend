@@ -144,7 +144,8 @@ def test_l_agent_dit_ce_que_sa_procedure_et_ses_recettes_appellent_sans_l_avoir(
                   '`slug="recette-a"`, et `slug="pas-une-recette"`.')
     monkeypatch.setattr(RT.db, "get_guide_db", lambda *a: {"body_md": corps_proc})
     fiches = {"recette-a": {"id": 3, "published_version": 2}}
-    monkeypatch.setattr(RT.db_recipes, "get_recipe", lambda ot, oid, slug: fiches.get(slug))
+    monkeypatch.setattr(RT.db_recipes, "get_recipe_or_platform",
+                        lambda ot, oid, slug: fiches.get(slug))
     monkeypatch.setattr(RT.db_recipes, "get_version",
                         lambda rid, v: {"body": _CORPS_CODE} if (rid, v) == (3, 2) else None)
     t = {"procedure": "veille", "tools": ["oto_recipe", "data_rows", "run_finish"]}
@@ -159,7 +160,7 @@ def test_un_agent_sans_procedure_n_a_rien_a_ajouter():
 def test_une_recette_non_publiee_n_est_pas_lue(monkeypatch):
     monkeypatch.setattr(RT.db, "get_guide_db",
                         lambda *a: {"body_md": 'oto_recipe slug="brouillon"'})
-    monkeypatch.setattr(RT.db_recipes, "get_recipe",
+    monkeypatch.setattr(RT.db_recipes, "get_recipe_or_platform",
                         lambda *a: {"id": 1, "published_version": None})
     monkeypatch.setattr(RT.db_recipes, "get_version",
                         lambda *a: pytest.fail("une version non publiée ne se lit pas"))
@@ -171,8 +172,9 @@ def _procedure_et_recette(monkeypatch):
     lus: dict[str, list] = {"procedures": [], "recettes": []}
     monkeypatch.setattr(RT.db, "get_guide_db", lambda *a: lus["procedures"].append(a[2]) or {
         "body_md": 'Lire <tool:data_aggregate>, puis <tool:oto_recipe> `slug="recette-a"`.'})
-    monkeypatch.setattr(RT.db_recipes, "get_recipe", lambda ot, oid, slug: lus["recettes"].append(
-        slug) or {"id": 3, "published_version": 2})
+    monkeypatch.setattr(RT.db_recipes, "get_recipe_or_platform",
+                        lambda ot, oid, slug: lus["recettes"].append(slug) or {
+                            "id": 3, "published_version": 2})
     monkeypatch.setattr(RT.db_recipes, "get_version", lambda rid, v: {"body": _CORPS_CODE})
     monkeypatch.setattr(RT.tool_registry, "bound_instance", lambda: None)
     return lus

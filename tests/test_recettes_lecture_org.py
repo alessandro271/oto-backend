@@ -106,7 +106,7 @@ def test_les_corps_de_la_liste_se_lisent_en_un_lot(monkeypatch):
                         lambda versions: lus.append(dict(versions)) or {})
     monkeypatch.setattr(cap.db_recipes, "get_version",
                         lambda *a: pytest.fail("une lecture de corps par recette"))
-    cap._lister_org(7)
+    cap._lister(("org", "7"))
     assert lus == [{0: 3, 1: 2, 2: 3, 3: 2, 4: 3}]
 
 
