@@ -405,7 +405,7 @@ qu'on déclare. Une procédure gagne un état « celle-ci tourne toute seule ».
 ```
 les OUTILS   se déduisent de la procédure — ceux qu'elle CITE (`<tool:nom>`)
 l'INSTRUCTION est dérivée : « lis la procédure X et applique-la »
-un SEUL agent par objet, et le refus NOMME celui qui existe
+le PROJET    l'un de ceux où la procédure est rangée (le premier que l'auteur lit)
 la LECTURE   se fait depuis l'objet (`list` filtré par `procedure`)
 ```
 
@@ -420,10 +420,12 @@ est un **second domicile du métier** : la même règle vit dans la procédure e
 dans l'instruction, et l'une des deux finit par mentir. Une instruction qui
 POINTE l'objet ne peut pas diverger de lui.
 
-⚠️ **Un seul agent par objet** : deux agents sur le même objet, c'est deux
-réponses à « est-ce que ça tourne ? », et l'écran devrait en choisir une. Le refus
-donne l'identifiant et le cadencement de celui qui existe — sinon l'utilisateur ne
-peut que réessayer.
+⚠️ **Plusieurs agents par objet** (24/10/2026 ; la règle « un seul agent par objet » du
+03/09, refus `already_scheduled`, est levée) : deux agents d'une procédure ne font pas
+forcément le même travail — chacun a ses instructions, son horaire et ses outils, et
+une procédure en sections se partage entre eux. La règle ne tenait d'ailleurs qu'à la
+pose : pointer un agent existant sur la procédure la contournait. Voir « Un agent
+travaille dans un des projets de sa procédure » ci-dessous.
 
 ⚠️ **Une procédure qui ne cite aucun outil est REFUSÉE, avec les deux issues** :
 citer les outils, ou passer `tools`. Un agent sans outil n'exécute rien ; le
@@ -1191,10 +1193,34 @@ l'échéance n'est que la conséquence. Tout ceci relevé à la revue d'avant
 déploiement du 13/09, pas par un banc : ces chemins existaient avant le lot et
 recevaient une ligne qu'ils ne savaient pas lire.
 
-**Un objet porte un agent de CHAQUE genre**, pas un seul. La règle du 03/09 (« un
-objet ne porte qu'un agent ») visait deux réponses à la même question ; une veille
-du matin et une réaction à un événement sont deux automatisations différentes de la
-même procédure. Deux du même genre restent refusées, pour la raison d'origine.
+**Un objet porte autant d'agents qu'on veut, de chaque genre.** La règle du 03/09
+(« un objet ne porte qu'un agent »), devenue le 13/09 « un agent de chaque genre », est
+levée le 24/10/2026 (`already_scheduled` n'existe plus) : une veille du matin et une
+réaction à un événement sont deux automatisations différentes, et deux agents du même
+genre aussi quand ils jouent chacun une partie de la procédure.
+
+#### Un agent travaille dans un des projets de sa procédure (24/10/2026)
+
+Chaque run se fait dans UN projet : c'est lui qui décide du tableau que désigne chaque
+`<slot:…>`, du compte épinglé d'un connecteur, de l'endroit où le run est compté. Une
+procédure, elle, peut être rangée dans plusieurs projets de l'org.
+
+- **Pose et retouche** (`oto_trigger op=create/update`) : `project_id` est l'un des
+  projets de l'org, non archivés, où la procédure est rangée (`db.projets_des_procedures`).
+  Un autre est refusé (409 `project_not_of_procedure`, avec le `oto_project op=link`
+  qui y range la procédure). Omis : le projet que l'agent garde, sinon le premier lié
+  — **parmi ceux que l'auteur du geste lit**, le même contrôle que pour un projet
+  demandé (`_projet_de_l_agent.lisible` : existe, lisible, visible dans l'org). S'il
+  n'en lit aucun : 403 `procedure_project_not_readable`. Une procédure rangée nulle part
+  l'est là où l'agent travaille, APRÈS l'écriture de l'agent.
+- **Au run** (horloge, webhook, `run_now`) : un agent sans projet à lui reçoit le
+  premier projet de sa procédure que **l'identité du run** lit (le propriétaire ; le
+  membre qui parle pour l'agent Slack ; l'appelant pour `run_now`). Déduit à chaque
+  run, jamais recopié sur l'agent. S'il n'en lit aucun, le run part sans projet ET son
+  instruction le dit (`_instruction.sans_projet_lisible`), journal à l'appui — jamais en
+  silence. Une lecture des projets qui échoue LÈVE (pas de départ sans projet masqué).
+- **Lecture** (`list`/`get`) : un agent sans projet à lui est servi avec le premier
+  projet de sa procédure que lit son propriétaire — la réponse de son run d'horloge.
 
 #### Ouvert à toute org (24/09/2026)
 

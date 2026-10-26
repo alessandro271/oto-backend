@@ -34,7 +34,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .orgs import partage_par_defaut
 from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
-               _modele, _portee, _source_du_hook, runner_jobs)
+               _modele, _portee, _projet_de_l_agent, _source_du_hook, runner_jobs)
 from .. import (db, deprecations, org_store, outils_du_travail, ownership,
                 procedure_retiree, roles, runner_hook, runner_models, runner_tick,
                 session_visibility, tool_alias, tool_registry, verrou_org)
@@ -151,7 +151,12 @@ class TriggerInput(BaseModel):
         "agent runs with your platform role. Every other tool runs as a member. "
         "Kept only while the agent is on your personal subscription with no named "
         "editor; cleared on `give`/`take_over`. `[]` clears it."))
-    project_id: Optional[int] = None
+    project_id: Optional[int] = Field(default=None, description=(
+        "create/update: the project the agent works in — its runs use that project's "
+        "slots and accounts. One of the projects its procedure is filed in (omitted = "
+        "the first one you can read; another is refused, `project_not_of_procedure`); "
+        "a procedure in no project is filed there. A procedure can have several agents, in one project "
+        "or across its projects — each with its own instructions, schedule and tools."))
     input: Optional[str] = None
     #: `run_now` seulement : ce que l'appelant passe au run qu'il lance — le résultat
     #: d'un premier agent pour le second d'une chaîne. AJOUTÉ à l'instruction de l'agent,
@@ -661,12 +666,84 @@ def _exiger_projet_de_l_org(ctx: ResolvedCtx, project_id: Optional[int]) -> None
     if project_id is None:
         return
     pid = str(int(project_id))
-    if (db.get_project_by_id(int(pid)) is None
-            or not ownership.can_access(ctx.sub, "project", pid, "read")
-            or not ownership.visible_in_org(ctx.sub, ctx.org_id, "project", pid)):
+    if not _projet_de_l_agent.lisible(ctx.sub, ctx.org_id, int(pid)):
         raise AuthzDenied(404, "unknown_project",
                           f"Projet #{pid} inconnu dans cette org : l'agent ne peut "
                           "travailler que pour un projet de l'org où il est posé.")
+
+
+def _projet_de_la_pose(ctx: ResolvedCtx, slug: Optional[str], projets: list[int],
+                       demande: Optional[int],
+                       garde: Optional[int] = None) -> tuple[Optional[int], bool]:
+    """Le projet où travaillera l'agent, et s'il faut y ranger sa procédure.
+
+    Tranché le 24/10/2026 : une procédure peut être rangée dans plusieurs projets de
+    l'org, un agent travaille dans UN d'entre eux (`_projet_de_l_agent`) — chaque run se
+    fait dans un projet, qui décide des tableaux de ses slots et des comptes qu'il
+    utilise. Pour qu'une procédure travaille pour deux projets : un agent dans chacun.
+    Une procédure peut avoir plusieurs agents, dans un même projet aussi : chacun a ses
+    instructions, et peut n'en jouer qu'une partie.
+    `projets` = ceux de la procédure (`db.projets_des_procedures`), le premier lié
+    d'abord. Donc :
+    - un projet demandé est l'un d'eux, ou REFUSÉ, avec le geste qui y range la
+      procédure — l'accepter rouvrirait l'agent rangé ailleurs que son travail ;
+    - rien de demandé : `garde` (le projet que l'agent a déjà) s'il en est un, sinon le
+      premier — seulement parmi ceux que l'appelant LIT (`_projet_de_l_agent.lisible`,
+      le contrôle du projet demandé) ; s'il n'en lit aucun, REFUSÉ
+      (`procedure_project_not_readable`) ;
+    - la procédure n'est rangée nulle part : le projet demandé (ou gardé, s'il le lit),
+      où elle est rangée du même coup — le booléen rendu ; `(None, False)` = rien à
+      changer.
+
+    Ne lit et n'écrit rien d'autre : le rangement se fait APRÈS l'écriture de l'agent,
+    pour qu'un refus qui suivrait ne laisse pas une procédure rangée par un appel échoué."""
+    if not projets:
+        if demande is not None:
+            return int(demande), True
+        # Le projet gardé ne s'attribue (et n'y range la procédure) que si l'appelant le
+        # lit — le même contrôle que le projet demandé (`_exiger_projet_de_l_org`).
+        if garde is not None and _projet_de_l_agent.lisible(ctx.sub, ctx.org_id, garde):
+            return int(garde), True
+        return None, False
+    if demande is None:
+        if garde in projets and _projet_de_l_agent.lisible(ctx.sub, ctx.org_id, garde):
+            return int(garde), False
+        projet = _projet_de_l_agent.premier_lisible(ctx.sub, ctx.org_id, projets)
+        if projet is None:
+            # Attribuer d'office un projet que l'appelant ne lit pas lui ouvrirait, par
+            # l'agent, ce que la pose refuse quand il le demande (`unknown_project`).
+            raise AuthzDenied(
+                403, "procedure_project_not_readable",
+                f"`{slug}` n'est rangée que dans des projets de l'org que tu ne lis pas : "
+                "l'agent ne peut pas y travailler en ton nom. Demande l'accès à l'un "
+                "d'eux, ou range la procédure dans un projet que tu lis (`oto_project "
+                f"op=link target_type=procedure target_ref={slug}`) et passe son "
+                "`project_id`.")
+        return projet, False
+    if int(demande) not in projets:
+        raise AuthzDenied(
+            409, "project_not_of_procedure",
+            f"un agent travaille dans un projet de sa procédure, et `{slug}` est rangée "
+            f"dans {', '.join(f'#{p}' for p in projets)}, pas dans #{int(demande)}. "
+            f"Range-la d'abord dans ce projet (`oto_project op=link "
+            f"project_id={int(demande)} target_type=procedure target_ref={slug}`) — elle "
+            "garde ses autres projets — ou choisis l'un des siens.")
+    return int(demande), False
+
+
+def _ranger_la_procedure(ctx: ResolvedCtx, slug: str, project_id: int) -> None:
+    """Range la procédure de l'org `slug` dans `project_id`, quand elle n'est rangée
+    nulle part et que l'appelant peut écrire dans ce projet de l'org. Sinon rien :
+    l'agent garde le projet demandé, comme avant la règle — un agent posé ne se défait
+    pas parce que sa procédure n'a pas pu suivre."""
+    instr = org_store.get_instruction("org", ctx.org_id, slug)
+    row = db.get_project_by_id(int(project_id))
+    if (not instr or instr.get("id") is None or not row
+            or row.get("owner_type") != "org" or str(row.get("owner_id")) != str(ctx.org_id)
+            or not ownership.can_access(ctx.sub, "project", str(int(project_id)), "write")):
+        return
+    db.add_project_link(int(project_id), "procedure", str(int(instr["id"])))
+    db.log_project_activity(int(project_id), ctx.sub, "project.link", f"procedure:{slug}")
 
 
 def _valide_le_webhook(inp: TriggerInput, actuel: Optional[dict] = None) -> None:
@@ -1274,6 +1351,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 "qui décide quand. Retire `cron`, ou déclare une automatisation horaire.")
         _valide_le_webhook(inp)
         _exiger_projet_de_l_org(ctx, inp.project_id)
+        projets = db.projets_des_procedures(ctx.org_id, [inp.procedure]).get(inp.procedure, [])
+        projet, a_ranger = _projet_de_la_pose(ctx, inp.procedure, projets, inp.project_id)
         # ⚠️ `tools` n'est plus exigé : il se DÉDUIT de la procédure quand il
         # n'est pas fourni. C'est ce qui rend le geste possible depuis un bouton.
         outils = list(inp.tools or []) or _outils_de_la_procedure(ctx, inp.procedure)
@@ -1317,39 +1396,15 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # programmé sans jamais tourner. À la création, le propriétaire EST
         # l'appelant — rien à comparer, seule la connexion se vérifie.
         _abonnement.exiger_a_la_pose(ctx.sub, None, famille, org_id=ctx.org_id)
-        # ⚠️ UN SEUL agent programmé par objet (tranché le 03/09). L'agent est une
-        # PROPRIÉTÉ de la procédure, pas une collection : deux agents sur le même
-        # objet, c'est deux réponses à « est-ce que ça tourne ? », et l'écran
-        # devrait en choisir une. Le refus dit lequel existe, pour qu'on puisse
-        # le modifier plutôt que d'en créer un second.
-        # ⚠️ UN SEUL agent PAR COUP D'ENVOI et par objet. La règle du 03/09 tenait
-        # « un objet ne porte qu'un agent » quand il n'existait qu'une façon de le
-        # déclencher ; elle devient « un programmé ET un déclenché », parce qu'une
-        # veille du matin et une réaction à un événement sont deux automatisations
-        # différentes de la même procédure — pas deux réponses à la même question.
-        # Deux du MÊME genre restent refusées, pour la raison d'origine.
+        # Plusieurs agents peuvent suivre la même procédure, dans un même projet comme
+        # dans plusieurs (levé le 24/10/2026). La règle du 03/09 (« un objet ne porte
+        # qu'une automatisation de chaque genre ») supposait que deux agents d'une
+        # procédure feraient le même travail. Ils ne le font pas : chacun a ses propres
+        # instructions, son horaire et ses outils, et une procédure en plusieurs
+        # sections se partage entre eux — l'un propose le vendredi, l'autre envoie le
+        # lundi. La règle ne tenait d'ailleurs qu'à la pose : pointer un agent existant
+        # sur la procédure la contournait, et c'est ainsi que ces partages existaient.
         genre = "webhook" if webhook else "schedule"
-        deja = [d for d in db.triggers_for_procedure(ctx.org_id, inp.procedure)
-                if (d.get("kind") or "schedule") == genre]
-        if deja:
-            # Un agent que l'appelant ne voit pas ne se décrit pas : ni son numéro, ni
-            # sa cadence (« aucun refus ne décrit un agent invisible »). Le refus reste
-            # nommé ; seul l'agent visible est désigné.
-            if _acces_agent.niveau(ctx.sub, ctx.org_id, deja[0]) is None:
-                raise AuthzDenied(
-                    409, "already_scheduled",
-                    f"`{inp.procedure}` porte déjà une automatisation de ce genre, qui "
-                    "n'est pas partagée avec toi — un objet ne porte qu'une "
-                    "automatisation de chaque genre. Demande l'accès à son "
-                    "propriétaire ou à un admin de l'org.")
-            quoi = ("déjà une automatisation webhook" if webhook else
-                    f"déjà une automatisation horaire (cadencement "
-                    f"`{deja[0]['cron']}`)")
-            raise AuthzDenied(
-                409, "already_scheduled",
-                f"`{inp.procedure}` a {quoi} (#{deja[0]['id']}). Modifie-la plutôt "
-                "que d'en créer une seconde — un objet ne porte qu'une "
-                "automatisation de chaque genre.")
         secret = hache = None
         if webhook:
             secret, hache = runner_hook.nouveau_secret()
@@ -1360,7 +1415,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             ctx.org_id, ctx.sub, procedure=inp.procedure,
             cron=inp.cron or None, tz=tz,
             next_due=runner_tick.next_due(inp.cron, tz) if not webhook else None,
-            tools=outils, project_id=inp.project_id,
+            tools=outils, project_id=projet,
             input=inp.input or _instruction.derivee(inp.procedure),
             label=inp.label, max_steps=inp.max_steps,
             max_tokens=_limites_du_run.a_ecrire(inp.max_tokens),
@@ -1390,6 +1445,9 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                              ressource_nom=inp.label or inp.procedure, vers="org",
                              geste="oto_trigger op=create")
         t = _acces_agent.avec_visibilites(ctx.org_id, [t])[0]
+        # Sa procédure n'était rangée nulle part : elle l'est là où l'agent travaille.
+        if a_ranger and projet is not None:
+            _ranger_la_procedure(ctx, inp.procedure, int(projet))
         # ⚠️ Un webhook NAÎT avec une adresse privée, TOUJOURS (décidé le
         # 25/09/2026) : l'id numérique se parcourt, et une source stocke une URL
         # aléatoire aussi bien qu'une numérique — rien ne justifie de la choisir.
@@ -1591,7 +1649,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             {**t, "tz": t.get("tz") or _TZ_DEFAUT},
             datetime.datetime.now(datetime.timezone.utc),
             origine="enchaîné" if chaine else "à la demande",
-            relais=runner_tick.cibles_du_relais({**t, "org_id": ctx.org_id}))
+            relais=runner_tick.cibles_du_relais({**t, "org_id": ctx.org_id}),
+            sub=ctx.sub)
         if inp.handoff:
             charge["input"] = _instruction.transmise(
                 charge["input"], inp.handoff,
@@ -1894,6 +1953,22 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # les connexions d'un autre membre exécuteront.
         _exiger_l_admin_du_slack(ctx)
         _valide_l_agent_slack({**_actuel(), **champs})
+    # Le projet suit la procédure (24/10/2026, `_projet_de_la_pose`) : un projet demandé
+    # est l'un des siens, et une autre procédure emmène l'agent dans l'un des SIENS —
+    # sauf une procédure rangée nulle part, qui l'est là où travaille l'agent, après
+    # l'écriture.
+    a_ranger: Optional[tuple[str, int]] = None
+    if "procedure" in champs or "project_id" in champs:
+        slug = champs.get("procedure") or _actuel().get("procedure")
+        if slug:
+            projets = db.projets_des_procedures(ctx.org_id, [slug]).get(slug, [])
+            garde = _actuel().get("project_id")
+            projet, ranger = _projet_de_la_pose(ctx, slug, projets, champs.get("project_id"),
+                                                garde=garde)
+            if projet is not None:
+                champs["project_id"] = projet
+            if ranger and projet is not None:
+                a_ranger = (slug, int(projet))
     if "tools" in champs:
         exiger_aucun_ajout_d_agent(_actuel(), champs["tools"])
     if inp.platform_tools is not None:
@@ -1911,6 +1986,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         if _actuel():
             _juger(_actuel(), stockee=True)
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+    if a_ranger:
+        _ranger_la_procedure(ctx, *a_ranger)
     # L'adresse privée s'écrit APRÈS la retouche acceptée (un refus qui suivrait
     # la laisserait posée par un appel échoué), puis on relit. SENS UNIQUE : on
     # passe en privée, on n'en revient pas (`false` est refusé à la validation).
@@ -2331,8 +2408,18 @@ def _ranger_en_lot(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     return {"total": len(ids), "succeeded": len(ids) - len(echecs), "failed": echecs}
 
 
+def _avec_le_projet_de_la_procedure(ctx: ResolvedCtx, rep: dict) -> dict:
+    """Un agent sans projet à lui est servi avec celui de sa procédure — celui où son run
+    travaille (`_projet_de_l_agent`). Une requête pour toute la réponse."""
+    if "trigger" in rep and rep["trigger"]:
+        rep["trigger"] = _projet_de_l_agent.servis(ctx.org_id, [rep["trigger"]])[0]
+    if rep.get("triggers"):
+        rep["triggers"] = _projet_de_l_agent.servis(ctx.org_id, rep["triggers"])
+    return rep
+
+
 def _triggers_et_acces(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
-    return _avec_mon_acces(ctx, _triggers_sync(ctx, inp))
+    return _avec_le_projet_de_la_procedure(ctx, _avec_mon_acces(ctx, _triggers_sync(ctx, inp)))
 
 
 async def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
@@ -2427,6 +2514,12 @@ CAPABILITIES += [
             DeclaredError(400, "no_auth_address",
                           "`rotate_address` sur un webhook SANS preuve : son adresse "
                           "est son credential, elle se renouvelle par l'écran (REST)"),
+            DeclaredError(409, "project_not_of_procedure",
+                          "`project_id` d'un projet où la procédure de l'agent n'est pas "
+                          "rangée"),
+            DeclaredError(403, "procedure_project_not_readable",
+                          "`project_id` omis, et la procédure de l'agent n'est rangée que "
+                          "dans des projets que l'appelant ne lit pas"),
             DeclaredError(404, "trigger_not_found",
                           "automatisation inconnue dans l'org du porteur"),
             DeclaredError(400, "procedure_archived",

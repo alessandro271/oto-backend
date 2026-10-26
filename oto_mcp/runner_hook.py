@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
 from . import db, org_suspension, procedure_retiree, runner_models
-from .capabilities import _limites_du_run
+from .capabilities import _instruction, _limites_du_run, _projet_de_l_agent
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +656,15 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
     return enfiler(t, externe, source, corps=corps)
 
 
+def _sans_projet_dit(projet: "_projet_de_l_agent.ProjetDuRun", t: dict,
+                     instruction: str) -> str:
+    """L'instruction du run, plus le paragraphe qui dit pourquoi il n'a pas de projet
+    quand sa procédure n'est rangée que dans des projets illisibles par son identité."""
+    if not projet.illisible:
+        return instruction
+    return _instruction.sans_projet_lisible(instruction, t["procedure"])
+
+
 def enfiler(t: dict, externe: Optional[str], source: Optional[str], *,
             corps: Any = None, entree: Optional[str] = None,
             sub: Optional[str] = None, outils_en_plus: tuple[str, ...] = ()) -> dict:
@@ -695,6 +704,10 @@ def enfiler(t: dict, externe: Optional[str], source: Optional[str], *,
         logger.warning("déclencheur %s : état de la procédure illisible (%s)", trigger_id, e)
         retiree = None
     sans_modele = runner_models.motif_sans_famille(t.get("model"))
+    # Le projet où il travaille : le sien, sinon le premier de sa procédure que lit
+    # l'identité du run (24/10/2026). Lu avant la transaction, pour la même raison que la
+    # suspension.
+    projet = _projet_de_l_agent.de_l_agent(t, sub or t.get("sub"))
     with db._connect() as conn:
         if not t["enabled"]:
             db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_PAUSED,
@@ -796,7 +809,7 @@ def enfiler(t: dict, externe: Optional[str], source: Optional[str], *,
                     outils += [o for o in outils_en_plus if o not in outils]
                     charge = {
                         "procedure": t["procedure"],
-                        "project_id": t.get("project_id"),
+                        "project_id": projet.project_id,
                         "tools": outils,
                         "label": t.get("label") or f"webhook — {t['procedure']}",
                         "max_steps": t.get("max_steps"),
@@ -806,11 +819,12 @@ def enfiler(t: dict, externe: Optional[str], source: Optional[str], *,
                         # Ce qui distingue une exécution déclenchée d'une exécution
                         # programmée, pour qui relit la file plus tard.
                         "hook": True,
-                        "input": entree if entree is not None else instruction_augmentee(
+                        "input": _sans_projet_dit(projet, t, entree if entree is not None
+                                                  else instruction_augmentee(
                             t.get("input") or "", corps,
                             t.get("payload_mode") or IGNORE, t.get("payload_fields"),
                             trigger_id=trigger_id,
-                            sans_preuve=prereglage(t.get("hook_auth")).schema == NONE),
+                            sans_preuve=prereglage(t.get("hook_auth")).schema == NONE)),
                         **runner_models.charge(t.get("model")),
                     }
                     job = db.enqueue_job(

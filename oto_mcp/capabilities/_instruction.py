@@ -115,6 +115,22 @@ def relais(instruction: str, cibles: list[dict]) -> str:
             "your summary.\n" + "\n".join(lignes))
 
 
+def sans_projet_lisible(instruction: str, slug: str) -> str:
+    """L'instruction d'un run SANS PROJET parce que sa procédure n'est rangée que dans des
+    projets que l'identité du run ne lit pas (`_projet_de_l_agent.de_l_agent`).
+
+    Le run ne reçoit pas un projet illisible, mais il ne part pas en silence : sans ce
+    paragraphe, ses `<slot:…>` échoueraient sans que rien ne dise pourquoi. Les projets
+    ne sont pas nommés : l'identité du run ne les lit pas."""
+    return (f"{instruction}\n\nThis run has NO project: the procedure `{slug}` is filed "
+            "only in projects that the identity this run works as cannot read, so none "
+            "was given to it. `<slot:…>` references will not resolve and no project "
+            "account applies. Do what the procedure allows without them, and say in "
+            "your report that the agent's owner must either get access to one of the "
+            "procedure's projects or file the procedure in a project they can read, "
+            "then set it as the agent's `project_id`.")
+
+
 def derivee(slug: str) -> str:
     """L'instruction MINIMALE : « lis l'objet, applique-le »."""
     return (f"Read the procedure `{slug}` and apply it. It is authoritative: "

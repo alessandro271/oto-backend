@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from . import db, org_suspension, procedure_retiree, runner_models
-from .capabilities import _abonnement, _instruction, _limites_du_run
+from .capabilities import _abonnement, _instruction, _limites_du_run, _projet_de_l_agent
 
 log = logging.getLogger(__name__)
 
@@ -122,7 +122,8 @@ def cibles_du_relais(t: dict) -> list[dict]:
 
 
 def charge_du_declencheur(t: dict, echeance, origine: str = "planifié",
-                          relais: Optional[list[dict]] = None) -> dict:
+                          relais: Optional[list[dict]] = None,
+                          sub: Optional[str] = None) -> dict:
     """La charge du travail `start` d'une occurrence de `t` — UNE définition pour
     l'horloge (`_tick`) et le lancement à la demande (`runner.triggers op=run_now`).
     Un run lancé à la main et un run lancé par l'horloge doivent être le MÊME run :
@@ -138,13 +139,25 @@ def charge_du_declencheur(t: dict, echeance, origine: str = "planifié",
     ⚠️ Le lien n'ajoute JAMAIS `oto_trigger` : l'outil ne sert pas que `run_now` (il
     modifie, partage, supprime des agents), et un agent qui lit des données tierces
     l'aurait reçu sans que personne l'ait mis dans sa liste. Sans l'outil, aucune
-    consigne : elle lui dirait d'appeler ce qu'il n'a pas."""
+    consigne : elle lui dirait d'appeler ce qu'il n'a pas.
+
+    `sub` = l'identité du run quand ce n'est pas le propriétaire (`run_now` : l'appelant).
+    Le projet attribué par défaut est un projet que cette identité LIT
+    (`_projet_de_l_agent.de_l_agent`) ; s'il n'y en a aucun, l'instruction le dit."""
     outils = t.get("tools") or []
     if "oto_trigger" not in outils:
         relais = None
+    projet = _projet_de_l_agent.de_l_agent(t, sub)
+    instruction = _instruction.relais(_instruction.horodatee(
+        t.get("input") or _instruction.derivee(t["procedure"]),
+        echeance, t["tz"]), relais or [])
+    if projet.illisible:
+        instruction = _instruction.sans_projet_lisible(instruction, t["procedure"])
     return {
         "procedure": t["procedure"],
-        "project_id": t["project_id"],
+        # Le sien, sinon le premier de sa procédure que lit l'identité du run (24/10/2026,
+        # `_projet_de_l_agent`) : un agent travaille dans un des projets de sa procédure.
+        "project_id": projet.project_id,
         "tools": outils,
         # ⚠️ DÉRIVÉE quand le déclencheur n'en porte pas. Sans cette ligne
         # le travail part sans instruction de départ, et le worker le refuse
@@ -166,9 +179,7 @@ def charge_du_declencheur(t: dict, echeance, origine: str = "planifié",
         #
         # Et l'occurrence se DATE (`horodatee`) : un agent hébergé n'a pas
         # d'horloge, il apprend ici quel jour et quelle heure il représente.
-        "input": _instruction.relais(_instruction.horodatee(
-            t.get("input") or _instruction.derivee(t["procedure"]),
-            echeance, t["tz"]), relais or []),
+        "input": instruction,
         "label": t.get("label") or f"{origine} — {t['procedure']}",
         "max_steps": t.get("max_steps"),
         # Les limites du run déclarées sur l'agent — seulement si déclarées.
