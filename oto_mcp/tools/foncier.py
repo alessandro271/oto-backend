@@ -867,6 +867,12 @@ def register(mcp: FastMCP) -> None:
         round-trip per additional 10 — `requetes` says how many were made. `total` is
         what was RETURNED, never what exists: the source publishes no count.
 
+        ⚠️ **No offset: only the FIRST `limit` rows are readable**, in the source's
+        own order (ascending owner SIREN, not size). On a large commune or a
+        department, `tronque: true` says more exist and you hold the smallest
+        SIRENs, not the biggest buildings — narrow with `emprise_min`, or go
+        commune by commune, before concluding on a territory.
+
         Args:
             code_commune: INSEE commune code.
             siren: every building owned by this company (indexed, fast).
