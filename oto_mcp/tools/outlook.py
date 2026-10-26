@@ -201,7 +201,7 @@ _COMPOSITION_ARGS = """\
     attachments: files to attach (a new message or a reply), as `source` refs oto
         resolves server-side, up to 3 MB each: `{"kind":"drive","file_id":…}`,
         `{"kind":"gmail","message_id":…,"filename":…}`, `{"kind":"url","url":…}`
-        (e.g. a signed URL from `oto_upload_url`), `{"kind":"project_file",
+        (e.g. a signed URL from `oto_upload_url`; `"filename"` forces its name), `{"kind":"project_file",
         "project_id":…,"file_id":…}`. Add `"content_id":"<id>"` to make one an
         inline image of the body (`<img src="cid:<id>">`)."""
 

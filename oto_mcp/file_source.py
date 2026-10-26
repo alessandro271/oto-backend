@@ -160,6 +160,11 @@ def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False,
     url_perimeter.refuse_if_excluded(src.get("url"), url_perimeter.perimeter_of_call())
     url = src.get("url")
     _check_url(url)
+    explicite = src.get("filename")
+    if explicite is not None:
+        if not isinstance(explicite, str) or not os.path.basename(explicite.strip()):
+            raise FileSourceError("source url : `filename` doit être un nom de fichier.")
+        explicite = os.path.basename(explicite.strip())
     from urllib.parse import unquote, urljoin, urlsplit
 
     import httpx
@@ -200,10 +205,17 @@ def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False,
                 data = b"".join(chunks)
                 mime = (r.headers.get("content-type")
                         or "application/octet-stream").split(";")[0].strip()
+                servi = _nom_de_disposition(r.headers.get("content-disposition"))
                 break
         else:
             raise FileSourceError(f"source url: more than {MAX_REDIRECTS} redirects.")
-    name = os.path.basename(unquote(urlsplit(str(url)).path)) or "file"
+    # #1346: the name the caller gives, else the one the server serves
+    # (`Content-Disposition`, e.g. a presigned storage URL with an opaque key), else
+    # the path. A generic type is refined from that name's extension.
+    name = explicite or servi \
+        or os.path.basename(unquote(urlsplit(str(url)).path)) or "file"
+    if mime == "application/octet-stream":
+        mime = mimetypes.guess_type(name)[0] or mime
     return ResolvedFile(data, name, mime)
 
 
@@ -451,7 +463,8 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
     "unipile"|"transit", …}` :
       - drive        : `{file_id, account?}`
       - gmail        : `{message_id, filename, index?, account?}`
-      - url          : `{url}` (http/https, redirections refusées)
+      - url          : `{url, filename?}` (http/https, redirections refusées ; nom :
+                       `filename`, sinon `Content-Disposition`, sinon le chemin)
       - project_file : `{project_id, file_id}` (ids d'`oto_project_files op=list`)
       - http         : `{path, params?}` (GET via le connecteur `http` de l'appelant)
       - content      : `{filename, base64 | text, mime?}` (fichier produit par l'agent,

@@ -155,3 +155,44 @@ def test_another_http_error_is_a_named_refusal(monkeypatch):
     _serve(monkeypatch, {"https://a.example/f": httpx.Response(500)})
     with pytest.raises(fs.FileSourceError, match="HTTP 500"):
         fs.resolve({"kind": "url", "url": "https://a.example/f"})
+
+
+# ── #1346 : le nom et le type viennent du serveur, ou de l'appelant ─────────────
+
+_CLE_OPAQUE = "https://bucket.example/7f3a9c?X-Amz-Signature=abc"
+
+
+def test_le_nom_servi_par_content_disposition_l_emporte_sur_le_chemin(monkeypatch):
+    _serve(monkeypatch, {_CLE_OPAQUE: httpx.Response(200, content=b"%PDF-1.4", headers={
+        "content-type": "application/octet-stream",
+        "content-disposition": 'attachment; filename="Devis.pdf"'})})
+    rf = fs.resolve({"kind": "url", "url": _CLE_OPAQUE})
+    assert rf.filename == "Devis.pdf"
+    assert rf.mime == "application/pdf", "un type générique se lit sur l'extension servie"
+
+
+def test_un_nom_explicite_l_emporte_sur_tout(monkeypatch):
+    _serve(monkeypatch, {_CLE_OPAQUE: httpx.Response(200, content=b"%PDF-1.4", headers={
+        "content-disposition": 'attachment; filename="x.bin"'})})
+    rf = fs.resolve({"kind": "url", "url": _CLE_OPAQUE, "filename": "../Facture 12.pdf"})
+    assert rf.filename == "Facture 12.pdf" and rf.mime == "application/pdf"
+
+
+def test_un_type_servi_precis_n_est_pas_reecrit(monkeypatch):
+    _serve(monkeypatch, {_CLE_OPAQUE: httpx.Response(200, content=b"a,b", headers={
+        "content-type": "text/csv", "content-disposition": 'inline; filename="x.pdf"'})})
+    rf = fs.resolve({"kind": "url", "url": _CLE_OPAQUE})
+    assert rf.filename == "x.pdf" and rf.mime == "text/csv"
+
+
+def test_sans_disposition_le_chemin_nomme_toujours(monkeypatch):
+    _serve(monkeypatch, {"https://a.example/d/rapport.csv": b"a,b"})
+    rf = fs.resolve({"kind": "url", "url": "https://a.example/d/rapport.csv"})
+    assert rf.filename == "rapport.csv"
+
+
+@pytest.mark.parametrize("nom", ["", "  ", 12, "dossier/"])
+def test_un_nom_explicite_mal_forme_est_refuse(monkeypatch, nom):
+    _serve(monkeypatch, {_CLE_OPAQUE: b"x"})
+    with pytest.raises(fs.FileSourceError, match="filename"):
+        fs.resolve({"kind": "url", "url": _CLE_OPAQUE, "filename": nom})

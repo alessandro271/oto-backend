@@ -164,7 +164,9 @@ _COMPOSITION_ARGS = """\
         - Drive: `{"kind":"drive","file_id":"<id>"}` (id from drive_list/metadata)
         - Gmail: `{"kind":"gmail","message_id":"<id>","filename":"<name>"}`
         - URL:   `{"kind":"url","url":"https://…"}` — e.g. a signed URL from
-          `oto_upload_url` (upload a local PDF first) or drive_download.
+          `oto_upload_url` (upload a local PDF first) or drive_download. Named
+          by the server's `Content-Disposition`, else the path; `"filename"`
+          forces the name (its extension types the file).
         - Project file: `{"kind":"project_file","project_id":<id>,"file_id":<id>}`
           (ids from oto_project_files op=list)
     account: email of the Google account to use — same choice as `_account`."""
