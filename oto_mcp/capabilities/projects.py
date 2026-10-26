@@ -460,23 +460,41 @@ def _require_active_org_visible(ctx: ResolvedCtx, row: dict) -> None:
     raise AuthzDenied(404, "unknown_project", f"Projet #{rid} inconnu.")
 
 
-def _procedure_ref_to_id(org_id: Optional[int], ref: str) -> str:
-    """Réf de procédure (ADR 0032) → l'ID stable du guide. Accepte déjà un id
-    (chiffres) ou un slug (résolu dans l'org du projet) ; fallback = laisser tel quel
-    (guide introuvable / hors org → pas de casse, résolu à la lecture côté front)."""
-    if not ref or ref.isdigit() or org_id is None:
+def _procedure_ref_to_id(sub: Optional[str], row: dict, org_id: Optional[int],
+                         ref: str) -> str:
+    """Réf de procédure (ADR 0032) → l'ID stable du guide. Accepte un id (chiffres) ou
+    un slug, cherché dans la portée du projet — ses paliers (`_tableau_owner_candidates` :
+    équipe propriétaire puis son org, projet perso puis son org de travail), l'org du
+    projet, puis le palier personnel du lieur. Un slug introuvable revient TEL QUEL :
+    l'appelant décide (refus au link, réf brute à l'unlink).
+
+    #1341 : le slug n'était cherché qu'au palier org ; un slug d'équipe ou personnel
+    revenait brut, était stocké tel quel, et le lien naissait mort."""
+    if not ref or ref.isdigit():
         return ref
-    inst = org_store.get_instruction("org", org_id, ref)
-    return str(inst["id"]) if inst and inst.get("id") is not None else ref
+    paliers = list(_tableau_owner_candidates(row))
+    if org_id is not None:
+        paliers.append(("org", str(org_id)))
+    if sub:
+        paliers.append(("user", sub))
+    vus: set = set()
+    for otype, oid in paliers:
+        if (otype, oid) in vus:
+            continue
+        vus.add((otype, oid))
+        inst = org_store.get_instruction(otype, int(oid) if otype != "user" else oid, ref)
+        if inst and inst.get("id") is not None:
+            return str(inst["id"])
+    return ref
 
 
-def _ref_canonizer(row: dict, org_id: Optional[int], target_type: str):
+def _ref_canonizer(sub: Optional[str], row: dict, org_id: Optional[int], target_type: str):
     """La fonction qui ramène une réf de lien à son écriture CANONIQUE — celle que `link`
     STOCKE aujourd'hui (l'id stable). Identité pour les types sans normalisation."""
     if target_type == "tableau":
         return lambda r: _resolve_tableau_id(row, r) or str(r or "").strip()
     if target_type == "procedure":
-        return lambda r: _procedure_ref_to_id(org_id, str(r or "").strip())
+        return lambda r: _procedure_ref_to_id(sub, row, org_id, str(r or "").strip())
     return lambda r: str(r or "").strip()
 
 
@@ -1252,7 +1270,14 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         config = dict(inp.config) if inp.config else None
         proj_org = int(row["owner_id"]) if row.get("owner_type") == "org" else ctx.org_id
         if inp.target_type == "procedure":
-            target_ref = _procedure_ref_to_id(proj_org, target_ref)
+            target_ref = _procedure_ref_to_id(sub, row, proj_org, target_ref)
+            # Un slug qui ne résout dans aucun palier du projet ne se stocke pas : le lien
+            # naîtrait mort (#1341). L'unlink, lui, garde la réf brute (lien d'avant).
+            if inp.op == "link" and not str(target_ref).isdigit():
+                _require(False, "unknown_procedure",
+                         f"Aucune procédure « {target_ref} » dans la portée du projet "
+                         "(ses paliers, son org, tes procédures personnelles). Passe "
+                         "son `guide_id` (rendu par `oto_procedure op=list`) en `target_ref`.", 404)
         elif inp.target_type == "tableau":
             # Normalise nom→id (le datastore du propriétaire du projet). Stocker l'id garde
             # la résolution cohérente ; un nom introuvable au LINK = erreur (pas de lien mort
@@ -1335,7 +1360,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             meme_binding = [l for l in db.list_project_links(int(inp.project_id))
                             if l.get("identity_ref") == identity_ref]
             ecritures = _unlink_refs(meme_binding, inp.target_type, target_ref,
-                                     _ref_canonizer(row, proj_org, inp.target_type))
+                                     _ref_canonizer(sub, row, proj_org, inp.target_type))
             autres = [r for r in ecritures if r != target_ref]
             if autres and target_ref not in ecritures:
                 rewrite_from, doublons = autres[0], autres[1:]
@@ -1359,7 +1384,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             demande = str(inp.target_ref).strip()
             existants = db.list_project_links(int(inp.project_id))
             refs = _unlink_refs(existants, inp.target_type, demande,
-                                _ref_canonizer(row, proj_org, inp.target_type))
+                                _ref_canonizer(sub, row, proj_org, inp.target_type))
             removed = sum(db.remove_project_link(int(inp.project_id), inp.target_type, r,
                                                  identity_ref=identity_ref)
                           for r in refs)

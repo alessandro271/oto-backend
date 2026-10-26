@@ -225,3 +225,69 @@ def test_une_procedure_sans_proprietaire_se_refuse_en_404(surface, monkeypatch):
         P._project(CTX, P.ProjectInput(op="link", project_id=59, target_type="procedure",
                                        target_ref="94"))
     assert (e.value.status, e.value.code) == (404, "unknown_procedure")
+
+
+# --- #1341 : un slug d'équipe ou personnel ne naît plus en lien mort --------------
+
+def _paliers(monkeypatch, par_palier: dict) -> list:
+    """`get_instruction` par palier : chaque slug n'existe QUE là où on le pose — une
+    doublure qui ignorerait le palier ferait passer la recherche org-seule pour bonne."""
+    lus: list = []
+
+    def _get(ot, oid, slug):
+        lus.append((ot, str(oid), slug))
+        return par_palier.get((ot, str(oid), slug))
+
+    monkeypatch.setattr(P.org_store, "get_instruction", _get)
+    return lus
+
+
+def test_link_par_slug_dune_procedure_dequipe_stocke_son_id(surface, monkeypatch):
+    """Projet d'ÉQUIPE : le slug vit au palier de l'équipe, pas de l'org."""
+    row = dict(ROW, owner_type="group", owner_id="12")
+    monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(row))
+    _paliers(monkeypatch, {("group", "12", "relance-equipe"): {"id": 501}})
+    vu: dict = {}
+    monkeypatch.setattr(P.db, "add_project_link",
+                        lambda pid, tt, tr, *a, **kw: vu.update(ref=tr) or
+                        {"status": "created", "changed": []})
+    P._project(CTX, P.ProjectInput(op="link", project_id=59, target_type="procedure",
+                                   target_ref="relance-equipe"))
+    assert vu["ref"] == "501"
+
+
+def test_link_par_slug_dune_procedure_personnelle_stocke_son_id(surface, monkeypatch):
+    _paliers(monkeypatch, {("user", "u1", "ma-relance"): {"id": 777}})
+    vu: dict = {}
+    monkeypatch.setattr(P.db, "add_project_link",
+                        lambda pid, tt, tr, *a, **kw: vu.update(ref=tr) or
+                        {"status": "created", "changed": []})
+    P._project(CTX, P.ProjectInput(op="link", project_id=59, target_type="procedure",
+                                   target_ref="ma-relance"))
+    assert vu["ref"] == "777"
+
+
+def test_le_palier_du_projet_prime_sur_la_copie_personnelle(surface, monkeypatch):
+    """Même slug à l'org du projet et chez le lieur : le lien vise celle du projet,
+    que tous ses membres lisent."""
+    _paliers(monkeypatch, {("org", "2", "relance"): {"id": 94},
+                           ("user", "u1", "relance"): {"id": 777}})
+    vu: dict = {}
+    monkeypatch.setattr(P.db, "add_project_link",
+                        lambda pid, tt, tr, *a, **kw: vu.update(ref=tr) or
+                        {"status": "created", "changed": []})
+    P._project(CTX, P.ProjectInput(op="link", project_id=59, target_type="procedure",
+                                   target_ref="relance"))
+    assert vu["ref"] == "94"
+
+
+def test_un_slug_introuvable_se_refuse_au_link(surface, monkeypatch):
+    """Ne jamais stocker un lien qui naît mort : refus nommé, rien n'est posé."""
+    _paliers(monkeypatch, {})
+    poses: list = []
+    monkeypatch.setattr(P.db, "add_project_link", lambda *a, **k: poses.append(a))
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="link", project_id=59, target_type="procedure",
+                                       target_ref="nexiste-nulle-part"))
+    assert (e.value.status, e.value.code) == (404, "unknown_procedure")
+    assert "guide_id" in e.value.message and poses == []

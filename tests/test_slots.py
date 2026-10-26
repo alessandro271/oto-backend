@@ -372,7 +372,7 @@ def test_audit_project(monkeypatch):
 def test_link_procedure_unbound_warning(monkeypatch):
     P, _ = _wire_link(monkeypatch)
     import oto_mcp.org_store as org_store_mod
-    monkeypatch.setattr(P, "_procedure_ref_to_id", lambda org, ref: "42")
+    monkeypatch.setattr(P, "_procedure_ref_to_id", lambda sub, row, org, ref: "42")
     # Après la pose, la vraie liste rend le lien résolu dans la portée du projet.
     monkeypatch.setattr(P.db, "list_project_links", lambda pid: [
         {"target_type": "procedure", "target_ref": "42", "procedure_id": 42}])
