@@ -71,6 +71,8 @@ def validate_schema_def(schema: Optional[dict],
     # fréquente, et les refus suivants supposent les clés bien nommées.
     errors: list[str] = cles_inconnues.refus(schema, ancien)
     _validate_fields_def(_fields(schema), "fields", errors)
+    _conditions_sans_colonne(_fields(schema), _fields(ancien) if isinstance(ancien, dict)
+                             else [], "fields", errors)
     errors.extend(_validate_formulas_def(_fields(schema)))
     # Une colonne titre par tableau (#317) : deux candidats, et le nom d'une ligne
     # dépendrait de l'ordre de déclaration — une inférence silencieuse, exactement ce
@@ -368,6 +370,47 @@ def _validate_reserved_def(f: dict, fpath: str, errors: list[str]) -> None:
     # Sous un sous-record, `readonly` et `agent_access` ne sont pas admis : c'est le
     # vocabulaire du niveau qui le refuse (`schema_keys.PREMIER_NIVEAU_SEULEMENT`) —
     # d'où un appel au premier niveau seulement.
+
+
+def _conditions_sans_colonne(fields: list, anciens: list, path: str,
+                             errors: list[str]) -> None:
+    """#1354 : une condition de `required_when` se lit sur une colonne SŒUR (même
+    niveau, `data.get(<clé>)` à l'écriture). Une clé qui n'en est pas une ne s'arme
+    jamais : `{"field": "nature", "equals": "prévu"}` se lisait « requis quand la
+    colonne `field` vaut "nature" et la colonne `equals` vaut "prévu" » — accepté,
+    inerte. Même règle de famille que #347 : refusée devant celui qui la pose.
+
+    Seule une condition POSÉE par ce geste se juge : celle qui figure déjà, identique,
+    sur la même colonne du schéma en place passe (`ancien`), comme une clé inconnue
+    héritée — un patch sur une autre colonne ne rend pas un schéma vivant inpatchable."""
+    cles = {str(f.get("key")) for f in fields if isinstance(f, dict) and f.get("key")}
+    avant = {str(f.get("key")): f for f in anciens if isinstance(f, dict) and f.get("key")}
+    for f in fields:
+        if not isinstance(f, dict) or not f.get("key"):
+            continue
+        key = str(f["key"])
+        old = avant.get(key) or {}
+        rw = f.get("required_when")
+        if isinstance(rw, dict) and rw and old.get("required_when") != rw:
+            absentes = [str(ck) for ck in rw if str(ck) not in cles]
+            if absentes:
+                errors.append(
+                    f"{path}.{key}: required_when vise "
+                    f"{', '.join(f'`{c}`' for c in absentes)}, qui n'est pas une "
+                    f"colonne déclarée à ce niveau ({', '.join(sorted(cles))}) — une "
+                    f"condition sur une colonne absente ne s'armerait jamais. La forme "
+                    f"est {{<colonne>: <valeur ou liste de valeurs>}}, par exemple "
+                    f"{{\"statut\": \"prévu\"}} : requis quand la colonne `statut` "
+                    f"vaut \"prévu\".")
+        sous = f.get("fields") if f.get("type") == "object" else (
+            f["of"].get("fields") if f.get("type") == "list"
+            and isinstance(f.get("of"), dict) else None)
+        if isinstance(sous, list):
+            old_sous = old.get("fields") if old.get("type") == "object" else (
+                old["of"].get("fields") if old.get("type") == "list"
+                and isinstance(old.get("of"), dict) else None)
+            _conditions_sans_colonne(sous, old_sous if isinstance(old_sous, list) else [],
+                                     f"{path}.{key}", errors)
 
 
 def _validate_fields_def(fields: list, path: str, errors: list[str]) -> None:

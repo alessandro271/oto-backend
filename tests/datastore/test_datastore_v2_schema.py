@@ -300,8 +300,8 @@ def test_une_forme_non_interpretee_est_refusee_a_la_pose():
 
 def test_la_liste_valide_est_acceptee_a_la_pose():
     assert dsv2.validate_schema_def(
-        {"fields": [{"key": "m",
-                     "required_when": {"s": ["a", "b"]}}]}) == []
+        {"fields": [{"key": "s"}, {"key": "m",
+                                  "required_when": {"s": ["a", "b"]}}]}) == []
 
 
 def test_la_condition_deballe_les_couches_liste_et_scalaire():

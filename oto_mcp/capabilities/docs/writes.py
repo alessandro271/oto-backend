@@ -36,26 +36,62 @@ def create(sub: Optional[str], inp) -> dict:
                              brut_par_defaut=False, hint=view.HINT_ACCUSE), **trace}
 
 
+#: Les clés qu'une page de `bulk_create` LIT. Fermée (#1354) : une clé hors liste n'était
+#: lue nulle part et la page naissait autrement que demandé, sans un mot.
+_CLES_DE_PAGE = ("title", "body_md", "kind", "description", "parent_index", "parent_id")
+
+
+def _parent_du_projet(parent_id, project_id, cle: str) -> int:
+    """Un parent posé dans ce projet, non archivé — refus nommé sinon."""
+    par = db.get_doc_by_id(int(parent_id))
+    require(par and par["project_id"] == project_id, "bad_parent",
+            f"Invalid `{cle}` (another project, or nonexistent).")
+    archivage.refuser_parent_archive(par)
+    return int(parent_id)
+
+
 def bulk_create(sub: Optional[str], inp) -> dict:
     # A4 (#6) : créer N pages en UN appel (33 pages ≠ 33 allers-retours). Arbre en un
-    # coup via `parent_index` (index d'une page PLUS TÔT dans le lot) ; sinon `parent_id`.
+    # coup via `parent_index` (index d'une page PLUS TÔT dans le lot) ; sinon le
+    # `parent_id` de la page, sinon celui du lot.
     require(inp.project_id is not None, "missing_project", "`project_id` is required.")
     require(common.can(sub, inp.project_id, "write"), "forbidden", "Write refused.", 403)
     require(bool(inp.pages), "missing_pages", "`pages` (non-empty list) is required.")
     if inp.parent_id is not None:
-        par = db.get_doc_by_id(int(inp.parent_id))
-        require(par and par["project_id"] == inp.project_id, "bad_parent",
-                "Invalid `parent_id` (another project, or nonexistent).")
-        archivage.refuser_parent_archive(par)
-    created: list[int] = []
+        _parent_du_projet(inp.parent_id, inp.project_id, "parent_id")
+    # Tout le lot est jugé AVANT la première page écrite : un refus à la page 12 ne
+    # laisse pas onze pages derrière lui.
+    parents_de_page: list = []
     for i, p in enumerate(inp.pages):
+        require(isinstance(p, dict), "bad_page", f"page #{i} is not an object.")
         title = str(p.get("title") or "").strip()
         require(bool(title), "missing_title", f"page #{i} has no `title`.")
-        pi = p.get("parent_index")
-        parent = created[pi] if isinstance(pi, int) and 0 <= pi < len(created) else inp.parent_id
+        inconnues = sorted(k for k in p if k not in _CLES_DE_PAGE)
+        require(not inconnues, "unknown_page_keys",
+                f"page #{i}: {', '.join(f'`{k}`' for k in inconnues)} not read — a page "
+                f"takes {', '.join(f'`{k}`' for k in _CLES_DE_PAGE)}. Nothing was created.")
+        pi, ppid = p.get("parent_index"), p.get("parent_id")
+        require(pi is None or ppid is None, "conflicting_parent",
+                f"page #{i}: give `parent_index` (an earlier page of this batch) OR "
+                f"`parent_id` (an existing page), not both. Nothing was created.")
+        if pi is not None:
+            require(isinstance(pi, int) and not isinstance(pi, bool) and 0 <= pi < i,
+                    "bad_parent_index",
+                    f"page #{i}: `parent_index` must be the index of an EARLIER page of "
+                    f"this batch (0..{i - 1}), got {pi!r}. Nothing was created.")
+        if ppid is not None:
+            require(isinstance(ppid, int) and not isinstance(ppid, bool), "bad_parent",
+                    f"page #{i}: `parent_id` must be a page id, got {ppid!r}.")
+            _parent_du_projet(ppid, inp.project_id, f"pages[{i}].parent_id")
+        parents_de_page.append((pi, ppid))
+    created: list[int] = []
+    for p, (pi, ppid) in zip(inp.pages, parents_de_page):
+        parent = (created[pi] if pi is not None
+                  else ppid if ppid is not None else inp.parent_id)
         created.append(db.create_doc(
-            int(inp.project_id), title, parent_id=parent, body_md=p.get("body_md") or "",
-            kind=(p.get("kind") or "doc"), created_by=sub, description=p.get("description")))
+            int(inp.project_id), str(p["title"]).strip(), parent_id=parent,
+            body_md=p.get("body_md") or "", kind=(p.get("kind") or "doc"), created_by=sub,
+            description=p.get("description")))
     db.log_project_activity(int(inp.project_id), sub, "doc.bulk_create", f"{len(created)} pages")
     return {"created": created, "count": len(created)}
 

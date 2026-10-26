@@ -48,7 +48,7 @@ class DocInput(BaseModel):
     region: Optional[Literal["preamble"]] = None
     mode: Optional[Literal["replace", "append", "prepend", "delete"]] = None  # patch : défaut replace
     to_project: Optional[int] = None    # move : projet cible (déplacer la page + son sous-arbre)
-    pages: Optional[list[dict]] = None  # bulk_create : [{title, body_md?, kind?, description?, parent_index?}]
+    pages: Optional[list[dict]] = None  # bulk_create : [{title, body_md?, kind?, description?, parent_index? | parent_id?}]
     # revert (#657) : la version à restaurer, adressée par le `id` que rend op=revisions.
     # PAS un numéro d'ordre : `doc_revisions` n'en porte aucun, et un rang calculé sur
     # une liste plafonnée (`limit`) désignerait une autre version au prochain appel.
@@ -224,8 +224,11 @@ CAPABILITIES += [
             "(`oto_guide`, read back by `oto_context`), and what concerns the person in "
             "their profile card (`oto_profile`) — not in a page. "
             "op=create (project_id, title; optional parent_id/body_md/kind) / bulk_create "
-            "(project_id + `pages`=[{title, body_md?, kind?, parent_index?}] → N pages in ONE "
-            "call, build a tree via parent_index = an earlier page in the batch) / list "
+            "(project_id + `pages`=[{title, body_md?, kind?, description?, parent_index? | "
+            "parent_id?}] → N pages in ONE call, build a tree via parent_index = an earlier "
+            "page in the batch, or hang a page under an existing one via its parent_id; "
+            "a top-level `parent_id` is the default parent of the batch; any other page "
+            "key is refused) / list "
             "(project_id → the page INDEX, build the tree via parent_id: titles and "
             "`body_md_length`, NOT the bodies — pick a page here, then op=get it. "
             '`fields=["*"]` returns whole pages, `fields=[…]` picks columns) / search (project_id + '

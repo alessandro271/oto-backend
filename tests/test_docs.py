@@ -165,6 +165,45 @@ def test_bulk_create_requires_titles(seams):
     assert ei.value.code == "missing_title"
 
 
+def test_bulk_create_honore_le_parent_id_dune_page(seams, monkeypatch):
+    """#1354 : un `parent_id` posé sur une page du lot était ignoré en silence — la page
+    naissait à la racine du projet."""
+    made = []
+    monkeypatch.setattr(db, "create_doc",
+                        lambda pid, title, parent_id=None, **kw: made.append((title, parent_id)) or 100 + len(made))
+    D._doc(CTX, D.DocInput(op="bulk_create", project_id=7, parent_id=3, pages=[
+        {"title": "Sous 9", "parent_id": 9},
+        {"title": "Sous le lot"},
+        {"title": "Sous la 1re", "parent_index": 0},
+    ]))
+    assert made == [("Sous 9", 9), ("Sous le lot", 3), ("Sous la 1re", 101)]
+
+
+def test_bulk_create_refuse_un_parent_id_de_page_hors_projet(seams, monkeypatch):
+    monkeypatch.setattr(db, "get_doc_by_id",
+                        lambda i: dict(DOC, id=i, project_id=8) if i == 5 else None)
+    with pytest.raises(AuthzDenied) as ei:
+        D._doc(CTX, D.DocInput(op="bulk_create", project_id=7,
+                               pages=[{"title": "A"}, {"title": "B", "parent_id": 5}]))
+    assert ei.value.code == "bad_parent" and "pages[1].parent_id" in ei.value.message
+    assert seams["create"] == [], "rien n'est créé avant que tout le lot soit jugé"
+
+
+def test_bulk_create_refuse_une_cle_de_page_inconnue(seams):
+    with pytest.raises(AuthzDenied) as ei:
+        D._doc(CTX, D.DocInput(op="bulk_create", project_id=7,
+                               pages=[{"title": "A", "parent": 9}]))
+    assert ei.value.code == "unknown_page_keys" and "`parent`" in ei.value.message
+    assert seams["create"] == []
+
+
+def test_bulk_create_refuse_un_parent_index_qui_ne_designe_rien(seams):
+    with pytest.raises(AuthzDenied) as ei:
+        D._doc(CTX, D.DocInput(op="bulk_create", project_id=7,
+                               pages=[{"title": "A", "parent_index": 0}]))
+    assert ei.value.code == "bad_parent_index"
+
+
 def test_move_to_another_project(seams, monkeypatch):
     # A4 (#6) : op=move avec to_project déplace la page + sous-arbre vers le projet cible
     # (écriture requise sur source ET cible ; cible doit exister).
