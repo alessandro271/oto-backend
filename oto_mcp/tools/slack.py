@@ -127,13 +127,15 @@ _GESTE_INVITATION = (
 Auteur = Literal["me", "app"]
 
 
-def _refus_auteur(message: str) -> McpError:
+def _refus_entree(message: str) -> McpError:
     """CURATED refusal: `McpError` INVALID_PARAMS, never a bare `ValueError`. The
     error taxonomy only returns an exception's text to the agent if it is
     curated; a `ValueError` without an upstream cause becomes "Internal server error",
     message lost and counted as a bug. Lived on the first send in prod (v1.334.0):
-    the refusal was right, the agent only read the opacity."""
+    the refusal was right, the agent only read the opacity — and again on
+    `slack_read_thread` given a reply's ts (#1350)."""
     return McpError(ErrorData(code=INVALID_PARAMS, message=message))
+
 
 
 def _auteur(bot: bool, user: bool, author: Optional[str]) -> bool:
@@ -144,19 +146,19 @@ def _auteur(bot: bool, user: bool, author: Optional[str]) -> bool:
     to the other identity."""
     if author is None:
         if bot and user:
-            raise _refus_auteur(
+            raise _refus_entree(
                 "This workspace carries two Slack identities: specify who writes — "
                 "`author=\"me\"` (in your name, user token) or `author=\"app\"` "
                 "(under the app's name, bot token). No default is taken: a "
                 "message that went out under the wrong name cannot be taken back.")
         return bool(user)
     if author == "me" and not user:
-        raise _refus_auteur(
+        raise _refus_entree(
             "`author=\"me\"` impossible: this workspace has no user token "
             "(`xoxp-`). Only the app can write there (`author=\"app\"`), or set a user "
             "token on the connector card.")
     if author == "app" and not bot:
-        raise _refus_auteur(
+        raise _refus_entree(
             "`author=\"app\"` impossible: this workspace has no bot token "
             "(`xoxb-`). Only you can write there (`author=\"me\"`), or set the "
             "app's bot token on the connector card.")
@@ -455,7 +457,7 @@ def register(mcp: FastMCP) -> None:
         if not msgs:
             # Slack raises `thread_not_found` on an unknown ts; an empty `ok:true`
             # has never been observed. Refuse rather than return a phantom thread.
-            raise ValueError(
+            raise _refus_entree(
                 "Slack returns an empty thread for `" + thread_ts + "` in `" + channel
                 + "` — check the parent message's ts with `slack_read_history`.")
         parent = msgs[0]
@@ -465,7 +467,7 @@ def register(mcp: FastMCP) -> None:
         # on the most likely calling error. Slack gives the right ts, we return it.
         vrai_parent = parent.get("thread_ts")
         if vrai_parent and vrai_parent != parent.get("ts"):
-            raise ValueError(
+            raise _refus_entree(
                 "`thread_ts` points to a REPLY, not the thread's parent: Slack "
                 "therefore returned only that message, and nothing of the thread. Call again with "
                 "thread_ts=`" + vrai_parent + "`.")
@@ -497,12 +499,12 @@ def register(mcp: FastMCP) -> None:
             info = client.channel_info(channel).get("channel") or {}
         nom = info.get("name") or channel
         if info.get("is_archived"):
-            raise ValueError(
+            raise _refus_entree(
                 "#" + nom + " is archived: it can be neither joined nor posted to.")
         if info.get("is_member"):
             return {"channel": info, "joined": False, "already_member": True}
         if info.get("is_private"):
-            raise ValueError(
+            raise _refus_entree(
                 "#" + nom + " is a private channel: no Slack API lets you invite yourself "
                 "(`conversations.join` only applies to public channels). "
                 "oto cannot do it for you — " + _GESTE_INVITATION + ".")
@@ -554,7 +556,7 @@ def register(mcp: FastMCP) -> None:
                 blob["data"], blob["filename"], blob["mimetype"],
                 sub=sub, prefix="slack-files", sheet=sheet, max_rows=max_rows)
         except (file_content.MediaUnavailable, file_content.SpreadsheetError) as e:
-            raise ValueError(str(e))
+            raise _refus_entree(str(e))
         return out
 
     @mcp.tool()
@@ -624,12 +626,12 @@ def register(mcp: FastMCP) -> None:
         """
         if op == "usergroup_members":
             if not usergroup:
-                raise _refus_auteur("`op=\"usergroup_members\"` needs `usergroup` (S…) — "
+                raise _refus_entree("`op=\"usergroup_members\"` needs `usergroup` (S…) — "
                                     "find it with `slack(op=\"usergroups\")`.")
             if include_users:
-                raise _refus_auteur("`include_users` only applies to `op=\"usergroups\"`.")
+                raise _refus_entree("`include_users` only applies to `op=\"usergroups\"`.")
         elif usergroup is not None:
-            raise _refus_auteur("`usergroup` only applies to `op=\"usergroup_members\"` — "
+            raise _refus_entree("`usergroup` only applies to `op=\"usergroup_members\"` — "
                                 "`op=\"usergroups\"` lists every group.")
         client, is_platform = _client()
         if op == "usergroup_members":
@@ -699,17 +701,17 @@ def register(mcp: FastMCP) -> None:
                                     ("channels", channels)) if v is not None}
         if op == "create_usergroup":
             if not name:
-                raise _refus_auteur("`op=\"create_usergroup\"` needs `name`.")
+                raise _refus_entree("`op=\"create_usergroup\"` needs `name`.")
         elif not usergroup:
-            raise _refus_auteur("`op=\"" + op + "\"` needs `usergroup` (S…) — "
+            raise _refus_entree("`op=\"" + op + "\"` needs `usergroup` (S…) — "
                                 "find it with `slack(op=\"usergroups\")`.")
         if op == "update_usergroup" and not champs:
-            raise _refus_auteur("`op=\"update_usergroup\"` needs at least one of `name`, "
+            raise _refus_entree("`op=\"update_usergroup\"` needs at least one of `name`, "
                                 "`handle`, `description`, `channels`.")
         membres_op = op in ("set_usergroup_members", "add_usergroup_members",
                             "remove_usergroup_members")
         if membres_op and not users:
-            raise _refus_auteur("`op=\"" + op + "\"` needs `users` (U… IDs).")
+            raise _refus_entree("`op=\"" + op + "\"` needs `users` (U… IDs).")
         if handle is not None:
             champs["handle"] = handle.lstrip("@")
 
@@ -731,7 +733,7 @@ def register(mcp: FastMCP) -> None:
                     "added": [u for u in apres if u not in avant],
                     "removed": [u for u in avant if u not in apres]}
             if not apres:
-                raise _refus_auteur(
+                raise _refus_entree(
                     "This would leave the group with no members, which Slack refuses. "
                     "Use `op=\"disable_usergroup\"` to empty or retire the group.")
             if dry_run:
@@ -754,7 +756,7 @@ def register(mcp: FastMCP) -> None:
                     groupes = client.list_usergroups(include_disabled=True)
                 actuel = next((g for g in groupes if g.get("id") == usergroup), None)
                 if actuel is None:
-                    raise _refus_auteur(
+                    raise _refus_entree(
                         "Slack does not know the user group `" + usergroup + "`. List them "
                         "with `slack(op=\"usergroups\", include_disabled=true)`.")
                 if op == "update_usergroup":

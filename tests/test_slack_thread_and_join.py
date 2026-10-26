@@ -27,6 +27,7 @@ import pytest
 
 from oto.tools.slack.client import SlackError
 
+from oto_mcp.mcp_errors import McpError
 from oto_mcp.tools import slack as slack_tools
 
 
@@ -128,9 +129,13 @@ def test_le_ts_d_une_REPONSE_est_refuse_avec_le_ts_du_parent(slack):
     m, client = slack
     client.replies.return_value = {"ok": True, "messages": [
         {"ts": "1787813698.937919", "thread_ts": "1787812434.744429", "text": "une réponse"}]}
-    with pytest.raises(ValueError) as e:
+    with pytest.raises(McpError) as e:
         _fn(m, "slack_read_thread")(channel="C1", thread_ts="1787813698.937919")
     assert "1787812434.744429" in str(e.value)
+    # #1350 : un `ValueError` nu était servi « Internal server error », sans le ts.
+    from oto_mcp import error_taxonomy
+    info = error_taxonomy.classify(e.value)
+    assert info.code == "invalid_input" and "1787812434.744429" in info.message
 
 
 def test_la_fenetre_et_la_pagination_du_fil_sont_transmises(slack):
@@ -189,7 +194,7 @@ def test_un_canal_PRIVE_est_refuse_SANS_meme_tenter_de_le_rejoindre(slack):
     client.channel_info.return_value = {"channel": {
         "id": "C0BHBS9CCD6", "name": "product-core", "is_private": True,
         "is_member": False, "is_archived": False}}
-    with pytest.raises(ValueError) as e:
+    with pytest.raises(McpError) as e:
         _fn(m, "slack_join_channel")(channel="C0BHBS9CCD6")
     msg = str(e.value)
     assert "private" in msg and "/invite" in msg
@@ -212,7 +217,7 @@ def test_un_canal_archive_est_refuse(slack):
     client.channel_info.return_value = {"channel": {
         "id": "C1", "name": "vieux-projet", "is_private": False,
         "is_member": False, "is_archived": True}}
-    with pytest.raises(ValueError, match="archiv"):
+    with pytest.raises(McpError, match="archiv"):
         _fn(m, "slack_join_channel")(channel="C1")
     client.join_channel.assert_not_called()
 
