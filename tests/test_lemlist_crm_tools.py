@@ -574,3 +574,19 @@ def test_un_acte_incomplet_est_refuse_sans_aller_retour():
         with pytest.raises(Exception, match="persona_id"):
             act.fn(op="delete_persona")
         assert not inst.method_calls
+
+
+def test_dupliquer_une_campagne_annonce_que_la_copie_tourne():
+    """#1348 : la copie revient `status: draft` et `op=reports` la montre `running`.
+    La description promettait un brouillon ; la réponse dit de mettre en pause."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.duplicate_campaign.return_value = {"_id": "cam_2", "status": "draft"}
+        tool = _tool("lemlist_campaign", "lemlist")
+        out = tool.fn(op="duplicate", campaign_id="cam_1")
+
+        assert "pause" in out["warning"] and "running" in out["warning"]
+        assert out["_id"] == "cam_2"
+        assert "fresh DRAFT" not in tool.description
+        assert "duplicated campaign lands in DRAFT" not in " ".join(tool.description.split())

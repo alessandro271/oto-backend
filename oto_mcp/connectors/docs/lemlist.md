@@ -50,7 +50,7 @@ four tools send or **arm** sending. all four are **hidden by default** — they 
 
 everything else works on data or on a campaign that has nothing to send yet.
 
-⚠️ **a campaign created by the API is born `state=running`**, contrary to what its `status` ("draft") suggests — verified live on 31/08. it sends nothing as long as no lead is launched, but `lemlist_campaign(op="start")` answers "already running" and `op="pause"` is the real switch. to build one calmly: create, then pause. (a **duplicated** campaign, on the other hand, is born paused.)
+⚠️ **a campaign created by the API is born `state=running`**, contrary to what its `status` ("draft") suggests — verified live on 31/08. it sends nothing as long as no lead is launched, but `lemlist_campaign(op="start")` answers "already running" and `op="pause"` is the real switch. to build one calmly: create, then pause. (a **duplicated** campaign is running too — `state: running` in `op="reports"` — pause it the same way.)
 
 pause ≠ recall: pausing stops progression, not what is already scheduled.
 

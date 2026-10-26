@@ -30,7 +30,8 @@ Conséquences, toutes vérifiées :
   l'état de la campagne. Mais c'est UN verrou, pas deux.
 
 **Donc : crée, puis mets en pause, puis construis.** Une campagne dupliquée
-(`op="duplicate"`), elle, naît réellement en pause.
+(`op="duplicate"`) tourne elle aussi (`state: running` dans `op="reports"`, `status`
+« draft ») : duplique, puis mets en pause.
 
 ## L'ordre de construction
 

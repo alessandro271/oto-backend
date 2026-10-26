@@ -941,7 +941,8 @@ def register(mcp: FastMCP) -> None:
         """Manage campaigns: create, configure, pause, duplicate, validate,
         report, export. `oto_guide op=read slug="lemlist-playbook"`: build order, where each id comes from, and the doc↔API gaps.
 
-        Nothing here sends: a created or duplicated campaign lands in DRAFT.
+        Nothing here sends by itself — but a created or duplicated campaign is
+        born RUNNING (its `status` reads "draft"): `op="pause"` is the switch.
         Putting messages on the wire is `lemlist_campaign_start` (hidden by
         default — enable it with `oto_enable_tool lemlist_campaign_start`).
 
@@ -965,7 +966,9 @@ def register(mcp: FastMCP) -> None:
           already running. Stops it advancing; already-scheduled leads are NOT
           recalled. Errors if the campaign is not running.
         - `duplicate`: `campaign_id` + optional `name`. Copies sequence, steps,
-          schedules and AI templates into a fresh DRAFT (CRM settings excluded).
+          schedules and AI templates into a new campaign (CRM settings excluded).
+          ⚠️ Like `create`, the copy runs (`state` running in `reports`) although
+          its `status` reads "draft": chain `op="pause"` to hold it.
         - `statutes`: `campaign_id`. The validation the lemlist UI runs — read it
           BEFORE starting: `level` 3 blocks the launch (no sender, broken DNS),
           2 warns (daily limit, missing schedule), 1 informs.
@@ -1043,6 +1046,13 @@ def register(mcp: FastMCP) -> None:
             if not campaign_id:
                 raise _bad("`campaign_id` required")
             result = client.duplicate_campaign(campaign_id, name=name)
+            # Measured: the copy answers `status: "draft"` and `reports` shows
+            # `state: running` — the same trap as `create`, said the same way.
+            if isinstance(result, dict):
+                result = {**result, "warning": (
+                    "The copy is running (`op=\"reports\"` shows state=running; its "
+                    "`status` shows \"draft\"). Call op=\"pause\" on its id to hold "
+                    "it while you review it.")}
 
         elif op == "statutes":
             if not campaign_id:
