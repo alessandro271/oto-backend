@@ -33,6 +33,7 @@ from oto.tools.common.errors import UpstreamHTTPError
 
 from .. import access, session_org
 from ..connectors import verify as connector_verify
+from .lecture import LECTURE
 
 if TYPE_CHECKING:
     from oto.tools.apify.client import ApifyClient
@@ -345,7 +346,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- find the actor -----------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def apify_store_search(
         search: Optional[str] = None,
         limit: int = 20,
@@ -372,7 +373,7 @@ def register(mcp: FastMCP) -> None:
         _gratuit()
         return out
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def apify_actors(limit: int = 50, offset: Optional[int] = None) -> dict:
         """List the actors of THIS account (not the public Store)."""
         with _upstream():
@@ -380,7 +381,7 @@ def register(mcp: FastMCP) -> None:
         _gratuit()
         return out
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def apify_actor(actor_id: str) -> dict:
         """Fetch one actor's card: builds, versions and `defaultRunOptions`
         (default memory and timeout).
@@ -464,7 +465,7 @@ def register(mcp: FastMCP) -> None:
         _gratuit()
         return out
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def apify_run_status(run_id: str, wait_for_finish: Optional[int] = None) -> dict:
         """Check a run: `status` (READY, RUNNING, SUCCEEDED, FAILED, TIMED-OUT,
         ABORTED), `defaultDatasetId` (where the output is) and `usageTotalUsd`
@@ -490,7 +491,7 @@ def register(mcp: FastMCP) -> None:
 
     # --- read the output ----------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def apify_dataset_items(
         dataset_id: str,
         limit: Optional[int] = None,
