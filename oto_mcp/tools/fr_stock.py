@@ -28,6 +28,27 @@ from .lecture import LECTURE
 from oto_mcp.fod import client as sirene_duckdb  # ADR 0028: scan offloaded to FOD
 
 
+def _avec_raison_sociale(rows: list[dict]) -> list[dict]:
+    """Join the legal unit (second SIRENE stock) on each row's SIREN.
+
+    The establishment stock's `denomination` is `denominationUsuelleEtablissement`,
+    empty for most establishments (334 nulls out of 337 SIRENs measured, a CAC 40
+    company among them): the company NAME lives in the legal-unit file. Each row
+    gets `raison_sociale` (null for a sole trader, whose name is a person's) and
+    `categorie_entreprise` (PME/ETI/GE). A SIREN missing from the legal-unit stock
+    gets `unite_legale: "absente"` — said, never left to read as "no name"."""
+    sirens = [r["siren"] for r in rows if r.get("siren")]
+    unites = sirene_duckdb.lookup_unites_legales(sirens) if sirens else {}
+    for r in rows:
+        ul = unites.get(r.get("siren"))
+        if ul is None:
+            r["unite_legale"] = "absente"
+            continue
+        r["raison_sociale"] = ul.get("denomination")
+        r["categorie_entreprise"] = ul.get("categorie_entreprise")
+    return rows
+
+
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=LECTURE)
@@ -68,13 +89,18 @@ def register(mcp: FastMCP) -> None:
         Unipile contacts…) with siège address/NAF before pushing to a CRM.
 
         Returns {siren: {street, postal_code, city, code_commune, naf,
-        denomination, status, ...}} ; SIRENs without a known siège are omitted.
+        raison_sociale, categorie_entreprise, denomination, status, ...}} ;
+        SIRENs without a known siège are omitted. `raison_sociale` is the
+        company name (legal-unit stock, null for a sole trader);
+        `denomination` is the establishment's USUAL name, empty for most.
 
         Args:
             sirens: list of SIREN numbers (9 digits), up to 10000.
         """
         clean = [str(s).strip() for s in sirens]
-        return sirene_duckdb.headquarters_addresses(clean)
+        sieges = sirene_duckdb.headquarters_addresses(clean)
+        _avec_raison_sociale(list(sieges.values()))
+        return sieges
 
     @mcp.tool(annotations=LECTURE)
     def fr_stock_siret(siret: str) -> Optional[dict]:
@@ -101,7 +127,10 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Multi-criteria search over the SIRENE stock parquet (INSEE local snapshot).
 
-        All filters are AND'd. Returns paginated establishments matching.
+        All filters are AND'd. Returns paginated establishments matching, each
+        with `raison_sociale` and `categorie_entreprise` from the legal-unit
+        stock. `denomination` is the establishment's USUAL name, empty for most
+        (~88 %): the company name is `raison_sociale`.
 
         Use cases:
         - All NAF 4711F (supermarkets) in Marseille (`code_commune=13201` or `code_postal=13001`)
@@ -119,7 +148,9 @@ def register(mcp: FastMCP) -> None:
                 departments (e.g. "971"). Matches on the postal code prefix —
                 enseigne+naf+departement enumerates all sites of a brand in a
                 département.
-            denomination: case-insensitive substring on denomination usuelle.
+            denomination: case-insensitive substring on the establishment's
+                usual name — rarely filled, so it misses most companies: to find
+                a company by its name, use `fr_search(query=…)`.
             enseigne: case-insensitive substring across enseigne 1/2/3.
             active_only: filter etatAdministratif='A' (default True).
             sieges_only: restrict to headquarters only (default False).
@@ -150,4 +181,5 @@ def register(mcp: FastMCP) -> None:
             limit=limit,
             offset=offset,
         )
+        _avec_raison_sociale(items)
         return {"items": items, "count": len(items), "limit": limit, "offset": offset}
