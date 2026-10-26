@@ -26,47 +26,71 @@ page — mais ce **n'est pas une page de mémoire** : ni dans l'arbre des pages,
 
 ## Ce que le serveur juge
 
-- **À l'écriture** (`capabilities/apps_manifeste.py`) : la forme du manifeste (mêmes
-  règles que le front), puis que chaque tableau déclaré se résout **pour l'auteur**
-  dans son org active, que chaque champ déclaré existe dans son schéma, et que chaque
-  agent existe dans l'org. Un manifeste qui nomme ce que l'auteur ne voit pas est
-  refusé, 400 `invalid_manifest`, chaque problème listé ; `op=validate` rend la liste
-  sans rien écrire.
+- **À l'écriture** (`capabilities/apps_manifeste.py`) — `create`, `update` ET
+  `restore` : la forme du manifeste (mêmes règles que le front, au plus 32 000
+  caractères de JSON), puis que chaque tableau déclaré se résout **pour l'auteur**,
+  que chaque champ déclaré existe dans son schéma, et que chaque tableau et chaque
+  agent **vivent dans l'org du projet de l'app** (`org_du_projet` ; un projet perso
+  sans org de rangement vit dans l'org perso de son propriétaire) — jamais dans l'org
+  active de l'auteur ni du lecteur. Un manifeste qui nomme ce que l'auteur ne voit pas,
+  ou ce qui vit ailleurs, est refusé, 400 `invalid_manifest`, chaque problème listé ;
+  `op=validate` (`project_id` ou `app_id`) rend la liste sans rien écrire.
 - **Chaque tableau déclaré est rangé par son NUMÉRO** (résolu à l'écriture pour
   l'auteur) : un nom résoudrait dans l'org active de qui le lit.
+- **`set`, `add`, `agents`, `files` sont jugés mais inertes** : rien ne les sert
+  encore (cf. plus bas).
+
+## Qui écrit une app
+
+- **La population bêta seule** : `create`, `update`, `archive`, `unarchive`,
+  `restore` exigent l'option `beta` (`access.has_option`, dans l'org de l'appel) — la
+  même population que `oto_apps` (`BETA_TOOLS`) et l'écran du front. Les autres :
+  403 `apps_beta_only`, sur les deux faces ; une panne du seam des options refuse
+  (fail-closed). Lire (`list`, `get`, `revisions`, `validate`) reste ouvert à qui
+  lit le projet.
+- **REST : session interactive seule** (`allow_api_token=False` sur `/api/me/apps`
+  et sur l'appel) : un jeton `oto_`, délégation d'agent hébergé comprise, est refusé
+  en 403 `api_token_forbidden`. Un agent écrit une app par `oto_apps`, en MCP.
 
 ## Une app ouverte — auteur ∩ lecteur (`me.app.call`)
 
 Une app ouverte ne parle qu'à `POST /api/me/apps/{app_id}/call` (face REST seule, pas
-d'outil MCP : un agent n'est jamais le lecteur d'une app). Actions : `read_rows`,
-`read_aggregate`, `write_cell`, `add_row`, `start_agent`, `agent_runs`, `run_result`.
+d'outil MCP : un agent n'est jamais le lecteur d'une app). **Actions servies :
+`read_rows` et `read_aggregate`, rien d'autre** — une autre action est une entrée
+invalide (400).
 
 - **Droits d'une app = droits de son auteur ∩ droits de son lecteur.** L'auteur est
-  `updated_by` ; il est jugé par l'ownership SEUL (numéro du tableau, niveau sur
-  l'agent), jamais par sa session. Le lecteur est jugé en exécutant POUR LUI les
-  capacités existantes (lignes, agrégat, écriture, `run_now`). Auteur inconnu ou qui
-  a perdu l'accès : 403 `app_author_unknown` / `app_author_lost_access`.
+  `updated_by` ; il est jugé par l'ownership SEUL (numéro du tableau), jamais par sa
+  session. Le lecteur est jugé en exécutant POUR LUI les capacités existantes (lignes,
+  agrégat). Auteur inconnu ou qui a perdu l'accès : 403 `app_author_unknown` /
+  `app_author_lost_access` ; tableau sorti de l'org du projet depuis l'écriture :
+  403 `table_outside_project_org`.
 - **Borné au manifeste, côté serveur** : projection aux champs déclarés (plus `_id`,
   `_revision`, les dates), filtre / tri / regroupement / mesure sur ces champs seuls,
-  recherche plein texte seulement sans liste de champs, valeurs posables, colonnes
-  d'ajout, agents lisibles ou lançables (`run: true`), entrée d'au plus 300
-  caractères marquée comme venue de l'app. Une écriture exige le `_revision` montré.
-- **Résultats d'agent** : `agent_runs` et `run_result` rendent statut, dates, erreur
-  et ce que l'agent a conclu (`runs.outcome`, `runs.note`, tronquée à 4 000
-  caractères) — pour un agent déclaré, et un travail qui est un run de cet agent.
-- **Ce qui n'y est pas** : les lignes changées PAR un run (le journal des révisions
-  porte le `run_id`, mais sans index sur cette colonne ; à poser en index concurrent
-  avant de le servir).
+  recherche plein texte seulement sans liste de champs. `limit` et `offset` sont des
+  entiers (sinon 400 `invalid_options`), `limit` ≤ 200.
+- **Route lourde** (`api/routes_lourdes.py`) : 240/min par jeton, 8 en parallèle — une
+  app laissée ouverte relit ses tableaux en fond. L'appel relit le manifeste sans le
+  HTML (`db.apps.get_for_call`).
+- **Journal** : l'appel est tracé comme toute requête REST (`tool_calls`, `kind=rest`),
+  mais la route y est réduite (`/api/me/apps/:id/call`) : le numéro de l'app et le
+  tableau lu n'y sont pas. Aucun journal d'audit des lectures n'existe à ce jour.
 
-L'outil MCP `oto_apps` reste dans `BETA_TOOLS` ; la face REST des apps n'est pas
-gardée, le front borne qui ouvre une app.
+### Ce qui n'est pas servi — et viendra avec un consentement
+
+Écrire une valeur (`set`), ajouter une ligne (`add`), lancer un agent, lire ses runs
+et ce qu'il a conclu : une app agirait au nom d'un lecteur qui ne l'a pas demandé.
+Ces gestes viendront avec un jeton de consentement du lecteur (oto-backend#1386).
+Le manifeste les déclare déjà, jugés à l'écriture, inertes à l'appel.
 
 ## Révisions et conflits
 
 `rev` est une ETag de contenu (titre, manifeste, HTML, vignette), comme celle des
 pages. `update` accepte `expected_rev` et refuse en 409 `conflict` si l'app a changé.
-Chaque mise à jour écrit d'abord l'état précédent dans `app_revisions` ; `restore`
-remet une révision (en écrivant à son tour l'état courant).
+Chaque mise à jour écrit d'abord l'état précédent dans `app_revisions` ; seules les
+50 plus récentes sont gardées (`db.apps.MAX_REVISIONS`, purge dans la même
+transaction). `restore` remet une révision (en écrivant à son tour l'état courant),
+après avoir REJUGÉ son manifeste : celui qui restaure en devient l'auteur.
 
 ## Liste
 

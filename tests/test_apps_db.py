@@ -1,8 +1,9 @@
-"""`db.apps` et la révision `20261025_2100_apps`, joués sur une vraie base.
+"""`db.apps` et la révision `20261026_1256_apps`, joués sur une vraie base.
 
 Ce qu'on vérifie, c'est ce que le STOCKAGE porte : l'ETag de contenu, la révision
 écrite AVANT chaque mise à jour, le conflit qui n'écrit rien, la liste sans HTML,
-la révision d'une autre app qui ne se lit pas, et la migration aller-retour.
+la révision d'une autre app qui ne se lit pas, la rétention des révisions, et la
+migration aller-retour.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from oto_mcp import db
 
 RACINE = Path(__file__).resolve().parent.parent
 _PRECEDENTE = "20261024_1101_default_sharing"
-_REVISION = "20261025_2100_apps"
+_REVISION = "20261026_1256_apps"
 MOI = "sub-apps-test"
 
 
@@ -103,17 +104,12 @@ def test_migration_aller_retour(live, pg_module_dsn):
     assert tables() == {"apps", "app_revisions"}
 
 
-def test_le_run_d_un_travail_et_ce_que_l_agent_a_conclu(live, pg_module_dsn):
-    import psycopg
-
-    with psycopg.connect(pg_module_dsn, autocommit=True) as c:
-        c.execute("INSERT INTO runs (run_id, label, outcome, note) VALUES ('run-apps-1', 'x', 'done', 'Enriched 3 leads.')")
-        job = c.execute(
-            "INSERT INTO runner_jobs (org_id, kind, run_id, payload, status) "
-            "VALUES (4242, 'start', 'run-apps-1', '{\"trigger_id\": \"9\"}', 'done') RETURNING id"
-        ).fetchone()[0]
-    j = db.apps.job_of_org(4242, job)
-    assert j["trigger_id"] == "9" and j["run_id"] == "run-apps-1"
-    assert db.apps.job_of_org(4243, job) is None          # borné à l'org
-    assert db.apps.run_results(["run-apps-1", None, "absent"]) == {
-        "run-apps-1": {"outcome": "done", "note": "Enriched 3 leads."}}
+def test_seules_les_dernieres_revisions_sont_gardees(projet, monkeypatch):
+    """Un agent qui réécrit son app en boucle ne remplit pas la base : chaque mise à
+    jour purge, dans sa transaction, ce qui dépasse `MAX_REVISIONS`."""
+    monkeypatch.setattr(db.apps, "MAX_REVISIONS", 3)
+    app = db.apps.create(projet, title="R", manifest={}, html="0", thumbnail=None, by=MOI)
+    for i in range(1, 6):
+        db.apps.update(app["id"], by=MOI, html=str(i))
+    gardees = db.apps.revisions(app["id"], limit=100)
+    assert [db.apps.revision(app["id"], r["id"])["html"] for r in gardees] == ["4", "3", "2"]

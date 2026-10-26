@@ -1,21 +1,30 @@
 """Le manifeste d'une app : sa forme, et ce que son AUTEUR peut réellement toucher.
 
 Une app s'exécute chez son lecteur, avec les droits du lecteur ; son manifeste dit
-quels tableaux, champs et agents elle peut toucher. Le front applique ce manifeste à
-chaque appel. Le serveur, ici, le juge À L'ÉCRITURE :
-- **la forme** — mêmes règles que le lecteur de manifeste du front, pour qu'un
-  agent apprenne son erreur en écrivant, pas à l'ouverture de l'app ;
-- **l'auteur** — chaque tableau déclaré doit se résoudre POUR L'AUTEUR dans son org
-  active, chaque champ déclaré exister dans son schéma, chaque agent exister dans
-  l'org. Un éditeur ne peut donc pas déclarer un tableau qu'il ne voit pas lui-même.
+quels tableaux, champs et agents elle peut toucher. Le serveur le juge À L'ÉCRITURE
+(`create`, `update`, `restore`) :
+- **la forme** — mêmes règles que le lecteur de manifeste du front, pour qu'un agent
+  apprenne son erreur en écrivant, pas à l'ouverture de l'app ; taille bornée
+  (`MAX_MANIFEST`) ;
+- **l'auteur** — chaque tableau déclaré doit se résoudre POUR L'AUTEUR, chaque champ
+  déclaré exister dans son schéma ;
+- **l'org du PROJET** — chaque tableau et chaque agent déclarés vivent dans l'org du
+  projet de l'app (`org_du_projet`), jamais dans l'org active de l'auteur ni du
+  lecteur : une app rangée dans un projet de l'org A ne lit pas un tableau de B.
 
 **Chaque tableau est RÉSOLU à l'écriture et rangé par son numéro** (`table` devient
 le `ns_id`) : un nom résout dans l'org active de qui le lit, et à l'APPEL l'app sert
 un lecteur qui n'est pas l'auteur — le même nom y désignerait un autre tableau. À
 l'appel (`apps_appel.py`), la règle « droits = auteur ∩ lecteur » juge ce numéro.
+
+**`set`, `add` et `agents` sont jugés mais INERTES** : l'appel d'une app ne sert que
+des lectures (`read_rows`, `read_aggregate`). Écrire une valeur, ajouter une ligne,
+lancer un agent viendront avec le consentement du lecteur (oto-backend#1386) ; le
+manifeste les porte déjà, validés, pour que le front et ce lot parlent la même forme.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Optional
 
@@ -24,6 +33,8 @@ MAX_HEIGHT = 4000
 DEFAULT_HEIGHT = 480
 MAX_TABLES = 20
 MAX_AGENTS = 20
+# Le manifeste sérialisé, en caractères : il est relu à CHAQUE appel d'une app ouverte.
+MAX_MANIFEST = 32_000
 
 
 def _liste_de_noms(v: Any) -> Optional[list[str]]:
@@ -38,6 +49,8 @@ def forme(raw: Any) -> tuple[dict, list[str]]:
     problems: list[str] = []
     if not isinstance(raw, dict):
         return {}, ["The manifest must be a JSON object."]
+    if len(json.dumps(raw, ensure_ascii=False)) > MAX_MANIFEST:
+        return {}, [f"The manifest is at most {MAX_MANIFEST} characters of JSON."]
     tables: dict[str, dict] = {}
     raw_tables = raw.get("tables") or {}
     if not isinstance(raw_tables, dict):
@@ -112,9 +125,36 @@ def forme(raw: Any) -> tuple[dict, list[str]]:
     return clean, problems
 
 
-def auteur(sub: str, org_id: Optional[int], clean: dict) -> list[str]:
-    """Ce que l'AUTEUR ne peut pas toucher parmi ce que le manifeste déclare. Range au
-    passage le numéro de chaque tableau résolu dans `clean` (`table`)."""
+def org_du_projet(project_id: int) -> Optional[int]:
+    """L'org où vit le projet d'une app — celle de ses tableaux et de ses agents.
+    Un projet perso sans org de rangement vit dans l'org perso de son propriétaire,
+    comme la liste des projets le range (`db/projects.py`). None = aucune (projet
+    inconnu, ou de la plateforme) : l'app n'y déclare alors rien."""
+    from .. import org_store, ownership
+
+    org, connue = ownership.org_ou_vit("project", str(int(project_id)))
+    if connue:
+        return org
+    owner = ownership.owner_of("project", str(int(project_id)))
+    if owner is not None and owner[0] == "user":
+        return org_store.get_personal_org(str(owner[1]))
+    return None
+
+
+def tableau_de_l_org(ns_id: str, org_id: Optional[int]) -> bool:
+    """Le tableau `ns_id` vit-il dans l'org `org_id` ? Org inconnue = non."""
+    from .. import ownership
+
+    if org_id is None:
+        return False
+    org, connue = ownership.org_ou_vit(ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id))
+    return connue and org is not None and int(org) == int(org_id)
+
+
+def auteur(sub: str, project_org: Optional[int], clean: dict) -> list[str]:
+    """Ce que l'AUTEUR ne peut pas toucher parmi ce que le manifeste déclare, et ce qui
+    ne vit pas dans l'org du projet (`project_org`). Range au passage le numéro de
+    chaque tableau résolu dans `clean` (`table`)."""
     from .. import db
     from ..datastore.core import DatastoreAmbigu, DatastoreNotFound, make_store
 
@@ -128,6 +168,10 @@ def auteur(sub: str, org_id: Optional[int], clean: dict) -> list[str]:
             # Même phrase qu'un tableau absent ou invisible : rien ne dit lequel.
             problems.append(f"tables.{alias}: table `{t['table']}` isn't one you can read here.")
             continue
+        if not tableau_de_l_org(str(ns_id), project_org):
+            problems.append(f"tables.{alias}: table `{t['table']}` isn't in this project's "
+                            "organization.")
+            continue
         t["table"] = str(ns_id)
         declared = {f.get("key") for f in (schema or {}).get("fields") or [] if isinstance(f, dict)}
         if not declared:
@@ -137,6 +181,7 @@ def auteur(sub: str, org_id: Optional[int], clean: dict) -> list[str]:
         if unknown:
             problems.append(f"tables.{alias}: no such field: {', '.join(unknown)}.")
     for alias, a in clean["agents"].items():
-        if org_id is None or db.get_trigger(a["id"], int(org_id)) is None:
-            problems.append(f"agents.{alias}: agent {a['id']} doesn't exist in this organization.")
+        if project_org is None or db.get_trigger(a["id"], int(project_org)) is None:
+            problems.append(f"agents.{alias}: agent {a['id']} isn't one of this project's "
+                            "organization.")
     return problems

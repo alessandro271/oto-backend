@@ -1,39 +1,45 @@
-"""`me.app.call` — une app ouverte n'agit que si son AUTEUR et son LECTEUR le peuvent.
+"""`me.app.call` — une app ouverte ne LIT que si son AUTEUR et son LECTEUR le peuvent,
+et que le tableau vit dans l'org du projet de l'app.
 
-On monkeypatche l'app, l'ownership, l'accès aux agents et les capacités exécutées pour
-le lecteur : ce qu'on vérifie ici, c'est le jugement (qui, quoi, borné à quoi), pas
-le stockage. Assertions sur le CODE des refus.
+On monkeypatche l'app, l'ownership, l'org du projet et les capacités exécutées pour le
+lecteur : ce qu'on vérifie ici, c'est le jugement (qui, quoi, borné à quoi), pas le
+stockage. Assertions sur le CODE des refus.
 """
+import asyncio
+import types
+
 import pytest
+from pydantic import ValidationError
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from oto_mcp import db, ownership
-from oto_mcp.capabilities import _acces_agent
 from oto_mcp.capabilities import apps_appel as C
+from oto_mcp.capabilities import registry
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 from oto_mcp.capabilities.datastore import rows as R
 
 LECTEUR = "lecteur"
 AUTEUR = "auteur"
-CTX = ResolvedCtx(sub=LECTEUR, org_id=42)
+ORG_DU_PROJET = 42
+CTX = ResolvedCtx(sub=LECTEUR, org_id=43)  # l'org active du lecteur n'est PAS celle du projet
 MANIFEST = {
     "tables": {"leads": {"table": "12", "fields": ["name", "status"],
                          "set": {"status": ["ok", "no"]}, "add": ["name"]},
                "all": {"table": "13", "fields": None, "set": {}, "add": []}},
-    "agents": {"enrich": {"id": 9, "run": True, "input": True},
-               "watch": {"id": 10, "run": False, "input": False}},
+    "agents": {"enrich": {"id": 9, "run": True, "input": True}},
 }
-APP = {"id": 5, "project_id": 7, "title": "Leads", "manifest": MANIFEST, "html": "",
+APP = {"id": 5, "project_id": 7, "title": "Leads", "manifest": MANIFEST,
        "thumbnail": None, "updated_by": AUTEUR, "archived_at": None}
 
 
 @pytest.fixture
 def seams(monkeypatch):
-    rec = {"list": [], "agg": [], "update": [], "append": [], "run": []}
+    rec = {"list": [], "agg": []}
     # Ce que chacun peut : par défaut, tout ; un test retire ce qu'il éprouve.
     droits = {(LECTEUR, "project"): True, (AUTEUR, "12", "read"): True,
-              (AUTEUR, "12", "write"): True, (AUTEUR, "13", "read"): True,
-              (AUTEUR, "13", "write"): True}
-    niveaux = {LECTEUR: "editor", AUTEUR: "owner"}
+              (AUTEUR, "13", "read"): True}
+    org_des_tableaux = {"12": ORG_DU_PROJET, "13": ORG_DU_PROJET}
 
     def can_access(sub, rtype, rid, want="read"):
         if rtype == "project":
@@ -42,23 +48,13 @@ def seams(monkeypatch):
 
     monkeypatch.setattr(ownership, "can_access", can_access)
     monkeypatch.setattr(db.apps, "get_for_call", lambda i: dict(APP) if i == 5 else None)
-    monkeypatch.setattr(db, "get_trigger", lambda tid, org: {"id": tid, "sub": AUTEUR} if tid in (9, 10) else None)
-    monkeypatch.setattr(_acces_agent, "niveau", lambda sub, org, t: niveaux.get(sub))
+    monkeypatch.setattr(C, "org_du_projet", lambda pid: ORG_DU_PROJET if pid == 7 else None)
+    monkeypatch.setattr(C, "tableau_de_l_org",
+                        lambda ns, org: org is not None and org_des_tableaux.get(ns) == org)
     monkeypatch.setattr(R, "_list_rows", lambda ctx, inp: rec["list"].append((ctx.sub, inp)) or {
         "rows": [{"_id": "r1", "_revision": "1", "name": "A", "status": "ok", "email": "x@y"}], "total": 1})
     monkeypatch.setattr(R, "_aggregate", lambda ctx, inp: rec["agg"].append(inp) or {"groups": [{"n": 1}]})
-    monkeypatch.setattr(R, "_update_row", lambda ctx, inp: rec["update"].append(inp) or {
-        "_id": inp.row_id, "_revision": "2", "status": inp.patch["status"], "email": "x@y"})
-    monkeypatch.setattr(R, "_append_row", lambda ctx, inp: rec["append"].append(inp) or {"_id": "r9", **inp.row})
-    import oto_mcp.capabilities.runner_triggers as T
-    monkeypatch.setattr(T, "_triggers", lambda ctx, inp: rec["run"].append((ctx.sub, inp)) or {"job": {"id": 77}})
-    monkeypatch.setattr(db, "list_jobs", lambda org, trigger_id=None, limit=50, **k: [
-        {"id": 77, "status": "done", "run_id": "run-1", "created_at": "t0", "finished_at": "t1", "last_error": None}])
-    monkeypatch.setattr(db.apps, "run_results", lambda ids: {"run-1": {"outcome": "done", "note": "Enriched 3 leads."}})
-    monkeypatch.setattr(db.apps, "job_of_org", lambda org, jid: {
-        "id": jid, "status": "done", "run_id": "run-1", "created_at": "t0", "finished_at": "t1",
-        "last_error": None, "trigger_id": "9" if jid == 77 else "999"})
-    rec["droits"], rec["niveaux"] = droits, niveaux
+    rec["droits"], rec["orgs"] = droits, org_des_tableaux
     return rec
 
 
@@ -70,6 +66,28 @@ def refus(**kw) -> AuthzDenied:
     with pytest.raises(AuthzDenied) as e:
         call(**kw)
     return e.value
+
+
+# ── Ce qui est servi : des lectures, rien d'autre ───────────────────────────
+
+@pytest.mark.parametrize("action", ["write_cell", "add_row", "start_agent", "agent_runs",
+                                    "run_result"])
+def test_rien_qui_ecrive_ni_lance_n_est_servi(action):
+    """Écrire, ajouter, lancer, lire les runs : pas avant le consentement du lecteur
+    (oto-backend#1386). L'action n'est pas une entrée valide."""
+    with pytest.raises(ValidationError):
+        C.AppCallInput(app_id=5, action=action, table="leads")
+
+
+def test_l_entree_ne_porte_plus_les_champs_d_ecriture():
+    assert set(C.AppCallInput.model_fields) == {"app_id", "action", "table", "options"}
+
+
+def test_la_capacite_n_a_pas_de_jeton_api_ni_d_outil_mcp():
+    cap = next(c for c in registry.CAPABILITIES if c.key == "me.app.call")
+    assert cap.mcp is None
+    (b,) = cap.rest_bindings()
+    assert b.allow_api_token is False and b.allow_issuer_token is False
 
 
 # ── Qui ─────────────────────────────────────────────────────────────────────
@@ -96,16 +114,25 @@ def test_l_auteur_qui_perd_le_tableau_coupe_l_app(seams):
     assert seams["list"] == []
 
 
-def test_ecrire_exige_que_l_auteur_puisse_ecrire(seams):
-    seams["droits"][(AUTEUR, "12", "write")] = False
-    e = refus(action="write_cell", table="leads", row_id="r1", field="status", value="ok",
-              expected_revision="1")
-    assert e.code == "app_author_lost_access" and seams["update"] == []
-
-
 def test_auteur_inconnu_refuse(seams, monkeypatch):
     monkeypatch.setattr(db.apps, "get_for_call", lambda i: dict(APP, updated_by=None))
     assert refus(action="read_rows", table="leads").code == "app_author_unknown"
+
+
+# ── Où : l'org du projet, pas celle de l'auteur ni du lecteur ───────────────
+
+def test_tableau_sorti_de_l_org_du_projet_refuse(seams):
+    seams["orgs"]["12"] = 99
+    e = refus(action="read_rows", table="leads")
+    assert (e.status, e.code) == (403, "table_outside_project_org")
+    e = refus(action="read_aggregate", table="leads")
+    assert e.code == "table_outside_project_org"
+    assert seams["list"] == [] and seams["agg"] == []
+
+
+def test_projet_sans_org_ne_sert_aucun_tableau(seams, monkeypatch):
+    monkeypatch.setattr(C, "org_du_projet", lambda pid: None)
+    assert refus(action="read_rows", table="leads").code == "table_outside_project_org"
 
 
 # ── Quoi : borné au manifeste ───────────────────────────────────────────────
@@ -118,6 +145,20 @@ def test_tableau_non_declare(seams):
 def test_lecture_ne_touche_pas_un_champ_non_declare(seams, options):
     assert refus(action="read_rows", table="leads", options=options).status in (400, 403)
     assert seams["list"] == []
+
+
+@pytest.mark.parametrize("options", [{"limit": "beaucoup"}, {"offset": "x"}, {"limit": 1.5},
+                                     {"limit": True}])
+def test_limite_non_numerique_400(seams, options):
+    e = refus(action="read_rows", table="leads", options=options)
+    assert (e.status, e.code) == (400, "invalid_options")
+    assert seams["list"] == []
+
+
+def test_limite_bornee(seams):
+    call(action="read_rows", table="leads", options={"limit": 10_000, "offset": -3})
+    inp = seams["list"][0][1]
+    assert inp.limit == C.MAX_ROWS and inp.offset == 0
 
 
 def test_filtre_sur_les_dates_permis(seams):
@@ -138,56 +179,42 @@ def test_agregat_borne(seams):
                  options={"metrics": [{"op": "sum", "field": "email"}]}).code == "undeclared_field"
 
 
-def test_ecriture_valeur_declaree_et_revision_exigee(seams):
-    out = call(action="write_cell", table="leads", row_id="r1", field="status", value="no",
-               expected_revision="1")
-    assert seams["update"][0].expected_revision == "1" and "email" not in out["row"]
-    assert refus(action="write_cell", table="leads", row_id="r1", field="status", value="maybe",
-                 expected_revision="1").code == "undeclared_value"
-    assert refus(action="write_cell", table="leads", row_id="r1", field="name", value="ok",
-                 expected_revision="1").code == "undeclared_write"
-    assert refus(action="write_cell", table="leads", row_id="r1", field="status",
-                 value="ok").code == "revision_required"
+# ── La porte : un jeton `oto_` est refusé avant le handler ─────────────────
 
+@pytest.mark.parametrize("cle,chemin", [("me.app.call", "/api/me/apps/5/call"),
+                                        ("me.app", "/api/me/apps")])
+def test_un_jeton_api_ou_delegue_est_refuse_sur_la_route_servie(monkeypatch, cle, chemin):
+    """Rejoue l'adaptateur REST avec la VRAIE authentification : un porteur `oto_`
+    (jeton API ou de délégation d'agent hébergé) prend 403 `api_token_forbidden`,
+    et le handler ne tourne pas."""
+    from oto_mcp.api import routes as api_routes
+    from oto_mcp.auth import token_scopes
+    from oto_mcp.capabilities import _rest_adapter
 
-def test_ajout_colonnes_declarees(seams):
-    call(action="add_row", table="leads", values={"name": "B"})
-    assert seams["append"][0].row == {"name": "B"}
-    assert refus(action="add_row", table="leads", values={"status": "ok"}).code == "undeclared_write"
-    assert refus(action="add_row", table="all", values={"name": "B"}).code == "undeclared_write"
+    lu = []
+    monkeypatch.setattr(api_routes.db, "verify_api_token",
+                        lambda t: lu.append(t) or {"sub": "u-1", "scopes": None,
+                                                   "token_kind": "delegation"})
+    cap = next(c for c in registry.CAPABILITIES if c.key == cle)
+    (binding,) = cap.rest_bindings()
 
+    class _Verifier:
+        async def verify_token(self, token):
+            return types.SimpleNamespace(claims={"sub": "u-jwt"})
 
-# ── Agents et leurs résultats ───────────────────────────────────────────────
-
-def test_lancer_comme_le_lecteur_avec_l_entree_marquee(seams):
-    out = call(action="start_agent", agent="enrich", input="acme.com")
-    (sub, inp), = seams["run"]
-    assert out["job_id"] == 77 and sub == LECTEUR
-    assert inp.op == "run_now" and inp.trigger_id == 9 and inp.handoff.endswith("acme.com")
-
-
-def test_lancer_exige_run_et_entree_declares(seams):
-    assert refus(action="start_agent", agent="watch").code == "agent_not_runnable"
-    assert refus(action="start_agent", agent="enrich", input="x" * 301).code == "agent_input_too_long"
-
-
-def test_lancer_exige_que_l_auteur_puisse_le_lancer(seams):
-    seams["niveaux"][AUTEUR] = "viewer"
-    assert refus(action="start_agent", agent="enrich").code == "app_author_lost_access"
-    assert seams["run"] == []
-
-
-def test_runs_et_ce_que_l_agent_a_conclu(seams):
-    out = call(action="agent_runs", agent="watch")
-    (run,) = out["runs"]
-    assert run["status"] == "done" and run["note"] == "Enriched 3 leads." and run["outcome"] == "done"
-
-
-def test_resultat_d_un_run_d_un_agent_declare_seulement(seams):
-    assert call(action="run_result", job_id=77)["run"]["note"] == "Enriched 3 leads."
-    assert refus(action="run_result", job_id=78).code == "unknown_run"
-
-
-def test_agent_invisible_au_lecteur(seams):
-    seams["niveaux"].pop(LECTEUR)
-    assert refus(action="agent_runs", agent="watch").code == "unknown_agent"
+    handler = _rest_adapter._make_handler(
+        cap, binding, _Verifier(), api_routes._authenticate,
+        lambda _r, p, status=200: JSONResponse(p, status_code=status),
+        lambda _r, s, code, d=None: JSONResponse({"error": code}, status_code=s))
+    req = Request({
+        "type": "http", "method": "POST", "path": chemin, "query_string": b"",
+        "root_path": "", "scheme": "http", "server": ("test", 80), "http_version": "1.1",
+        "path_params": {"app_id": "5"} if "call" in chemin else {},
+        "headers": [(b"authorization", b"Bearer oto_deadbeef"),
+                    (b"content-type", b"application/json")],
+    }, receive=lambda: asyncio.sleep(0, {"type": "http.request", "body": b"{}"}))
+    rep = asyncio.run(handler(req))
+    token_scopes.set_current(None)
+    assert rep.status_code == 403
+    assert b"api_token_forbidden" in bytes(rep.body)
+    assert lu == []  # refusé avant même de chercher le jeton

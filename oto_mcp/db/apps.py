@@ -10,7 +10,10 @@ HTML et de la vignette. Aucune colonne ne la porte ; une écriture qui la reçoi
 d'écraser l'édition d'un autre.
 
 **Chaque mise à jour écrit d'abord l'état précédent dans `app_revisions`**, sous le
-verrou de la ligne : de quoi restaurer, et de quoi dire qui a changé quoi.
+verrou de la ligne : de quoi restaurer, et de quoi dire qui a changé quoi. **Seules
+les `MAX_REVISIONS` plus récentes sont gardées**, purgées dans la même transaction :
+un HTML pèse jusqu'à 512 Ko, et un agent qui réécrit son app en boucle remplirait la
+base sans borne.
 """
 from __future__ import annotations
 
@@ -27,6 +30,8 @@ from ._conn import _connect
 _CARTE = ("id, project_id, title, thumbnail, created_by, created_at, updated_by, "
           "updated_at, archived_at")
 _TOUT = _CARTE + ", manifest, html"
+# Les révisions gardées par app — autant que `revisions()` en liste.
+MAX_REVISIONS = 50
 
 
 class AppConflict(Exception):
@@ -116,6 +121,11 @@ def update(app_id: int, *, by: str, expected_rev: Optional[str] = None,
              Jsonb(prior["thumbnail"]) if prior["thumbnail"] is not None else None,
              prior["updated_by"]),
         )
+        conn.execute(
+            "DELETE FROM app_revisions WHERE app_id = %s AND id NOT IN ("
+            "SELECT id FROM app_revisions WHERE app_id = %s ORDER BY id DESC LIMIT %s)",
+            (app_id, app_id, MAX_REVISIONS),
+        )
         sets, params = ["updated_at = NOW()", "updated_by = %s"], [by]
         if title is not None:
             sets.append("title = %s")
@@ -146,7 +156,7 @@ def set_archived(app_id: int, archived: bool) -> Optional[dict]:
     return with_rev(row)
 
 
-def revisions(app_id: int, limit: int = 50) -> list[dict]:
+def revisions(app_id: int, limit: int = MAX_REVISIONS) -> list[dict]:
     """Les états antérieurs, du plus récent au plus ancien — sans leur HTML."""
     with _connect() as conn:
         return conn.execute(
@@ -180,30 +190,3 @@ def project_owners(project_ids: Iterable[int]) -> dict[str, tuple[str, str]]:
             (ids,),
         ).fetchall()
     return {str(r["id"]): (r["owner_type"], str(r["owner_id"])) for r in rows}
-
-
-# ── Ce qu'une app lit des runs de ses agents (`capabilities/apps_appel.py`) ─────
-
-def job_of_org(org_id: int, job_id: int) -> Optional[dict]:
-    """Un travail de l'org, avec l'agent dont il est un run (`trigger_id`, texte tel
-    que posé par le serveur dans sa charge ; NULL hors agent)."""
-    with _connect() as conn:
-        return conn.execute(
-            "SELECT id, status, run_id, created_at, finished_at, last_error, "
-            "payload->>'trigger_id' AS trigger_id "
-            "FROM runner_jobs WHERE id = %s AND org_id = %s",
-            (job_id, org_id),
-        ).fetchone()
-
-
-def run_results(run_ids: Iterable[str]) -> dict[str, dict]:
-    """`{run_id: {outcome, note}}` — ce que l'agent a conclu (`run_finish`), en une
-    requête sur la clé primaire."""
-    ids = sorted({r for r in run_ids if r})
-    if not ids:
-        return {}
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT run_id, outcome, note FROM runs WHERE run_id = ANY(%s)", (ids,)
-        ).fetchall()
-    return {r["run_id"]: {"outcome": r["outcome"], "note": r["note"]} for r in rows}

@@ -13,7 +13,7 @@ IF NOT EXISTS`, même fragment) ; rien ne les lit avant la capacité qui les ser
 
 Retour arrière : retire les tables — et les apps qu'elles portent.
 
-Révision : 20261025_2100_apps
+Révision : 20261026_1256_apps
 Précédente : 20261024_1101_default_sharing
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ from alembic import op
 
 from oto_mcp.db.schema.apps import APPS
 
-revision = "20261025_2100_apps"
+revision = "20261026_1256_apps"
 down_revision = "20261024_1101_default_sharing"
 branch_labels = None
 depends_on = None

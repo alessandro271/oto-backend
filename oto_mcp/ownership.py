@@ -469,6 +469,19 @@ def owner_of(resource_type: str, resource_id: str) -> Optional[tuple[str, str]]:
     return _kind(resource_type).owner_getter(resource_id)
 
 
+def org_ou_vit(resource_type: str, resource_id: str) -> "org_origin.Origine":
+    """L'org où VIT une ressource (`org_origin.org_of`) : son propriétaire, et pour une
+    ressource perso l'org où son kind la range (`context_org`). Ressource inconnue :
+    `(None, False)` — rien n'est deviné."""
+    owner = owner_of(resource_type, resource_id)
+    if owner is None:
+        return None, False
+    k = _kind(resource_type)
+    return org_origin.org_of(
+        owner[0], owner[1], groups=org_origin.group_orgs([owner]),
+        context_org_id=k.context_org(resource_id) if k.context_org else None)
+
+
 # --- Plan CONTENU : can_access (owner ∪ grants) ------------------------------
 
 def _owner_match_content(sub: str, owner_type: str, owner_id: str) -> bool:

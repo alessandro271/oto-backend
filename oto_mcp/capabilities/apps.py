@@ -10,28 +10,43 @@ serveur ne savait ni la valider ni dire qui l'avait écrite. Elle a désormais s
 **L'accès est celui du projet** (`ownership.can_access`, lecture / écriture), comme
 une page. Une app inconnue OU illisible rend le même 404 : rien ne dit qu'elle existe.
 
-**Le manifeste se juge à l'écriture** (`apps_manifeste.py`) : sa forme, et que chaque
-tableau, champ et agent déclarés sont à la portée de l'AUTEUR. Un manifeste invalide
-est refusé en 400 `invalid_manifest` avec la liste de ce qui ne va pas ; `op=validate`
-rend cette liste sans rien écrire.
+**Le manifeste se juge à l'écriture** (`apps_manifeste.py`) — création, mise à jour
+ET restauration d'une révision : sa forme, que chaque tableau, champ et agent déclarés
+sont à la portée de l'AUTEUR, et qu'ils vivent dans l'org du PROJET de l'app. Un
+manifeste invalide est refusé en 400 `invalid_manifest` avec la liste de ce qui ne va
+pas ; `op=validate` rend cette liste sans rien écrire.
+
+**Écrire une app est réservé à la population bêta** (option `beta`, la même que celle
+qui ouvre `oto_apps` et l'écran du front) : `create`, `update`, `archive`,
+`unarchive`, `restore` refusent 403 `apps_beta_only` aux autres, sur les deux faces,
+fail-closed. Lire une app reste ouvert à qui lit son projet.
+
+**Face REST : session interactive seule** (`allow_api_token=False`) — aucun jeton
+`oto_`, délégation d'agent hébergé comprise : une app s'écrit par un humain ou par son
+agent en MCP, pas par un script porteur de clé.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .. import db, ownership
+from .. import access, db, ownership
+from ..tool_visibility import BETA_OPTION
 from ._authz import SUB_ONLY
-from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
-from .apps_manifeste import auteur, forme
+from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .apps_manifeste import auteur, forme, org_du_projet
 from .registry import CAPABILITIES
+
+logger = logging.getLogger(__name__)
 
 PROJECT_RTYPE = "project"
 MAX_HTML = 512_000
 MAX_TITLE = 200
 MAX_PROJECTS = 200
 _THUMB_KEYS = {"image", "color", "emoji", "design"}
+_ECRITURES = frozenset({"create", "update", "archive", "unarchive", "restore"})
 
 
 class AppInput(BaseModel):
@@ -137,10 +152,29 @@ def _media_base() -> Optional[str]:
         return None
 
 
-def _checked_manifest(ctx: ResolvedCtx, raw: Optional[dict]) -> dict:
+def _beta_ou_refus(ctx: ResolvedCtx) -> None:
+    """Écrire une app : la population `beta` seule, celle du front et de `oto_apps`.
+    Fail-CLOSED : une panne du seam des options refuse, et le journal le dit."""
+    try:
+        ok = access.has_option(ctx.sub, BETA_OPTION, org=ctx.org_id)
+    except Exception:
+        logger.warning("apps beta lookup fail-CLOSED for %s in org %s", ctx.sub,
+                       ctx.org_id, exc_info=True)
+        ok = False
+    if not ok:
+        raise AuthzDenied(403, "apps_beta_only",
+                          "Writing apps is open to beta accounts only for now.")
+
+
+def _problemes(sub: str, project_id: int, raw: Optional[dict]) -> tuple[dict, list[str]]:
     clean, problems = forme(raw if raw is not None else {})
     if not problems:
-        problems = auteur(ctx.sub, ctx.org_id, clean)
+        problems = auteur(sub, org_du_projet(project_id), clean)
+    return clean, problems
+
+
+def _checked_manifest(ctx: ResolvedCtx, project_id: int, raw: Optional[dict]) -> dict:
+    clean, problems = _problemes(ctx.sub, project_id, raw)
     if problems:
         raise AuthzDenied(400, "invalid_manifest",
                           "The manifest isn't valid: " + " ".join(problems))
@@ -173,10 +207,20 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         allowed = [int(pid) for pid, ok in readable.items() if ok]
         return {"apps": db.apps.list_for_projects(allowed, archived=inp.archived is True)}
 
+    if inp.op in _ECRITURES:
+        _beta_ou_refus(ctx)
+
     if inp.op == "validate":
-        clean, problems = forme(inp.manifest if inp.manifest is not None else {})
-        if not problems:
-            problems = auteur(sub, ctx.org_id, clean)
+        # Jugé contre l'org du projet où l'app vivra : celui nommé, ou celui de l'app.
+        if inp.app_id is not None:
+            pid = _app_or_404(sub, inp.app_id, "read")["project_id"]
+        else:
+            _require(inp.project_id is not None, "missing_project",
+                     "`project_id` (or `app_id`) is required to validate a manifest.")
+            _require(_can(sub, int(inp.project_id), "read"), "forbidden",
+                     "You can't read this project.", 403)
+            pid = int(inp.project_id)
+        _, problems = _problemes(sub, pid, inp.manifest)
         return {"ok": not problems, "problems": problems}
 
     if inp.op == "create":
@@ -184,7 +228,7 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         _require(_can(sub, int(inp.project_id), "write"), "forbidden",
                  "You can't add an app to this project.", 403)
         _content(inp, creating=True)
-        manifest = _checked_manifest(ctx, inp.manifest)
+        manifest = _checked_manifest(ctx, int(inp.project_id), inp.manifest)
         row = db.apps.create(int(inp.project_id), title=inp.title.strip(), manifest=manifest,
                              html=inp.html or "", thumbnail=_thumbnail(inp.thumbnail), by=sub)
         db.log_project_activity(int(inp.project_id), sub, "app.create", row["title"])
@@ -207,14 +251,18 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         _require(inp.revision_id is not None, "missing_revision", "`revision_id` is required.")
         old = db.apps.revision(row["id"], int(inp.revision_id))
         _require(old is not None, "unknown_revision", "No such revision of this app.", 404)
+        # Restaurer, c'est RÉÉCRIRE l'app sous son nom : le manifeste d'hier est rejugé
+        # contre celui qui restaure (il devient l'auteur) et l'org du projet d'aujourd'hui.
         changed = _update(sub, row, inp.expected_rev, title=old["title"],
-                          manifest=old["manifest"], html=old["html"], thumbnail=old["thumbnail"])
+                          manifest=_checked_manifest(ctx, row["project_id"], old["manifest"]),
+                          html=old["html"], thumbnail=old["thumbnail"])
         db.log_project_activity(row["project_id"], sub, "app.restore", row["title"])
         return {"app": _view(changed)}
 
     # update
     _content(inp, creating=False)
-    manifest = _checked_manifest(ctx, inp.manifest) if inp.manifest is not None else None
+    manifest = (_checked_manifest(ctx, row["project_id"], inp.manifest)
+                if inp.manifest is not None else None)
     thumb: Any = ...
     if inp.clear_thumbnail:
         thumb = None
@@ -241,22 +289,26 @@ CAPABILITIES += [
     Capability(
         key="me.app", handler=_app, Input=AppInput, Output=AppOut, authz=SUB_ONLY,
         description=(
-            "Apps: screens people build on the platform — dashboards, review queues, forms — "
+            "Apps: screens people build on the platform — dashboards, review queues — "
             "kept in a project and opened with the project's access. An app is a "
-            "manifest (the tables and fields it reads, the field values it may set, "
-            "the columns a form may add, the agents it may read or start with "
-            "`run: true`, `files: true` to upload) plus HTML that runs sandboxed and "
-            "talks to the platform through its `window` bridge. Not a memory page.\n"
+            "manifest (the tables and fields it reads; `set`, `add`, `agents` and "
+            "`files` are checked but not served yet: an open app only reads) plus HTML "
+            "that runs sandboxed and talks to the platform through its `window` "
+            "bridge. Not a memory page.\n"
             "op=list (`project_ids`; cards, no HTML) / get (`app_id`; with manifest, "
             "HTML and `rev`) / create (`project_id`, `title`, `manifest`, `html`, "
             "optional `thumbnail`) / update (`app_id`, any of those; pass "
             "`expected_rev` from get → 409 if it changed) / archive / unarchive / "
-            "revisions / restore (`revision_id`) / validate (`manifest`: the problems "
-            "a create would refuse, nothing written). Every declared table, field and "
-            "agent must be within YOUR reach: a create or update naming one you can't "
-            "read is refused (400 invalid_manifest, each problem listed)."
+            "revisions / restore (`revision_id`) / validate (`manifest` and "
+            "`project_id` or `app_id`: the problems a create would refuse, nothing "
+            "written). Every declared table and agent must be within YOUR reach and "
+            "in the project's organization: otherwise 400 invalid_manifest, each "
+            "problem listed. Writing apps is open to beta accounts only."
         ),
         mcp="oto_apps",
-        rest=RestBinding("POST", "/api/me/apps"),
+        rest=RestBinding("POST", "/api/me/apps", allow_api_token=False),
+        errors=(DeclaredError(403, "apps_beta_only",
+                              "create, update, archive, unarchive or restore by an "
+                              "account without the beta option"),),
     ),
 ]
