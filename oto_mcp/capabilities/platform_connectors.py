@@ -37,6 +37,7 @@ from pydantic import BaseModel, StrictBool, StrictInt
 
 from .. import access, db, entitlements_catalogue as catalogue, org_store, providers
 from . import _facturation_externe as facturation_externe
+from . import _quota_d_octroi as quota_d_octroi
 from ..connectors import activation as connector_activation
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -362,6 +363,10 @@ def _set_platform_access(ctx: ResolvedCtx, inp: PlatformAccessSetInput) -> dict:
         raise AuthzDenied(400, "no_platform_access")
     gscope = f"{inp.scope}:{sid}"
     on = bool(inp.on)
+    if on and has_key:
+        # Ce geste accorde sans quota : refusé AVANT toute écriture (marque d'option
+        # comprise) pour un connecteur qui exige le quota à l'octroi.
+        quota_d_octroi.exiger(inp.provider, None, quota_d_octroi.SANS_QUOTA)
     if on:
         if option:
             db.set_option_comp(inp.scope, sid, option, granted_by=ctx.sub)
@@ -406,7 +411,10 @@ _DOC_SET_ACCESS = (
     "Opens or closes an org's or a member's platform access to a connector, in one "
     "gesture: sets the option mark and the platform key grant together, depending on what "
     "the connector has. Refuses a grant to a non-existent org or account, and a "
-    "connector that has neither option nor platform key (`no_platform_access`). ⚠️ Refuses with "
+    "connector that has neither option nor platform key (`no_platform_access`). Grants "
+    "without a quota: a connector that requires one is refused with "
+    "`grant_quota_required` (" + quota_d_octroi.AIDE + " — grant its key with "
+    "`platform.org.grant_key` or `platform.key.grant` and `daily_quota`). ⚠️ Refuses with "
     "409 `billing_moved` a connector whose option is a catalogue entitlement "
     "(`unipile`): that entitlement is set by the billing service (oto-commerce) alone; "
     "the platform key is then shared via `platform.org.grant_key` (an org) or "
@@ -449,7 +457,8 @@ CAPABILITIES += [
         errors=(facturation_externe.declaration(
             "The connector's option is a key of the entitlements catalogue, which only the "
             "billing service (oto-commerce) sets; the platform key is shared "
-            "via `platform.org.grant_key` (an org) or `platform.key.grant` (an account)."),),
+            "via `platform.org.grant_key` (an org) or `platform.key.grant` (an account)."),
+                quota_d_octroi.declaration()),
         mcp=None,
         rest=RestBinding("POST", _ACCESS),
     ),

@@ -82,6 +82,14 @@ PLATFORM_OPS_DEFAULT = "elevenlabs_act:create_speech"
 HALF_RATE_MODELS = frozenset({"eleven_flash_v2", "eleven_flash_v2_5",
                               "eleven_turbo_v2", "eleven_turbo_v2_5"})
 
+# The longest `text` one generation takes ON THE SHARED KEY, in characters: one call must
+# never spend a day's quota at once. Checked as soon as the resolved key turns out to be
+# the shared one — before the client is built, ElevenLabs called or a credit noted. The
+# customer's own key is not bounded here (ElevenLabs bounds it). A longer script is cut
+# into lines, read one call each (`previous_text` / `next_text` keep them continuous).
+MAX_TEXT_CHARS = 5_000
+TEXT_TOO_LONG = "text_too_long"
+
 
 def parse_platform_ops(value: str) -> frozenset[tuple[str, Optional[str]]]:
     """`platform.ops` as `(tool, op)` pairs, `op=None` for every op of the tool.
@@ -162,6 +170,17 @@ class ElevenLabsASec(RuntimeError):
 
 def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
+
+
+def _borner_texte(text: Optional[str]) -> None:
+    """On the shared key: refuses (`text_too_long`) a `text` longer than
+    `MAX_TEXT_CHARS` — nothing done, nothing spent."""
+    if text is not None and len(text) > MAX_TEXT_CHARS:
+        raise _bad(f"{TEXT_TOO_LONG}: `text` is {len(text)} characters, at most "
+                   f"{MAX_TEXT_CHARS} per call on the shared key. Cut it into lines and "
+                   "read them one call each (`previous_text` / `next_text` keep them "
+                   "continuous), or set your own ElevenLabs key, which lifts this limit. "
+                   "Nothing was done.")
 
 
 def _slim(value: Any, drop: frozenset, dropped: set) -> Any:
@@ -329,12 +348,13 @@ def register(mcp: FastMCP) -> None:
 
     connector_verify.register(_NAME, _verify, couvre=connector_verify.AUTH_QUOTA)
 
-    def _client(tool: str, op: str, units: int = 1
+    def _client(tool: str, op: str, units: int = 1, text: Optional[str] = None
                 ) -> tuple[ElevenLabsClient, Callable[[int], None]]:
         """`(client, served)`. The cascade runs whole (own key > platform grant), the
-        grant's quota checked for `units`; on the platform key, a generation this
-        instance does not serve (`platform_ops`), or the balance read, is refused
-        BEFORE a credit is spent, naming what the shared key serves.
+        grant's quota checked for `units`; on the platform key, a `text` over
+        `MAX_TEXT_CHARS`, a generation this instance does not serve (`platform_ops`), or
+        the balance read, is refused BEFORE a credit is spent, naming what the shared
+        key serves.
 
         `served(credits)` notes what the call spent, once ElevenLabs has answered: a
         call that raises notes nothing. `quantity` on every generation (the journal's
@@ -342,6 +362,7 @@ def register(mcp: FastMCP) -> None:
         a read)."""
         key, is_platform = access.resolve_api_key(_NAME, units=units)
         if is_platform:
+            _borner_texte(text)
             if tool == _NAME:
                 refused = op == "get_subscription"
             else:
@@ -489,7 +510,9 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Generate audio with ElevenLabs. EVERY call spends the account's credits
         (characters for speech, seconds for music and sound) and is not retried:
-        read `elevenlabs` op='get_subscription' before a batch.
+        read `elevenlabs` op='get_subscription' before a batch. On the shared key, `text`
+        is at most 5,000 characters per call (`text_too_long`): cut a longer script
+        into lines, or use your own key, which lifts the limit.
 
         On the SHARED key (granted by oto, no key of your own), only the generations
         this instance serves run — by default `create_speech`; the others ask for your
@@ -523,7 +546,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             op: What to generate (see above).
-            text: The words to read (`create_speech`), the sound to make (`create_sound`), or the preview's line (`create_voice_design`).
+            text: The words to read (`create_speech`), the sound to make (`create_sound`), or the preview's line (`create_voice_design`); at most 5000 characters on the shared key.
             voice_id: The voice that reads, for `create_speech`.
             model_id: Model id, e.g. eleven_multilingual_v2 or eleven_v3 for speech, music_v1 for music; the API's default when omitted.
             voice_settings: Speech only: {stability, similarity_boost, style, use_speaker_boost, speed}, each optional.
@@ -562,7 +585,7 @@ def register(mcp: FastMCP) -> None:
             _refuse_ignored(op, **music, **sound, **design)
             vid, line = _need(voice_id, "voice_id", op), _need(text, "text", op)
             client, served = _client("elevenlabs_act", op,
-                                     units=max(1, speech_credits(line, model_id)))
+                                     units=max(1, speech_credits(line, model_id)), text=line)
             audio = _run(lambda: client.create_speech(
                 vid, line, model_id=model_id, voice_settings=voice_settings,
                 previous_text=previous_text, next_text=next_text, seed=seed,
@@ -590,7 +613,7 @@ def register(mcp: FastMCP) -> None:
         if op == "create_sound":
             _refuse_ignored(op, seed=seed, **speech, **music, **design)
             what = _need(text, "text", op)
-            client, served = _client("elevenlabs_act", op)
+            client, served = _client("elevenlabs_act", op, text=what)
             audio = _run(lambda: client.create_sound(
                 what, duration_seconds=duration_seconds, prompt_influence=prompt_influence,
                 loop=loop, model_id=model_id, output_format=output_format))
@@ -600,7 +623,7 @@ def register(mcp: FastMCP) -> None:
         # op == "create_voice_design" — the only one left (guard above).
         _refuse_ignored(op, **speech, **music, **sound)
         described = _need(voice_description, "voice_description", op)
-        client, served = _client("elevenlabs_act", op)
+        client, served = _client("elevenlabs_act", op, text=text)
         result = _run(lambda: client.create_voice_design(
             described, text=text, auto_generate_text=auto_generate_text,
             model_id=model_id, seed=seed, output_format=output_format))

@@ -10,7 +10,10 @@ join to the client:
 - intent refusals (an argument of another op, a missing required argument);
 - the translation of upstream refusals, and above all an EMPTY account (401
   `quota_exceeded`) told apart from a REFUSED key, by a 402 in the chain;
-- the probe: 401 → `NonAutorise`, quota → `QuotaEpuise`, balance read.
+- the probe: 401 → `NonAutorise`, quota → `QuotaEpuise`, balance read;
+- the shared key: closed without a grant (real resolution path), refused before any
+  credit once its quota is spent, granted only WITH a quota in credits (every grant
+  path), and, on it only, a `text` over `MAX_TEXT_CHARS` refused before the client.
 """
 import asyncio
 from unittest.mock import MagicMock
@@ -453,3 +456,228 @@ def test_an_unreadable_setting_RAISES_rather_than_serving_the_default(monkeypatc
                         lambda *a, **kw: "elevenlabs_act:gone")
     with pytest.raises(RuntimeError, match="not understood"):
         E.platform_ops()
+
+
+# --- the shared key is CLOSED without a grant: the real resolution path -----------------
+#
+# `access.resolve_api_key` is the REAL one here (taken before any fixture stubs it): the
+# cascade, the platform rung and its quota run as in production; only what reads the
+# database is stubbed — no own key, no org, the vault's platform instance, the day's usage
+# (same seams as `tests/test_free_tier_platform_key.py`).
+
+from oto_mcp import access as _access  # noqa: E402
+
+#: Read on the facade at import, before any fixture stubs it.
+_VRAIE_RESOLUTION = _access.resolve_api_key
+
+
+@pytest.fixture
+def cle_partagee(monkeypatch, client, trace, sans_droit_declare):
+    """The shared ElevenLabs key in the vault, CLOSED (`share_mode='closed'`); `etat`
+    holds who it is granted to (`share_down`), the grant's quota and today's usage."""
+    from oto_mcp import access, grants_chain
+    etat = {"share_down": [], "rate_limit_by": {}, "used": 0}
+    monkeypatch.setattr(access, "resolve_api_key", _VRAIE_RESOLUTION)
+    monkeypatch.setattr(access.db, "get_member_api_key", lambda sub, org, p: None)
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    monkeypatch.setattr(access, "current_org", lambda sub: None)
+    monkeypatch.setattr(access.credentials_store, "list_platform_instances", lambda p: [{
+        "label": "shared", "share_mode": "closed", "share_down": list(etat["share_down"]),
+        "share_side": [], "meta": {"rate_limit_by": dict(etat["rate_limit_by"])}}])
+    monkeypatch.setattr(access.credentials_store, "get_credential",
+                        lambda et, eid, p, account="": "PLAT")
+    monkeypatch.setattr(access.db, "get_usage_today", lambda sub, p: etat["used"])
+    monkeypatch.setattr(grants_chain.db_grants, "edges_for", lambda ref, grantees: [])
+    monkeypatch.setattr("oto_mcp.links.ou_poser_la_cle", lambda *a, **k: "")
+    return etat
+
+
+def _accorder(etat, quota):
+    etat["share_down"] = ["user:user-sub"]
+    etat["rate_limit_by"] = {"user:user-sub": quota}
+
+
+def test_without_a_grant_the_shared_key_is_never_served(client, cle_partagee):
+    with pytest.raises(McpError, match="No `elevenlabs` key configured"):
+        _tool("elevenlabs_act")(op="create_speech", voice_id="v1", text="Hello there")
+    assert client.built == [], "no client built: the shared key was not served"
+    assert not client.method_calls
+
+
+def test_with_a_grant_the_shared_key_is_served(client, cle_partagee, setting):
+    _accorder(cle_partagee, 100)
+    client.create_speech.return_value = _audio(character_count=11)
+    _tool("elevenlabs_act")(op="create_speech", voice_id="v1", text="Hello there")
+    assert client.built == [{"api_key": "PLAT"}]
+
+
+def test_an_exhausted_quota_refuses_before_any_credit_is_spent(client, cle_partagee, setting):
+    _accorder(cle_partagee, 100)
+    cle_partagee["used"] = 100
+    with pytest.raises(McpError, match="Platform quota elevenlabs exceeded"):
+        _tool("elevenlabs_act")(op="create_speech", voice_id="v1", text="Hello there")
+    assert client.built == [] and not client.method_calls
+
+
+def test_a_call_bigger_than_what_is_left_refuses_before_any_credit_is_spent(
+        client, cle_partagee, setting):
+    """95 of 100 credits spent, the line costs 11: refused whole, never served on credit."""
+    _accorder(cle_partagee, 100)
+    cle_partagee["used"] = 95
+    with pytest.raises(McpError):
+        _tool("elevenlabs_act")(op="create_speech", voice_id="v1", text="Hello there")
+    assert client.built == [] and not client.method_calls
+
+
+# --- the text ceiling, on the SHARED key only: refused before the client exists --------
+
+def test_on_the_shared_key_a_text_over_the_ceiling_is_refused_before_the_client(
+        client, platform, trace, setting):
+    """The key is resolved (it is what says the shared key serves), then the refusal
+    comes BEFORE the client is built: nothing called, nothing noted, nothing settled."""
+    from oto_mcp.tools import elevenlabs as E
+    setting["value"] = "elevenlabs_act"   # every op served: the ceiling refuses, not the ops
+    ops = ({"op": "create_speech", "voice_id": "v1"},
+           {"op": "create_sound"},
+           {"op": "create_voice_design", "voice_description": "calm"})
+    for kwargs in ops:
+        with pytest.raises(McpError, match="text_too_long") as e:
+            _tool("elevenlabs_act")(text="x" * (E.MAX_TEXT_CHARS + 1), **kwargs)
+        assert str(E.MAX_TEXT_CHARS) in str(e.value), "the refusal says the ceiling"
+        assert "shared key" in str(e.value) and "your own ElevenLabs key" in str(e.value)
+    assert len(platform) == len(ops), "the resolution was called, once per op"
+    assert client.built == [] and not client.method_calls and trace == []
+
+
+def test_on_the_shared_key_a_text_at_the_ceiling_is_served(client, platform, trace, setting):
+    from oto_mcp.tools import elevenlabs as E
+    client.create_speech.return_value = _audio(character_count=E.MAX_TEXT_CHARS)
+    _tool("elevenlabs_act")(op="create_speech", voice_id="v1",
+                            text="x" * E.MAX_TEXT_CHARS)
+    assert platform == [E.MAX_TEXT_CHARS]
+    assert client.create_speech.called
+
+
+def test_on_the_own_key_a_text_over_the_ceiling_is_served(client, trace, setting):
+    """The customer's own key loses nothing: ElevenLabs bounds it, not oto."""
+    from oto_mcp.tools import elevenlabs as E
+    client.create_speech.return_value = _audio(character_count=E.MAX_TEXT_CHARS + 1)
+    _tool("elevenlabs_act")(op="create_speech", voice_id="v1",
+                            text="x" * (E.MAX_TEXT_CHARS + 1))
+    assert client.built == [{"api_key": "key-de-test"}]
+    assert client.create_speech.called
+    assert trace == [{"quantity": E.MAX_TEXT_CHARS + 1}]
+
+
+def test_the_served_description_says_the_ceiling():
+    """The docstring writes the number: tied here to the constant, its single source."""
+    from oto_mcp.tools import elevenlabs as E
+    tool = asyncio.run(_mcp().get_tool("elevenlabs_act"))
+    assert f"{E.MAX_TEXT_CHARS:,}" in tool.description
+    assert str(E.MAX_TEXT_CHARS) in f"{tool.description}{tool.parameters}", (
+        "the `text` argument says its ceiling")
+
+
+# --- a grant of the shared key REQUIRES a daily quota, in ElevenLabs credits ----------
+
+def _ctx():
+    from oto_mcp.capabilities._types import ResolvedCtx
+    return ResolvedCtx(sub="admin", org_id=1)
+
+
+@pytest.fixture
+def octrois(monkeypatch):
+    """Every grant path's reads stubbed; `faits` = what was WRITTEN (grants, option marks)."""
+    from oto_mcp import credentials_store
+    from oto_mcp.capabilities import platform_connectors as pc, users_admin as ua
+    faits: list = []
+    monkeypatch.setattr(credentials_store, "list_platform_instances",
+                        lambda p: [{"label": "shared"}])
+    monkeypatch.setattr(credentials_store, "platform_grant",
+                        lambda p, s, daily_quota=None, label=None:
+                        faits.append(("grant", p, s, daily_quota)))
+    monkeypatch.setattr(ua.db, "get_user", lambda s: {"sub": s})
+    monkeypatch.setattr(ua.org_store, "get_org", lambda oid: {"id": oid})
+    monkeypatch.setattr(ua.group_store, "get_group", lambda gid: {"id": gid})
+    monkeypatch.setattr(ua.db, "set_option_comp",
+                        lambda *a, **k: faits.append(("option",) + a))
+    monkeypatch.setattr(pc.access, "paid_option_for", lambda n: None)
+    monkeypatch.setattr(pc.db, "set_option_comp",
+                        lambda *a, **k: faits.append(("option",) + a))
+    return faits
+
+
+def _par_chaque_chemin(daily_quota):
+    """One grant of the shared ElevenLabs key by each path, `daily_quota` passed where
+    the path carries one."""
+    from oto_mcp.capabilities import admin_console as ac, platform_connectors as pc
+    from oto_mcp.capabilities import users_admin as ua
+    ctx = _ctx()
+    return {
+        "platform.key.grant": lambda: ua._grant_key(ctx, ua.GrantKeyInput(
+            target="u1", provider="elevenlabs", daily_quota=daily_quota)),
+        "platform.org.grant_key": lambda: ua._grant_org_key(ctx, ua.OrgGrantKeyInput(
+            org_id=2, provider="elevenlabs", daily_quota=daily_quota)),
+        "platform.group.grant_key": lambda: ua._grant_group_key(ctx, ua.GroupGrantKeyInput(
+            group_id=3, provider="elevenlabs", daily_quota=daily_quota)),
+        "oto_admin_key_grant user": lambda: ac._key_grant(ctx, ac.KeyGrantInput(
+            op="grant", scope="user", target="u1", provider="elevenlabs",
+            daily_quota=daily_quota)),
+        "oto_admin_key_grant org": lambda: ac._key_grant(ctx, ac.KeyGrantInput(
+            op="grant", scope="org", org_id=2, provider="elevenlabs",
+            daily_quota=daily_quota)),
+        "oto_admin_key_grant group": lambda: ac._key_grant(ctx, ac.KeyGrantInput(
+            op="grant", scope="group", group_id=3, provider="elevenlabs",
+            daily_quota=daily_quota)),
+        # The gestures that carry no quota: refused whatever `daily_quota` is.
+        "platform.connector.access_set": lambda: pc._set_platform_access(
+            ctx, pc.PlatformAccessSetInput(provider="elevenlabs", scope="org", id=2, on=True)),
+        "platform.option.set": lambda: ua._set_option(ctx, ua.OptionInput(
+            entity_type="org", entity_id="2", option="elevenlabs", on=True)),
+    }
+
+
+@pytest.mark.parametrize("daily_quota", [None, 0])
+def test_a_grant_without_a_quota_is_refused_by_every_path(octrois, daily_quota):
+    from oto_mcp.capabilities._types import AuthzDenied
+    for chemin, octroyer in _par_chaque_chemin(daily_quota).items():
+        with pytest.raises(AuthzDenied) as e:
+            octroyer()
+        assert e.value.status == 400 and e.value.code == "grant_quota_required", chemin
+        assert "daily_quota" in str(e.value) and "ElevenLabs credits" in str(e.value), chemin
+    assert octrois == [], "nothing written: neither a grant nor an option mark"
+
+
+def test_a_grant_with_a_quota_in_credits_goes_through(octrois):
+    sans_quota = {"platform.connector.access_set", "platform.option.set"}
+    for chemin, octroyer in _par_chaque_chemin(500).items():
+        if chemin not in sans_quota:
+            octroyer()
+    assert octrois and all(f == ("grant", "elevenlabs", f[2], 500) for f in octrois)
+    assert len(octrois) == 6
+
+
+def test_the_store_itself_refuses_a_grant_without_a_quota(monkeypatch):
+    """The rule holds BELOW the console too: `platform_grant` plays it before touching
+    the vault — a script or a future path cannot grant unlimited."""
+    from oto_mcp import credentials_store
+    monkeypatch.setattr(credentials_store, "_connect",
+                        lambda: pytest.fail("the vault must not be touched"))
+    for quota in (None, 0, -5):
+        with pytest.raises(credentials_store.QuotaDOctroiRequis, match="ElevenLabs credits"):
+            credentials_store.platform_grant("elevenlabs", "org:2", daily_quota=quota)
+
+
+def test_the_quota_rule_is_declared_by_the_connector_only():
+    from oto_mcp import credentials_store, providers
+    assert providers.REGISTRY["elevenlabs"].grant_quota_unit == "ElevenLabs credits"
+    assert providers.REGISTRY["serper"].grant_quota_unit == ""
+    credentials_store.exiger_quota_d_octroi("serper", None)   # optional elsewhere
+
+
+def test_the_grant_tools_say_the_unit():
+    from oto_mcp.capabilities import admin_console, users_admin  # noqa: F401 — declare
+    from oto_mcp.capabilities.registry import by_key
+    for key in ("admin.key_grant", "platform.key.grant", "platform.org.grant_key",
+                "platform.group.grant_key"):
+        assert "`elevenlabs` (ElevenLabs credits)" in by_key(key).description, key

@@ -324,6 +324,26 @@ def _sans_refus(meta: dict, scope: str) -> dict:
     return meta
 
 
+class QuotaDOctroiRequis(ValueError):
+    """Un accord de la clé plateforme d'un connecteur qui déclare `grant_quota_unit`
+    sans `daily_quota` positif : absent ou 0, ce serait l'illimité sur NOTRE compte."""
+
+
+def exiger_quota_d_octroi(provider: str, daily_quota: "int | None") -> None:
+    """Lève `QuotaDOctroiRequis` si `provider` exige un quota à l'octroi
+    (`Connector.grant_quota_unit`) et que `daily_quota` n'est pas un entier > 0. La
+    règle, en un seul endroit : `platform_grant` la joue sur tout chemin, la console la
+    joue AVANT d'écrire quoi que ce soit (`capabilities/_quota_d_octroi.py`)."""
+    con = providers.REGISTRY.get(provider)
+    unite = getattr(con, "grant_quota_unit", "") if con else ""
+    if not unite or (isinstance(daily_quota, int) and not isinstance(daily_quota, bool)
+                     and daily_quota > 0):
+        return
+    raise QuotaDOctroiRequis(
+        f"la clé plateforme `{provider}` ne s'accorde qu'avec un quota quotidien : passe "
+        f"`daily_quota` > 0, en {unite} (absent ou 0, ce serait illimité).")
+
+
 def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
                    label: "str | None" = None) -> None:
     """ADR 0044 §F R4 : accorde l'accès plateforme à `scope` (`user:<sub>` | `group:<gid>`
@@ -331,9 +351,11 @@ def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
     l'instance du `provider` (label = clé la plus récente par défaut) — remplace
     grant_platform_key/grant_org_platform_key. Non free-tier ⟹ ajoute au `share_down`
     (mode 'closed'). Free-tier (`platform_key_open`) ⟹ accès déjà ouvert à tous : on ne pose
-    QUE le quota (`meta.rate_limit_by[scope]`). Le quota s'applique dans les deux cas."""
+    QUE le quota (`meta.rate_limit_by[scope]`). Le quota s'applique dans les deux cas, et il est
+    EXIGÉ (> 0) pour un connecteur qui déclare `grant_quota_unit`."""
     from . import grants_chain  # import tardif (grants_chain lit ce module)
 
+    exiger_quota_d_octroi(provider, daily_quota)
     if grants_chain.is_chained(provider):
         # Blueprint ADR 0053 (lot L5) : accorder = poser une ARÊTE. On ne touche PLUS
         # la ligne du coffre — ni `share_mode`, ni `share_down`, ni `rate_limit_by`.

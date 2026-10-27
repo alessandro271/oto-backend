@@ -249,6 +249,13 @@ class Connector:
     # (`secret_kind="none"`) but is not free: it is never installed by default as open
     # data (`connectors/usable.py`), the member installs it.
     spends_keys_of: tuple[str, ...] = ()
+    # The UNIT of the platform key's daily quota, when every GRANT of that key must carry
+    # one. Set ⟹ a grant without a positive `daily_quota` is refused
+    # (`credentials_store.exiger_quota_d_octroi`), whatever the path that grants: the
+    # default (`default_quota=0`) is UNLIMITED, which a key billed per use cannot afford.
+    # Empty (default) = the quota stays optional. The unit is what the tool notes as
+    # `units` (e.g. ElevenLabs credits), and the refusal names it.
+    grant_quota_unit: str = ""
 
     @property
     def org_shareable(self) -> bool:
@@ -566,7 +573,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        personal_cross_org=False, cardinality="", account_axis_static=False,
        account_noun="",
        field_discriminator="", credential_of=None, hosted_channel=None,
-       spends_keys_of=()) -> Connector:
+       spends_keys_of=(), grant_quota_unit="") -> Connector:
     """Factory for a registry entry — called by `providers/<name>.py`.
 
     Adding a FIELD per connector = adding it to `Connector` AND here, then
@@ -585,5 +592,5 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         account_axis_static=account_axis_static,
         account_noun=account_noun, field_discriminator=field_discriminator,
         credential_of=credential_of, hosted_channel=hosted_channel,
-        spends_keys_of=tuple(spends_keys_of),
+        spends_keys_of=tuple(spends_keys_of), grant_quota_unit=grant_quota_unit,
     )

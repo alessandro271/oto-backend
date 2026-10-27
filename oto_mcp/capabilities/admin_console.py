@@ -20,6 +20,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 from .. import credentials_store, db
+from . import _quota_d_octroi as quota_d_octroi
 from . import droits_admin, platform_invites, unipile_seats, users_admin
 from .orgs import (admin as orgs_admin, members as orgs_members,
                    reads as orgs_reads)
@@ -147,7 +148,8 @@ class KeyGrantInput(BaseModel):
     group_id: Optional[int] = None    # scope=group (équipe, #1239)
     org_id: Optional[int] = None      # scope=org
     provider: Optional[str] = None    # grant/revoke : connecteur ciblé ; op=list : filtre
-    daily_quota: Optional[int] = None  # grant (optionnel)
+    daily_quota: Optional[int] = None  # grant (optionnel ; exigé > 0 si le connecteur
+                                       # déclare `grant_quota_unit`, cf. _quota_d_octroi)
 
 
 def _key_grant(ctx: ResolvedCtx, inp: KeyGrantInput) -> dict:
@@ -413,7 +415,9 @@ CAPABILITIES += [
                      "`provider` filter; platform admin) / grant|revoke (by `provider`, super admin) · "
                      "scope=user (`target` email|sub) | group (`group_id`, the team's "
                      "members while it is their active one) | org (`org_id`); grant takes optional "
-                     "`daily_quota`. To POSE a raw key/secret, use the dashboard."),
+                     "`daily_quota` (per day, in the unit the key's tool meters). "
+                     + quota_d_octroi.AIDE + " To POSE a raw key/secret, use the dashboard."),
+        errors=(quota_d_octroi.declaration(),),
         mcp="oto_admin_key_grant",
     ),
     Capability(

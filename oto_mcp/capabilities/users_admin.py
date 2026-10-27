@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, StrictInt
 from .. import (access, billing_grants, providers, credentials_store, db,
                 entitlements_catalogue as catalogue, group_store, org_store)
 from . import _facturation_externe as facturation_externe
+from . import _quota_d_octroi as quota_d_octroi
 from . import _identite
 from . import droits_admin
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
@@ -240,6 +241,7 @@ def _grant_key(ctx: ResolvedCtx, inp: GrantKeyInput) -> dict:
         raise AuthzDenied(404, "unknown_user", f"Compte {target!r} inconnu.")
     if not _has_platform_instance(inp.provider):
         raise AuthzDenied(404, "unknown_key", f"Aucune clé plateforme `{inp.provider}`.")
+    quota_d_octroi.exiger(inp.provider, inp.daily_quota)
     dq = max(1, inp.daily_quota) if inp.daily_quota is not None else None
     credentials_store.platform_grant(inp.provider, f"user:{target}", daily_quota=dq)
     return {"ok": True, "sub": target, "provider": inp.provider, "daily_quota": dq}
@@ -256,6 +258,7 @@ def _grant_org_key(ctx: ResolvedCtx, inp: OrgGrantKeyInput) -> dict:
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     if not _has_platform_instance(inp.provider):
         raise AuthzDenied(404, "unknown_key", f"Aucune clé plateforme `{inp.provider}`.")
+    quota_d_octroi.exiger(inp.provider, inp.daily_quota)
     dq = max(1, inp.daily_quota) if inp.daily_quota is not None else None
     credentials_store.platform_grant(inp.provider, f"org:{inp.org_id}", daily_quota=dq)
     return {"ok": True, "org_id": inp.org_id, "provider": inp.provider, "daily_quota": dq}
@@ -274,6 +277,7 @@ def _grant_group_key(ctx: ResolvedCtx, inp: GroupGrantKeyInput) -> dict:
         raise AuthzDenied(404, "unknown_group", f"Équipe #{inp.group_id} inconnue.")
     if not _has_platform_instance(inp.provider):
         raise AuthzDenied(404, "unknown_key", f"Aucune clé plateforme `{inp.provider}`.")
+    quota_d_octroi.exiger(inp.provider, inp.daily_quota)
     dq = max(1, inp.daily_quota) if inp.daily_quota is not None else None
     credentials_store.platform_grant(inp.provider, f"group:{inp.group_id}", daily_quota=dq)
     return {"ok": True, "group_id": inp.group_id, "provider": inp.provider,
@@ -379,6 +383,9 @@ def _set_option(ctx: ResolvedCtx, inp: OptionInput) -> dict:
         except (ValueError, TypeError):
             raise AuthzDenied(400, "invalid_body", "entity_id d'org doit être un entier.")
     if inp.on:
+        # Offrir l'option ACCORDE aussi la clé plateforme (`_compose_platform_grant`),
+        # sans quota : refusé AVANT de poser la marque, pour un connecteur qui l'exige.
+        quota_d_octroi.exiger(inp.option, None, quota_d_octroi.SANS_QUOTA)
         db.set_option_comp(inp.entity_type, eid, inp.option, granted_by=ctx.sub,
                            expires_at=_parse_expiry(inp, eid))
         key = _compose_platform_grant(ctx, inp, eid)
@@ -505,8 +512,10 @@ CAPABILITIES += [
     Capability(
         key="platform.key.grant", handler=_grant_key, Input=GrantKeyInput,
         authz=SUPER_ADMIN,
+        errors=(quota_d_octroi.declaration(),),
         description="[super admin] Grant a platform key (by id) to a user, with an optional "
-                    "per-day quota. target = email or sub. Never reveals the key.",
+                    "per-day quota. target = email or sub. Never reveals the key. "
+                    + quota_d_octroi.AIDE,
         rest=RestBinding("POST", "/api/admin/users/{sub}/grants/{provider}", _SUB),
     ),
     Capability(
@@ -519,7 +528,9 @@ CAPABILITIES += [
         key="platform.org.grant_key", handler=_grant_org_key, Input=OrgGrantKeyInput,
         authz=SUPER_ADMIN,
         description="[super admin] Share a connector's platform key with a WHOLE org — every member "
-                    "resolves it (metered per-member). Optional per-day quota.",
+                    "resolves it (metered per-member). Optional per-day quota. "
+                    + quota_d_octroi.AIDE,
+        errors=(quota_d_octroi.declaration(),),
         rest=RestBinding("POST", "/api/admin/orgs/{id}/grants/{provider}", _ID),
     ),
     Capability(
@@ -532,11 +543,12 @@ CAPABILITIES += [
         key="platform.group.grant_key", handler=_grant_group_key, Input=GroupGrantKeyInput,
         Output=GroupKeyGrant, authz=SUPER_ADMIN,
         errors=(DeclaredError(404, "unknown_group", "l'équipe n'existe pas"),
-                DeclaredError(404, "unknown_key", "aucune clé plateforme pour ce connecteur")),
+                DeclaredError(404, "unknown_key", "aucune clé plateforme pour ce connecteur"),
+                quota_d_octroi.declaration()),
         description="[super admin] Grant a connector's platform key (the included key) to a "
                     "TEAM — its members resolve it while the team is their active one. "
                     "Optional per-day quota. With the org forbidding personal keys for the "
-                    "connector, this reserves it to the team.",
+                    "connector, this reserves it to the team. " + quota_d_octroi.AIDE,
         rest=RestBinding("POST", "/api/admin/groups/{id}/grants/{provider}", _GID),
     ),
     Capability(
@@ -583,7 +595,9 @@ CAPABILITIES += [
                     "For a platform-mode connector this ALSO grants/revokes its platform key (so "
                     "the option is actually usable, not a dead has_option without a key); the "
                     "`platform_key` field reports what happened (granted / no_platform_key / "
-                    "byo_inert / revoked). An option can also GATE tools (e.g. 'beta'), and a tool "
+                    "byo_inert / revoked); a connector whose grant requires a quota is "
+                    "refused with `grant_quota_required` (grant its key with `daily_quota` "
+                    "instead). An option can also GATE tools (e.g. 'beta'), and a tool "
                     "list is computed at handshake: `visible_next_session: true` means the change "
                     "lands on a session other than yours and shows up when its owner reconnects — "
                     "false means your own tool list was just refreshed. Neither is a failure. "
@@ -596,7 +610,8 @@ CAPABILITIES += [
                     "tenant: its owners are that partner's customers, not ours.",
         errors=(facturation_externe.declaration(
             "L'option est une clé du catalogue des droits : c'est un droit déclaré, que "
-            "seul le service de facturation (oto-commerce) pose."),),
+            "seul le service de facturation (oto-commerce) pose."),
+                quota_d_octroi.declaration()),
         mcp="oto_admin_set_option",
         rest=RestBinding("POST", "/api/admin/option-comps", {}),
     ),

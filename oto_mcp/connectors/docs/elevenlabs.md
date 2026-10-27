@@ -5,6 +5,7 @@ create a key in ElevenLabs (Developers → API Keys → *Create key*) and paste 
 - a key can carry its own **credit limit** in ElevenLabs: a good way to give a teammate or an agent a budget
 - your own key first: every generation then spends **your** ElevenLabs credits; each organization or person sets its own key
 - the **shared key**, when oto grants it to your org, covers speech (`create_speech`) only, unless the instance opens more; music, sound effects and voice design need your own key. Each spoken call counts the ElevenLabs credits it spent (half a credit per character on the flash and turbo models, one otherwise). The voice and model reads are free on it; the balance (`get_subscription`) is not served on it — it is the instance's
+- granting the shared key (`oto_admin_key_grant op=grant`) **requires** a `daily_quota` > 0, counted in **ElevenLabs credits** per day (absent or 0, which would be unlimited, is refused with `grant_quota_required`); the gestures that carry no quota (platform access, option gift) are refused for this connector
 
 ## usage — a voice, a track, a sound
 
@@ -20,6 +21,7 @@ create a key in ElevenLabs (Developers → API Keys → *Create key*) and paste 
 
 - ⚠️ the audio is a **download link that expires** (`expires_in`, one hour by default; the file is deleted after a day): download it right away, never store the link
 - every `elevenlabs_act` call spends credits and is **never retried** automatically: a replay bills twice
+- on the **shared key**, `text` is at most **5,000 characters** per call (`text_too_long`, refused before anything is spent): cut a longer script into lines, read one call each, or use your own key, which lifts this limit
 - an empty account answers like a refused key on ElevenLabs' side (401); the connector tells the two apart and says which
 - `seed` makes a take reproducible as far as the model allows, not exactly
 - a voice design preview is **not** a voice of the account: saving it takes a voice slot, in ElevenLabs

@@ -20,10 +20,11 @@ from ._model import CredentialField, _c
 # it). The platform key serves the ops the instance chose (`tools/elevenlabs.py::
 # platform_ops`, by default speech only); music, sound and voice design ask for the
 # customer's own key unless the instance opens them. Each call served on it notes the
-# ElevenLabs credits it spent (`units`, `quantity`).
+# ElevenLabs credits it spent (`units`, `quantity`). Every grant carries a daily quota in
+# those credits (`grant_quota_unit`): the default, 0, would be unlimited on our account.
 CONNECTOR = _c(
     "elevenlabs", ["elevenlabs"], auth_modes={"byo_user", "byo_org", "platform"},
-    default_quota=0, platform_key_open=False,
+    default_quota=0, platform_key_open=False, grant_quota_unit="ElevenLabs credits",
     keyed=True, secret_kind="api_key",
     credential_fields=(
         CredentialField(

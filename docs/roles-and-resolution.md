@@ -296,6 +296,14 @@ monde », ne sert pas l'appelant révoqué.
 Quota daily per-grant : colonne `user_grants.daily_quota` (posé par l'admin
 au moment du grant). Si NULL, fallback sur env `OTO_MCP_QUOTA_<PROVIDER>_DAILY`
 ou `_QUOTA_DEFAULTS` dans `access/quotas.py`. User key bypass quota.
+⚠️ **Quota EXIGÉ à l'octroi** pour un connecteur qui déclare `grant_quota_unit` (registre,
+`providers/<nom>.py` ; aujourd'hui `elevenlabs`, en crédits ElevenLabs) : un accord sans
+`daily_quota`, ou à 0 (= illimité), est refusé (`400 grant_quota_required`) par TOUT chemin —
+`oto_admin_key_grant` / `platform.{key,org,group}.grant_key` (qui portent le quota),
+`platform.connector.access_set` et `platform.option.set` (qui n'en portent pas : refusés
+avant toute écriture, le message renvoie au grant). La règle vit dans
+`credentials_store.exiger_quota_d_octroi`, jouée aussi par `platform_grant` lui-même ; la
+console la traduit par `capabilities/_quota_d_octroi.py`.
 
 **Les platform keys vivent en DB uniquement** (coffre `platform_keys` — plus de
 bootstrap SOPS/env au boot, oto-mcp#12). Poser/roter une clé = surface admin :
