@@ -24,8 +24,8 @@ face, remise à sa valeur d'avant à la sortie, jamais un état de module.
 | rien de tout ça | — | `system` | NULL | neuf, par transaction |
 
 Le run n'est pas dans le geste : c'est un axe d'appel à part entière
-(`session_org.current_call_run`), posé par la face MCP (`_run_id=` ou la pile de la
-session) comme par la face REST (`X-Oto-Run`). Il est lu au moment d'écrire.
+(`session_org.current_call_or_session_run`), posé par la face MCP (`_run_id=`, sinon le run
+actif de la session, #830) comme par la face REST (`X-Oto-Run`). Il est lu au moment d'écrire.
 """
 from __future__ import annotations
 
@@ -159,7 +159,7 @@ def estampille() -> dict:
     g = _GESTE.get()
     return {
         "acteur": g.acteur if g else None,
-        "run_id": session_org.current_call_run(),
+        "run_id": session_org.current_call_or_session_run(),
         "source": g.source if g else SYSTEM,
         "geste_id": g.geste_id if g else nouvel_identifiant(),
     }

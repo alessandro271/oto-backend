@@ -46,7 +46,8 @@ tiers et les scripts du client.
   et sur le chemin des Conversations (boucle d'outils hébergée chez le fournisseur), le
   worker ne voit jamais passer les appels — il ne peut rien injecter du tout ;
 - **rien ne le pose sur la face REST** (`session_org.set_call_run` n'est appelé que
-  depuis le middleware MCP, l'axe `_run_id=` et les tools `run_*`). Un `or run` dans le
+  depuis l'axe `_run_id=` et les tools `run_*`, le run de session — `set_session_run`,
+  #830 — que depuis le middleware MCP). Un `or run` dans le
   prédicat serait donc une branche inerte : verte, jamais empruntée.
 
 Un agent SANS run ouvert est donc reconnu — c'est le cas que le run ratait, et c'est le

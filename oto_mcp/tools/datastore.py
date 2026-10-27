@@ -231,7 +231,8 @@ def _omitted_run_hint(e: RowLocked) -> Optional[str]:
     prove it.
 
     Three conditions, all necessary:
-    - the call carries NO run — that is precisely the fault;
+    - the call carries NO run, neither `_run_id` nor the session's active run (#830)
+      — that is precisely the fault;
     - the lease is held by an identified run;
     - that run belongs to the SAME sub as the caller. ⚠️ Without this last test we
       would reveal to a third party the token that lifts the lock: `_run_id` authorizes nothing,
@@ -242,8 +243,8 @@ def _omitted_run_hint(e: RowLocked) -> Optional[str]:
     """
     try:
         from .. import session_org
-        if session_org.current_call_run():
-            return None                      # the call carries a run: another cause
+        if session_org.current_call_or_session_run():
+            return None                      # a run is known (named or session's): other cause
         run = getattr(e, "claimed_run", None)
         if not run:
             return None                      # lease without a run (worker only): nothing to say

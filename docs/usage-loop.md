@@ -32,7 +32,11 @@ volontaire d'agent + les runs / déroulés. Détail : ADR 0017 (repo public
   paramètre reste accepté jusqu'à sa date, `docs/alias-deprecies.md`) **ou** un run
   one-shot (sans `guide`), même trace. Le `run_id` vit dans une **pile en état de
   session FastMCP** (`guide_run.py`, runs imbriqués OK), stampé sur chaque appel côté
-  serveur — l'agent ne thread rien.
+  serveur — l'agent ne thread rien. Le sommet de la pile est aussi posé par
+  `CallContextMiddleware` en **run de session** (`session_org.current_session_run`, #830)
+  quand l'appel ne nomme aucun `_run_id` : le datastore, le journal des gestes et les
+  jobs `jev` le lisent ; la résolution d'org du run (#639) et les gardes d'`oto_fleet`
+  restent sur le seul `_run_id` explicite (`docs/org-context.md` §L'org du run).
   - **Une session neuve d'agent hébergé reprend son run** (27/10/2026) : la pile ne
     survit pas à la session, et le relais du runner, relancé après un appel coupé côté
     client, en ouvre une autre — les appels suivants partaient avec `run_id` NULL, la

@@ -811,7 +811,7 @@ def _deposer(plan: Plan) -> dict:
         jid = db_jev.create_jev_job(
             org_id=access.current_org(sub), sub=sub,
             project_id=session_org.current_call_project(),
-            run_id=session_org.current_call_run(), adresse=str(ns_id),
+            run_id=session_org.current_call_or_session_run(), adresse=str(ns_id),
             model_column=plan.model_column, remaining=remaining,
             params={k: getattr(plan, k) for k in PARAMS_DU_JOB})
     except db_jev.JevJobActive as e:

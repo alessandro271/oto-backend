@@ -92,6 +92,15 @@ Ce que l'étage fait, et ne fait pas :
   jamais un repli silencieux sur la maison. Mesuré : 40 appels sur sept jours (un sub,
   deux runs ouverts dans une org dont il n'est plus membre) deviendraient ce
   refus ;
+- **seul le run NOMMÉ résout l'org** (`_run_id=`, `session_org.current_call_run()`),
+  jamais le run actif de la session (#830). Le middleware pose aussi celui-ci, dans une
+  ContextVar à part (`session_org.current_session_run`), mais pour les seuls lecteurs qui
+  RATTACHENT sans rien décider — datastore, journal des gestes, jobs `jev`
+  (`current_call_or_session_run`). Résoudre l'org sur lui ferait changer d'org, ou
+  REFUSER (plus membre), des appels qui n'ont nommé aucun run ; il en va de même des
+  gardes anti-agent d'`oto_fleet` (`not_from_a_run`, `not_your_own_fleet`), qui
+  refuseraient sinon un humain ayant un run ouvert dans sa session. Garde-fou :
+  `tests/test_run_de_session_830.py` ;
 - **un run inconnu de `runs`, ou hors org, ne pose rien** : `_run_id` y reste ce qu'il
   était, un identifiant de corrélation ; l'appel se résout comme avant (maison) ;
 - **le journal stampe l'org résolue**, donc l'org du run : la vue `op=calls org_id=X`

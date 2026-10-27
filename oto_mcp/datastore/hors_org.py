@@ -36,9 +36,10 @@ from .. import db, org_store, ownership, session_org
 
 
 def run_courant() -> Optional[str]:
-    """Le run de l'appel, ou None hors de tout run / hors contexte de requête."""
+    """Le run de l'appel (explicite, sinon celui de la session, #830), ou None hors
+    de tout run / hors contexte de requête."""
     try:
-        return session_org.current_call_run()
+        return session_org.current_call_or_session_run()
     # noqa: SILENT — hors contexte de requête (script, test) : pas de run à lire
     except Exception:  # noqa: BLE001
         return None

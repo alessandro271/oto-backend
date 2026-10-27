@@ -383,6 +383,20 @@ tient un run actif. C'est ce qui rend le jeton obligatoire dans les faits, et ce
 description de l'axe dit désormais (`call_axes.RUN`). Mesuré, non corrigé ici : le
 correctif de la lecture est un lot à part, avec sa propre mesure.
 
+**Rallumé, pour le datastore seulement (27/10/2026, #830).** Le repli était mort depuis
+le 28/08/2026 (lu sur le `MiddlewareContext`). Le middleware lit désormais la pile sur
+`fastmcp_context` et pose le sommet dans une ContextVar À PART, le run de SESSION
+(`session_org.current_session_run`), quand l'appel ne nomme aucun `_run_id`. Le datastore
+le lit par `session_org.current_call_or_session_run()` — l'explicite d'abord : un agent
+qui encadre son travail par `run_start` réserve, écrit sur sa ligne et la voit libérée par
+`run_finish` sans repasser le jeton, tant que sa session tient ; l'indice « tu as oublié
+`_run_id` » (#547) ne parle plus que si aucun run, ni nommé ni de session, n'est connu.
+`current_call_run()` garde son sens — le run NOMMÉ seul — pour la résolution d'org du run
+(#639) et les gardes de flotte (#830), qui ne le lisent pas par choix
+(`docs/org-context.md` §L'org du run). `_run_id` reste obligatoire dans la description
+servie : un client qui renouvelle sa session à chaque appel n'a pas de pile. Banc :
+`tests/test_run_de_session_830.py`.
+
 **Un agent ne réserve que dans un run (23/09/2026, #727).** Sans run, `data_claim_next`
 rendait une vraie ligne ET posait un bail ; mais le bail se tient par son RUN
 (`_lease_guard`), donc l'écriture était refusée APRÈS l'enquête, et le claim suivant,
@@ -2990,8 +3004,9 @@ Coût : un aller-retour (`SELECT set_config(…)` ×4) par transaction d'écritu
 
 **Le contexte** : `oto_mcp/geste.py`, une `ContextVar` par requête (même modèle que les
 axes d'appel de `session_org`), posée à l'entrée de chaque face et remise à zéro à la
-sortie. Le run n'y est pas : c'est l'axe `session_org.current_call_run()`, lu au moment
-d'écrire (`_run_id=` ou la pile de session en MCP, `X-Oto-Run` en REST).
+sortie. Le run n'y est pas : c'est l'axe `session_org.current_call_or_session_run()`, lu
+au moment d'écrire (`_run_id=`, sinon le run actif de la session en MCP — #830 —,
+`X-Oto-Run` en REST).
 
 | face | posé par | `source` | `acteur` | `geste_id` |
 |---|---|---|---|---|

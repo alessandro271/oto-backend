@@ -210,13 +210,21 @@ async def test_the_middleware_pins_the_active_run_from_the_stack():
     helpers au lieu du chemin réel.
 
     Ici on exerce le MIDDLEWARE : une pile de run, aucun jeton `_run_id=`, et on
-    vérifie que le run est posé pendant le handler."""
+    vérifie que le run est posé pendant le handler.
+
+    ⚠️ Ce banc passait l'état de session comme contexte du MIDDLEWARE lui-même ; or le
+    vrai `MiddlewareContext` n'a pas `get_state` — l'état est sur son
+    `fastmcp_context`. Il est resté vert pendant que le repli était mort en production
+    (28/08 → 27/10/2026, #830). Le contexte a désormais la forme réelle, et le run de
+    la pile est posé en run de SESSION (lu par le datastore), pas en run de l'appel
+    (réservé au `_run_id` explicite : org du run, gardes de flotte)."""
     from oto_mcp import guide_run, session_org
+    from oto_mcp.datastore.outils import _current_run
     from oto_mcp.middleware.call_context import CallContextMiddleware
 
     vu = {}
 
-    class _Ctx:                      # l'état de session, comme FastMCP le tient
+    class _Session:                  # l'état de session, comme FastMCP le tient
         def __init__(self):
             self._state = {}
 
@@ -226,21 +234,28 @@ async def test_the_middleware_pins_the_active_run_from_the_stack():
         async def set_state(self, k, v):
             self._state[k] = v
 
-    ctx = _Ctx()
-    await guide_run.push_run(ctx, "run-empile", "campagne")
+    class _MiddlewareCtx:            # comme le vrai : PAS de get_state
+        pass
+
+    session = _Session()
+    await guide_run.push_run(session, "run-empile", "campagne")
 
     class _Msg:
         name, arguments = "data_claim_next", {"datastore": "t", "worker": "w"}
 
+    ctx = _MiddlewareCtx()
     ctx.message = _Msg()
+    ctx.fastmcp_context = session
 
     async def _call_next(_):
-        vu["run"] = session_org.current_call_run()   # ce que voit le handler
+        vu["run"] = _current_run()                    # ce que voit le datastore
+        vu["explicite"] = session_org.current_call_run()
         return "ok"
 
     await CallContextMiddleware(frozenset()).on_call_tool(ctx, _call_next)
 
     assert vu["run"] == "run-empile", (
-        "sans jeton explicite, le run ACTIF de la pile doit être posé — c'est la "
-        "racine du défaut de production")
-    assert session_org.current_call_run() is None, "et retiré après l'appel"
+        "sans jeton explicite, le run ACTIF de la pile doit être vu du datastore — "
+        "c'est la racine du défaut de production")
+    assert vu["explicite"] is None, "le run de session n'est pas le run NOMMÉ (#830)"
+    assert session_org.current_session_run() is None, "et retiré après l'appel"

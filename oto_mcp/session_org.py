@@ -158,8 +158,52 @@ def reset_call_run(token: contextvars.Token) -> None:
 
 
 def current_call_run() -> Optional[str]:
-    """run_id explicite de l'appel courant (corrélation calllog), ou None."""
+    """run_id EXPLICITE de l'appel courant (axe `_run_id=`, `X-Oto-Run`, verbes `run_*`),
+    ou None. Ne rend JAMAIS le run de la session : voir `current_session_run`."""
     return _CALL_RUN.get()
+
+
+# ── Le run de la SESSION (#830) ───────────────────────────────────────────────
+# Deux runs distincts, deux ContextVars, deux familles de lecteurs :
+#
+# - `_CALL_RUN` (ci-dessus) : le run que l'appel NOMME (`_run_id=`). Seul lu par ce qui
+#   DÉCIDE sur le run : `run_org.pin_for_call` (#639 — l'appel se résout dans l'org du
+#   run, et il est REFUSÉ si l'appelant n'en est plus membre) et les gardes anti-agent
+#   d'`oto_fleet` (`runner_fleets._run_courant` : `not_from_a_run`,
+#   `not_your_own_fleet`). Les étendre au run de session ferait changer d'org, ou
+#   refuser, des appels qui n'ont rien nommé.
+# - `_SESSION_RUN` : le sommet de la pile de runs de la session (`guide_run`), posé par
+#   `CallContextMiddleware` quand l'appel ne nomme aucun run. Lu, via
+#   `current_call_or_session_run`, par ce qui RATTACHE au run sans rien décider : le
+#   datastore (réservation, verrou de ligne, indice de refus), le journal des gestes
+#   (`geste.estampille`), les jobs `jev`. Un agent qui encadre son travail par
+#   `run_start` y est reconnu sans repasser le jeton à chaque appel.
+#
+# Le repli du middleware sur la pile était mort depuis le 28/08/2026 (lu sur le
+# `MiddlewareContext`, qui n'a pas `get_state`) : rallumé ici, pour la seconde famille
+# seulement.
+_SESSION_RUN: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "oto_session_run", default=None)
+
+
+def set_session_run(run_id: str) -> contextvars.Token:
+    return _SESSION_RUN.set(run_id)
+
+
+def reset_session_run(token: contextvars.Token) -> None:
+    _SESSION_RUN.reset(token)
+
+
+def current_session_run() -> Optional[str]:
+    """Le run actif de la session (sommet de pile, posé par le middleware), ou None."""
+    return _SESSION_RUN.get()
+
+
+def current_call_or_session_run() -> Optional[str]:
+    """Le run de l'appel : l'explicite d'abord, sinon celui de la session. Pour les
+    lecteurs qui RATTACHENT (datastore, gestes, jobs) — jamais pour ceux qui décident
+    d'une org ou d'un refus (`current_call_run`, #639/#830)."""
+    return current_call_run() or current_session_run()
 
 
 # ── FACE par laquelle l'appel est entré (oto#83) ──────────────────────────────

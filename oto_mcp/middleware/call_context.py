@@ -221,13 +221,25 @@ class CallContextMiddleware(Middleware):
             # _calllog_sink`) et la cible d'`oto_call` (`tools/meta`) — sans lui, la
             # timeline du run s'arrêtait à la session perdue. L'état de session se lit
             # sur le contexte FastMCP, pas sur celui du middleware.
-            await guide_run.reprendre_run_du_jeton(
-                getattr(context, "fastmcp_context", None))
-            if not session_org.current_call_run():
-                actif = await guide_run.active_run_id(context)
+            #
+            # ⚠️ Le run de la pile se pose en RUN DE SESSION, pas en run de l'appel
+            # (#830) : `current_call_run()` reste le seul `_run_id` explicite, que lisent
+            # la résolution d'org du run (`run_org.pin_for_call`, #639 — refus si l'on
+            # n'est plus membre) et les gardes anti-agent d'`oto_fleet`. Le run de
+            # session ne sert qu'aux lecteurs qui RATTACHENT (datastore, gestes, jobs),
+            # par `session_org.current_call_or_session_run()`. La pile se lit sur
+            # `fastmcp_context` : le `MiddlewareContext` n'a pas `get_state`, et ce
+            # repli lu sur lui est resté mort du 28/08 au 27/10/2026.
+            fctx = getattr(context, "fastmcp_context", None)
+            await guide_run.reprendre_run_du_jeton(fctx)
+            # Seulement si l'appel ne NOMME aucun run : `_run_id` n'est posé que plus
+            # bas (axes), et un run nommé ne se double pas de celui de la session.
+            if (fctx is not None and not session_org.current_call_run()
+                    and not args.get(call_axes.RUN.param)):
+                actif = await guide_run.active_run_id(fctx)
                 if actif:
-                    undo.append((session_org.reset_call_run,
-                                 session_org.set_call_run(actif)))
+                    undo.append((session_org.reset_session_run,
+                                 session_org.set_session_run(actif)))
             # `_org=` (tools de capacité) : posé ici, retiré des kwargs par `_make_tool`.
             if name in self._org and args.get("_org") is not None:
                 undo.append((session_org.reset_call_org, await self._pin_org(args["_org"])))

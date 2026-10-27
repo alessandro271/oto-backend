@@ -142,7 +142,8 @@ def _backquote(noms) -> str:
 
 
 def _current_run() -> Optional[str]:
-    """Le run de l'appel courant, ou None hors de tout run.
+    """Le run de l'appel courant — `_run_id=` explicite, sinon le run actif de la
+    session (#830) —, ou None hors de tout run.
 
     Lu ICI et pas passé par les surfaces : le run est un CONTEXTE d'appel (ADR 0038),
     pas un argument métier — l'exiger des surfaces reviendrait à demander à chaque
@@ -150,7 +151,7 @@ def _current_run() -> Optional[str]:
     deux."""
     from .. import session_org
     try:
-        return session_org.current_call_run()
+        return session_org.current_call_or_session_run()
     # noqa: SILENT — hors run : pas de corrélation d'exécution à poser
     except Exception:      # noqa: BLE001 — hors contexte de requête (script, test)
         return None

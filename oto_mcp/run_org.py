@@ -106,7 +106,11 @@ async def pin_for_call() -> list:
     axes : un `_org=`/`_project=` explicite a déjà posé l'org et garde la priorité —
     le run reste gardé (propriétaire), son org n'est alors ni posée ni jugée. Le sub
     se lit là où les gardes des axes le lisent (`call_axes`). Rend la liste
-    d'annulation, même forme (LIFO) que les axes."""
+    d'annulation, même forme (LIFO) que les axes.
+
+    ⚠️ Le run EXPLICITE seul (`current_call_run`), jamais le run de la session
+    (`current_session_run`, #830) : ce dernier changerait l'org — ou ferait refuser,
+    si l'on n'en est plus membre — des appels qui n'ont nommé aucun run."""
     run_id = session_org.current_call_run()
     if not run_id:
         return []

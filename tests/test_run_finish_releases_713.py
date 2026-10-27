@@ -21,6 +21,12 @@ ne couvrent : la combinaison réelle de l'incident — session STABLE (le calllo
 qu'un seul `session_id` de bout en bout), `_run_id` JAMAIS passé, trois réservations, une
 fermeture, sur les outils tels que `register_all` les monte.
 
+⚠️ Le middleware reçoit un `MiddlewareContext`, qui n'a PAS `get_state` : l'état de
+session est sur son `fastmcp_context`. Ce banc passait l'état de session comme contexte
+du middleware lui-même — il est resté vert pendant que le repli était mort en
+production (28/08 → 27/10/2026, #830). Le contexte a désormais la forme réelle ; le banc
+sur un vrai serveur FastMCP est `test_run_de_session_830.py`.
+
 Résultat sur le code actuel : PASSE. La garantie tient — à la condition que l'état de
 session survive entre les appels, ce que #317 a rendu vrai pour ce seam. #547 (29/08)
 rappelle que cette condition n'est PAS garantie en production sur claude.ai (renouvellement
@@ -100,16 +106,21 @@ def _claim_sans_run_id(ctx, ns: str, worker: str) -> dict:
     class _Msg:
         pass
 
+    class _MiddlewareCtx:       # comme le vrai : PAS de get_state, la session est
+        pass                    # sur `fastmcp_context` (#830)
+
     msg = _Msg()
     msg.name = "data_claim_next"
     msg.arguments = {"datastore": ns, "worker": worker}
-    ctx.message = msg
+    mctx = _MiddlewareCtx()
+    mctx.message = msg
+    mctx.fastmcp_context = ctx
 
     async def _next(c):
         return await outil.run(c.message.arguments)
 
     async def _go():
-        return await CallContextMiddleware(frozenset()).on_call_tool(ctx, _next)
+        return await CallContextMiddleware(frozenset()).on_call_tool(mctx, _next)
 
     return asyncio.run(_go()).structured_content
 

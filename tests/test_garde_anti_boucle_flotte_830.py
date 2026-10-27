@@ -3,8 +3,9 @@
 `launch` refuse `not_from_a_run` (« un agent qui se relance lui-même dépense en
 boucle ») et `stop` refuse `not_your_own_fleet`. Les deux se décident sur
 `runner_fleets._run_courant()`, qui lit `session_org.current_call_run()` — une
-ContextVar que SEUL l'axe `_run_id` alimente côté handler (le repli sur la pile de
-session du middleware est mort : `MiddlewareContext` n'a pas de `get_state`).
+ContextVar que SEUL l'axe `_run_id` alimente côté handler. Le run actif de la pile de
+session est posé à part (`session_org.current_session_run`) et ces gardes ne le lisent
+pas, par choix (`test_run_de_session_830.py`).
 
 Or `oto_fleet` n'était pas sur la surface de corrélation (`call_axes`) : le jeton
 était retiré sans être posé, et le runner hébergé — qui ne pose `_run_id` QUE sur
