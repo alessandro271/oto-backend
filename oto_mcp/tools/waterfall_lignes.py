@@ -184,27 +184,43 @@ def _hors_liste(attempts: list[dict]) -> list[str]:
     return noms
 
 
-def _outils_a_donner(refuses: list[str]) -> dict:
+def _planifies(plan: Optional[dict]) -> list[str]:
+    """Les outils des étapes qu'un `dry_run` dit `planned` — variantes comprises."""
+    noms: list[str] = []
+    for a in (plan or {}).get("attempts") or []:
+        for p in [a, *(a.get("tried") or [])]:
+            if p.get("status") == "planned" and isinstance(p.get("tool"), str):
+                noms.append(p["tool"])
+    return noms
+
+
+def _outils_a_donner(refuses: list[str], *, dry_run: bool = False) -> dict:
     """Sync (base) : ce que le reçu dit des étapes refusées au travail — les outils à
     donner à l'agent et le geste qui les lui donne, la forme du refus d'une recette-code
     (`missing_tools`, `fix`, `recipes/code.refus_hors_liste`). Les autres étapes ont
     tourné : le reçu reste celui d'un passage, pas un refus. `fix` est un geste de
     personne (`tools_human_only`) ; `next_step` dit à l'agent de s'arrêter en les nommant,
-    pas de conclure à un quota."""
+    pas de conclure à un quota.
+
+    `dry_run` : les étapes PLANIFIÉES que le travail refusera. Le plan les disait
+    `planned` sans un mot — c'est ce qui a fait conclure un agent à une panne de fournisseur
+    (vécu le 26/10/2026) : le plan mentait, l'agent a cru le plan."""
     manque = outils_du_travail.manquants(refuses)
     if not manque:
         return {}
     noms = manque["missing"]
     agent = f"agent {manque['trigger_id']}" if manque.get("trigger_id") else "this agent"
+    sort = ("will be skipped on the real call" if dry_run
+            else "were skipped, and their rows stay pending")
     return {"missing_tools": noms,
             "fix": outils_du_travail.correctif(manque.get("trigger_id"),
                                                manque.get("tools") or [], noms),
-            "next_step": (f"{outils_du_travail.CODE}: the steps that call {noms} were "
-                          f"skipped, because {agent} is not allowed to use them (job "
-                          f"{manque['job_id']}); their rows stay pending. This is not a "
-                          "quota or a key. Stop with run_finish(outcome=\"blocked\") "
-                          f"naming them: the owner adds them to {agent}'s tools in one "
-                          "click (the agent's page shows them).")}
+            "next_step": (f"{outils_du_travail.CODE}: the steps that call {noms} {sort}, "
+                          f"because {agent} is not allowed to use them (job "
+                          f"{manque['job_id']}). This is not a quota or a key. Stop with "
+                          "run_finish(outcome=\"blocked\") naming them: the owner adds "
+                          f"them to {agent}'s tools in one click (the agent's page shows "
+                          "them).")}
 
 
 def _pas_un_verdict(out: dict, trouve: Any, attempts: list[dict],
@@ -334,6 +350,9 @@ async def fill_rows(mcp: FastMCP, ns: str, *, datastore, inputs: dict, output: d
                 {k: v for k, v in a.items() if k != "arguments"}
                 for a in plan.get("attempts") or []]}
         recu.compter("would_look_up", len(groupes))
+        if plan is not None:
+            extra.update(await run_in_threadpool(
+                lambda: _outils_a_donner(_planifies(plan), dry_run=True)))
         # `rendre` counts what is left: the database, off the loop.
         return await run_in_threadpool(
             lambda: recu.rendre(lot, selectionnees=len(lot.lignes), dry_run=True,

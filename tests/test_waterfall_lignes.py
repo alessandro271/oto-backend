@@ -343,3 +343,14 @@ def test_sans_etape_refusee_le_recu_ne_parle_pas_d_outils(calls, table, _travail
     calls["answers"]["hunter_email_finder"] = IssueCible(ok=True, result={"data": {}})
     out = _act("waterfall_email", **_EMAIL_ARGS)
     assert "missing_tools" not in out and "fix" not in out
+
+
+def test_le_plan_d_un_dry_run_dit_l_etape_que_le_travail_refusera(calls, table, _travail_41):
+    """Le plan disait `planned` sans un mot : l'agent l'a cru, puis a conclu à un quota."""
+    _une_ligne(table)
+    out = _act("waterfall_email", **{**_EMAIL_ARGS, "providers": ["hunter", "apollo"],
+                                     "dry_run": True})
+    assert calls["made"] == [] and table["store"].ecrites == {}
+    assert out["missing_tools"] == ["hunter_email_finder"]
+    assert out["fix"]["tools"][-1] == "hunter_email_finder"
+    assert "will be skipped" in out["next_step"]

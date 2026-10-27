@@ -32,6 +32,10 @@ _CLE = re.compile(r"[a-z][a-z0-9_]*")
 #: Jusqu'où, après le nom de la cascade, `providers=` appartient encore à SON appel : un
 #: appel écrit en entier tient en quelques centaines de caractères.
 _PORTEE = 800
+#: Les outils d'étape qu'une personne ne donne JAMAIS d'office en posant un agent
+#: (`runner_triggers._appeles_par_ses_outils`) : l'étape s'en sert pour UN acteur fixé,
+#: mais l'outil en lance n'importe lequel. Ils restent dans `missing_tools`, au geste.
+JAMAIS_D_OFFICE = frozenset({"apify_run_sync"})
 
 
 def outils_de_l_etape(step: Step) -> list[str]:

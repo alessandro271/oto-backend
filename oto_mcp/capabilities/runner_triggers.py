@@ -1043,26 +1043,33 @@ def _appeles_par_ses_outils(org: int, slug: str, outils: list[str]) -> list[str]
     lance, s'il a `oto_recipe` ; ceux des étapes de cascade qu'elle écrit, s'il a CETTE
     cascade (`waterfall_cites`). Un outil que l'agent n'appellera pas ne lui manque pas.
 
-    ⚠️ Seulement des LECTURES déclarées (`tool_registry.effet_de`, fail-closed : un effet
-    inconnu n'est pas une lecture). Une recette-code appelle aussi les écritures qu'elle
-    déclare (`writes`) : posées sur l'agent, elles lui seraient ouvertes en direct, hors de
-    la recette et de sa borne.
+    ⚠️ D'une recette, seulement des LECTURES déclarées (`tool_registry.effet_de`,
+    fail-closed : un effet inconnu n'est pas une lecture). Une recette-code appelle aussi
+    les écritures qu'elle déclare (`writes`), et son corps peut nommer n'importe quel
+    outil : posées sur l'agent, ces écritures lui seraient ouvertes en direct, hors de la
+    recette et de sa borne. D'une cascade, tout outil d'étape qui ne se déclare pas
+    ACTEUR : la table des étapes est fixée dans le code (`waterfall/plan.py`), la prose
+    n'y choisit qu'un fournisseur — et la plupart de ses outils ne déclarent rien encore
+    (`apollo_match_person`, `hunter_email_finder`…), en exiger `read` viderait le geste
+    dans le cas même qui l'a fait naître. Sauf `waterfall_cites.JAMAIS_D_OFFICE`.
 
     ⚠️ Jamais les marqueurs `<tool:…>` de la procédure : ceux-là sont la liste PAR DÉFAUT
     (`_outils_de_la_procedure`), et la personne qui écrit une liste a pu en écarter un
     exprès. Ce qu'un outil appelle pour l'agent, personne ne l'écarte : sans lui, l'outil
     qu'on lui a donné échoue."""
-    a = {deprecations.tool_canonique(n) for n in outils if isinstance(n, str)}
+    canon = deprecations.tool_canonique
+    a = {canon(n) for n in outils if isinstance(n, str)}
     corps = _corps_de_la_procedure(org, slug)
     candidats: list[str] = []
     if "oto_recipe" in a:
         for recette in outils_cites.recettes_citees(corps):
-            candidats += _outils_de_la_recette_publiee(org, recette)
-    candidats += [nom for cascade, nom in waterfall_cites.etapes_des_cascades(corps)
-                  if deprecations.tool_canonique(cascade) in a]
+            candidats += [canon(n) for n in _outils_de_la_recette_publiee(org, recette)
+                          if tool_registry.effet_de(canon(n)) == "read"]
+    candidats += [canon(nom) for cascade, nom in waterfall_cites.etapes_des_cascades(corps)
+                  if canon(cascade) in a and canon(nom) not in waterfall_cites.JAMAIS_D_OFFICE
+                  and tool_registry.effet_de(canon(nom)) != "act"]
     servis = a | outils_du_travail.OUTILS_DE_L_HOTE
-    return [c for c in dict.fromkeys(deprecations.tool_canonique(n) for n in candidats)
-            if c not in servis and tool_registry.effet_de(c) == "read"]
+    return [c for c in dict.fromkeys(candidats) if c not in servis]
 
 
 def _completer_par_une_personne(org: int, slug: Optional[str],

@@ -2907,10 +2907,15 @@ large.
 quand `tools` ou `procedure` change, joués par une PERSONNE, ajoutent à la liste ce que
 les outils de l'agent appelleront pour lui, et le rendent (`tools_added`, absent si rien) :
 les outils des recettes publiées que la procédure lance, si l'agent a `oto_recipe` ; ceux
-des étapes de cascade qu'elle écrit, s'il a cette cascade. Trois bornes : des LECTURES
-déclarées seulement (`tool_registry.effet_de == "read"`, fail-closed — une recette-code
-appelle aussi les écritures qu'elle déclare, et posées sur l'agent elles lui seraient
-ouvertes en direct) ; jamais les marqueurs `<tool:…>` de la procédure (la personne qui
+des étapes de cascade qu'elle écrit, s'il a cette cascade. Trois bornes : d'une recette,
+des LECTURES déclarées seulement (`tool_registry.effet_de == "read"`, fail-closed — une
+recette-code peut nommer n'importe quel outil, et appelle aussi les écritures qu'elle
+déclare : posées sur l'agent, elles lui seraient ouvertes en direct) ; d'une cascade, tout
+outil d'étape qui ne se déclare pas acteur (la table des étapes est fixée dans le code, la
+prose n'y choisit qu'un fournisseur, et la plupart de ses outils ne déclarent encore rien —
+`apollo_match_person` le premier), sauf `waterfall/cites.JAMAIS_D_OFFICE`
+(`apify_run_sync` : l'étape s'en sert pour un acteur fixé, l'outil en lance n'importe
+lequel — il reste dans `missing_tools`, au geste) ; jamais les marqueurs `<tool:…>` de la procédure (la personne qui
 écrit une liste a pu en écarter un exprès) ; rien sous un jeton de délégation (un agent
 n'élargit aucune liste, pas même par ce détour). Fail-soft : un calcul qui échoue pose la
 liste demandée, et `missing_tools` le dit à la lecture.

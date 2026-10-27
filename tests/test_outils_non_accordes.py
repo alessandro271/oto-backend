@@ -272,8 +272,10 @@ _RECETTE_DECLARATIVE = {"tool": "lemlist_database", "source": {"items": "results
 _PROC_RECETTE_ET_CASCADE = (
     'Lire <tool:data_aggregate>. Sourcer : <tool:oto_recipe> `op="run"`, '
     '`slug="sourcing"`. Puis ' + _PROC_CASCADE)
-_LECTURES = {"lemlist_database", "apollo_match_person", "linkedin_aiark_person",
-             "data_rows", "data_aggregate"}
+#: Les effets tels que les outils les déclarent : `apollo_match_person` ne déclare rien
+#: (comme la plupart des outils d'étape), `linkedin_aiark_person` et `lemlist_database`
+#: se déclarent lectures.
+_LECTURES = {"lemlist_database", "linkedin_aiark_person", "data_rows", "data_aggregate"}
 
 
 @pytest.fixture
@@ -288,7 +290,7 @@ def _procedure_outillee(monkeypatch):
     monkeypatch.setattr(RT.db_recipes, "get_version",
                         lambda rid, v: {"body": _RECETTE_DECLARATIVE})
     monkeypatch.setattr(RT.tool_registry, "effet_de",
-                        lambda n: "read" if n in _LECTURES else "act")
+                        lambda n: "read" if n in _LECTURES else None)
 
 
 def test_ses_outils_appellent_la_recette_et_les_etapes_qui_lui_manquent(_procedure_outillee):
@@ -363,3 +365,19 @@ def test_sous_le_jeton_d_un_travail_rien_n_est_ajoute(_agent_8, monkeypatch):
         op="update", trigger_id=8, tools=["oto_recipe", "waterfall_email_act"]))
     assert _agent_8["tools"] == ["oto_recipe", "waterfall_email_act"]
     assert "tools_added" not in rep
+
+
+def test_une_etape_qui_ne_declare_rien_est_donnee_une_qui_agit_jamais(monkeypatch):
+    """La table des étapes est fixée dans le code : un outil d'étape qui ne déclare rien
+    (`hunter_email_finder`) est donné ; un outil qui se déclare acteur, jamais ; un outil
+    générique (`apify_run_sync`, n'importe quel acteur), jamais d'office."""
+    monkeypatch.setattr(RT.db, "get_guide_db", lambda *a: {"body_md": (
+        '`waterfall_email(providers=["hunter", "kaspr"])` puis '
+        '`waterfall_company(providers=["linkedin"])`')})
+    monkeypatch.setattr(RT.tool_registry, "effet_de",
+                        lambda n: "act" if n == "kaspr_enrich_linkedin" else None)
+    assert RT._appeles_par_ses_outils(
+        77, "p", ["waterfall_email", "waterfall_company"]) == ["hunter_email_finder"]
+    assert ("apify_run_sync", "`waterfall_company` (providers)") in RT._outils_non_accordes(
+        77, {"procedure": "p", "tools": ["waterfall_company"]}), (
+        "jamais d'office, mais toujours dit : le geste reste à la personne")
