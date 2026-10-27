@@ -752,6 +752,8 @@ AGENT_EPISODES = """
 --   `reparations` — `[{at, action, job_id, acteur, detail}]`, dans l'ordre : chaque
 --              geste fait, par qui (`medecin` = la boucle, sinon le `sub` de l'agent
 --              médecin ou de l'opérateur). Rien ne s'y efface.
+--   `classe_manuelle` — la classe/le côté ont été posés par un humain ou l'agent
+--              médecin (`diagnose`) : la boucle ne les réécrit plus à chaque passage.
 -- ⚠️ Aucune FK vers `runner_triggers` : un épisode documente un état passé, il survit à
 -- la suppression de l'agent (même règle que `credential_disparitions`).
 CREATE TABLE IF NOT EXISTS agent_episodes (
@@ -767,6 +769,7 @@ CREATE TABLE IF NOT EXISTS agent_episodes (
     travaux_morts INTEGER NOT NULL DEFAULT 0,
     reparations JSONB NOT NULL DEFAULT '[]'::jsonb,
     diagnostic TEXT,
+    classe_manuelle BOOLEAN NOT NULL DEFAULT false,
     ouvert_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     vu_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     clos_at TIMESTAMPTZ,

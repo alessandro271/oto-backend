@@ -492,7 +492,8 @@ def perimer_travaux_du_declencheur(trigger_id: int, org_id: int,
 
 
 def file_du_declencheur(trigger_id: int, org_id: int) -> dict:
-    """Ce qui ATTEND maintenant pour ce déclencheur : `{pending, held}`.
+    """Ce qui ATTEND maintenant pour ce déclencheur : `{pending, held}` — et ce qui
+    TOURNE (`claimed`).
 
     ⚠️ **Exactement le prédicat de `perimer_travaux_du_declencheur`**, et c'est la
     raison d'être de ce compte : il dit ce que « vider la file » viderait. Un écran
@@ -503,13 +504,18 @@ def file_du_declencheur(trigger_id: int, org_id: int) -> dict:
     `held` est séparé de `pending` parce qu'ils ne disent pas la même chose :
     `pending` part dès qu'un worker passe, `held` attend qu'on rallume l'agent.
     `0` est un vrai zéro, jamais une absence de mesure.
+
+    ⚠️ `claimed` (27/10/2026) n'est PAS dans ce que « vider la file » viderait : un
+    travail pris par un worker tourne déjà. Il est compté à part pour qui doit savoir
+    qu'une occurrence est EN VOL — la relance d'un travail mort (`medecin_agents`) ne
+    double pas un run en cours.
     """
     return files_des_declencheurs(org_id, [trigger_id])[int(trigger_id)]
 
 
 def files_des_declencheurs(org_id: int, trigger_ids: list[int]) -> dict[int, dict]:
     """`file_du_declencheur` pour toute une liste, en UNE lecture (oto-backend#1148) :
-    `{trigger_id: {pending, held}}`, chaque id demandé présent, `0` compris.
+    `{trigger_id: {pending, held, claimed}}`, chaque id demandé présent, `0` compris.
 
     ⚠️ Aucun index ne sert `status = 'held'` (`idx_runner_jobs_live` couvre
     `pending`/`claimed`) : cette lecture PARCOURT `runner_jobs`. Faite une fois par
@@ -523,17 +529,18 @@ def files_des_declencheurs(org_id: int, trigger_ids: list[int]) -> dict[int, dic
             """
             SELECT payload->>'trigger_id' AS trigger_id,
                    COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
-                   COUNT(*) FILTER (WHERE status = 'held')::int AS held
+                   COUNT(*) FILTER (WHERE status = 'held')::int AS held,
+                   COUNT(*) FILTER (WHERE status = 'claimed')::int AS claimed
               FROM runner_jobs
-             WHERE org_id = %s AND status IN ('pending', 'held')
+             WHERE org_id = %s AND status IN ('pending', 'held', 'claimed')
                AND payload->>'trigger_id' = ANY(%s)
              GROUP BY 1
             """,
             (org_id, [str(i) for i in ids]),
         ).fetchall()
     lus = {int(r["trigger_id"]): r for r in rows}
-    return {i: {"pending": lus.get(i, {}).get("pending") or 0,
-                "held": lus.get(i, {}).get("held") or 0} for i in ids}
+    return {i: {cle: lus.get(i, {}).get(cle) or 0
+                for cle in ("pending", "held", "claimed")} for i in ids}
 
 
 def comptage_perime(org_id: int, trigger_id: int) -> dict:

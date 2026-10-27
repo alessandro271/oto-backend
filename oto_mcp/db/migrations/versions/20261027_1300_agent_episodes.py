@@ -4,7 +4,7 @@ un agent avant qu'on le remarque).
 Une table NEUVE, née entière, et deux index — le DDL est le fragment
 `db/schema/runs.py::AGENT_EPISODES`, exécuté tel quel : `agent_episodes (id, org_id,
 trigger_id, classe, cote, statut, motif, dernier_job_id, travaux_morts, reparations,
-diagnostic, ouvert_at, vu_at, clos_at, resolution)`, un index unique partiel (un seul
+diagnostic, classe_manuelle, ouvert_at, vu_at, clos_at, resolution)`, un index unique partiel (un seul
 épisode vivant par agent) et un index de lecture par statut.
 
 **Verrous.** `AccessExclusiveLock` sur la table neuve (vide, instantané). Aucune table

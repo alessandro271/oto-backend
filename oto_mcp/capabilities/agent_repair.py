@@ -10,9 +10,10 @@ dans l'org de l'appelant. L'agent médecin vit dans l'org de la plateforme et so
 agents d'autres orgs : sans cette porte, il diagnostiquerait sans pouvoir rien faire.
 
 ⚠️ **Ce que cette porte permet est une liste FERMÉE** : lire un épisode et le dernier
-travail mort, relancer ce travail (sous les gardes de la boucle, `medecin_agents.relancer`
-— une relance par travail mort, `RELANCES_MAX` par épisode, jamais par-dessus une
-occurrence qui attend, jamais au-delà de `AGE_MAX`), écrire un diagnostic, corriger la
+travail mort (sans sa sortie : `_CHAMPS_DU_TRAVAIL`), relancer ce travail (sous les
+gardes de la boucle, `medecin_agents.relancer` — une relance par travail mort, tenue en
+base, `RELANCES_MAX` par épisode, jamais par-dessus une occurrence qui attend ou tourne,
+jamais au-delà de `AGE_MAX`), écrire un diagnostic, corriger la
 classe, escalader, clore. Elle ne touche ni une clé, ni une identité, ni une procédure,
 ni un horaire, ni une donnée — ces remèdes appartiennent au titulaire de l'agent.
 Chaque geste s'écrit sur l'épisode avec son auteur (`ctx.sub`), avant d'être fait.
@@ -75,8 +76,17 @@ def _episode(inp: AgentRepairInput) -> dict:
     return ep
 
 
+#: Ce qui se sert du dernier travail mort : de quoi diagnostiquer, rien de ce que l'agent
+#: a PRODUIT. ⚠️ Ni `result` ni `attempt_errors` : le premier est la sortie de l'agent chez
+#: son titulaire, le second peut en recopier des morceaux (une trace d'outil, une donnée
+#: lue) — une porte de plateforme sur TOUTES les orgs n'en a pas besoin pour soigner.
+_CHAMPS_DU_TRAVAIL = ("id", "kind", "status", "attempts", "last_error", "finished_at",
+                      "run_id")
+
+
 def _contexte(ep: dict) -> tuple[Optional[dict], Optional[dict]]:
-    """L'agent (sans sa configuration secrète) et le dernier travail mort de l'épisode."""
+    """L'agent (sans sa configuration secrète) et le dernier travail mort de l'épisode
+    (`_CHAMPS_DU_TRAVAIL`)."""
     org_id = int(ep["org_id"])
     t = db.get_trigger(int(ep["trigger_id"]), org_id) or None
     agent = None if t is None else {
@@ -84,9 +94,7 @@ def _contexte(ep: dict) -> tuple[Optional[dict], Optional[dict]]:
                               "cron", "tz", "tools", "max_run_seconds", "max_tokens")}
     job = db.get_job(int(ep["dernier_job_id"]), org_id) if ep.get("dernier_job_id") else None
     if job is not None:
-        job = {k: job.get(k) for k in ("id", "kind", "status", "attempts", "last_error",
-                                       "attempt_errors", "result", "finished_at",
-                                       "run_id")}
+        job = {k: job.get(k) for k in _CHAMPS_DU_TRAVAIL}
     return agent, job
 
 
@@ -158,11 +166,16 @@ CAPABILITIES += [
             "proprietaire | inconnu), re-runs transient platform failures by itself, and "
             "closes it on the next success. op=list (`statut`, default `vivants`; "
             "`org_id`, `cote`, `limit`) / get (`episode_id` → the episode, the agent, "
-            "and its last dead job with EVERY attempt's error) / rerun (re-queue the last "
+            "and its last dead job: status, attempts, `last_error` — never its result nor "
+            "its per-attempt log) / rerun (re-queue the last "
             "dead job — refused, with the reason in `refus`, when the episode is closed, "
             "the agent is off, the fault is the owner's, the job was already re-run, it is older than 24 h, "
-            "an occurrence is already waiting, or 2 re-runs were already spent) / "
-            "diagnose (`diagnostic`, and/or a corrected `classe`/`cote`) / escalate (hand "
+            "an occurrence is already waiting or running, or 2 re-runs were already spent; "
+            "it re-queues the job as it was, reading none of the agent's content. ⚠️ No "
+            "guard knows whether the dead run already wrote or sent something: a re-run "
+            "redoes it) / "
+            "diagnose (`diagnostic`, and/or a corrected `classe`/`cote` — kept: the "
+            "loop no longer reclassifies that episode) / escalate (hand "
             "it to a human, with your `diagnostic`) / close (`resolution`). Nothing here "
             "touches a key, an identity, a procedure, a schedule or any data: those "
             "fixes belong to the agent's owner — say what they are in `diagnostic`."),

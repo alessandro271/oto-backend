@@ -2615,37 +2615,63 @@ passe AVANT l'alerte.
   `classe` + `cote` (`plateforme` · `proprietaire` · `inconnu`) disent QUI peut réparer ;
   `statut` `ouvert → en_soin → escalade | clos` ; `reparations` = chaque geste, son
   auteur et sa date, en ajout seul.
-- **La classe** (`medecin_agents.classer`) se lit sur le motif : famille non servie →
+- **La classe** (`medecin_agents.classer`) se lit sur le motif, tronqué comme la file le
+  rend (`MOTIF_TETE`, 200 caractères — chaque fragment tient dans la tête du vrai
+  message) : famille non servie (« Aucun worker ne sert la famille »,
+  `_abonnement._famille_non_servie`, et l'ancien « aucun agent ne dessert ») →
   plateforme ; clé refusée (`cle_sans_workspace`, 401/403, clé invalide, quota, crédit)
+  ET clé non déposée (`runner_jobs._SANS_CLE_DEPOSEE`, `_cle_exigee.raison_du_refus`)
   et identité invalide → titulaire ; refus PASSAGER → plateforme, par la règle même de
   la file (`refus_passager`), donc un 429 de quota épuisé reste du côté du titulaire.
+  ⚠️ « … ne tournent que sur la clé déposée par l'organisation » est une clé que le
+  titulaire n'a pas déposée : une regex `ne tournent` la rangeait côté plateforme, et
+  l'alerte se taisait sur la seule panne qu'il pouvait réparer.
+  ⚠️ Une classe posée à la main (`diagnose` : `classe` ou `cote`) marque l'épisode
+  `classe_manuelle` : les passages suivants rafraîchissent le motif et le compte, plus la
+  classe ni le côté.
   ⚠️ `fin_anormale (success)` n'est PAS un défaut du runner : c'était un refus du
   fournisseur mal libellé par un runner d'avant le 22/10 — il tombe en `inconnu`.
 - **Le soin automatique** (boucle `medecin_agents`, toutes les 5 min) : relancer le
   dernier travail mort, et SEULEMENT pour un refus passager, ou une famille non servie
   quand un worker vivant la sert de nouveau pour cette org (`runner_arme.families`).
   Gardes, toutes dans `medecin_agents.relancer` : une relance par travail mort,
-  `RELANCES_MAX` (2) par épisode, jamais quand une occurrence de l'agent attend déjà
-  (`file_du_declencheur`), jamais au-delà de `AGE_MAX` (24 h). La trace s'écrit sur
-  l'épisode AVANT l'enfilage, sous garde SQL (deux processus : un seul relance), et un
-  refus de la trace n'enfile rien. Une relance que personne ne prend périme à
+  `RELANCES_MAX` (2) par épisode — les deux tenues EN BASE par le WHERE de
+  `noter_reparation`, qui relit `reparations` (deux processus sur le même travail : le
+  second attend le verrou de ligne, relit, refuse) —, jamais quand une occurrence de
+  l'agent attend (`pending`, `held`) ou TOURNE (`claimed`, `file_du_declencheur`),
+  jamais au-delà de `AGE_MAX` (24 h). La trace s'écrit sur l'épisode AVANT l'enfilage,
+  et un refus de la trace n'enfile rien ; il est relu sur l'épisode pour être dit (clos,
+  déjà relancé, plafond) — seul le plafond escalade. Une relance que personne ne prend périme à
   l'occurrence suivante (#814) : relancer ne fabrique pas d'arriéré. Au plafond (refus
-  passager seulement), l'épisode passe `escalade` — chez nous. ⚠️ Une famille qui reste
+  passager seulement), l'épisode passe `escalade` — chez nous : au journal ET au suivi
+  d'erreurs (Sentry, étiquette `oto.medecin_agents`, une issue par agent), le canal des
+  autres défauts dits hors requête. ⚠️ Une famille qui reste
   non servie n'atteint JAMAIS ce plafond (rien n'est relancé) : son épisode reste
-  `ouvert`, le courriel du titulaire est tu, et c'est l'agent médecin qui l'escalade
-  passé une heure. ⚠️ La relance automatique ne lit pas `result.tool_counts` : un refus
-  passager après une écriture est relancé comme la file le relance déjà
-  (`complete_job`) ; l'agent médecin, lui, refuse de relancer un run qui a écrit.
+  `ouvert`, le courriel du titulaire est tu tant que la boucle le voit, et l'escalade est
+  un geste de l'agent médecin ou d'un opérateur (`op=escalate`) : rien ne l'escalade
+  seul. En pratique la boucle ne lit que les travaux `failed`, et le texte « Aucun worker
+  ne sert la famille » s'écrit sur des travaux périmés (`expired`) : cette classe est
+  rare. ⚠️ Ni la relance automatique ni `op=rerun` ne lisent `result.tool_counts` : un
+  refus passager après une écriture est relancé comme la file le relance déjà
+  (`complete_job`) ; rien encore ne distingue, avant un `rerun`, un run qui a écrit.
 - **Ce qu'il ne fait jamais** : toucher une clé, une identité, une procédure, un horaire
   ou une donnée ; relancer une panne `inconnu` (un run qui a agi avant de mourir
   referait ses effets). Un épisode du titulaire passe `escalade` sans geste : c'est
   l'alerte qui le lui dit.
 - **L'alerte se tait pour nos pannes** : `alerte_agents_bloques.balayer` écarte un agent
   dont l'épisode vivant est côté plateforme (`agents_soignes_par_nous`, escaladé
-  compris). Ouvert sur erreur : des épisodes illisibles laissent partir le courriel.
+  compris) — ET que la boucle a vu depuis moins de `medecin_agents.FRAICHEUR` (six
+  passages, 30 min). ⚠️ Sans cette borne, une boucle éteinte après avoir tourné laissait
+  ses épisodes muets pour toujours ; boucle arrêtée ou jamais armée, l'alerte reprend
+  d'elle-même. Ouvert sur erreur : des épisodes illisibles laissent partir le courriel.
+- **Tenant tiers** : une org d'un tenant tiers n'est ni relevée ni relancée — la règle
+  de l'alerte, la même fonction (`alerte_agents_bloques.org_a_nous`, fermée sur
+  erreur) ; l'écart est compté au bilan (`tenant_tiers_ecartes`) et dit une fois au
+  journal par processus.
 - **L'agent médecin** : `oto_admin_agent_repair` (capacité `admin.agent_repair`,
-  plateforme, MCP seul) — `list` / `get` (l'épisode, l'agent, le dernier travail mort
-  avec chaque tentative) / `rerun` (les mêmes gardes que la boucle, plus : épisode clos,
+  plateforme, MCP seul) — `list` / `get` (l'épisode, l'agent, le dernier travail mort :
+  statut, tentatives, `last_error` — ni son `result` ni `attempt_errors`, qui portent ce
+  que l'agent a produit chez son titulaire) / `rerun` (les mêmes gardes que la boucle, plus : épisode clos,
   agent éteint, panne du titulaire ; un refus revient dans `refus`, pas en erreur) /
   `diagnose` / `escalate` / `close`. Prêté à un agent hébergé de la plateforme par
   `platform_tools` : sans lui, un agent de notre org lit les pannes d'une autre org sans

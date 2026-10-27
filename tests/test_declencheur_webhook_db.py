@@ -485,14 +485,14 @@ def test_la_file_compte_ce_que_VIDER_viderait(live):
     _poser_statut(jobs[0], "held")
     _poser_statut(jobs[1], "done")
 
-    assert db.file_du_declencheur(t["id"], ORG) == {"pending": 1, "held": 1}
-    assert db.file_du_declencheur(autre["id"], ORG) == {"pending": 2, "held": 0}, (
+    assert db.file_du_declencheur(t["id"], ORG) == {"pending": 1, "held": 1, "claimed": 0}
+    assert db.file_du_declencheur(autre["id"], ORG) == {"pending": 2, "held": 0, "claimed": 0}, (
         "la file d'un autre agent ne se mélange pas")
-    assert db.file_du_declencheur(t["id"], ORG + 1) == {"pending": 0, "held": 0}, (
+    assert db.file_du_declencheur(t["id"], ORG + 1) == {"pending": 0, "held": 0, "claimed": 0}, (
         "org-scopé")
 
     assert db.perimer_travaux_du_declencheur(t["id"], ORG) == 2
-    assert db.file_du_declencheur(t["id"], ORG) == {"pending": 0, "held": 0}
+    assert db.file_du_declencheur(t["id"], ORG) == {"pending": 0, "held": 0, "claimed": 0}
 
 
 def test_les_livraisons_d_une_AUTRE_org_sont_invisibles(live):

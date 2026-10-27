@@ -32,8 +32,12 @@ def bureau(monkeypatch):
             "agents": [_agent(1, 7), _agent(2, 7), _agent(3, 9), _agent(4, 11)]}
     monkeypatch.setattr(M, "_ECARTEES_DITES", set())
     etat["soignes"] = set()
-    monkeypatch.setattr(episodes_agents, "agents_soignes_par_nous",
-                        lambda ids: {i for i in ids if i in etat["soignes"]})
+    etat["fenetres"] = []
+
+    def _soignes(ids, *, vus_depuis):
+        etat["fenetres"].append(vus_depuis)
+        return {i for i in ids if i in etat["soignes"]}
+    monkeypatch.setattr(episodes_agents, "agents_soignes_par_nous", _soignes)
     monkeypatch.setattr(alertes_agents, "agents_bloques", lambda seuil: list(etat["agents"]))
     monkeypatch.setattr(alertes_agents, "marquer_annonces",
                         lambda ids: etat["marques"].extend(ids) or len(ids))
@@ -108,12 +112,15 @@ def test_une_panne_de_la_plateforme_ne_s_annonce_pas_au_titulaire(bureau):
     html = bureau["lettres"][0][2]
     assert "agent 1" in html and "agent 2" not in html
     assert 2 not in bureau["marques"]
+    # Seulement tant que la boucle tient l'épisode : la fenêtre est celle du médecin.
+    from oto_mcp import medecin_agents
+    assert bureau["fenetres"] == [medecin_agents.FRAICHEUR]
 
 
 def test_des_episodes_illisibles_laissent_partir_le_courriel(bureau, monkeypatch):
     from oto_mcp.db import episodes_agents
 
-    def _casse(ids):
+    def _casse(ids, *, vus_depuis):
         raise RuntimeError("base indisponible")
     monkeypatch.setattr(episodes_agents, "agents_soignes_par_nous", _casse)
     M.balayer(_JOUR)

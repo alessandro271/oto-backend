@@ -15,6 +15,7 @@ mécanisme invisible sur le même objet — exactement ce que la décision du ba
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any, Optional
 
 from ._conn import _connect
@@ -24,8 +25,8 @@ from .alertes_agents import FENETRE_JOURS, MOTIF_TETE, _DU_DECLENCHEUR
 VIVANTS = ("ouvert", "en_soin", "escalade")
 
 _COLONNES = ("id, org_id, trigger_id, classe, cote, statut, motif, dernier_job_id, "
-             "travaux_morts, reparations, diagnostic, ouvert_at, vu_at, clos_at, "
-             "resolution")
+             "travaux_morts, reparations, diagnostic, classe_manuelle, ouvert_at, vu_at, "
+             "clos_at, resolution")
 
 
 def pannes_en_cours() -> list[dict[str, Any]]:
@@ -56,6 +57,7 @@ def pannes_en_cours() -> list[dict[str, Any]]:
                     SELECT j.id, j.last_error, j.kind, j.payload, j.sub, j.finished_at
                       FROM runner_jobs j
                      WHERE {_DU_DECLENCHEUR} AND j.status = 'failed'
+                       AND j.finished_at > NOW() - make_interval(days => %(fenetre)s)
                      ORDER BY j.finished_at DESC LIMIT 1) d
              WHERE t.enabled AND f.travaux >= 1
              ORDER BY t.org_id, t.id
@@ -69,7 +71,9 @@ def ouvrir_ou_rafraichir(*, org_id: int, trigger_id: int, classe: str, cote: str
                          travaux: int) -> dict[str, Any]:
     """L'épisode vivant de l'agent, ouvert s'il n'existe pas, rafraîchi sinon (dernier
     travail, motif, compte, `vu_at`). La classe suit le DERNIER motif : une panne qui
-    change de cause change de remède. Rend la ligne."""
+    change de cause change de remède — sauf une classe posée à la main (`poser`,
+    `classe_manuelle`) : un diagnostic d'humain ou de l'agent médecin n'est pas
+    défait au passage suivant par la regex qu'il corrigeait. Rend la ligne."""
     with _connect() as conn:
         return dict(conn.execute(
             f"""
@@ -78,7 +82,10 @@ def ouvrir_ou_rafraichir(*, org_id: int, trigger_id: int, classe: str, cote: str
             VALUES (%(org)s, %(trigger)s, %(classe)s, %(cote)s, %(motif)s, %(job)s,
                     %(travaux)s)
             ON CONFLICT (trigger_id) WHERE statut <> 'clos' DO UPDATE
-               SET classe = EXCLUDED.classe, cote = EXCLUDED.cote,
+               SET classe = CASE WHEN agent_episodes.classe_manuelle
+                                 THEN agent_episodes.classe ELSE EXCLUDED.classe END,
+                   cote = CASE WHEN agent_episodes.classe_manuelle
+                               THEN agent_episodes.cote ELSE EXCLUDED.cote END,
                    motif = EXCLUDED.motif, dernier_job_id = EXCLUDED.dernier_job_id,
                    travaux_morts = EXCLUDED.travaux_morts, vu_at = NOW()
             RETURNING {_COLONNES}
@@ -116,9 +123,12 @@ def noter_reparation(episode_id: int, *, action: str, acteur: str,
                      job_id: Optional[int] = None, detail: Optional[str] = None,
                      maximum: Optional[int] = None) -> Optional[dict[str, Any]]:
     """Ajoute un geste à l'épisode et le passe `en_soin` — sous garde : un épisode clos
-    ne reçoit rien, et `maximum` borne le nombre de gestes de cette `action` (deux
-    processus qui soignent le même épisode : un seul gagne). Rend la ligne, ou None si
-    la garde a refusé — l'appelant ne fait alors PAS le geste."""
+    ne reçoit rien, `maximum` borne le nombre de gestes de cette `action`, et un même
+    `job_id` ne reçoit qu'UN geste de chaque `action` (une relance par travail mort).
+    La garde est dans le WHERE de l'UPDATE, qui relit `reparations` : deux processus
+    sur le même épisode, le second attend le verrou de ligne, relit la ligne écrite par
+    le premier, et refuse. Rend la ligne, ou None si la garde a refusé — l'appelant ne
+    fait alors PAS le geste."""
     geste = {"action": action, "acteur": acteur, "job_id": job_id,
              "detail": (detail or "")[:500] or None}
     with _connect() as conn:
@@ -134,10 +144,14 @@ def noter_reparation(episode_id: int, *, action: str, acteur: str,
                AND (%(max)s::int IS NULL OR (
                      SELECT COUNT(*) FROM jsonb_array_elements(reparations) r
                       WHERE r->>'action' = %(action)s) < %(max)s::int)
+               AND (%(job)s::bigint IS NULL OR NOT EXISTS (
+                     SELECT 1 FROM jsonb_array_elements(reparations) r
+                      WHERE r->>'action' = %(action)s
+                        AND r->>'job_id' = (%(job)s::bigint)::text))
             RETURNING {_COLONNES}
             """,
             {"geste": json.dumps(geste, ensure_ascii=False), "id": int(episode_id),
-             "max": maximum, "action": action},
+             "max": maximum, "action": action, "job": job_id},
         ).fetchone()
     return dict(row) if row else None
 
@@ -147,7 +161,10 @@ def poser(episode_id: int, *, statut: Optional[str] = None,
           cote: Optional[str] = None,
           resolution: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Le geste d'un humain ou de l'agent médecin sur un épisode : son diagnostic, sa
-    classe corrigée, l'escalade ou la clôture. Un champ absent ne change pas."""
+    classe corrigée, l'escalade ou la clôture. Un champ absent ne change pas.
+
+    Une `classe` ou un `cote` posé ici marque l'épisode `classe_manuelle` : le passage
+    suivant de la boucle ne le réécrit plus (`ouvrir_ou_rafraichir`)."""
     with _connect() as conn:
         row = conn.execute(
             f"""
@@ -156,6 +173,8 @@ def poser(episode_id: int, *, statut: Optional[str] = None,
                    diagnostic = COALESCE(%(diag)s, diagnostic),
                    classe = COALESCE(%(classe)s, classe),
                    cote = COALESCE(%(cote)s, cote),
+                   classe_manuelle = classe_manuelle
+                       OR %(classe)s::text IS NOT NULL OR %(cote)s::text IS NOT NULL,
                    resolution = COALESCE(%(resolution)s, resolution),
                    clos_at = CASE WHEN %(statut)s = 'clos' THEN NOW() ELSE clos_at END,
                    vu_at = NOW()
@@ -198,15 +217,20 @@ def lire(episode_id: int) -> Optional[dict[str, Any]]:
     return dict(row) if row else None
 
 
-def agents_soignes_par_nous(trigger_ids: list) -> set[int]:
+def agents_soignes_par_nous(trigger_ids: list, *, vus_depuis: timedelta) -> set[int]:
     """Parmi ces agents, ceux dont l'épisode vivant est du côté PLATEFORME, tant qu'il n'est pas
     clos — escaladé compris : une panne plateforme qui résiste s'escalade chez NOUS. Leur
-    titulaire ne peut rien y faire, l'alerte se tait pour eux."""
+    titulaire ne peut rien y faire, l'alerte se tait pour eux.
+
+    ⚠️ Seulement un épisode VU depuis moins de `vus_depuis` (`medecin_agents.FRAICHEUR`,
+    quelques passages de la boucle) : un épisode que plus personne ne rafraîchit — boucle
+    éteinte, jamais armée, ou arrêtée — ne fait taire personne. Sans cette borne, une
+    boucle éteinte après avoir tourné laissait ses agents muets pour toujours."""
     if not trigger_ids:
         return set()
     with _connect() as conn:
         return {int(r["trigger_id"]) for r in conn.execute(
             "SELECT trigger_id FROM agent_episodes "
             "WHERE trigger_id = ANY(%s) AND cote = 'plateforme' "
-            "AND statut <> 'clos'",
-            ([int(i) for i in trigger_ids],)).fetchall()}
+            "AND statut <> 'clos' AND vu_at > NOW() - %s",
+            ([int(i) for i in trigger_ids], vus_depuis)).fetchall()}

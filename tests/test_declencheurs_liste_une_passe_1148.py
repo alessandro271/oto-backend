@@ -155,7 +155,7 @@ def test_les_mesures_groupees_comptent_chaque_declencheur_a_part(live):
                           kind="webhook")["id"]
     with dbconn._connect() as c:
         for tid, statut, n in ((a, "pending", 2), (a, "held", 1), (a, "expired", 3),
-                               (b, "pending", 1), (b, "done", 4)):
+                               (b, "pending", 1), (b, "claimed", 1), (b, "done", 4)):
             for _ in range(n):
                 c.execute("INSERT INTO runner_jobs (org_id, kind, status, payload) "
                           "VALUES (%s, 'start', %s, jsonb_build_object('trigger_id', %s::text))",
@@ -169,8 +169,9 @@ def test_les_mesures_groupees_comptent_chaque_declencheur_a_part(live):
                       "VALUES (%s, %s, %s)", (tid, ORG + 2, issue))
     absent = b + 1000
     files = db.files_des_declencheurs(ORG + 2, [a, b, absent])
-    assert files == {a: {"pending": 2, "held": 1}, b: {"pending": 1, "held": 0},
-                     absent: {"pending": 0, "held": 0}}
+    assert files == {a: {"pending": 2, "held": 1, "claimed": 0},
+                     b: {"pending": 1, "held": 0, "claimed": 1},
+                     absent: {"pending": 0, "held": 0, "claimed": 0}}
     pertes = db.comptages_perimes(ORG + 2, [a, b])
     assert (pertes[a]["expired_count"], pertes[b]["expired_count"]) == (3, 0)
     assert pertes[b]["expired_since"] is None and pertes[a]["expired_since"] is not None

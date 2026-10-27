@@ -16,7 +16,8 @@ escalade. Ce module en est une, et la plus petite possible :
 - **où** : seulement la PRODUCTION — la boucle se déclare `tiers=True` dans
   `boucles_de_fond.py`, la préprod (même base) et le développement ne la composent pas ;
 - ⚠️ **un agent dont la panne est la NÔTRE est écarté** (`medecin_agents.py`) : un
-  épisode du côté plateforme ne s'annonce pas au titulaire, qui n'y peut rien ;
+  épisode du côté plateforme ne s'annonce pas au titulaire, qui n'y peut rien — tant
+  que la boucle le VOIT (`medecin_agents.FRAICHEUR`) : boucle éteinte, l'alerte reprend ;
 - ⚠️ **une org d'un tenant tiers est ÉCARTÉE** (`db.org_tenant_slug`, fermé sur
   erreur) : on ne s'adresse pas aux clients d'un partenaire dans son produit sans une
   règle que le tenant aurait déclarée — il n'en existe aucune pour ce courrier
@@ -64,15 +65,18 @@ def destinataire_admin(org_id: int) -> Optional[tuple[str, str]]:
     return (sub, adresses[sub]) if sub else None
 
 
-def _org_a_nous(org_id: int) -> bool:
-    """L'org relève-t-elle du tenant primaire, sur réponse franche ? Fermé sur erreur."""
+def org_a_nous(org_id: int, *, qui: str) -> bool:
+    """L'org relève-t-elle du tenant primaire, sur réponse franche ? Fermé sur erreur.
+    `qui` = le dispositif qui demande, nommé au journal. Partagé avec la boucle
+    `medecin_agents`, qui écarte les mêmes orgs : une seule règle pour « cette org
+    est-elle la nôtre »."""
     from . import db, tenancy
     try:
         return db.org_tenant_slug(int(org_id)) == tenancy.primary_slug()
     # noqa: SILENT — fermé par défaut, et dit : l'org est écartée et comptée.
     except Exception:  # noqa: BLE001
-        log.warning("alerte agents bloqués : tenant de l'org %s illisible — org écartée",
-                    org_id, exc_info=True)
+        log.warning("%s : tenant de l'org %s illisible — org écartée", qui, org_id,
+                    exc_info=True)
         return False
 
 
@@ -126,12 +130,16 @@ def _courriel(to: str, agents: list[dict], *, brand: Optional[str],
 
 
 def _soignes_par_nous(trigger_ids: list) -> set[int]:
-    """Les agents dont la panne est du côté PLATEFORME (`medecin_agents.py`) : leur
-    titulaire n'y peut rien, on ne lui écrit pas. Ouvert sur erreur — une lecture ratée
-    laisse partir le courriel : prévenir pour rien vaut mieux que se taire à tort."""
+    """Les agents dont la panne est du côté PLATEFORME (`medecin_agents.py`) ET que la
+    boucle tient encore (épisode vu depuis moins de `medecin_agents.FRAICHEUR`) : leur
+    titulaire n'y peut rien, on ne lui écrit pas. Une boucle éteinte ou arrêtée cesse de
+    voir ses épisodes, et l'alerte reprend d'elle-même. Ouvert sur erreur — une lecture
+    ratée laisse partir le courriel : prévenir pour rien vaut mieux que se taire à tort."""
+    from . import medecin_agents
     from .db import episodes_agents
     try:
-        return episodes_agents.agents_soignes_par_nous(trigger_ids)
+        return episodes_agents.agents_soignes_par_nous(
+            trigger_ids, vus_depuis=medecin_agents.FRAICHEUR)
     except Exception:  # noqa: BLE001
         log.warning("alerte agents bloqués : épisodes illisibles — aucun agent écarté",
                     exc_info=True)
@@ -157,7 +165,7 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
         par_org.setdefault(int(a["org_id"]), []).append(a)
     envoyes, marques, ecartees, sans_destinataire = 0, 0, 0, 0
     for org_id, agents in sorted(par_org.items()):
-        if not _org_a_nous(org_id):
+        if not org_a_nous(org_id, qui="alerte agents bloqués"):
             ecartees += 1
             if org_id not in _ECARTEES_DITES:
                 _ECARTEES_DITES.add(org_id)
