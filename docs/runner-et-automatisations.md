@@ -2916,6 +2916,27 @@ recettes) une fois par réponse, quel que soit le nombre d'agents qui la portent
 qui le lève est UN `op=update` : `tools` + `missing_tools` — le bouton « Autoriser » de
 l'écran. Il n'accorde rien seul : la liste reste la borne fail-closed de #1256.
 
+**Ce qui est lu (27/10/2026).** Une recette déclarative cite son `tool`, à la racine du
+corps — `outils_cites` lisait `source.tool`, une clé qu'aucune recette ne porte, et toute
+recette déclarative citait `[]`. Et les étapes d'une cascade : quand la procédure écrit
+les fournisseurs à côté de l'appel (`waterfall_email_act(… providers=["apollo",
+"aiark"])`), `waterfall/cites.py` rend les outils de leurs étapes (collecte et révélation
+comprises), `needed_by` = « `waterfall_email_act` (providers) ». Sans `providers=` écrit,
+rien n'est inféré : l'ordre se résout au run, et toute la table serait une liste trop
+large.
+
+**Posé par une personne, complété d'office (27/10/2026).** `op=create`, et `op=update`
+quand `tools` ou `procedure` change, joués par une PERSONNE, ajoutent à la liste ce que
+les outils de l'agent appelleront pour lui, et le rendent (`tools_added`, absent si rien) :
+les outils des recettes publiées que la procédure lance, si l'agent a `oto_recipe` ; ceux
+des étapes de cascade qu'elle écrit, s'il a cette cascade. Trois bornes : des LECTURES
+déclarées seulement (`tool_registry.effet_de == "read"`, fail-closed — une recette-code
+appelle aussi les écritures qu'elle déclare, et posées sur l'agent elles lui seraient
+ouvertes en direct) ; jamais les marqueurs `<tool:…>` de la procédure (la personne qui
+écrit une liste a pu en écarter un exprès) ; rien sous un jeton de délégation (un agent
+n'élargit aucune liste, pas même par ce détour). Fail-soft : un calcul qui échoue pose la
+liste demandée, et `missing_tools` le dit à la lecture.
+
 **Élargir est un geste de personne (`tools_human_only`).** Sous un jeton de délégation
 (`verrou_org.travail_de_la_requete`, la même détection que `platform_tools_human_only`), un
 `op=update` dont `tools` nomme un outil absent de la liste stockée est refusé (403) : sans

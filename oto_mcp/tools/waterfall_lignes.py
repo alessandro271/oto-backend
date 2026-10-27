@@ -37,6 +37,7 @@ from typing import Any, Literal, Optional
 from fastmcp import FastMCP
 from starlette.concurrency import run_in_threadpool
 
+from .. import outils_du_travail
 from ..auth.hooks import current_user_sub_from_token
 from ..datastore import par_reference as pr
 from ..mcp_errors import McpError
@@ -169,6 +170,43 @@ def _valider(ns: str, inputs: Any, output: Any, status_column: Any) -> tuple[dic
     return colonnes, sorties
 
 
+def _hors_liste(attempts: list[dict]) -> list[str]:
+    """Les outils des étapes refusées parce qu'un travail hébergé ne les a pas dans sa
+    liste (`tool_not_in_job`) — variantes comprises. Une telle étape est SAUTÉE par la
+    cascade (`appel._call`), comme une garde : sans ce relevé, la ligne revenait
+    `no_step_answered`, et l'agent concluait à un quota épuisé (vécu le 26/10/2026)."""
+    noms: list[str] = []
+    for a in attempts:
+        for p in [a, *(a.get("tried") or [])]:
+            if (p.get("code") == outils_du_travail.CODE and isinstance(p.get("tool"), str)
+                    and p["tool"] not in noms):
+                noms.append(p["tool"])
+    return noms
+
+
+def _outils_a_donner(refuses: list[str]) -> dict:
+    """Sync (base) : ce que le reçu dit des étapes refusées au travail — les outils à
+    donner à l'agent et le geste qui les lui donne, la forme du refus d'une recette-code
+    (`missing_tools`, `fix`, `recipes/code.refus_hors_liste`). Les autres étapes ont
+    tourné : le reçu reste celui d'un passage, pas un refus. `fix` est un geste de
+    personne (`tools_human_only`) ; `next_step` dit à l'agent de s'arrêter en les nommant,
+    pas de conclure à un quota."""
+    manque = outils_du_travail.manquants(refuses)
+    if not manque:
+        return {}
+    noms = manque["missing"]
+    agent = f"agent {manque['trigger_id']}" if manque.get("trigger_id") else "this agent"
+    return {"missing_tools": noms,
+            "fix": outils_du_travail.correctif(manque.get("trigger_id"),
+                                               manque.get("tools") or [], noms),
+            "next_step": (f"{outils_du_travail.CODE}: the steps that call {noms} were "
+                          f"skipped, because {agent} is not allowed to use them (job "
+                          f"{manque['job_id']}); their rows stay pending. This is not a "
+                          "quota or a key. Stop with run_finish(outcome=\"blocked\") "
+                          f"naming them: the owner adds them to {agent}'s tools in one "
+                          "click (the agent's page shows them).")}
+
+
 def _pas_un_verdict(out: dict, trouve: Any, attempts: list[dict],
                    qualify: Optional[dict]) -> Optional[str]:
     """Why a cascade's outcome is NOT a verdict to write on its row — None when it is: a
@@ -185,6 +223,10 @@ def _pas_un_verdict(out: dict, trouve: Any, attempts: list[dict],
     if any(a.get("status") == "skipped" and a.get("code") == "time_budget"
            for a in attempts):
         return "time_budget"
+    if _hors_liste(attempts):
+        # Un fournisseur n'a pas tourné parce que l'agent n'a pas son outil : un `no_match`
+        # écrit ici ne serait jamais repris une fois l'outil donné.
+        return outils_du_travail.CODE
     if any(a.get("status") in ("failed", "withheld") for a in attempts):
         return "step_failed"
     if any(a.get("code") == "max_paid_steps" for a in attempts):
@@ -303,6 +345,8 @@ async def fill_rows(mcp: FastMCP, ns: str, *, datastore, inputs: dict, output: d
     qualif = {"calls": 0, "not_qualified": 0, "cost_usd": 0.0}
     #: Rows of `groupes` whose cascade did not START (time): left pending.
     attente = {"rows": 0}
+    #: Step tools the hosted job refused (`_hors_liste`), across every row.
+    refuses: list[str] = []
 
     async def _une(sig: str, entree: dict, rids: list[str]) -> None:
         async with porte:
@@ -326,6 +370,7 @@ async def fill_rows(mcp: FastMCP, ns: str, *, datastore, inputs: dict, output: d
             qualif["cost_usd"] += q.get("cost_usd") or 0
         trouve = out.get(kind) if out.get("found") else None
         attempts = out.get("attempts") or []
+        refuses.extend(n for n in _hors_liste(attempts) if n not in refuses)
         motif = _pas_un_verdict(out, trouve, attempts, qualify)
         if motif:
             # Not a verdict (out of time, a step failed, Jev did not judge): nothing
@@ -369,6 +414,8 @@ async def fill_rows(mcp: FastMCP, ns: str, *, datastore, inputs: dict, output: d
         extra["output_fields_never_found"] = sorted(c for c, v in vides.items() if v)
     if qualif["calls"]:
         extra["qualification"] = {**qualif, "cost_usd": round(qualif["cost_usd"], 8)}
+    if refuses:
+        extra.update(await run_in_threadpool(_outils_a_donner, refuses))
     return await run_in_threadpool(
         lambda: recu.rendre(lot, selectionnees=len(lot.lignes), dry_run=False,
                             traitees=len(lot.lignes) - max(pas_partis, 0), **extra))
@@ -391,6 +438,9 @@ _DOC = """Run the {label} waterfall over a TABLE's rows, on the server — op `u
         after the row is written; the one-contact tool collects them.
         The answer is counts plus `errors: [{{row_id, code}}]`; `dry_run` reads the rows,
         counts the lookups and returns the first one's plan, calling nothing.
+        From a hosted agent, a step whose tool the agent may not call is skipped and
+        its rows stay pending (`tool_not_in_job`, not a quota): the answer then names
+        them (`missing_tools`) with the owner's one-click `fix`.
 
         Args:
             op: `update_rows`.

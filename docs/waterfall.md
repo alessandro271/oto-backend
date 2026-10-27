@@ -481,6 +481,14 @@ de `datastore/par_reference` (`docs/donnees-par-reference.md`), comme `lemlist_p
   la cascade → `time_budget` / `max_paid_steps` ; une trouvaille que Jev devait juger et
   n'a pas jugée → `qualification_skipped`. La ligne reste VIDE, le code va au reçu
   (`skipped_<code>`, `errors`), et l'appel suivant la retente.
+- ⚠️ **Une étape hors de la liste d'un agent hébergé** (27/10/2026) : la garde du travail
+  la saute (`appel._call`), comme toute garde. Avant, la ligne revenait
+  `no_step_answered` — ou `no_match` si une autre étape avait répondu, fermée pour de
+  bon — et l'agent concluait à un quota. Désormais : `tool_not_in_job`, la ligne reste
+  vide, et le reçu nomme les outils (`missing_tools`) avec le geste qui les donne
+  (`fix`, la forme du refus d'une recette-code) et `next_step` pour l'agent. Avant le run,
+  `missing_tools` de l'agent les nomme déjà quand sa procédure écrit les fournisseurs
+  (`waterfall/cites.py`, `docs/runner-et-automatisations.md`).
 - `qualify` sans Jev utilisable : refusé avant de lire une ligne ; une clé de `providers`
   inconnue : refusée une fois, avant la première ligne.
 - **Mêmes entrées, une recherche** : les lignes dont les entrées normalisées coïncident
