@@ -2925,22 +2925,20 @@ comprises), `needed_by` = « `waterfall_email_act` (providers) ». Sans `provide
 rien n'est inféré : l'ordre se résout au run, et toute la table serait une liste trop
 large.
 
-**Posé par une personne, complété d'office (27/10/2026).** `op=create`, et `op=update`
-quand `tools` ou `procedure` change, joués par une PERSONNE, ajoutent à la liste ce que
-les outils de l'agent appelleront pour lui, et le rendent (`tools_added`, absent si rien) :
-les outils des recettes publiées que la procédure lance, si l'agent a `oto_recipe` ; ceux
-des étapes de cascade qu'elle écrit, s'il a cette cascade. Trois bornes : d'une recette,
-des LECTURES déclarées seulement (`tool_registry.effet_de == "read"`, fail-closed — une
-recette-code peut nommer n'importe quel outil, et appelle aussi les écritures qu'elle
-déclare : posées sur l'agent, elles lui seraient ouvertes en direct) ; d'une cascade, tout
-outil d'étape qui ne se déclare pas acteur (la table des étapes est fixée dans le code, la
-prose n'y choisit qu'un fournisseur, et la plupart de ses outils ne déclarent encore rien —
-`apollo_match_person` le premier), sauf `waterfall/cites.JAMAIS_D_OFFICE`
-(`apify_run_sync` : l'étape s'en sert pour un acteur fixé, l'outil en lance n'importe
-lequel — il reste dans `missing_tools`, au geste) ; jamais les marqueurs `<tool:…>` de la procédure (la personne qui
-écrit une liste a pu en écarter un exprès) ; rien sous un jeton de délégation (un agent
-n'élargit aucune liste, pas même par ce détour). Fail-soft : un calcul qui échoue pose la
-liste demandée, et `missing_tools` le dit à la lecture.
+**Posé par une personne : ce qui manque est dit, jamais ajouté (27/10/2026).** `op=create`,
+et `op=update` quand `tools` ou `procedure` change, joués par une PERSONNE, rendent
+`tools_to_add` (absent si rien) : ce que les outils de l'agent appelleront pour lui et
+qu'il n'a pas — les outils des recettes publiées que la procédure lance, si l'agent a
+`oto_recipe` ; ceux des étapes de cascade qu'elle écrit, s'il a cette cascade. La liste
+posée reste celle demandée : la personne la repose avec ces outils si elle le veut. Rien
+d'office, parce que ce qui décide de la proposition (la prose de la procédure, le corps
+des recettes) un agent peut l'écrire : un ajout à la retouche suivante d'une personne lui
+ouvrirait en direct ce qu'il y a cité. Bornes de la proposition : d'une recette, des
+LECTURES déclarées seulement (`tool_registry.effet_de == "read"`, fail-closed) ; d'une
+cascade, les outils d'étape de la liste blanche `waterfall/cites.PROPOSABLES` (écrite à la
+main ; `apify_run_sync`, qui lance n'importe quel acteur, est dans `NON_PROPOSES` et reste
+au geste via `missing_tools`) ; jamais les marqueurs `<tool:…>` de la procédure ; rien sous
+un jeton de délégation. Un calcul qui échoue lève : pas de liste posée à l'aveugle.
 
 **Élargir est un geste de personne (`tools_human_only`).** Sous un jeton de délégation
 (`verrou_org.travail_de_la_requete`, la même détection que `platform_tools_human_only`), un

@@ -26,16 +26,34 @@ from .plan import STEPS_BY_NAMESPACE
 
 #: Un appel de cascade cité dans la prose : l'outil d'un contact ou son mode tableau (`_act`).
 _CASCADE = re.compile(r"\b(" + "|".join(STEPS_BY_NAMESPACE) + r")(?:_act)?\b")
+#: Les outils de cascade (un contact, ou le mode tableau `_act`) : un agent qui n'en a
+#: aucun n'appellera aucune étape.
+CASCADES = frozenset(STEPS_BY_NAMESPACE) | frozenset(f"{n}_act" for n in STEPS_BY_NAMESPACE)
 #: Les fournisseurs écrits à côté : `providers=["apollo", "aiark"]` (ou `providers: [...]`).
 _FOURNISSEURS = re.compile(r"""\bproviders\s*[=:]\s*\[([^\]]*)\]""")
 _CLE = re.compile(r"[a-z][a-z0-9_]*")
 #: Jusqu'où, après le nom de la cascade, `providers=` appartient encore à SON appel : un
 #: appel écrit en entier tient en quelques centaines de caractères.
 _PORTEE = 800
-#: Les outils d'étape qu'une personne ne donne JAMAIS d'office en posant un agent
-#: (`runner_triggers._appeles_par_ses_outils`) : l'étape s'en sert pour UN acteur fixé,
-#: mais l'outil en lance n'importe lequel. Ils restent dans `missing_tools`, au geste.
-JAMAIS_D_OFFICE = frozenset({"apify_run_sync"})
+#: La liste BLANCHE des outils d'étape qu'on PROPOSE à la personne qui pose un agent
+#: (`tools_to_add`, `runner_triggers._appeles_par_ses_outils`) : des recherches et des
+#: enrichissements d'un contact ou d'une société, rien d'autre. Écrite à la main, pas
+#: déduite des effets déclarés (la plupart des outils d'étape ne déclarent rien encore) :
+#: une étape neuve n'est proposée qu'une fois rangée ici ou dans `NON_PROPOSES`
+#: (`tests/test_outils_non_accordes.py` le vérifie sur toute la table).
+PROPOSABLES = frozenset({
+    "apollo_enrich_organization", "apollo_match_person", "apollo_reveal_phone",
+    "apollo_reveal_phone_result", "apollo_search_people", "cognism_enrich_account",
+    "cognism_enrich_contact", "dataforseo_technologies", "dropcontact_enrich",
+    "dropcontact_result", "forager_person", "fr_get", "fr_search", "fullenrich_enrich_linkedin",
+    "fullenrich_result", "hunter_email_finder", "kaspr_enrich_linkedin", "lemlist_database",
+    "lemlist_enrich", "lemlist_enrich_result", "linkedin_aiark_person",
+    "linkedin_aiark_search", "linkedin_unipile_profile", "lusha_search_and_enrich",
+    "serper_search", "theirstack_companies_search",
+})
+#: Les outils d'étape jamais proposés : l'étape s'en sert pour UN acteur fixé, mais
+#: l'outil en lance n'importe lequel. Ils restent dans `missing_tools`, au geste.
+NON_PROPOSES = frozenset({"apify_run_sync"})
 
 
 def outils_de_l_etape(step: Step) -> list[str]:

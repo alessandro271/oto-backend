@@ -340,44 +340,120 @@ def _agent_8(monkeypatch, _procedure_outillee):
     return vu
 
 
-def test_une_personne_qui_change_la_liste_la_complete_et_le_voit(_agent_8, monkeypatch):
+def test_une_personne_qui_change_la_liste_voit_ce_qui_manque_sans_rien_d_ajoute(
+        _agent_8, monkeypatch):
+    """Correction (a) : la liste posée est celle demandée, ce qui manque est DIT."""
     monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
+    demandee = ["oto_recipe", "waterfall_email_act", "data_rows"]
     rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
-        op="update", trigger_id=8, tools=["oto_recipe", "waterfall_email_act", "data_rows"]))
-    ajout = ["lemlist_database", "apollo_match_person", "linkedin_aiark_person"]
-    assert _agent_8["tools"] == ["oto_recipe", "waterfall_email_act", "data_rows", *ajout]
-    assert rep["tools_added"] == ajout
+        op="update", trigger_id=8, tools=demandee))
+    assert _agent_8["tools"] == demandee
+    assert rep["tools_to_add"] == [
+        "lemlist_database", "apollo_match_person", "linkedin_aiark_person"]
 
 
-def test_une_retouche_qui_ne_touche_ni_liste_ni_procedure_n_ajoute_rien(_agent_8, monkeypatch):
+def test_une_retouche_qui_ne_touche_ni_liste_ni_procedure_ne_dit_rien(_agent_8, monkeypatch):
     monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
     rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2),
                             RT.TriggerInput(op="update", trigger_id=8, label="renommé"))
-    assert "tools" not in _agent_8 and "tools_added" not in rep
+    assert "tools" not in _agent_8 and "tools_to_add" not in rep
 
 
-def test_sous_le_jeton_d_un_travail_rien_n_est_ajoute(_agent_8, monkeypatch):
+def test_sous_le_jeton_d_un_travail_rien_n_est_propose(_agent_8, monkeypatch):
     """Un agent qui repose une liste (même ou plus courte) passe, et n'emporte rien de
-    plus : il n'élargit aucune liste, pas même par ce détour."""
+    plus."""
     monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete",
                         lambda: types.SimpleNamespace(job_id=41))
     rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
         op="update", trigger_id=8, tools=["oto_recipe", "waterfall_email_act"]))
     assert _agent_8["tools"] == ["oto_recipe", "waterfall_email_act"]
-    assert "tools_added" not in rep
+    assert "tools_to_add" not in rep
 
 
-def test_une_etape_qui_ne_declare_rien_est_donnee_une_qui_agit_jamais(monkeypatch):
-    """La table des étapes est fixée dans le code : un outil d'étape qui ne déclare rien
-    (`hunter_email_finder`) est donné ; un outil qui se déclare acteur, jamais ; un outil
-    générique (`apify_run_sync`, n'importe quel acteur), jamais d'office."""
+def test_une_prose_ecrite_par_un_agent_n_elargit_pas_la_liste_a_la_retouche_suivante(
+        _agent_8, monkeypatch):
+    """(b) Le détour : un run écrit dans la procédure une recette qui lit, et des
+    fournisseurs de cascade ; une personne retouche ensuite l'agent. La liste écrite reste
+    celle qu'elle a posée — un outil qu'elle a retiré ne revient pas —, ce que la prose
+    appelle n'est que proposé."""
+    monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
+    rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
+        op="update", trigger_id=8, tools=["oto_recipe", "waterfall_email_act"]))
+    assert _agent_8["tools"] == ["oto_recipe", "waterfall_email_act"]
+    assert "lemlist_database" in rep["tools_to_add"]
+    _agent_8.clear()
+    rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
+        op="update", trigger_id=8, procedure="p"))
+    assert "tools" not in _agent_8, "changer la procédure n'écrit pas la liste"
+    assert "lemlist_database" in rep["tools_to_add"]
+
+
+def test_un_registre_d_effets_vide_n_ouvre_rien(_agent_8, monkeypatch):
+    """Registre non réchauffé : aucune lecture de recette n'est proposée (fail-closed),
+    seules les étapes de la liste blanche le sont, et la liste écrite ne bouge pas."""
+    monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
+    monkeypatch.setattr(RT.tool_registry, "effet_de", lambda n: None)
+    rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
+        op="update", trigger_id=8, tools=["oto_recipe", "waterfall_email_act"]))
+    assert _agent_8["tools"] == ["oto_recipe", "waterfall_email_act"]
+    assert rep["tools_to_add"] == ["apollo_match_person", "linkedin_aiark_person"]
+
+
+def test_un_calcul_qui_echoue_leve_au_lieu_de_poser_la_liste_a_l_aveugle(
+        _agent_8, monkeypatch):
+    monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
+
+    def _panne(*a):
+        raise RuntimeError("base indisponible")
+    monkeypatch.setattr(RT.db_recipes, "get_recipe_or_platform", _panne)
+    with pytest.raises(RuntimeError):
+        RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
+            op="update", trigger_id=8, tools=["oto_recipe"]))
+    assert "tools" not in _agent_8
+
+
+def test_a_la_pose_sous_le_jeton_d_un_travail_rien_n_est_propose(_procedure_outillee,
+                                                                 monkeypatch):
+    """(a) La pose (`op=create`), pas seulement la retouche : sous un jeton, rien."""
+    monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete",
+                        lambda: types.SimpleNamespace(job_id=41))
+    assert RT._a_ajouter_par_une_personne(2, "p", ["oto_recipe", "waterfall_email_act"]) == []
+    monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
+    assert RT._a_ajouter_par_une_personne(2, "p", ["oto_recipe", "waterfall_email_act"]) == [
+        "lemlist_database", "apollo_match_person", "linkedin_aiark_person"]
+
+
+def test_chaque_outil_d_etape_est_range_proposable_ou_non():
+    """La liste blanche est écrite à la main : une étape neuve doit y être rangée."""
+    from oto_mcp.waterfall import cites
+    from oto_mcp.waterfall.plan import STEPS_BY_NAMESPACE
+    tous = {n for etapes in STEPS_BY_NAMESPACE.values() for s in etapes
+            for n in cites.outils_de_l_etape(s)}
+    assert not cites.PROPOSABLES & cites.NON_PROPOSES
+    assert tous == cites.PROPOSABLES | cites.NON_PROPOSES, (
+        tous ^ (cites.PROPOSABLES | cites.NON_PROPOSES))
+
+
+def test_seule_la_liste_blanche_des_etapes_est_proposee(monkeypatch):
+    """Ce qui décide, c'est `PROPOSABLES`, pas l'effet déclaré : `hunter_email_finder`
+    (qui ne déclare rien) et `kaspr_enrich_linkedin` (même déclaré acteur) sont des
+    étapes de la liste ; `apify_run_sync` (n'importe quel acteur) jamais."""
     monkeypatch.setattr(RT.db, "get_guide_db", lambda *a: {"body_md": (
         '`waterfall_email(providers=["hunter", "kaspr"])` puis '
         '`waterfall_company(providers=["linkedin"])`')})
     monkeypatch.setattr(RT.tool_registry, "effet_de",
                         lambda n: "act" if n == "kaspr_enrich_linkedin" else None)
     assert RT._appeles_par_ses_outils(
-        77, "p", ["waterfall_email", "waterfall_company"]) == ["hunter_email_finder"]
+        77, "p", ["waterfall_email", "waterfall_company"]) == [
+        "hunter_email_finder", "kaspr_enrich_linkedin"]
     assert ("apify_run_sync", "`waterfall_company` (providers)") in RT._outils_non_accordes(
         77, {"procedure": "p", "tools": ["waterfall_company"]}), (
         "jamais d'office, mais toujours dit : le geste reste à la personne")
+
+
+def test_sans_recette_ni_cascade_la_procedure_n_est_pas_lue(monkeypatch):
+    """La pose d'un agent ordinaire ne paie aucune lecture de plus."""
+    def _interdit(*a):
+        raise AssertionError("procédure lue pour rien")
+    monkeypatch.setattr(RT.db, "get_guide_db", _interdit)
+    assert RT._appeles_par_ses_outils(77, "p", ["data_rows", "gmail"]) == []
