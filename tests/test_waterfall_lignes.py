@@ -299,3 +299,47 @@ def test_une_trouvaille_que_jev_n_a_pas_jugee_n_est_pas_ecrite(calls, table):
                output={"people": "people"}, status_column="people_status",
                providers=["google"], qualify=_FIT)
     assert table["store"].ecrites == {} and out["skipped_qualification_skipped"] == 1
+
+
+def _hors_liste(name):
+    """Le refus que la garde du travail hébergé lève sur l'outil d'une étape."""
+    return McpError(ErrorData(code=INVALID_PARAMS,
+                              message=f"Refusal `tool_not_in_job`: `{name}` is not in this "
+                                      "hosted agent's tool list (job 41).",
+                              data={"code": "tool_not_in_job", "tool": name}))
+
+
+@pytest.fixture
+def _travail_41(monkeypatch):
+    """Le travail 41 de l'agent 7, qui a la cascade mais pas l'outil de Hunter."""
+    from oto_mcp import outils_du_travail
+    import types
+    monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete",
+                        lambda: types.SimpleNamespace(job_id=41))
+    monkeypatch.setattr(outils_du_travail.db, "charge_du_travail", lambda job: {
+        "tools": ["waterfall_email_act", "apollo_match_person"], "trigger_id": 7})
+
+
+def test_une_etape_hors_de_la_liste_du_travail_n_est_ni_un_verdict_ni_un_quota(
+        calls, table, _travail_41):
+    """Hunter refusé au travail, Apollo répond sans trouver : écrire `no_match` fermerait
+    la ligne pour de bon, alors que Hunter n'a jamais tourné. Le reçu nomme l'outil et le
+    geste qui le donne — pas un quota."""
+    _une_ligne(table)
+    calls["answers"]["hunter_email_finder"] = _hors_liste("hunter_email_finder")
+    calls["answers"]["apollo_match_person"] = IssueCible(ok=True, result={"person": {}})
+    out = _act("waterfall_email", **{**_EMAIL_ARGS, "providers": ["hunter", "apollo"]})
+    assert table["store"].ecrites == {} and out.get("no_match") is None
+    assert out["skipped_tool_not_in_job"] == 1
+    assert out["errors"] == [{"row_id": "r1", "code": "tool_not_in_job"}]
+    assert out["missing_tools"] == ["hunter_email_finder"]
+    assert out["fix"] == {"tool": "oto_trigger", "op": "update", "trigger_id": 7, "tools": [
+        "waterfall_email_act", "apollo_match_person", "hunter_email_finder"]}
+    assert "not a quota" in out["next_step"] and "agent 7" in out["next_step"]
+
+
+def test_sans_etape_refusee_le_recu_ne_parle_pas_d_outils(calls, table, _travail_41):
+    _une_ligne(table)
+    calls["answers"]["hunter_email_finder"] = IssueCible(ok=True, result={"data": {}})
+    out = _act("waterfall_email", **_EMAIL_ARGS)
+    assert "missing_tools" not in out and "fix" not in out
