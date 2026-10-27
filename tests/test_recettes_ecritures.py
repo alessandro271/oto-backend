@@ -82,3 +82,29 @@ def test_une_recette_lit_les_comptes_et_les_exports_d_une_campagne_lemlist_sans_
                "export_status"):
         assert ec.juger("lemlist_campaign", {"op": op})[0] == "refus", op
     assert not any(d.startswith("lemlist_campaign") for d in ec.declarables())
+
+
+def test_une_recette_lit_les_watch_lists_les_desinscriptions_et_les_fiches_lemlist():
+    """Lire les prises d'une watch list, la liste de désinscription et les fiches du CRM
+    lemlist avant de pousser : des lectures, sans déclaration. Tout ce qui crée, modifie,
+    désinscrit ou réinscrit est refusé — rien de ces trois outils ne se déclare."""
+    lectures = {
+        "lemlist_watchlist": ("list", "filters", "filter_values", "library", "history",
+                              "signals"),
+        "lemlist_unsubscribe": ("list", "get", "export", "var_list", "var_get",
+                                "var_export", "contact_status", "contact_export"),
+        "lemlist_contact": ("list", "get", "lists", "list_export"),
+    }
+    ecritures = {
+        "lemlist_watchlist": ("create", "update", "delete", "push_signals"),
+        "lemlist_unsubscribe": ("add", "delete", "var_add", "var_bulk", "var_remove",
+                                "contact_add", "contact_remove"),
+        "lemlist_contact": ("upsert", "delete", "list_create", "list_manage"),
+    }
+    for outil, ops in lectures.items():
+        for op in ops:
+            assert ec.juger(outil, {"op": op}) == ("lire", None), (outil, op)
+    for outil, ops in ecritures.items():
+        for op in ops:
+            assert ec.juger(outil, {"op": op})[0] == "refus", (outil, op)
+        assert not any(d.startswith(outil) for d in ec.declarables()), outil
