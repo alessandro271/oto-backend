@@ -22,10 +22,18 @@ reçu ; un code qui ne rend rien dans ce délai est tué, et l'exécution lève.
 milieu d'une fonction : une relance repart du début, et une recette s'écrit donc avec des
 écritures idempotentes (#1202).
 
-**Limite connue** : le serveur sert les appels un par un (il lit une ligne, attend
-`appeler`, répond). Des appels lancés en parallèle par le code (`asyncio.gather`) sont
-servis dans l'ordre ; s'ils sont très nombreux pendant un appel lent, la sortie du
-processus peut se remplir et le code attendre. À reprendre quand une recette en aura besoin.
+**Des appels en parallèle sont servis en parallèle** : chaque demande est jugée par le
+budget dès sa lecture (dans l'ordre d'arrivée, sans `await` entre le compte et la
+décision : `max_calls` reste exact), puis jouée dans sa propre tâche, au plus
+`Budget.en_vol` à la fois ; la boucle continue de lire pendant ce temps et chaque réponse
+repart avec son `id` dès qu'elle est prête (`sandbox_pont.ts` les range par `id`). Servis
+un par un jusqu'au 27/10/2026 : une recette qui lançait cinq recherches par
+`asyncio.gather` les voyait passer l'une après l'autre (~11 s chacune) et dépassait sa
+durée. Une tâche par appel, et pas un entrelacement dans la boucle : `executer_cible`
+pose et retire des ContextVar par jeton, ce qui exige que chaque appel ait son contexte.
+⚠️ Le plafond d'unités se juge AVANT l'appel (la quantité n'est connue qu'après) : il
+peut être dépassé de ce que facturent les appels déjà en vol, au plus `en_vol` appels
+— un seul quand le code appelle en série, comme avant.
 
 **Pas de SQL ici** et rien de bloquant : un sous-processus asyncio, lu ligne à ligne sur
 la boucle. `appeler` est une coroutine (`meta.executer_cible` l'est), qui joue elle-même
@@ -57,6 +65,9 @@ MAX_RESULTAT = 5 * 1024 * 1024
 #: les appels y sont refusés (`time_budget`), seule la fin est attendue. Au-delà, le
 #: processus est tué et l'exécution lève — c'est la seule borne qui finit en exception.
 GRACE_S = 5.0
+#: Les appels d'UNE exécution servis en même temps. Au-delà, une demande lue attend
+#: qu'un appel finisse (son budget est déjà jugé, sa place dans l'ordre aussi).
+EN_VOL = 5
 
 #: `appeler(outil, arguments)` → `{ok, result?, code?, message?, quantity?}`. Ne lève
 #: pas : un refus ou un échec est une réponse `ok: false` avec son `code`.
@@ -69,6 +80,7 @@ class Budget:
     appels: Optional[int] = 100   # None = pas de borne en nombre d'appels
     unites: float = 1000.0
     delai_s: float = 120.0
+    en_vol: int = EN_VOL          # appels servis en même temps (au moins 1)
 
 
 async def executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appeler,
@@ -102,6 +114,10 @@ async def executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appeler
     # Vidée en parallèle, BORNÉE : un processus qui remplit sa sortie d'erreur bloquerait
     # sinon, et la lire en entier la garderait toute en mémoire.
     erreurs = asyncio.ensure_future(_queue_erreurs(proc.stderr))
+    # Les appels en vol, leurs places, et UN écrivain à la fois sur l'entrée du processus.
+    en_vol: set[asyncio.Task] = set()
+    places = asyncio.Semaphore(max(1, budget.en_vol))
+    ecriture = asyncio.Lock()
     try:
         await _envoyer(proc, tache)
         while True:
@@ -128,16 +144,35 @@ async def executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appeler
                 continue
             message = json.loads(ligne[len(nonce):])
             if message.get("type") == "call":
-                reponse = await _servir(message, appeler, budget, recu, fin)
-                await _envoyer(proc, {"id": message.get("id"), **reponse})
+                # Jugée ICI, dans l'ordre de lecture : le compte et la décision ne sont
+                # séparés par aucun `await`, donc deux demandes ne passent pas sur la
+                # même place du budget. Seul l'appel admis part dans sa tâche.
+                refus = _admettre(message, budget, recu, fin)
+                if refus is not None:
+                    await _repondre(proc, ecriture, message.get("id"), refus)
+                    continue
+                tache_appel = asyncio.create_task(_servir(
+                    proc, ecriture, places, message, appeler, recu, fin))
+                en_vol.add(tache_appel)
+                tache_appel.add_done_callback(en_vol.discard)
                 continue
             if message.get("type") == "done":
                 if not message.get("ok"):
                     raise executor.ExecutionEchouee(message.get("erreur") or "échec sans message")
+                # Un appel lancé et jamais attendu par le code va à son terme, comme
+                # quand le serveur servait en série : le reçu compte ce qu'il a facturé.
+                if en_vol:
+                    await asyncio.wait(set(en_vol),
+                                       timeout=max(0.1, fin_dure - time.monotonic()))
                 sortie = dict(message.get("sortie") or {})
                 return {**sortie, **recu, "journal": message.get("journal") or "",
                         "duree_ms": int((time.monotonic() - debut) * 1000)}
     finally:
+        # Ce qui vole encore (délai, plantage, fin anticipée) est annulé AVANT de
+        # fermer l'entrée : une réponse n'est jamais écrite dans un tube fermé.
+        for tache_appel in list(en_vol):
+            tache_appel.cancel()
+        await asyncio.gather(*en_vol, return_exceptions=True)
         if proc.returncode is None:
             proc.kill()
             await asyncio.to_thread(lance.arreter)
@@ -170,9 +205,19 @@ async def _fin_erreurs(erreurs) -> str:
         return ""
 
 
-async def _servir(message: dict, appeler: Appeler, budget: Budget, recu: dict,
-                  fin: float) -> dict:
-    """UNE demande du code : bornée par le budget, puis passée à `appeler`."""
+async def _repondre(proc, ecriture: asyncio.Lock, id_appel, reponse: dict) -> None:
+    """La réponse d'UN appel, une ligne entière à la fois (`ecriture`). Un processus
+    parti (fin, plantage, délai) ne la lit plus : la boucle le constate sur sa sortie."""
+    try:
+        async with ecriture:
+            await _envoyer(proc, {"id": id_appel, **reponse})
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+
+
+def _admettre(message: dict, budget: Budget, recu: dict, fin: float) -> Optional[dict]:
+    """Le jugement d'UNE demande par le budget, SANS `await` : le refus à rendre, ou
+    `None` — l'appel est admis et déjà compté dans `calls`."""
     outil, arguments = message.get("tool"), message.get("args")
     if not isinstance(outil, str) or not isinstance(arguments, dict):
         recu["refused"] += 1
@@ -187,6 +232,24 @@ async def _servir(message: dict, appeler: Appeler, budget: Budget, recu: dict,
         return {"ok": False, "code": "budget_exhausted",
                 "message": f"This run's budget is spent ({borne}). Nothing was called."}
     recu["calls"] += 1
+    return None
+
+
+async def _servir(proc, ecriture: asyncio.Lock, places: asyncio.Semaphore, message: dict,
+                  appeler: Appeler, recu: dict, fin: float) -> None:
+    """UN appel ADMIS, dans sa tâche : il attend sa place, joue, répond."""
+    try:
+        async with places:
+            reponse = await _jouer(message["tool"], dict(message["args"]), appeler, recu, fin)
+    except Exception as e:  # noqa: BLE001 — une tâche qui lève laisserait le code sans réponse
+        logger.exception("pont : l'appel `%s` a levé hors d'`appeler`", message.get("tool"))
+        reponse = {"ok": False, "code": "bridge_error", "message": type(e).__name__}
+    await _repondre(proc, ecriture, message.get("id"), reponse)
+
+
+async def _jouer(outil: str, arguments: dict, appeler: Appeler, recu: dict,
+                 fin: float) -> dict:
+    """L'appel lui-même, passé à `appeler`, borné par ce qui reste de la durée."""
     try:
         reponse = await asyncio.wait_for(appeler(outil, dict(arguments)),
                                          max(0.1, fin - time.monotonic()))

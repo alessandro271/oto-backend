@@ -141,8 +141,15 @@ code (#1202) : `oto_recipe` le sert aux recettes `kind: "code"` (`docs/recettes.
   son reçu ; au-delà il est tué et l'exécution lève. Pas de reprise au milieu d'une
   fonction : une relance repart du début, d'où des écritures idempotentes le jour où il y
   en aura. Un résultat au-delà de `MAX_RESULTAT` est refusé APRÈS l'appel (facturé).
-- **Limite connue** : les appels sont servis un par un ; des appels parallèles très
-  nombreux pendant un appel lent peuvent remplir la sortie du processus.
+- **Des appels en parallèle sont servis en parallèle** (`asyncio.gather` dans le code),
+  au plus `Budget.en_vol` à la fois (`EN_VOL`, 5) : chaque demande est jugée par le
+  budget à sa lecture, sans `await` entre le compte et la décision (`max_calls` exact),
+  puis jouée dans sa tâche ; les réponses repartent par `id` dès qu'elles sont prêtes.
+  Servis un par un jusqu'au 27/10/2026 — cinq recherches de ~11 s lancées ensemble
+  passaient l'une après l'autre et une recette dépassait sa durée. ⚠️ Le plafond
+  d'unités se juge avant l'appel : il peut être dépassé de ce que facturent les appels
+  en vol (au plus `en_vol`). `max_writes` se réserve avant le premier `await`
+  (`recipes/pont.py`), il reste exact.
 - **Côté serveur, une pompe asyncio** (`create_subprocess_exec`) : les appels d'outils
   sont attendus sur la boucle, sans fil ni SQL dans ce module.
 
