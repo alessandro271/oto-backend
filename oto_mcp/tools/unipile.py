@@ -704,6 +704,14 @@ def account_status(provider: str = "LINKEDIN",
         # itself (`credential_provider`), so the message names the right card.
         canal_con = providers.connector_for_hosted_channel(provider)
         nom = canal_con.name if canal_con else "unipile"
+        # #1342: an own account linked in another org is named, with its gesture —
+        # never « connect your account » for an account that exists.
+        ailleurs = ([] if pointer_error
+                    else connector_identities.comptes_dans_une_autre_org(sub, provider))
+        if ailleurs:
+            out["elsewhere"] = ailleurs[0]
+            out["next_step"] = ailleurs[0]["next_step"]
+            return out
         diag = connector_readiness.diagnose(
             sub, nom, org=org, group=access.current_group(sub))
         out["next_step"] = pointer_error or (
@@ -972,6 +980,15 @@ def unipile_client(provider: str = "LINKEDIN"):
         except ValueError as e:
             raise McpError(_refus_identite(e))
     if not account_id:
+        # #1342 (option C of 27/10/2026): the caller's OWN account of this channel is
+        # linked in another of their orgs and adoptable here → say so, with the gesture.
+        # « Connect your account » sent people to a new pairing (a second session at the
+        # provider) for an account that already exists.
+        ailleurs = connector_identities.comptes_dans_une_autre_org(sub, provider)
+        if ailleurs:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS, message=ailleurs[0]["next_step"],
+                data={"code": connector_identities.CODE_AUTRE_ORG, "retryable": False}))
         # The page comes from the account's PRODUCT: a client of a third-party tenant sent
         # to us creates a second account there, and nothing links any more (see
         # `unipile_connect.connections_page`). Without a declared page, no address —

@@ -95,6 +95,15 @@ class Identity(BaseModel):
     shared_owner: Optional[IdentitySharedOwner] = None
 
 
+class IdentityElsewhere(BaseModel):
+    """The caller's OWN hosted account linked in another of their orgs (#1342)."""
+    channel: str
+    account_id: str
+    account_name: Optional[str] = None
+    org_id: Optional[int] = None
+    next_step: str                          # the exact gesture to adopt it here
+
+
 class ConnectorIdentities(BaseModel):
     """Identities reachable by the caller's resolved credential for a connector."""
     connector: str
@@ -116,13 +125,20 @@ class ConnectorIdentities(BaseModel):
     # `no_credential` | `paid_option_off` | `over_quota` | `credential_rejected`
     # (a layer is missing, see `connectors/readiness.py`) | `no_identity_connected`
     # (everything is in place, one
-    # remains to be connected). The defect of #504 was not the CONTENT of the
+    # remains to be connected) | `account_in_other_org` (#1342: the caller's own hosted
+    # account is linked in another of their orgs — see `elsewhere`). The defect of #504 was not the CONTENT of the
     # list — verified on prod on 28/08, it was empty because there was
     # nothing to list — it was its SILENCE: `[]` did not say whether there was no
     # account, no key, or a key that sees nothing, and the caller invented the
     # wrong cause for four days.
     reason: Optional[str] = None
     next_step: Optional[str] = None         # the action, returned as is
+    # ── Own accounts linked in ANOTHER org (#1342) ── present only when there are some.
+    # A hosted account is served only in the org it is linked to; these are the
+    # caller's own, adoptable here by the gesture in `next_step` of each entry
+    # (`unipile_connect_start`, no new pairing). On an empty list, `reason` is then
+    # `account_in_other_org` and the top-level `next_step` is the first one's.
+    elsewhere: Optional[list[IdentityElsewhere]] = None
 
 
 class SelectedIdentity(BaseModel):
@@ -220,9 +236,29 @@ async def _list(ctx: ResolvedCtx, inp: IdentitiesInput) -> dict:
         "noun": noun,
         "identities": ids,
     }
-    if not ids:
+    ailleurs = await run_in_threadpool(_ailleurs, ctx, inp)
+    if ailleurs:
+        out["elsewhere"] = ailleurs
+    if not ids and ailleurs:
+        # Not « nothing is connected »: the caller's account exists, in another org.
+        out.update(reason=connector_identities.CODE_AUTRE_ORG,
+                   next_step=ailleurs[0]["next_step"])
+    elif not ids:
         out.update(_why_empty(ctx, inp.connector, noun))
     return out
+
+
+def _ailleurs(ctx: ResolvedCtx, inp: IdentitiesInput) -> list[dict]:
+    """The caller's own hosted accounts linked in another org, adoptable here (#1342) —
+    only for the hosted messaging family (`unipile` and its channel cards), member tier."""
+    from ... import providers
+    if inp.scope != "member":
+        return []
+    con = providers.REGISTRY.get(inp.connector)
+    if inp.connector != "unipile" and not (con and con.hosted_channel):
+        return []
+    return connector_identities.comptes_dans_une_autre_org(
+        ctx.sub, con.hosted_channel if con else None)
 
 
 def _why_empty(ctx: ResolvedCtx, connector: str, noun: str) -> dict:
@@ -342,7 +378,11 @@ CAPABILITIES_DOC_LIST = (
     "no_credential / paid_option_off / over_quota / credential_rejected (a layer is "
     "missing — credential_rejected = the key resolves but the provider refused it at "
     "the last connection test) or "
-    "no_identity_connected (everything resolves, nothing linked yet), with `next_step`. "
+    "no_identity_connected (everything resolves, nothing linked yet) or "
+    "account_in_other_org (your own hosted account is linked in another of your orgs), "
+    "with `next_step`. A hosted messaging account is served only in the org it is linked "
+    "to: `elsewhere` lists yours linked in another org, each with the gesture that adopts "
+    "it here without a new pairing. "
     "Never read an empty list as a bug before reading its reason."
 )
 CAPABILITIES_DOC_SET = (

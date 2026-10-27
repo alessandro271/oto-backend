@@ -85,6 +85,11 @@ def wired(monkeypatch):
                                                   "reason": "no_pending",
                                                   "detail": "rien en attente"})(sub)
     monkeypatch.setattr(unipile_connect, "reconcile_pending", _reconcile)
+    # #1342 : les comptes propres liés dans une AUTRE org, adoptables ici (aucun par défaut).
+    from oto_mcp.tools import unipile as U
+    state["elsewhere"] = {}
+    monkeypatch.setattr(U, "status_for",
+                        lambda sub, **k: {"elsewhere": dict(state["elsewhere"])})
     return state
 
 
@@ -105,6 +110,19 @@ def test_op_status_sans_compte_repond_faux_au_lieu_de_lever(wired):
     assert out["connected"] is False
     assert out["account_id"] is None
     assert out["next_step"]                  # le geste, nommé
+
+
+def test_op_status_nomme_le_compte_lie_dans_une_autre_org_et_sa_reprise(wired):
+    """#1342 : le compte existe, dans une autre org de la personne — le statut le
+    nomme avec le geste qui l'adopte ici, jamais « connecte ton compte »."""
+    wired["accounts"] = []
+    wired["elsewhere"] = {"linkedin": {"account_id": "acc_9", "account_name": "Jane Doe",
+                                       "org_id": 12}}
+    out = _tool("linkedin_unipile_account")(op="status")
+    assert out["connected"] is False
+    assert out["elsewhere"]["account_id"] == "acc_9"
+    assert "unipile_connect_start(channel='linkedin')" in out["next_step"]
+    assert "org 12" in out["next_step"]
 
 
 def test_op_status_rapporte_une_session_morte(wired):

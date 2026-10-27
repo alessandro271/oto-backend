@@ -4,8 +4,17 @@ Le compte épinglé POUR L'APPEL prime sur le pointeur maison, gardé (accordé 
 propre), éphémère, sans repli muet."""
 import pytest
 
-from oto_mcp import session_org, db
+from oto_mcp import access, session_org, db
 from oto_mcp.connectors import identities as ci
+
+
+@pytest.fixture(autouse=True)
+def _org_de_contexte(monkeypatch):
+    """Les comptes propres épinglables sont ceux de l'org de contexte (#1342)."""
+    monkeypatch.setattr(access, "current_org", lambda sub: 7)
+    monkeypatch.setattr(access, "personal_instance_org",
+                        lambda sub, con, exclude_org=None: None)
+    monkeypatch.setattr(db, "get_unipile_account_id", lambda sub, org, prov: None)
 
 
 def _grants(mapping):
@@ -13,7 +22,7 @@ def _grants(mapping):
 
 
 def _own(ids):
-    return lambda sub: [{"provider": "LINKEDIN", "account_id": a} for a in ids]
+    return lambda sub: [{"provider": "LINKEDIN", "account_id": a, "org_id": 7} for a in ids]
 
 
 def test_pin_granted_account_wins(monkeypatch):

@@ -175,12 +175,105 @@ def _own_unipile_account_id(sub: str, provider: str) -> str | None:
 
 
 def _own_account_ids(sub: str, provider: str) -> set[str]:
-    """All of the sub's own LIVE `account_id`s on this channel (all orgs) — guard
-    set for the `_account=` pin (their own, in addition to granted accounts)."""
-    from .. import db
+    """The sub's own LIVE `account_id`s on this channel that are operable HERE — guard
+    set for the `_account=` pin (their own, in addition to granted accounts).
+
+    HERE = linked to the context org (member scope, ADR 0033 B4), plus the one account
+    the unpinned resolution would serve anyway (`_own_unipile_account_id`: the BYO
+    cross-org pairing of #172, key and account from the same org). An account linked
+    to ANOTHER org of the same sub is not in it (#1342, decision of 27/10/2026, option C
+    « strict partitioning + adoption »): pinning it used to pass while the list and the
+    unpinned refusal said « none » — one rule must hold everywhere. Such a pin gets the
+    named refusal `account_in_other_org` (see `_ligne_dans_une_autre_org`)."""
+    from .. import access, db
     p = provider.upper()
-    return {a["account_id"] for a in db.list_unipile_accounts(sub)
-            if (a.get("provider") or "").upper() == p}
+    org = access.current_org(sub)
+    ids = {a["account_id"] for a in db.list_unipile_accounts(sub)
+           if (a.get("provider") or "").upper() == p and a.get("org_id") == org}
+    propre = _own_unipile_account_id(sub, provider)
+    if propre:
+        ids.add(propre)
+    return ids
+
+
+# #1342 (option C of 27/10/2026): the code of the refusal served when the caller's OWN
+# account of this channel is linked in ANOTHER of their orgs, not in the context org.
+# Never « connect your account »: the account exists, a new pairing would create a
+# second session at the provider. The gesture is the adoption (`unipile_connect_start`).
+CODE_AUTRE_ORG = "account_in_other_org"
+
+
+class CompteDansUneAutreOrg(ValueError):
+    """The caller's own account of this channel lives in another of their orgs.
+
+    `ValueError` like the other « this identity is not operable here » refusals of the
+    resolution (their callers convert them, `tools/unipile._refus_identite`); the
+    subclass carries the code that NAMES it."""
+
+    code = CODE_AUTRE_ORG
+
+
+def comptes_dans_une_autre_org(sub: str, provider: "str | None" = None) -> list[dict]:
+    """The caller's hosted accounts linked in ANOTHER of their orgs and ADOPTABLE here
+    (`status_for(...)['elsewhere']`, single source: platform seat on the shared key,
+    option open in the context org). `provider` (LINKEDIN, WHATSAPP…) = this channel
+    only; None = every channel. Each entry: `{channel, account_id, account_name,
+    org_id, next_step}` — `next_step` is the exact gesture (adoption, no new pairing)."""
+    from ..tools import unipile as unipile_tool
+    canaux = unipile_tool.UNIPILE_CHANNELS
+    out = []
+    for front, compte in unipile_tool.status_for(sub)["elsewhere"].items():
+        canal = canaux[front]
+        if provider and canal != provider.upper():
+            continue
+        entree = {"channel": canal, **compte}
+        out.append({**entree, "next_step": phrase_compte_ailleurs(entree, adoptable=True)})
+    return out
+
+
+def phrase_compte_ailleurs(compte: dict, *, adoptable: bool) -> str:
+    """The sentence that names an own account linked in another org, and the gesture.
+
+    `adoptable` = the adoption by `unipile_connect_start` works from here (platform seat,
+    option open here). Otherwise the account stays usable from ITS org (`_org=`)."""
+    canal = (compte.get("channel") or "").upper()
+    front = canal.lower()
+    nom = compte.get("account_name") or compte["account_id"]
+    debut = (f"Your {canal.title()} account '{nom}' (`{compte['account_id']}`) is linked "
+             f"to another of your orgs (org {compte.get('org_id')}), not to this one: an "
+             "account is only served in the org it is linked to.")
+    ailleurs = f" — or run the call in its org with `_org={compte.get('org_id')}`."
+    if adoptable:
+        return (debut + f" To use it here, call `unipile_connect_start(channel='{front}')`: "
+                "it adopts this SAME account in the current org, with no new pairing (no "
+                "login, no QR code). Do not reconnect it" + ailleurs)
+    return (debut + " It cannot be adopted here as is (another account of this channel "
+            "is already linked here, it lives under that org's own Unipile key, or hosted "
+            "messaging is not open in this org): use it from its org" + ailleurs)
+
+
+def _ligne_dans_une_autre_org(sub: str, provider: str, account_id: str) -> "dict | None":
+    """The caller's own live row for `account_id` on this channel in ANOTHER org (the
+    first one), or None."""
+    from .. import access, db
+    p = provider.upper()
+    org = access.current_org(sub)
+    return next((a for a in db.list_unipile_accounts(sub)
+                 if a.get("account_id") == account_id and a.get("org_id") != org
+                 and (a.get("provider") or "").upper() == p), None)
+
+
+def refuser_si_compte_dans_une_autre_org(sub: str, provider: str, account_id: str) -> None:
+    """Raises `CompteDansUneAutreOrg` if the pinned `account_id` is the caller's own
+    account linked to another org (#1342): the named refusal, with the gesture."""
+    ligne = _ligne_dans_une_autre_org(sub, provider, account_id)
+    if ligne is None:
+        return
+    adoptables = {c["account_id"] for c in comptes_dans_une_autre_org(sub, provider)}
+    raise CompteDansUneAutreOrg(phrase_compte_ailleurs(
+        {"channel": provider, "account_id": account_id,
+         "account_name": ligne.get("account_name"), "org_id": ligne.get("org_id")},
+        adoptable=account_id in adoptables))
 
 
 def refuser_si_preteur_en_pause(sub: str, provider: str, account_id: str) -> None:
@@ -210,8 +303,10 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
 
     **Call pin `_account=` (ADR 0051)**: operated identity pinned FOR THIS
     CALL — takes precedence over the home pointer, EPHEMERAL (no state written).
-    Guarded: GRANTED account (live #55) OR the sub's OWN account; a non-operable pin
-    RAISES (never a silent fallback to another identity).
+    Guarded: GRANTED account (live #55) OR the sub's OWN account operable HERE (linked
+    to the context org, #1342); a non-operable pin RAISES (never a silent fallback to
+    another identity) — named `account_in_other_org` when it is the sub's own account
+    linked to another org.
 
     Otherwise, a "home identity" pointer set → REVALIDATED against LIVE grants on
     every call (owner revocation or disconnection = immediate effect, hard
@@ -226,6 +321,7 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
         if pin in db.granted_accounts_for(sub, provider) or pin in _own_account_ids(sub, provider):
             return pin
         refuser_si_preteur_en_pause(sub, provider, pin)
+        refuser_si_compte_dans_une_autre_org(sub, provider, pin)
         raise ValueError(
             f"The pinned {provider.title()} account (`_account=`) is neither "
             "yours nor an account granted to you — or it is no longer operable. List the "

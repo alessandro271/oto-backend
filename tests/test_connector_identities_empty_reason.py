@@ -31,6 +31,10 @@ def _list(monkeypatch, *, identities, mode="platform", pending=None, option_ok=T
     monkeypatch.setattr(CI.connector_identities, "list_identities",
                         lambda sub, name, scope="member": list(identities))
     monkeypatch.setattr(CI.connector_identities, "supports", lambda name: True)
+    # #1342 : aucun compte propre lié dans une autre org (cas couvert par
+    # `tests/test_unipile_compte_autre_org_1342.py`).
+    monkeypatch.setattr(CI.connector_identities, "comptes_dans_une_autre_org",
+                        lambda sub, provider=None: [])
     monkeypatch.setattr(access, "credential_mode_for",
                         lambda sub, name, org=None, group=None, probe=None: mode)
     monkeypatch.setattr(access, "option_open", lambda sub, name, org=None: option_ok)
