@@ -62,6 +62,20 @@ ECRITURES: dict[str, Ecriture] = {
     # (`tests/test_convention_act.py`) : à sa paire, ces ops vont au lecteur `lemlist`.
     "lemlist_campaign": Ecriture(frozenset({"reports", "batch_stats", "export_leads",
                                             "statutes"}), frozenset()),
+    # Même cas, même transition : des lecteurs multiplexés avec des ops qui écrivent.
+    # Les prises d'une watch list (`signals`), avant de chercher qui contacter ; la liste
+    # de désinscription et les fiches du CRM lemlist, avant de pousser — le garde-fou
+    # « déjà exclu » / « déjà connu » sans modèle. Rien à déclarer : `create`, `update`,
+    # `delete`, `push_signals`, `add`, `var_*` d'écriture, `upsert`, `list_create`,
+    # `list_manage` restent refusés.
+    "lemlist_watchlist": Ecriture(frozenset({"list", "filters", "filter_values",
+                                             "library", "history", "signals"}),
+                                  frozenset()),
+    "lemlist_unsubscribe": Ecriture(frozenset({"list", "get", "export", "var_list",
+                                               "var_get", "var_export", "contact_status",
+                                               "contact_export"}), frozenset()),
+    "lemlist_contact": Ecriture(frozenset({"list", "get", "lists", "list_export"}),
+                                frozenset()),
 }
 
 #: Ce qu'aucune op permise ne peut être : détruire, fusionner, une op `bulk_*` (un lot
