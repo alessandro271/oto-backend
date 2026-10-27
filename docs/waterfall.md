@@ -486,7 +486,8 @@ de `datastore/par_reference` (`docs/donnees-par-reference.md`), comme `lemlist_p
   `no_step_answered` — ou `no_match` si une autre étape avait répondu, fermée pour de
   bon — et l'agent concluait à un quota. Désormais : `tool_not_in_job`, la ligne reste
   vide, et le reçu nomme les outils (`missing_tools`) avec le geste qui les donne
-  (`fix`, la forme du refus d'une recette-code) et `next_step` pour l'agent. Avant le run,
+  (`fix`, la forme du refus d'une recette-code) et `next_step` pour l'agent. Un `dry_run`
+  le dit aussi des étapes qu'il planifie : le plan les disait `planned` sans un mot. Avant le run,
   `missing_tools` de l'agent les nomme déjà quand sa procédure écrit les fournisseurs
   (`waterfall/cites.py`, `docs/runner-et-automatisations.md`).
 - `qualify` sans Jev utilisable : refusé avant de lire une ligne ; une clé de `providers`
