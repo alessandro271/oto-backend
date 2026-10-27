@@ -34,8 +34,15 @@ def test_une_recette_code_cite_ses_appels_litteraux_une_fois_chacun():
 
 
 def test_une_recette_declarative_cite_son_outil():
-    assert outils_cites.outils_cites({"source": {"tool": "apollo_search_people"}}) \
-        == ["apollo_search_people"]
+    """La forme que le moteur exécute : `tool` à la racine, `source` ne tient que la
+    pagination (`moteur.py`)."""
+    corps = {"tool": "lemlist_database", "arguments": {"op": "people"},
+             "source": {"items": "results", "pagination": {"type": "page"}}}
+    assert outils_cites.outils_cites(corps) == ["lemlist_database"]
+
+
+def test_une_recette_declarative_ne_cite_pas_une_cle_qu_aucune_recette_ne_porte():
+    assert outils_cites.outils_cites({"source": {"tool": "apollo_search_people"}}) == []
 
 
 def test_un_corps_illisible_ne_cite_rien():

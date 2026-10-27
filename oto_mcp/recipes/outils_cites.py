@@ -10,9 +10,15 @@ d'outils à ajouter. Lire ce qu'elle cite permet deux choses, avec la même list
 - AU run (`code.executer`) : un seul refus qui nomme TOUS les outils manquants, avant
   le premier appel, plutôt que le premier d'entre eux après des écritures.
 
-Recette déclarative : son `source.tool`. Recette-code : chaque `oto.call("<nom>"` à
-nom LITTÉRAL de ses sources. Un nom construit à l'exécution ne se lit pas ici : il
-reste jugé à l'appel, comme avant — la liste est un plancher, jamais un plafond.
+Recette déclarative : son `tool`, à la racine du corps — là où le moteur le lit
+(`moteur.py`, `contrat.py`). Recette-code : chaque `oto.call("<nom>"` à nom LITTÉRAL
+de ses sources. Un nom construit à l'exécution ne se lit pas ici : il reste jugé à
+l'appel, comme avant — la liste est un plancher, jamais un plafond.
+
+⚠️ 27/10/2026 : on lisait `source.tool`, une clé qu'aucune recette ne porte (`source`
+ne tient que `items` et `pagination`). Toute recette déclarative citait donc `[]` :
+un agent dont la procédure en lançait une ne voyait jamais son outil manquer, et
+l'apprenait au run, refusé (`tool_not_in_job`).
 """
 from __future__ import annotations
 
@@ -29,9 +35,8 @@ def outils_cites(corps: Any) -> list[str]:
     if not isinstance(corps, dict):
         return []
     noms: list[str] = []
-    source = corps.get("source")
-    if isinstance(source, dict) and isinstance(source.get("tool"), str):
-        noms.append(source["tool"])
+    if isinstance(corps.get("tool"), str):
+        noms.append(corps["tool"])
     for texte in (corps.get("sources") or {}).values():
         if isinstance(texte, str):
             noms += _APPEL.findall(texte)
