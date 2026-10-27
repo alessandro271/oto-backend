@@ -1926,13 +1926,24 @@ l'on peut encore la déposer, plutôt qu'à la réservation.
 ### Part équitable entre orgs au claim (27/10/2026)
 
 Un worker de plateforme sert d'abord **l'org qui a le moins de travaux en vol** (bail
-vivant), puis le plus ancien dû. Trié sur `due_at` seul, une org qui enfilait une rafale
+vivant) **dans la famille du travail**, puis le plus ancien dû. Trié sur `due_at` seul, une org qui enfilait une rafale
 (une passe sur 200 lignes à 7 h) tenait toutes les places jusqu'à épuisement, et
 l'occurrence d'une autre org due quelques minutes plus tard attendait derrière — jusqu'à
 périmer à l'occurrence suivante. Les orgs prennent maintenant leur tour, une place à la
-fois. **Aucune borne** : une org seule à attendre prend toutes les places. Le comptage
-passe par `idx_runner_jobs_live` (aucune migration). Un bail mort ne compte pas comme en
-vol.
+fois. **Aucune borne** : une org seule à attendre prend toutes les places. Un bail mort
+ne compte pas comme en vol.
+
+- **Par pool** : la charge se compte par `(org, famille)` — chaque famille est un pool de
+  capacité distinct (clé de plateforme, abonnement `*_subscription`, ferme). Une org qui
+  occupe les abonnements de ses membres n'a rien pris aux workers de clé : elle n'y passe
+  pas derrière les autres.
+- **Par org, jamais par tenant** : le tenant ne règle rien dans la file (convention « on
+  n'étend plus le tenant ») ; regrouper par tenant ferait d'un gros tenant une seule part.
+- **Coût** : la charge est une CTE `MATERIALIZED` calculée une fois par réservation sur
+  les seules lignes vivantes (`idx_runner_jobs_live`, aucune migration), puis jointe. Une
+  sous-requête corrélée dans l'`ORDER BY` la recompterait pour chaque ligne éligible —
+  quadratique en rafale. Garde : `tests/test_runner_jobs_index_vivant.py`, qui mesure le
+  plan de la requête **émise** par `claim_next_job` (espion), pas une copie.
 
 ### Un worker peut ne servir que certaines orgs : `org_ids` (25/09/2026)
 

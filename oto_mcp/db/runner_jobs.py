@@ -15,10 +15,12 @@ Quatre invariants, gravés ici parce qu'une réécriture distraite les casserait
 4. **Seul le claimant conclut** : `complete`/`extend`/`bind_run` sont scopés
    `claimed_by = worker` (le patron de `finish_run`) — un pair ne peut ni fermer
    ni prolonger le job d'un autre.
-5. **Part équitable entre orgs** (27/10/2026) : un worker de plateforme sert d'abord
-   l'org qui a le moins de travaux en vol, puis le plus ancien dû — une org qui
+5. **Part équitable entre orgs, par pool** (27/10/2026) : un worker de plateforme
+   sert d'abord l'org qui a le moins de travaux en vol DANS LE POOL qu'il sert (la
+   famille de modèles : clé, abonnement, ferme), puis le plus ancien dû — une org qui
    enfile une rafale ne retient plus les autres derrière elle, et garde toute la
-   capacité tant qu'elle est seule à attendre.
+   capacité tant qu'elle est seule à attendre. La part est celle de l'ORG, jamais du
+   tenant (voir `claim_next_job`).
 """
 from __future__ import annotations
 
@@ -240,14 +242,15 @@ def _fragments_abonnement(abonnement: bool, sonde: bool = False) -> dict:
     course de deux réservations simultanées sur le même abonnement."""
     if not abonnement:
         return {"colonnes_forfait": "", "jointure_pret": "", "clause_abonnement": "",
-                "verrou_de": "", "charge_prise": _CHARGE_PRISE, "retour_preteur": ""}
+                "charge_prise": _CHARGE_PRISE, "retour_preteur": ""}
     from .org_subscription_pool import PRET_VIVANT, preteur_servable
     PRETEUR_SERVABLE = preteur_servable(sonde)
     return {
         "colonnes_forfait": ", pret.sub AS preteur, COALESCE(pret.sub, rj.sub) AS forfait",
-        # ⚠️ LATERAL, et `FOR UPDATE OF rj` : la ligne du prêteur n'est pas verrouillée
-        # (une jointure externe ne se verrouille pas), la course entre deux prises sur
-        # le même prêteur se tranche au verrou consultatif de `_deja_en_vol`.
+        # ⚠️ LATERAL, et `FOR UPDATE OF rj` (écrit dans la prise, pour les deux
+        # modes) : la ligne du prêteur n'est pas verrouillée (une jointure externe ne
+        # se verrouille pas), la course entre deux prises sur le même prêteur se
+        # tranche au verrou consultatif de `_deja_en_vol`.
         # `viap` : CE travail passe-t-il par le pool ? Lu une fois, par la prise et
         # par le choix du prêteur.
         "jointure_pret": f"""CROSS JOIN LATERAL (SELECT {_par_le_pool(sonde)} AS actif) viap
@@ -273,7 +276,6 @@ def _fragments_abonnement(abonnement: bool, sonde: bool = False) -> dict:
                                     AND (ab.statut IN ('needs_login', 'disconnected')
                                          OR {user_subscriptions.pause_en_vigueur('ab', sonde)}))
                    END""",
-        "verrou_de": "OF rj ",
         "charge_prise": f"""(SELECT jsonb_set(
                         c.charge, '{{{_CHAMP_PLATEFORME}}}',
                         COALESCE(c.charge->'{_CHAMP_PLATEFORME}', '{{}}'::jsonb)
@@ -739,17 +741,30 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
     deviennent VISIBLES au lieu d'être re-servies pour rien.
 
     ⚠️ `org_id=None` = **worker de PLATEFORME** : il sert toutes les
-    organisations, et prend simplement le travail le plus ancien. Ce n'est pas
+    organisations, selon la part équitable ci-dessous. Ce n'est pas
     une garde retirée — un worker n'a jamais eu de droit propre : ce qu'il
     reçoit avec le travail est un jeton délégué au nom du DEMANDEUR, borné au
     bail. Le filtre par org venait de ce que la capacité était déclarée pour un
     membre d'organisation, ce qui imposait un worker par client.
 
-    ⚠️ DETTE, nommée ici parce que c'est ici qu'elle mordra : l'ordre est
-    `due_at`, donc FIFO GLOBAL. Une organisation qui enfile deux mille travaux
-    fait attendre toutes les autres — le partage est équitable dans le TEMPS,
-    pas entre clients. Un tourniquet par organisation est le geste suivant ; il
-    n'est pas fait.
+    ⚠️ PART ÉQUITABLE (27/10/2026) : l'ordre n'est plus `due_at` seul (FIFO
+    global, où une org qui enfilait deux mille travaux faisait attendre toutes les
+    autres). D'abord l'org qui a le MOINS de travaux en vol (bail vivant) dans la
+    FAMILLE du travail, puis le plus ancien dû. Aucune borne : une org seule à
+    attendre prend toutes les places.
+
+    - **Par pool** : la charge se compte par `(org, famille)`. Chaque famille est un
+      pool de capacité distinct (clé de plateforme, abonnement `*_subscription`,
+      ferme) ; une org qui remplit les abonnements de ses membres n'a rien pris aux
+      workers de clé, et n'y passe pas derrière les autres.
+    - **Par org, pas par tenant** : la part est celle de l'org qui paie et attend.
+      Le tenant ne règle rien dans la file (aucun réglage par tenant, convention
+      gardée par `tests/test_tenant_ne_s_etend_plus.py`) ; un regroupement par
+      tenant ferait d'un gros tenant une seule part face à une org isolée.
+    - **Coût** : la charge (`charge`) est calculée UNE fois par réservation, sur les
+      seules lignes vivantes (`idx_runner_jobs_live`), puis jointe. Une sous-requête
+      corrélée dans l'`ORDER BY` la recomptait pour CHAQUE ligne éligible —
+      quadratique en rafale (banc : `tests/test_runner_jobs_index_vivant.py`).
 
     `org_ids` (25/09/2026) : le worker ne réserve QUE les travaux de ces orgs — pour
     essayer un moteur sur une organisation avant de le donner au parc. `None` = toutes,
@@ -854,11 +869,25 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
         de_la_famille_ferme = f"rj.payload->>'model_family' IS NOT DISTINCT FROM '{FAMILLE_FERME}'"
         row = conn.execute(
             f"""
-            WITH pris AS (
+            -- ⚠️ PART ÉQUITABLE (27/10/2026, docstring) : la charge en vol de chaque
+            -- (org, famille), calculée UNE fois — MATERIALIZED, jamais recalculée par
+            -- ligne candidate. Ses prédicats impliquent celui de `idx_runner_jobs_live`
+            -- (même forme `status IN (...)` que la prise) : elle ne lit que les lignes
+            -- vivantes, jamais l'historique.
+            WITH charge AS MATERIALIZED (
+                SELECT org_id, payload->>'model_family' AS famille, COUNT(*) AS n
+                  FROM runner_jobs
+                 WHERE status IN ('pending', 'claimed')
+                   AND status = 'claimed' AND lease_until >= NOW()
+                 GROUP BY 1, 2
+            ), pris AS (
                 SELECT rj.id, rj.kind, rj.run_id{frag['colonnes_forfait']} FROM runner_jobs rj
                 {frag['jointure_pret']}
-                 WHERE (%s::bigint IS NULL OR org_id = %s) AND due_at <= NOW()
-                   AND (%s::bigint[] IS NULL OR org_id = ANY(%s::bigint[]))
+                LEFT JOIN charge c
+                       ON c.org_id = rj.org_id
+                      AND c.famille IS NOT DISTINCT FROM rj.payload->>'model_family'
+                 WHERE (%s::bigint IS NULL OR rj.org_id = %s) AND rj.due_at <= NOW()
+                   AND (%s::bigint[] IS NULL OR rj.org_id = ANY(%s::bigint[]))
                    -- Un membre ne réserve que SES travaux (voir `porteur`).
                    AND (%s::text IS NULL OR rj.sub = %s)
                    -- Org SUSPENDUE (`org_suspension`) : ses travaux restent en file,
@@ -872,9 +901,9 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                    -- restreindre à un index PARTIEL que si le WHERE IMPLIQUE son
                    -- prédicat, et une disjonction sur DEUX statuts écrite sans le
                    -- dire explicitement ne le prouve pas au planificateur.
-                   AND status IN ('pending', 'claimed')
-                   AND (status = 'pending' OR lease_until < NOW())
-                   AND attempts < max_attempts
+                   AND rj.status IN ('pending', 'claimed')
+                   AND (rj.status = 'pending' OR rj.lease_until < NOW())
+                   AND rj.attempts < rj.max_attempts
                    -- ⚠️ `''` et jamais NULL pour « aucun dépôt » : `= ''` rend
                    -- FAUX, `= NULL` rend INCONNU. Même tri dans cette forme,
                    -- mais la première réécriture qui NIE la clause (`NOT …`)
@@ -884,29 +913,23 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                    -- les travaux sans famille, et rien d'autre ne bouge. (Pas de
                    -- marqueur de paramètre dans ce commentaire : psycopg les compte
                    -- aussi dans les commentaires SQL.)
-                   AND (payload->>'model_family' = %s
-                        OR (payload->>'model_family' IS NULL AND NOT %s))
+                   AND (rj.payload->>'model_family' = %s
+                        OR (rj.payload->>'model_family' IS NULL AND NOT %s))
                    -- La famille ferme d'une org routée vers la ferme : à un worker
                    -- de ferme, qui ne prend que ce qu'il peut servir
                    -- (`_servi_par_ce_worker`).
                    AND {_servi_par_ce_worker("rj", de_la_famille_ferme)}
                    {frag['clause_abonnement']}
-                 -- ⚠️ PART ÉQUITABLE entre orgs (27/10/2026) : d'abord l'org qui a le
-                 -- MOINS de travaux en vol, puis le plus ancien dû. Trié sur `due_at`
-                 -- seul, une org qui enfilait 200 travaux à 7 h tenait toutes les
-                 -- places des workers jusqu'à épuisement, et l'occurrence horaire
-                 -- d'une autre org, due à 7 h 05, attendait derrière — jusqu'à
-                 -- périmer. Aucune borne : une org seule prend toutes les places ;
-                 -- elle n'en prend plus quand une autre attend. Le comptage passe
-                 -- par `idx_runner_jobs_live` (org_id en tête, `claimed` couvert) :
-                 -- quelques lignes vivantes par org, jamais l'historique.
-                 ORDER BY (SELECT COUNT(*) FROM runner_jobs en_vol
-                            WHERE en_vol.org_id = rj.org_id
-                              AND en_vol.status IN ('pending', 'claimed')
-                              AND en_vol.status = 'claimed'
-                              AND en_vol.lease_until >= NOW()),
-                          due_at
-                   FOR UPDATE {frag['verrou_de']}SKIP LOCKED
+                 -- ⚠️ PART ÉQUITABLE : d'abord l'org la moins chargée DANS CETTE
+                 -- famille (aucune ligne dans `charge` = rien en vol), puis le plus
+                 -- ancien dû.
+                 -- ⚠️ `OF rj`, dans les DEUX modes : seul le travail se verrouille.
+                 -- Sans lui, en abonnement, `FOR UPDATE` viserait aussi le prêteur,
+                 -- côté nullable d'une jointure externe : refusé par PostgreSQL
+                 -- (le prêteur se tranche à `_deja_en_vol`). La CTE `charge` n'est
+                 -- jamais verrouillée.
+                 ORDER BY COALESCE(c.n, 0), rj.due_at
+                   FOR UPDATE OF rj SKIP LOCKED
                  LIMIT 1
             ), clos AS (
                 -- Le DERNIER `run_start` du run, et sa clôture : même lecture que
