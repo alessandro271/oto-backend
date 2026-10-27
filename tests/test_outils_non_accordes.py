@@ -264,3 +264,102 @@ def test_l_agent_dit_les_fournisseurs_de_sa_cascade_qu_il_n_a_pas(monkeypatch):
     t = {"procedure": "p", "tools": ["waterfall_email_act", "linkedin_aiark_person"]}
     assert RT._outils_non_accordes(77, t) == [
         ("apollo_match_person", "`waterfall_email_act` (providers)")]
+
+
+# ── posé par une personne : ce que ses outils appellent pour lui ─────────────
+
+_RECETTE_DECLARATIVE = {"tool": "lemlist_database", "source": {"items": "results"}}
+_PROC_RECETTE_ET_CASCADE = (
+    'Lire <tool:data_aggregate>. Sourcer : <tool:oto_recipe> `op="run"`, '
+    '`slug="sourcing"`. Puis ' + _PROC_CASCADE)
+_LECTURES = {"lemlist_database", "apollo_match_person", "linkedin_aiark_person",
+             "data_rows", "data_aggregate"}
+
+
+@pytest.fixture
+def _procedure_outillee(monkeypatch):
+    """Une procédure qui cite un outil, lance une recette déclarative publiée et une
+    cascade à deux fournisseurs ; seules les lectures connues sont déclarées `read`."""
+    monkeypatch.setattr(RT.db, "get_guide_db",
+                        lambda *a: {"body_md": _PROC_RECETTE_ET_CASCADE})
+    monkeypatch.setattr(RT.db_recipes, "get_recipe_or_platform",
+                        lambda ot, oid, slug: {"id": 3, "published_version": 1}
+                        if slug == "sourcing" else None)
+    monkeypatch.setattr(RT.db_recipes, "get_version",
+                        lambda rid, v: {"body": _RECETTE_DECLARATIVE})
+    monkeypatch.setattr(RT.tool_registry, "effet_de",
+                        lambda n: "read" if n in _LECTURES else "act")
+
+
+def test_ses_outils_appellent_la_recette_et_les_etapes_qui_lui_manquent(_procedure_outillee):
+    outils = ["oto_recipe", "waterfall_email_act", "linkedin_aiark_person"]
+    assert RT._appeles_par_ses_outils(77, "p", outils) == [
+        "lemlist_database", "apollo_match_person"]
+
+
+def test_sans_l_outil_qui_appelle_rien_ne_lui_manque(_procedure_outillee):
+    """Sans `oto_recipe`, la recette ne tournera pas ; sans la cascade, ses étapes non
+    plus — et le marqueur `<tool:data_aggregate>` n'est jamais ajouté d'office."""
+    assert RT._appeles_par_ses_outils(77, "p", ["data_rows"]) == []
+    assert RT._appeles_par_ses_outils(77, "p", ["oto_recipe"]) == ["lemlist_database"]
+
+
+def test_une_ecriture_qu_une_recette_code_appelle_n_est_jamais_ajoutee(monkeypatch):
+    """`folk_record` agit : posé sur l'agent, il lui serait ouvert en direct."""
+    monkeypatch.setattr(RT.db, "get_guide_db",
+                        lambda *a: {"body_md": '<tool:oto_recipe> slug="ecrit"'})
+    monkeypatch.setattr(RT.db_recipes, "get_recipe_or_platform",
+                        lambda *a: {"id": 3, "published_version": 1})
+    monkeypatch.setattr(RT.db_recipes, "get_version", lambda *a: {"body": _CORPS_CODE})
+    monkeypatch.setattr(RT.tool_registry, "effet_de",
+                        lambda n: "read" if n == "data_rows" else "act")
+    assert RT._appeles_par_ses_outils(77, "p", ["oto_recipe"]) == ["data_rows"]
+    monkeypatch.setattr(RT.tool_registry, "effet_de", lambda n: None)
+    assert RT._appeles_par_ses_outils(77, "p", ["oto_recipe"]) == [], (
+        "un effet inconnu n'est pas une lecture")
+
+
+@pytest.fixture
+def _agent_8(monkeypatch, _procedure_outillee):
+    """L'agent 8 de `porteur`, sur la procédure outillée ; rend ce que `update_trigger`
+    a reçu."""
+    from oto_mcp.capabilities import _acces_agent
+    monkeypatch.setattr(_acces_agent, "niveaux",
+                        lambda sub, org_id, agents: {int(t["id"]): "owner" for t in agents})
+    monkeypatch.setattr("oto_mcp.db.connector_settings.get_connector_setting",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: {
+        "id": i, "org_id": o, "sub": "porteur", "procedure": "p",
+        "tools": ["oto_recipe", "waterfall_email_act"]})
+    monkeypatch.setattr(RT.tool_alias, "canonical_names", lambda noms, sub: list(noms))
+    vu: dict = {}
+    monkeypatch.setattr(RT.db, "update_trigger",
+                        lambda i, o, champs, **k: vu.update(champs) or {"id": i, **champs})
+    return vu
+
+
+def test_une_personne_qui_change_la_liste_la_complete_et_le_voit(_agent_8, monkeypatch):
+    monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
+    rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
+        op="update", trigger_id=8, tools=["oto_recipe", "waterfall_email_act", "data_rows"]))
+    ajout = ["lemlist_database", "apollo_match_person", "linkedin_aiark_person"]
+    assert _agent_8["tools"] == ["oto_recipe", "waterfall_email_act", "data_rows", *ajout]
+    assert rep["tools_added"] == ajout
+
+
+def test_une_retouche_qui_ne_touche_ni_liste_ni_procedure_n_ajoute_rien(_agent_8, monkeypatch):
+    monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
+    rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2),
+                            RT.TriggerInput(op="update", trigger_id=8, label="renommé"))
+    assert "tools" not in _agent_8 and "tools_added" not in rep
+
+
+def test_sous_le_jeton_d_un_travail_rien_n_est_ajoute(_agent_8, monkeypatch):
+    """Un agent qui repose une liste (même ou plus courte) passe, et n'emporte rien de
+    plus : il n'élargit aucune liste, pas même par ce détour."""
+    monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete",
+                        lambda: types.SimpleNamespace(job_id=41))
+    rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
+        op="update", trigger_id=8, tools=["oto_recipe", "waterfall_email_act"]))
+    assert _agent_8["tools"] == ["oto_recipe", "waterfall_email_act"]
+    assert "tools_added" not in rep

@@ -47,11 +47,11 @@ def outils_de_l_etape(step: Step) -> list[str]:
     return noms
 
 
-def outils_des_cascades(texte: str) -> list[tuple[str, str]]:
-    """`[(outil, qui l'appelle)]` : les outils des étapes que la procédure nomme à côté
-    d'une cascade (`waterfall_email_act(… providers=["apollo"])`), dans l'ordre écrit. Une
-    clé qu'aucune étape de cette cascade ne porte est ignorée : l'outil la refusera au run,
-    ce n'est pas un outil qui manque."""
+def etapes_des_cascades(texte: str) -> list[tuple[str, str]]:
+    """`[(cascade telle que citée, outil)]` : les outils des étapes que la procédure nomme
+    à côté d'un appel de cascade (`waterfall_email_act(… providers=["apollo"])`), dans
+    l'ordre écrit. Une clé qu'aucune étape de cette cascade ne porte est ignorée : l'outil
+    la refusera au run, ce n'est pas un outil qui manque."""
     texte = texte or ""
     appels = list(_CASCADE.finditer(texte))
     cites: list[tuple[str, str]] = []
@@ -61,8 +61,12 @@ def outils_des_cascades(texte: str) -> list[tuple[str, str]]:
         if trouve is None:
             continue
         etapes = {s.key: s for s in STEPS_BY_NAMESPACE[appel.group(1)]}
-        par = f"`{appel.group(0)}` (providers)"
         for cle in _CLE.findall(trouve.group(1).lower()):
             if cle in etapes:
-                cites += [(nom, par) for nom in outils_de_l_etape(etapes[cle])]
+                cites += [(appel.group(0), nom) for nom in outils_de_l_etape(etapes[cle])]
     return cites
+
+
+def outils_des_cascades(texte: str) -> list[tuple[str, str]]:
+    """`[(outil, qui l'appelle)]`, la forme de `missing_tools` (`needed_by`)."""
+    return [(nom, f"`{cascade}` (providers)") for cascade, nom in etapes_des_cascades(texte)]

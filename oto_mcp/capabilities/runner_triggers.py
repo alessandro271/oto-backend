@@ -562,6 +562,11 @@ class BulkFailure(BaseModel):
 
 class TriggerOut(BaseModel):
     trigger: Optional[Trigger] = None
+    #: `create` / `update` par une personne : les outils ajoutés d'office à la liste
+    #: demandée, parce que les outils de l'agent les appelleront pour lui (une recette
+    #: que sa procédure lance, les étapes d'une cascade dont elle écrit les
+    #: fournisseurs) — des lectures seulement. Absent quand rien n'a été ajouté.
+    tools_added: Optional[list[str]] = None
     #: `link` / `unlink` : le lien posé ou retiré ; `links` / `graph` : ceux de l'org
     #: que l'appelant voit (les deux agents visibles). `{id, from_trigger_id,
     #: to_trigger_id, kind, condition, created_by, created_at}`.
@@ -1032,6 +1037,58 @@ def _outils_de_la_recette_publiee(org: int, recette: str) -> list[str]:
     return outils_cites.outils_cites((version or {}).get("body"))
 
 
+def _appeles_par_ses_outils(org: int, slug: str, outils: list[str]) -> list[str]:
+    """Sync (base) : ce que les outils de l'agent appelleront POUR lui, et qu'il n'a pas —
+    au canonique, dans l'ordre de la procédure. Les outils des recettes publiées qu'elle
+    lance, s'il a `oto_recipe` ; ceux des étapes de cascade qu'elle écrit, s'il a CETTE
+    cascade (`waterfall_cites`). Un outil que l'agent n'appellera pas ne lui manque pas.
+
+    ⚠️ Seulement des LECTURES déclarées (`tool_registry.effet_de`, fail-closed : un effet
+    inconnu n'est pas une lecture). Une recette-code appelle aussi les écritures qu'elle
+    déclare (`writes`) : posées sur l'agent, elles lui seraient ouvertes en direct, hors de
+    la recette et de sa borne.
+
+    ⚠️ Jamais les marqueurs `<tool:…>` de la procédure : ceux-là sont la liste PAR DÉFAUT
+    (`_outils_de_la_procedure`), et la personne qui écrit une liste a pu en écarter un
+    exprès. Ce qu'un outil appelle pour l'agent, personne ne l'écarte : sans lui, l'outil
+    qu'on lui a donné échoue."""
+    a = {deprecations.tool_canonique(n) for n in outils if isinstance(n, str)}
+    corps = _corps_de_la_procedure(org, slug)
+    candidats: list[str] = []
+    if "oto_recipe" in a:
+        for recette in outils_cites.recettes_citees(corps):
+            candidats += _outils_de_la_recette_publiee(org, recette)
+    candidats += [nom for cascade, nom in waterfall_cites.etapes_des_cascades(corps)
+                  if deprecations.tool_canonique(cascade) in a]
+    servis = a | outils_du_travail.OUTILS_DE_L_HOTE
+    return [c for c in dict.fromkeys(deprecations.tool_canonique(n) for n in candidats)
+            if c not in servis and tool_registry.effet_de(c) == "read"]
+
+
+def _completer_par_une_personne(org: int, slug: Optional[str],
+                                outils: list[str]) -> tuple[list[str], list[str]]:
+    """Sous le geste d'une PERSONNE (create, update) : `outils` augmentés de ce que ses
+    outils appelleront pour l'agent (`_appeles_par_ses_outils`), et ce qui a été ajouté —
+    rendu (`tools_added`) pour que l'ajout se voie, jamais en silence.
+
+    Né du 26/10/2026 : un agent dont les outils lançaient une recette puis une cascade a
+    été bloqué deux jours de suite, chaque fois sur un outil que l'un d'eux appelait pour
+    lui. Le dire (`missing_tools`) laissait le geste à faire ; la personne qui pose l'agent
+    le fait maintenant en le posant.
+
+    Sous un jeton de délégation : rien. Un agent n'élargit aucune liste
+    (`tools_human_only`), pas même par ce détour. Fail-soft : un calcul qui échoue pose la
+    liste telle quelle — `missing_tools` le dira à la lecture."""
+    if not slug or verrou_org.travail_de_la_requete() is not None:
+        return outils, []
+    try:
+        ajoutes = _appeles_par_ses_outils(org, slug, outils)
+    except Exception as e:  # noqa: SILENT — journalisé, la liste posée reste celle demandée
+        logger.warning("tools_added indisponible pour la procédure %s : %s", slug, e)
+        return outils, []
+    return [*outils, *ajoutes], ajoutes
+
+
 def _noms_canoniques(ctx: ResolvedCtx, inp: TriggerInput) -> TriggerInput:
     """La déclaration aux noms d'outils CANONIQUES, avant tout le reste (`tool_alias`).
 
@@ -1369,6 +1426,9 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Sous un jeton de délégation, l'agent créé n'a pas plus d'outils que le travail
         # qui le crée — liste fournie ou déduite de la procédure (`tools_human_only`).
         exiger_aucun_outil_hors_du_travail(outils)
+        # Une personne qui pose l'agent lui donne aussi ce que ses outils appelleront
+        # pour lui (recettes, étapes de cascade), et le voit (`tools_added`).
+        outils, ajoutes = _completer_par_une_personne(ctx.org_id, inp.procedure, outils)
         tz = inp.tz or _TZ_DEFAUT
         if not webhook:
             try:
@@ -1466,8 +1526,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             # Le secret en CLAIR, une seule fois. Il n'est pas stocké — seul son
             # haché l'est — donc ni une relecture ni un incident ne le rendront.
             return {"trigger": _avec_hook(ctx.org_id, t),
-                   "hook_secret": secret}
-        return {"trigger": t}
+                   "hook_secret": secret, **_ajoutes(ajoutes)}
+        return {"trigger": t, **_ajoutes(ajoutes)}
 
     if inp.op == "list":
         # ⚠️ Filtré par OBJET quand `procedure` est fourni : l'écran d'une
@@ -1948,6 +2008,15 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     # lit donc ici, juste avant d'écrire.
     if not _actuel():
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+    # Une personne qui change la liste ou la procédure donne aussi à l'agent ce que ses
+    # outils appelleront pour lui (`tools_added`) — avant les gardes qui jugent la liste.
+    ajoutes: list[str] = []
+    if "tools" in champs or "procedure" in champs:
+        complet, ajoutes = _completer_par_une_personne(
+            ctx.org_id, champs.get("procedure") or _actuel().get("procedure"),
+            champs["tools"] if "tools" in champs else list(_actuel().get("tools") or []))
+        if ajoutes:
+            champs["tools"] = complet
     if (_actuel().get("hook_auth") == runner_hook.SLACK
             and (set(champs) - _RETOUCHES_LIBRES_SLACK or inp.platform_tools is not None)):
         # ⚠️ L'agent Slack tourne sous l'identité de CHAQUE membre qui lui écrit : ce
@@ -2000,7 +2069,12 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         db.poser_adresse_de_hook(inp.trigger_id, ctx.org_id,
                                  runner_hook.nouvelle_adresse())
         t = db.get_trigger(inp.trigger_id, ctx.org_id) or t
-    return {"trigger": _avec_hook(ctx.org_id, t)}
+    return {"trigger": _avec_hook(ctx.org_id, t), **_ajoutes(ajoutes)}
+
+
+def _ajoutes(ajoutes: list[str]) -> dict:
+    """`tools_added` dans la réponse, seulement quand quelque chose a été ajouté."""
+    return {"tools_added": ajoutes} if ajoutes else {}
 
 
 def _destinataire_du_don(ctx: ResolvedCtx, inp: TriggerInput) -> str:
