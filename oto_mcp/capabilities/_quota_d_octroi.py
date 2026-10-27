@@ -32,7 +32,9 @@ def exiger(provider: str, daily_quota: Optional[int], suite: str = "") -> None:
     try:
         credentials_store.exiger_quota_d_octroi(provider, daily_quota)
     except credentials_store.QuotaDOctroiRequis as e:
-        raise AuthzDenied(400, CODE, f"{e}{suite}") from e
+        # The code written out, not `CODE`: the declared-refusal guard reads the raise
+        # literally (`tests/_refus_atteignables.py`); a name there reads as computed.
+        raise AuthzDenied(400, "grant_quota_required", f"{e}{suite}") from e
 
 
 def _unites() -> str:
