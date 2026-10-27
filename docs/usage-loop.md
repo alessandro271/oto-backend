@@ -41,9 +41,10 @@ volontaire d'agent + les runs / déroulés. Détail : ADR 0017 (repo public
     `guide_run.reprendre_run_du_jeton` : pour un jeton de **délégation** seulement (un
     par travail), le run que CE jeton a ouvert et qui n'est pas clos
     (`db.run_ouvert_du_jeton`, lu du journal : `run_start.token_id`, clôture par
-    `_run_closure`, borné à la création du jeton) est poussé sur la pile de la session
-    neuve. Cherché une fois par session ; jamais un jeton d'utilisateur, jamais un
-    autre compte.
+    `_run_closure`, borné à l'org du travail et à la création du jeton — les têtes de
+    `idx_tool_calls_run_start_sub`) est poussé sur la pile de la session neuve.
+    Cherché une fois par session, échec compris ; jamais un jeton d'utilisateur, jamais
+    un autre compte.
   - **Retrouver un `run_id` perdu** (#473, 28/08) : `oto_project op=runs` **sans**
     `project_id` rend MES déroulés encore OUVERTS, chacun avec son `run_id` et son état
     lisible (`db.my_runs`). Sans ça, un agent qui perd le fil ne peut plus clore ce

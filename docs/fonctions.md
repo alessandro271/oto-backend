@@ -146,10 +146,18 @@ code (#1202) : `oto_recipe` le sert aux recettes `kind: "code"` (`docs/recettes.
   budget à sa lecture, sans `await` entre le compte et la décision (`max_calls` exact),
   puis jouée dans sa tâche ; les réponses repartent par `id` dès qu'elles sont prêtes.
   Servis un par un jusqu'au 27/10/2026 — cinq recherches de ~11 s lancées ensemble
-  passaient l'une après l'autre et une recette dépassait sa durée. ⚠️ Le plafond
-  d'unités se juge avant l'appel : il peut être dépassé de ce que facturent les appels
-  en vol (au plus `en_vol`). `max_writes` se réserve avant le premier `await`
-  (`recipes/pont.py`), il reste exact.
+  passaient l'une après l'autre et une recette dépassait sa durée. ⚠️ Le budget se
+  juge deux fois : à la lecture (`max_calls`), puis quand l'appel obtient sa place
+  (unités et durée, sans `await` jusqu'au départ) — un appel qui a attendu en file ne
+  part pas sur un plafond épuisé, et sa place dans `calls` est rendue. La quantité
+  n'étant connue qu'après, le plafond d'unités peut être dépassé de ce que facturent
+  les appels déjà PARTIS : au plus `en_vol`. `max_writes` se réserve avant le premier
+  `await` (`recipes/pont.py`), il reste exact.
+- **Une fin en erreur n'abandonne pas ce qui est parti** : un code qui lève (un appel
+  d'un `gather` a échoué) laisse ses appels partis aller à leur terme, bornés par la
+  durée ; seuls ceux encore en file sont annulés, sans partir ni compter ; puis
+  l'exécution lève. Un appel annulé n'est jamais réglé comme un succès
+  (`meta.executer_cible`).
 - **Côté serveur, une pompe asyncio** (`create_subprocess_exec`) : les appels d'outils
   sont attendus sur la boucle, sans fil ni SQL dans ce module.
 

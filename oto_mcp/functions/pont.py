@@ -31,9 +31,17 @@ un par un jusqu'au 27/10/2026 : une recette qui lançait cinq recherches par
 `asyncio.gather` les voyait passer l'une après l'autre (~11 s chacune) et dépassait sa
 durée. Une tâche par appel, et pas un entrelacement dans la boucle : `executer_cible`
 pose et retire des ContextVar par jeton, ce qui exige que chaque appel ait son contexte.
-⚠️ Le plafond d'unités se juge AVANT l'appel (la quantité n'est connue qu'après) : il
-peut être dépassé de ce que facturent les appels déjà en vol, au plus `en_vol` appels
-— un seul quand le code appelle en série, comme avant.
+⚠️ Le budget se juge DEUX fois : à la lecture de la demande (son rang, `max_calls`), puis
+quand l'appel obtient sa place (unités et durée, sans `await` jusqu'au départ) — une
+demande qui a attendu en file derrière d'autres ne part pas sur un plafond que ces
+autres ont épuisé, et sa place dans `calls` est rendue. La quantité n'étant connue
+qu'après l'appel, le plafond d'unités peut être dépassé de ce que facturent les appels
+déjà PARTIS : au plus `en_vol` appels, un seul quand le code appelle en série.
+
+**Une fin en erreur n'abandonne pas ce qui est parti** : le code qui lève (un appel d'un
+`asyncio.gather` a échoué) laisse des appels frères en vol, une écriture peut-être. Ceux
+qui ont leur place vont à leur terme (bornés par la durée) ; seuls ceux encore en file
+sont annulés, sans partir ni compter ; puis l'exécution lève.
 
 **Pas de SQL ici** et rien de bloquant : un sous-processus asyncio, lu ligne à ligne sur
 la boucle. `appeler` est une coroutine (`meta.executer_cible` l'est), qui joue elle-même
@@ -116,6 +124,7 @@ async def executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appeler
     erreurs = asyncio.ensure_future(_queue_erreurs(proc.stderr))
     # Les appels en vol, leurs places, et UN écrivain à la fois sur l'entrée du processus.
     en_vol: set[asyncio.Task] = set()
+    partis: set[asyncio.Task] = set()   # ceux qui ont leur place : l'appel est parti
     places = asyncio.Semaphore(max(1, budget.en_vol))
     ecriture = asyncio.Lock()
     try:
@@ -152,18 +161,24 @@ async def executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appeler
                     await _repondre(proc, ecriture, message.get("id"), refus)
                     continue
                 tache_appel = asyncio.create_task(_servir(
-                    proc, ecriture, places, message, appeler, recu, fin))
+                    proc, ecriture, places, message, appeler, recu, fin, budget, partis))
                 en_vol.add(tache_appel)
                 tache_appel.add_done_callback(en_vol.discard)
+                tache_appel.add_done_callback(partis.discard)
                 continue
             if message.get("type") == "done":
                 if not message.get("ok"):
-                    raise executor.ExecutionEchouee(message.get("erreur") or "échec sans message")
+                    # Ce qui attend encore sa place ne part pas ; ce qui est parti (une
+                    # écriture peut-être) va à son terme avant que l'exécution lève.
+                    for tache_appel in en_vol - partis:
+                        tache_appel.cancel()
                 # Un appel lancé et jamais attendu par le code va à son terme, comme
                 # quand le serveur servait en série : le reçu compte ce qu'il a facturé.
                 if en_vol:
                     await asyncio.wait(set(en_vol),
                                        timeout=max(0.1, fin_dure - time.monotonic()))
+                if not message.get("ok"):
+                    raise executor.ExecutionEchouee(message.get("erreur") or "échec sans message")
                 sortie = dict(message.get("sortie") or {})
                 return {**sortie, **recu, "journal": message.get("journal") or "",
                         "duree_ms": int((time.monotonic() - debut) * 1000)}
@@ -235,12 +250,39 @@ def _admettre(message: dict, budget: Budget, recu: dict, fin: float) -> Optional
     return None
 
 
+def _rejuger(budget: Budget, recu: dict, fin: float) -> Optional[dict]:
+    """Le budget rejugé quand l'appel admis obtient sa place, SANS `await` : les unités
+    et la durée ont pu s'épuiser pendant qu'il attendait. Refusé, il rend sa place dans
+    `calls` (il n'est pas parti) et compte parmi les refus."""
+    borne = ("spend_cap" if recu["units"] >= budget.unites else
+             "time_budget" if time.monotonic() >= fin else None)
+    if borne is None:
+        return None
+    recu["calls"] -= 1
+    recu["refused"] += 1
+    recu["stopped"] = recu["stopped"] or borne
+    return {"ok": False, "code": "budget_exhausted",
+            "message": f"This run's budget is spent ({borne}). Nothing was called."}
+
+
 async def _servir(proc, ecriture: asyncio.Lock, places: asyncio.Semaphore, message: dict,
-                  appeler: Appeler, recu: dict, fin: float) -> None:
-    """UN appel ADMIS, dans sa tâche : il attend sa place, joue, répond."""
+                  appeler: Appeler, recu: dict, fin: float, budget: Budget,
+                  partis: set) -> None:
+    """UN appel ADMIS, dans sa tâche : il attend sa place, est rejugé, joue, répond.
+    Annulé avant d'être parti (fin du code en erreur), il rend sa place dans `calls`."""
+    parti = False
     try:
         async with places:
-            reponse = await _jouer(message["tool"], dict(message["args"]), appeler, recu, fin)
+            reponse = _rejuger(budget, recu, fin)
+            if reponse is None:
+                parti = True
+                partis.add(asyncio.current_task())
+                reponse = await _jouer(message["tool"], dict(message["args"]), appeler,
+                                       recu, fin)
+    except asyncio.CancelledError:
+        if not parti:
+            recu["calls"] -= 1
+        raise
     except Exception as e:  # noqa: BLE001 — une tâche qui lève laisserait le code sans réponse
         logger.exception("pont : l'appel `%s` a levé hors d'`appeler`", message.get("tool"))
         reponse = {"ok": False, "code": "bridge_error", "message": type(e).__name__}

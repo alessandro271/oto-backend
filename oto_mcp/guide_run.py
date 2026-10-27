@@ -121,4 +121,10 @@ async def reprendre_run_du_jeton(ctx: Any) -> Optional[str]:
     except Exception:  # noqa: BLE001 — la corrélation ne casse jamais l'appel
         logger.warning("reprise du run du jeton %s impossible (best-effort)",
                        axes.get("token_id"), exc_info=True)
+        # Cherché quand même : une base qui refuse ne se relit pas à chaque appel.
+        try:
+            await ctx.set_state(_CHERCHE_KEY, True)
+        except Exception:  # noqa: BLE001 — l'état de session est perdu, rien à marquer
+            logger.warning("reprise du run du jeton : marque de session non posée",
+                           exc_info=True)
         return None

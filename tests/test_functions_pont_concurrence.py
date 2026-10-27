@@ -21,6 +21,8 @@ from oto_mcp.functions import executor, isolement, pont
 # Le faux bac à sable : il lance TOUTES ses demandes d'un coup (`job.input.calls`), puis
 # lit autant de réponses, dans l'ordre où elles arrivent, et les rend. `abandonne` : il
 # finit sans attendre ses réponses (un appel lancé et jamais attendu par le code).
+# `lire` : il n'en attend que tant, puis finit — en erreur si `ok` est faux (un appel
+# d'un `gather` a levé, les autres volent encore).
 _FAUX_BAC = r'''
 import json, sys
 tache = json.loads(sys.stdin.readline())
@@ -32,10 +34,13 @@ for i, args in enumerate(plan["calls"], 1):
     ecrire({"type": "call", "id": i, "tool": "acme_search", "args": args})
 recues = []
 if not plan.get("abandonne"):
-    for _ in plan["calls"]:
+    for _ in range(plan.get("lire", len(plan["calls"]))):
         recues.append(json.loads(sys.stdin.readline()))
-ecrire({"type": "done", "ok": True, "sortie": {"ok": True, "result": recues},
-        "journal": ""})
+if plan.get("ok", True):
+    ecrire({"type": "done", "ok": True, "sortie": {"ok": True, "result": recues},
+            "journal": ""})
+else:
+    ecrire({"type": "done", "ok": False, "erreur": "un appel du gather a levé"})
 '''
 
 
@@ -50,10 +55,12 @@ def faux_bac(tmp_path, monkeypatch):
         argv=[sys.executable, "-I", str(script)], env=dict(os.environ), cwd=str(tmp_path)))
 
 
-def _jouer(demandes: list, appeler, abandonne=False, **budget) -> dict:
+def _jouer(demandes: list, appeler, abandonne=False, plan: dict | None = None,
+           **budget) -> dict:
     return asyncio.run(pont.executer_avec_pont(
         sources={"r.py": ""}, entrypoint="r:run", appeler=appeler,
-        budget=pont.Budget(**budget), entree={"calls": demandes, "abandonne": abandonne}))
+        budget=pont.Budget(**budget),
+        entree={"calls": demandes, "abandonne": abandonne, **(plan or {})}))
 
 
 def _outil_lent(vus: list):
@@ -113,3 +120,74 @@ def test_un_appel_que_le_code_n_attend_pas_va_a_son_terme(faux_bac):
     sortie = _jouer([{"n": "orphelin", "s": 0.2}], _outil_lent(vus), abandonne=True)
     assert sortie["ok"] and [n for n, _, _ in vus] == ["orphelin"]
     assert sortie["calls"] == 1 and sortie["units"] == 1
+
+
+def test_un_gather_plus_large_que_en_vol_ne_passe_pas_le_plafond_d_unites(faux_bac):
+    """Douze appels lancés ensemble, trois places, quatre unités : ceux qui attendent en
+    file sont REJUGÉS à l'obtention de leur place. Au plus `en_vol` appels partent sur un
+    plafond que les précédents n'avaient pas encore débité — jamais les douze."""
+    vus = []
+    sortie = _jouer([{"n": i, "s": 0.05} for i in range(12)], _outil_lent(vus),
+                    en_vol=3, unites=4)
+    assert len(vus) <= 4 + 3 - 1
+    assert sortie["calls"] == len(vus) and sortie["units"] == len(vus)
+    assert sortie["refused"] == 12 - len(vus)
+    assert sortie["stopped"] == "spend_cap"
+
+
+def test_une_duree_echue_pendant_la_file_ne_laisse_pas_partir_l_appel(faux_bac):
+    """Une place, cinq appels de 0,2 s, 0,3 s de budget : le deuxième est coupé par la
+    durée, les suivants obtiennent leur place après l'échéance — refusés sans partir, et
+    leur place dans `calls` rendue."""
+    partis = []
+
+    async def appeler(outil, arguments):
+        partis.append(arguments["n"])
+        await asyncio.sleep(0.2)
+        return {"ok": True, "result": arguments["n"]}
+
+    sortie = _jouer([{"n": i} for i in range(5)], appeler, en_vol=1, delai_s=0.3)
+    assert partis == [0, 1]
+    assert sortie["calls"] == 2 and sortie["refused"] == 3
+    assert sortie["stopped"] == "time_budget"
+
+
+def test_une_fin_en_erreur_laisse_les_appels_partis_aller_a_leur_terme(faux_bac):
+    """Le code lève après sa première réponse (un appel de son `gather` a échoué) : les
+    appels déjà partis — des écritures peut-être — vont à leur terme ; celui qui
+    attendait encore sa place ne part pas ; puis l'exécution lève."""
+    partis, finis = [], []
+
+    async def appeler(outil, arguments):
+        partis.append(arguments["n"])
+        await asyncio.sleep(arguments["s"])
+        finis.append(arguments["n"])
+        return {"ok": True, "result": arguments["n"]}
+
+    demandes = [{"n": "vif", "s": 0.05}, {"n": "ecriture", "s": 0.4},
+                {"n": "suivant", "s": 0.4}, {"n": "en_file", "s": 0.4}]
+    with pytest.raises(executor.ExecutionEchouee, match="gather"):
+        _jouer(demandes, appeler, en_vol=2, plan={"lire": 1, "ok": False})
+    assert "en_file" not in partis
+    assert sorted(finis) == sorted(partis)
+
+
+def test_chaque_appel_garde_son_contexte_sous_concurrence(faux_bac):
+    """Chaque appel est joué dans SA tâche, contexte copié : ce qu'un appel pose dans une
+    ContextVar (c'est ainsi qu'`executer_cible` pose compte, org et run de sa cible) ne
+    se voit pas d'un appel concurrent, même quand tous la changent en même temps."""
+    import contextvars
+    cv = contextvars.ContextVar("axe_du_test", default=None)
+    vus = []
+
+    async def appeler(outil, arguments):
+        cv.set(arguments["n"])
+        await asyncio.sleep(arguments["s"])
+        vus.append((arguments["n"], cv.get()))
+        return {"ok": True, "result": cv.get()}
+
+    sortie = _jouer([{"n": f"compte-{i}", "s": 0.05 * (5 - i)} for i in range(5)],
+                    appeler)
+    assert len(vus) == 5 and all(n == lu for n, lu in vus)
+    assert sorted(r["result"] for r in sortie["result"]) == [f"compte-{i}" for i in range(5)]
+    assert cv.get() is None

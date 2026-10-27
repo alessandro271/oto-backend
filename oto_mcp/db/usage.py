@@ -362,25 +362,38 @@ def run_ouvert_du_jeton(sub: str, token_id: int) -> Optional[str]:
     (`_run_closure` — mêmes trois prédicats que `run_closed_at`). Bornes :
     - le jeton doit être de DÉLÉGATION et appartenir à `sub` : jamais un jeton
       d'utilisateur, qui sert plusieurs sessions sans lien, jamais le jeton d'autrui ;
-    - l'ouverture est postérieure à la création du jeton : le parcours de
-      `idx_tool_calls_run_start_sub` s'arrête au début du travail, même quand le jeton
-      n'a jamais ouvert de run (le cas courant, payé une fois par session).
+    - l'ouverture est dans l'org du travail (`verrou_org_id`) et postérieure à la
+      création du jeton : `(sub, org_id, created_at)` sont les trois colonnes de tête de
+      `idx_tool_calls_run_start_sub`, dont le parcours s'arrête ainsi au début du
+      travail, même quand le jeton n'a jamais ouvert de run (le cas courant, payé une
+      fois par session). Sans l'org, PG parcourrait tous les `run_start` du compte sur
+      la rétention : la colonne du milieu de l'index n'aurait pas d'égalité. Un jeton
+      sans org de travail (portée personnelle, ou émis avant le verrou) garde ce
+      parcours-là, borné au seul compte.
     Plusieurs runs ouverts (imbriqués) : le plus récent, le sommet de la pile."""
     with _connect() as conn:
+        jeton = conn.execute(
+            "SELECT created_at, verrou_org_id FROM user_api_tokens "
+            "WHERE id = %s AND sub = %s AND kind = 'delegation'",
+            (token_id, sub),
+        ).fetchone()
+        if jeton is None:
+            return None
+        org = "AND s.org_id = %(org)s" if jeton["verrou_org_id"] is not None else ""
         row = conn.execute(
             f"""
             SELECT s.run_id
-              FROM user_api_tokens t
-              JOIN tool_calls s
-                ON s.sub = t.sub AND s.token_id = t.id AND s.created_at >= t.created_at
+              FROM tool_calls s
                    {_run_closure("s")}
-             WHERE t.id = %s AND t.sub = %s AND t.kind = 'delegation'
+             WHERE s.sub = %(sub)s {org} AND s.created_at >= %(depuis)s
+               AND s.token_id = %(jeton)s
                AND s.tool = 'run_start' AND s.run_id IS NOT NULL
                AND f.created_at IS NULL
              ORDER BY s.created_at DESC, s.id DESC
              LIMIT 1
             """,
-            (token_id, sub),
+            {"sub": sub, "org": jeton["verrou_org_id"], "depuis": jeton["created_at"],
+             "jeton": token_id},
         ).fetchone()
     return row["run_id"] if row else None
 

@@ -45,6 +45,12 @@ def serveur(compte, monkeypatch):
     def acme_post(text: str = "") -> dict:
         appels.append("acme_post")
         return {"posted": True}
+
+    @m.tool(annotations=LECTURE)
+    async def acme_lent(marque: str = "") -> dict:
+        appels.append("acme_lent")
+        await asyncio.sleep(5)
+        return {"fini": marque}
     return m, appels
 
 
@@ -387,3 +393,34 @@ def test_un_outil_qui_ecrit_hors_liste_reste_refuse(crm):
     m, appels = crm
     assert _ecrire(m, "acme_post", {"text": "x"})["code"] == "recipe_tool_not_read_only"
     assert appels == []
+
+
+def test_un_appel_annule_en_vol_n_est_ni_regle_ni_journalise_comme_un_succes(serveur,
+                                                                          monkeypatch):
+    """Le pont qui ferme (fin du code, délai) annule les appels encore en vol : l'appel
+    annulé n'a pas abouti. `executer_cible` laissait `ok` vrai — réglé par
+    `regler_appel` et journalisé réussi."""
+    from oto_mcp import access
+    from oto_mcp.db._conn import _connect
+    from oto_mcp.recipes import pont
+    m, appels = serveur
+    regles = []
+    monkeypatch.setattr(access, "regler_appel", lambda *a, **k: regles.append(a))
+    marque = uuid.uuid4().hex
+
+    async def jouer():
+        tache = asyncio.create_task(
+            pont.appeleur_en_lecture(m, SUB)("acme_lent", {"marque": marque}))
+        while "acme_lent" not in appels:
+            await asyncio.sleep(0.01)
+        tache.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await tache
+
+    asyncio.run(jouer())
+    assert regles == []
+    with _connect() as conn:
+        lignes = conn.execute(
+            "SELECT ok FROM tool_calls WHERE sub = %s AND tool = 'acme_lent' "
+            "AND args->>'marque' = %s", (SUB, marque)).fetchall()
+    assert [r["ok"] for r in lignes] == [False]

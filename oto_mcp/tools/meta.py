@@ -286,6 +286,12 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
             await connector_health.suivre_appel(target_trace, None, rejet=message)
         return IssueCible(ok=False, message=message, code=info.code,
                           retryable=bool(getattr(info, "retryable", False)))
+    except asyncio.CancelledError as e:
+        # Annulé en vol (le pont qui ferme, un délai) : l'appel n'a pas abouti. Il
+        # n'est ni journalisé ni réglé comme un succès — `ok` restait vrai, et le
+        # `finally` le réglait par `regler_appel`.
+        ok, err, echec = False, "cancelled", e
+        raise
     finally:
         # The TARGET's org and run, read BEFORE undoing the axes: after the reset,
         # `current_org` returns the caller's home org, not the one where the target

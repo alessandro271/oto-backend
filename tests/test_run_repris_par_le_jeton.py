@@ -63,19 +63,21 @@ def _ago(minutes: float) -> datetime:
     return datetime.now(timezone.utc) - timedelta(minutes=minutes)
 
 
-def _jeton(conn, *, sub="u1", kind="delegation", ago=60.0) -> int:
+def _jeton(conn, *, sub="u1", kind="delegation", ago=60.0, org=None) -> int:
+    """`org` : l'org du travail (`verrou_org_id`), celle où l'agent ouvre ses runs."""
     return conn.execute(
-        "INSERT INTO user_api_tokens (sub, label, token_hash, created_at, kind) "
-        "VALUES (%s, 'runner job', md5(random()::text), %s, %s) RETURNING id",
-        (sub, _ago(ago), kind)).fetchone()["id"]
+        "INSERT INTO user_api_tokens (sub, label, token_hash, created_at, kind, "
+        "verrou_org, verrou_org_id) "
+        "VALUES (%s, 'runner job', md5(random()::text), %s, %s, %s, %s) RETURNING id",
+        (sub, _ago(ago), kind, org is not None or None, org)).fetchone()["id"]
 
 
-def _fait(conn, tool, run_id, args, *, sub="u1", token_id=None, ago=10.0):
+def _fait(conn, tool, run_id, args, *, sub="u1", token_id=None, ago=10.0, org=None):
     conn.execute(
         "INSERT INTO tool_calls (created_at, kind, sub, tool, args, run_id, token_id, "
-        "token_kind) VALUES (%s, 'mcp', %s, %s, %s::jsonb, %s, %s, %s)",
+        "token_kind, org_id) VALUES (%s, 'mcp', %s, %s, %s::jsonb, %s, %s, %s, %s)",
         (_ago(ago), sub, tool, json.dumps(args), run_id, token_id,
-         "delegation" if token_id is not None else None))
+         "delegation" if token_id is not None else None, org))
 
 
 def _ouvrir(conn, run_id, **kw):
@@ -126,6 +128,54 @@ def test_une_ouverture_anterieure_au_jeton_est_ignoree(conn):
     j = _jeton(conn, ago=5.0)
     _ouvrir(conn, "r-vieux", token_id=j, ago=30.0)
     assert usage.run_ouvert_du_jeton("u1", j) is None
+
+
+def test_le_run_est_cherche_dans_l_org_du_travail(conn):
+    """Le jeton d'un travail est borné à son org : son run s'y ouvre, et la recherche
+    s'y borne — c'est ce qui fait servir l'index par ses trois colonnes de tête."""
+    j = _jeton(conn, org=7)
+    _ouvrir(conn, "r-ailleurs", token_id=j, org=8, ago=5.0)
+    assert usage.run_ouvert_du_jeton("u1", j) is None
+    _ouvrir(conn, "r-ici", token_id=j, org=7, ago=10.0)
+    assert usage.run_ouvert_du_jeton("u1", j) == "r-ici"
+
+
+def test_la_recherche_est_servie_par_l_index_des_ouvertures_jusqu_a_l_org(conn):
+    """Le plan : `idx_tool_calls_run_start_sub` avec `sub`, `org_id` ET `created_at` en
+    condition d'index — sans l'org, la colonne du milieu manque et PG parcourt tous les
+    `run_start` du compte sur la rétention."""
+    from oto_mcp.db import index_releve
+    [ix] = [i for i in index_releve.OUVERTURES if i.nom == "idx_tool_calls_run_start_sub"]
+    conn.execute(f"CREATE INDEX {ix.nom} ON tool_calls {ix.forme}")
+    j = _jeton(conn, org=7)
+    _ouvrir(conn, "r1", token_id=j, org=7)
+    vus = []
+    reel = conn.execute
+
+    def espion(requete, *a, **k):
+        if "FROM tool_calls s" in str(requete):
+            conn.execute("SET enable_seqscan = off")
+            vus.append(reel("EXPLAIN " + str(requete), *a, **k).fetchall())
+        return reel(requete, *a, **k)
+
+    class _Espion:
+        def __getattr__(self, nom):
+            return espion if nom == "execute" else getattr(conn, nom)
+
+    @contextmanager
+    def _connect_espion():
+        yield _Espion()
+
+    usage._connect, avant = _connect_espion, usage._connect
+    try:
+        assert usage.run_ouvert_du_jeton("u1", j) == "r1"
+    finally:
+        usage._connect = avant
+        conn.execute("RESET enable_seqscan")
+    lignes = [next(iter(r.values())) for r in vus[0]]
+    assert any(ix.nom in ligne for ligne in lignes), lignes
+    [cond] = [ligne for ligne in lignes if "Index Cond" in ligne]
+    assert "org_id" in cond and "created_at" in cond, lignes
 
 
 def test_des_runs_imbriques_rendent_le_plus_recent_encore_ouvert(conn):
