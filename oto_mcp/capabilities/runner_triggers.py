@@ -41,6 +41,7 @@ from .. import (db, deprecations, org_store, outils_du_travail, ownership,
 from ..db import recipes as db_recipes
 from ..recipes import outils_cites
 from ..tools import catalogue as tool_catalogue
+from ..waterfall import cites as waterfall_cites
 from ._authz import ORG_MEMBER
 from ._dossier import FOLDER_MAX, dossier_valide
 from ._outils_plateforme import (PLATFORM_TOOLS_MAX, exiger_aucun_ajout_d_agent,
@@ -1008,7 +1009,8 @@ def _outils_non_accordes(org: int, t: dict,
 def _outils_cites_par_la_procedure(org: int, slug: str,
                                    memo: dict) -> list[tuple[str, str]]:
     """Sync (base) : les outils que la procédure cite (`<tool:…>`, comme l'allowlist
-    déduite) puis ceux des recettes PUBLIÉES qu'elle nomme — `[(outil, qui l'appelle)]`.
+    déduite), ceux des recettes PUBLIÉES qu'elle nomme, puis ceux des étapes de cascade
+    dont elle écrit les fournisseurs (`waterfall_cites`) — `[(outil, qui l'appelle)]`.
     Une recette nommée par plusieurs procédures se lit une fois par réponse (`memo`)."""
     corps = _corps_de_la_procedure(org, slug)
     cites = [(n, f"procedure `{slug}`") for n in tool_registry.ref_names(corps)]
@@ -1016,7 +1018,7 @@ def _outils_cites_par_la_procedure(org: int, slug: str,
         if ("recipe", org, recette) not in memo:
             memo[("recipe", org, recette)] = _outils_de_la_recette_publiee(org, recette)
         cites += [(n, f"recipe `{recette}`") for n in memo[("recipe", org, recette)]]
-    return cites
+    return cites + waterfall_cites.outils_des_cascades(corps)
 
 
 def _outils_de_la_recette_publiee(org: int, recette: str) -> list[str]:
