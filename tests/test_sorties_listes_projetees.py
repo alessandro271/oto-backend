@@ -71,7 +71,9 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # défaut, `full=True` le brut — `tools/github_index.py`).
 # 210 → 209 le 2026-10-16 : zohodesk_articles payé (vue légère par défaut, `full=True`
 # le brut — `tools/zohodesk.py`).
-_PLAFOND = 209
+# 209 → 208 le 2026-10-27 : linkedin_unipile payé (URL de profil ramenée au slug, fils
+# allégeables — `tools/unipile.py`).
+_PLAFOND = 208
 
 
 def _debt() -> set[str]:

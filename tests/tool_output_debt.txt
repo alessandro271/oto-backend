@@ -139,7 +139,6 @@ lever_opportunities
 lever_postings
 lever_users
 lighton_files
-linkedin_unipile
 linkedin_unipile_facets
 linkedin_unipile_job
 loi_article
