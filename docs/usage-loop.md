@@ -33,6 +33,17 @@ volontaire d'agent + les runs / déroulés. Détail : ADR 0017 (repo public
   one-shot (sans `guide`), même trace. Le `run_id` vit dans une **pile en état de
   session FastMCP** (`guide_run.py`, runs imbriqués OK), stampé sur chaque appel côté
   serveur — l'agent ne thread rien.
+  - **Une session neuve d'agent hébergé reprend son run** (27/10/2026) : la pile ne
+    survit pas à la session, et le relais du runner, relancé après un appel coupé côté
+    client, en ouvre une autre — les appels suivants partaient avec `run_id` NULL, la
+    timeline s'arrêtait là (le relais retire `_run_id` des schémas servis : l'agent ne
+    peut pas le repasser). `CallContextMiddleware` appelle
+    `guide_run.reprendre_run_du_jeton` : pour un jeton de **délégation** seulement (un
+    par travail), le run que CE jeton a ouvert et qui n'est pas clos
+    (`db.run_ouvert_du_jeton`, lu du journal : `run_start.token_id`, clôture par
+    `_run_closure`, borné à la création du jeton) est poussé sur la pile de la session
+    neuve. Cherché une fois par session ; jamais un jeton d'utilisateur, jamais un
+    autre compte.
   - **Retrouver un `run_id` perdu** (#473, 28/08) : `oto_project op=runs` **sans**
     `project_id` rend MES déroulés encore OUVERTS, chacun avec son `run_id` et son état
     lisible (`db.my_runs`). Sans ça, un agent qui perd le fil ne peut plus clore ce

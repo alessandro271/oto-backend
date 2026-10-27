@@ -214,6 +214,15 @@ class CallContextMiddleware(Middleware):
             # d'abord, la pile ensuite. J'avais pris le premier pour le run courant —
             # or il n'est posé que si l'appelant l'a passé, ce qu'un agent ne fait pas.
             # Une seule lecture des deux sources, ici, plutôt qu'une par seam.
+            #
+            # Une session NEUVE d'un agent hébergé (relais relancé après un appel coupé)
+            # reprend d'abord le run que son jeton de délégation tient ouvert : poussé
+            # sur la pile de CETTE session, que lisent le journal (`server.
+            # _calllog_sink`) et la cible d'`oto_call` (`tools/meta`) — sans lui, la
+            # timeline du run s'arrêtait à la session perdue. L'état de session se lit
+            # sur le contexte FastMCP, pas sur celui du middleware.
+            await guide_run.reprendre_run_du_jeton(
+                getattr(context, "fastmcp_context", None))
             if not session_org.current_call_run():
                 actif = await guide_run.active_run_id(context)
                 if actif:
