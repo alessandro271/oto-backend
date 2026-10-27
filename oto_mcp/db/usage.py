@@ -348,6 +348,43 @@ def run_closed_at(run_id: str) -> Optional[datetime]:
     return row["finished_at"] if row else None
 
 
+def run_ouvert_du_jeton(sub: str, token_id: int) -> Optional[str]:
+    """Le run ENCORE OUVERT le plus récent qu'a ouvert ce jeton de DÉLÉGATION, ou `None`.
+
+    Un agent hébergé n'a qu'un jeton par travail (`kind='delegation'`, `job_id`) : le
+    run qu'il a ouvert sous ce jeton est le sien, quelle que soit la session MCP par
+    laquelle il arrive. La pile de runs, elle, vit dans l'état de session
+    (`guide_run`) et ne survit pas à une session neuve (un relais relancé après un
+    appel coupé) — c'est le repli de `CallContextMiddleware`.
+
+    Lu du journal, comme partout : l'ouverture est le fait `run_start` (sa colonne
+    `token_id`, posée par `calllog.poser_emetteur`), la clôture le fait `run_finish`
+    (`_run_closure` — mêmes trois prédicats que `run_closed_at`). Bornes :
+    - le jeton doit être de DÉLÉGATION et appartenir à `sub` : jamais un jeton
+      d'utilisateur, qui sert plusieurs sessions sans lien, jamais le jeton d'autrui ;
+    - l'ouverture est postérieure à la création du jeton : le parcours de
+      `idx_tool_calls_run_start_sub` s'arrête au début du travail, même quand le jeton
+      n'a jamais ouvert de run (le cas courant, payé une fois par session).
+    Plusieurs runs ouverts (imbriqués) : le plus récent, le sommet de la pile."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT s.run_id
+              FROM user_api_tokens t
+              JOIN tool_calls s
+                ON s.sub = t.sub AND s.token_id = t.id AND s.created_at >= t.created_at
+                   {_run_closure("s")}
+             WHERE t.id = %s AND t.sub = %s AND t.kind = 'delegation'
+               AND s.tool = 'run_start' AND s.run_id IS NOT NULL
+               AND f.created_at IS NULL
+             ORDER BY s.created_at DESC, s.id DESC
+             LIMIT 1
+            """,
+            (token_id, sub),
+        ).fetchone()
+    return row["run_id"] if row else None
+
+
 def run_pour_en_tete(run_id: str, sub: str) -> Optional[dict]:
     """Ce qu'un en-tête REST `X-Oto-Run` doit savoir de son run — en UNE requête (oto#227).
 
