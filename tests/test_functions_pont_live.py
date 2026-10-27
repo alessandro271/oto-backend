@@ -180,6 +180,28 @@ def test_des_appels_en_parallele_recoivent_chacun_leur_reponse(bac):
     assert sortie["result"] == [0, 10, 20, 30] and sortie["calls"] == 4
 
 
+def test_des_appels_lents_en_parallele_se_chevauchent(bac):
+    """`asyncio.gather` dans le code = des appels servis ENSEMBLE (27/10/2026 : ils
+    passaient l'un après l'autre). La boucle serveur, sans Deno, se juge dans
+    `test_functions_pont_concurrence.py` ; ici, le bout-en-bout."""
+    import time
+    fenetres = []
+
+    async def appeler(outil, arguments):
+        debut = time.monotonic()
+        await asyncio.sleep(0.5)
+        fenetres.append((debut, time.monotonic()))
+        return {"ok": True, "result": arguments["q"]}
+
+    sortie = _jouer(
+        "import asyncio\n"
+        "async def run(oto, entree):\n"
+        "    return list(await asyncio.gather(*(oto.call('acme_search', {'q': i})\n"
+        "                                       for i in range(3))))\n", appeler)
+    assert sortie["result"] == [0, 1, 2] and sortie["calls"] == 3
+    assert max(d for d, _ in fenetres) < min(f for _, f in fenetres)
+
+
 def test_un_resultat_trop_gros_est_refuse_apres_l_appel(bac):
     gros = "x" * (pont.MAX_RESULTAT + 1)
     appeler = _doublure({"acme_search": {"ok": True, "result": gros, "quantity": 1}}, [])

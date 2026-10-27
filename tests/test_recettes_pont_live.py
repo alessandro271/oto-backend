@@ -323,6 +323,66 @@ def test_un_lot_qui_ne_tient_pas_dans_le_reste_n_est_pas_joue(crm):
     assert appels == ["acme_crm:createx3", "acme_crm:createx2"]
 
 
+def test_des_ecritures_en_parallele_ne_depassent_pas_le_plafond(monkeypatch):
+    """Le pont sert les appels en parallèle (27/10/2026) : trois écritures lancées
+    ensemble sous `max_writes=2` — deux jouées, une refusée. Le reste se RÉSERVE avant le
+    premier `await` ; jugé avant et compté après, les trois passaient. Sans base : seul
+    le compte est éprouvé, l'outil et sa résolution sont des doublures qui cèdent la main."""
+    from oto_mcp.recipes import ecritures as ec
+    from oto_mcp.recipes import pont
+    from oto_mcp.tools import meta
+    monkeypatch.setitem(ec.ECRITURES, "acme_crm", ec.Ecriture(
+        frozenset({"search"}), frozenset({"create"})))
+    joues = []
+
+    async def resoudre(fastmcp, outil):
+        await asyncio.sleep(0)
+        return object()
+
+    async def executer(tool, sub, outil, arguments):
+        await asyncio.sleep(0.01)
+        joues.append(arguments["name"])
+        return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(meta, "resoudre_outil", resoudre)
+    monkeypatch.setattr(pont, "_executer", executer)
+    compteur = pont.compteur_neuf()
+    appeler = pont.appeleur_de_recette(
+        None, SUB, datastore=None, ecrire=True, ecritures=frozenset({"acme_crm:create"}),
+        max_ecritures=2, compteur=compteur)
+
+    async def ensemble():
+        return await asyncio.gather(*(appeler("acme_crm", {"op": "create", "name": n})
+                                      for n in "abc"))
+
+    reponses = asyncio.run(ensemble())
+    assert sorted(r.get("code", "ok") for r in reponses) == ["budget_exhausted", "ok", "ok"]
+    assert len(joues) == 2
+    assert compteur["total"] == 2 and compteur["writes"] == {"acme_crm:create": 2}
+    assert compteur["stopped"] == "max_writes"
+
+
+def test_une_ecriture_dont_l_outil_manque_rend_sa_reservation(monkeypatch):
+    """Réservée avant la résolution de l'outil : un outil absent de l'instance n'a rien
+    tenté, sa place est rendue et le reçu ne le compte pas."""
+    from oto_mcp.recipes import ecritures as ec
+    from oto_mcp.recipes import pont
+    from oto_mcp.tools import meta
+    monkeypatch.setitem(ec.ECRITURES, "acme_crm", ec.Ecriture(
+        frozenset({"search"}), frozenset({"create"})))
+
+    async def absent(fastmcp, outil):
+        return None
+
+    monkeypatch.setattr(meta, "resoudre_outil", absent)
+    compteur = pont.compteur_neuf()
+    reponse = asyncio.run(pont.appeleur_de_recette(
+        None, SUB, datastore=None, ecrire=True, ecritures=frozenset({"acme_crm:create"}),
+        max_ecritures=2, compteur=compteur)("acme_crm", {"op": "create", "name": "a"}))
+    assert reponse["code"] == "unknown_tool"
+    assert compteur == {"writes": {}, "total": 0, "stopped": None}
+
+
 def test_un_outil_qui_ecrit_hors_liste_reste_refuse(crm):
     m, appels = crm
     assert _ecrire(m, "acme_post", {"text": "x"})["code"] == "recipe_tool_not_read_only"

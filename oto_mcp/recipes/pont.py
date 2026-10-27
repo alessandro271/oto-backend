@@ -144,14 +144,21 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
             refus = _refus_ecrire_chez_un_tiers(nom, arguments, fiches)
             if refus:
                 return refus
+            # Réservées AVANT le premier `await` : le pont sert des appels en parallèle,
+            # et deux écritures jugées sur le même reste passeraient toutes les deux.
+            etat["total"] += fiches
+            etat["writes"][nom] = etat["writes"].get(nom, 0) + fiches
         from ..tools import meta
         tool = await meta.resoudre_outil(fastmcp, outil)
         if tool is None:
+            if sens == "ecrire":
+                # Rien n'a été tenté : la réservation est rendue.
+                etat["total"] -= fiches
+                etat["writes"][nom] -= fiches
+                if not etat["writes"][nom]:
+                    del etat["writes"][nom]
             return {"ok": False, "code": "unknown_tool",
                     "message": f"`{outil}` is not served by this instance."}
-        if sens == "ecrire":
-            etat["total"] += fiches
-            etat["writes"][nom] = etat["writes"].get(nom, 0) + fiches
         return await _executer(tool, sub, outil, arguments)
 
     def _refus_ecrire_chez_un_tiers(nom: str, arguments: dict,
