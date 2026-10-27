@@ -213,3 +213,54 @@ def test_une_liste_lit_chaque_procedure_et_ses_recettes_une_fois(monkeypatch):
     assert manque[1] == ["data_aggregate", "data_rows", "folk_record"]
     assert manque[2] == ["data_aggregate", "oto_recipe", "folk_record"], (
         "la lecture est partagée, le calcul reste celui de CHAQUE agent")
+
+
+# ── les étapes d'une cascade que la procédure écrit ──────────────────────────
+
+_PROC_CASCADE = (
+    'Répéter `waterfall_email_act(op="update_rows", datastore="12", '
+    'filter={"stage":"sourced"}, inputs={"full_name":"full_name","domain":"domain"}, '
+    'output={"email":"email_verified"}, status_column="email_find_status", '
+    'providers=["apollo","aiark"], batch_size=50)` une fois à la fois.')
+
+
+def test_une_cascade_cite_les_outils_des_fournisseurs_qu_elle_nomme():
+    from oto_mcp.waterfall import cites
+    assert cites.outils_des_cascades(_PROC_CASCADE) == [
+        ("apollo_match_person", "`waterfall_email_act` (providers)"),
+        ("linkedin_aiark_person", "`waterfall_email_act` (providers)")]
+
+
+def test_une_cascade_sans_fournisseurs_ecrits_ne_cite_rien():
+    """Sans `providers=`, l'ordre se résout au run : toute la table serait une liste trop
+    large, pas un outil qui manque."""
+    from oto_mcp.waterfall import cites
+    assert cites.outils_des_cascades('`waterfall_email_act(op="update_rows")`') == []
+    assert cites.outils_des_cascades('providers=["apollo"] sans cascade') == []
+
+
+def test_les_fournisseurs_appartiennent_a_la_cascade_qui_les_precede():
+    """Deux cascades : chacune lit SES fournisseurs, et une clé qu'elle ne porte pas est
+    ignorée (l'outil la refusera au run)."""
+    from oto_mcp.waterfall import cites
+    texte = ('`waterfall_phone(providers=["kaspr"])`, puis '
+             '`waterfall_email(providers=["hunter", "inconnu"])`.')
+    assert [n for n, _ in cites.outils_des_cascades(texte)] == [
+        "kaspr_enrich_linkedin", "hunter_email_finder"]
+
+
+def test_une_etape_asynchrone_cite_aussi_son_outil_de_collecte():
+    from oto_mcp.waterfall import cites
+    noms = [n for n, _ in cites.outils_des_cascades(
+        'waterfall_email_act providers=["fullenrich"]')]
+    assert noms[0] == "fullenrich_enrich_linkedin" and len(noms) == 2
+    assert noms[1] != noms[0], "la collecte est un autre outil, appelé lui aussi"
+
+
+def test_l_agent_dit_les_fournisseurs_de_sa_cascade_qu_il_n_a_pas(monkeypatch):
+    """L'agent a la cascade, pas ses étapes : chaque étape serait refusée au travail et la
+    ligne reviendrait sans réponse. Il le dit avant le run."""
+    monkeypatch.setattr(RT.db, "get_guide_db", lambda *a: {"body_md": _PROC_CASCADE})
+    t = {"procedure": "p", "tools": ["waterfall_email_act", "linkedin_aiark_person"]}
+    assert RT._outils_non_accordes(77, t) == [
+        ("apollo_match_person", "`waterfall_email_act` (providers)")]
