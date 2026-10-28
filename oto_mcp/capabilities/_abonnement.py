@@ -410,7 +410,6 @@ def raison_de_peremption(sub: Optional[str], org_id: int,
     livraison est refusée avant (`runner_models.motif_sans_famille`, 21/10/2026).
     """
     base = "occurrence non prise dans son cycle : le déclencheur a enfilé la suivante."
-    aucun_agent = f"{base} Aucun agent ne dessert cette organisation."
     if famille not in (etat_runner.get("families") or []):
         # Aucun worker vivant ne sert cette famille pour cette org (21/10/2026) : le
         # dire, et depuis quand. « Aucun agent ne dessert cette organisation »
@@ -420,8 +419,12 @@ def raison_de_peremption(sub: Optional[str], org_id: int,
         # Famille API servie : le détail d'une clé manquante appartient à
         # `_cle_exigee`, pas à ce module.
         return base
+    # ⚠️ Passé ce point, un worker de la famille EST vivant pour cette org : « aucun
+    # agent ne dessert cette organisation » serait faux (28/10/2026 — 55 péremptions
+    # d'abonnement en trois jours le disaient encore, quand l'API n'en avait plus une).
     if not sub:
-        return aucun_agent
+        return (f"{base} Ce travail n'a pas de propriétaire : aucun abonnement "
+                f"`{famille}` ne peut le servir.")
     if par_le_pool(org_id, famille, sub):
         # ⚠️ `taille_du_pool` compte les prêteurs SERVABLES MAINTENANT — 0 y est
         # ambigu (personne ne prête ? ou tout le monde est au plafond ?) pour un
@@ -440,8 +443,11 @@ def raison_de_peremption(sub: Optional[str], org_id: int,
                         "au pool de l'organisation doivent le reconnecter (Réglages › "
                         "Fournisseurs de modèles) — il repartira tout seul.")
             return _pool_au_plafond(base, org_id, famille, modele)
-        # Un prêteur EST servable maintenant : la vraie cause a déjà cédé.
-        return aucun_agent
+        # Un prêteur EST servable maintenant : ils étaient occupés (un travail à la
+        # fois par abonnement), ou la cause a cédé entre-temps.
+        return (f"{base} Le pool `{famille}` de l'organisation a des prêteurs "
+                "servables, mais chacun ne sert qu'un travail à la fois : celui-ci "
+                "attendait encore son tour quand la suivante est arrivée.")
     # ⚠️ `servable()` répond FAIT EXPRÈS `True` pour un `paused_limit`, quelle que
     # soit son échéance (l'attente vit dans la réservation, pas dans cette
     # garde) : la réutiliser ici confondrait TOUT plafond avec une cause déjà
@@ -457,11 +463,26 @@ def raison_de_peremption(sub: Optional[str], org_id: int,
         if reset and reset > datetime.now(timezone.utc):
             return (f"{base} L'abonnement `{famille}` de son propriétaire avait "
                     "atteint son plafond de consommation.")
-        # Échéance passée (ou inconnue) : la réservation aurait déjà servi ce
-        # travail — la vraie cause a cédé, le texte générique reste le plus
-        # honnête qu'on puisse écrire.
-        return aucun_agent
-    return aucun_agent
+        # Échéance passée (ou inconnue) : la pause a cédé, la réservation peut
+        # servir — ce qui reste est l'attente ordinaire ci-dessous.
+    # L'abonnement doit être OUVERT dans cette org (08/10/2026), sinon la réservation
+    # fait attendre le travail (`runner_jobs._ABONNEMENT_OUVERT_ICI`) : la cause que
+    # ce diagnostic ne nommait pas, et qui renvoie au propriétaire, pas à l'exploitant.
+    if not user_subscriptions.sert_dans(sub, famille, org_id):
+        return (f"{base} L'abonnement `{famille}` de son propriétaire est connecté, "
+                "mais pas ouvert dans cette organisation : ouvre-le dans Réglages › "
+                "Fournisseurs de modèles — il repartira tout seul.")
+    return _sert_un_travail_a_la_fois(base, famille)
+
+
+def _sert_un_travail_a_la_fois(base: str, famille: str) -> str:
+    """Tout est en place — worker vivant, abonnement connecté et ouvert ici : la
+    réservation sérialise (un travail à la fois par abonnement), et celui-ci n'est pas
+    parti avant la suivante. Le dire renvoie à la cadence, pas à un agent absent."""
+    return (f"{base} Un agent `{famille}` est en ligne et l'abonnement de son "
+            "propriétaire peut servir, mais un abonnement ne sert qu'un travail à la "
+            "fois : celui-ci attendait encore derrière un autre (un travail plus long "
+            "que la cadence, ou plusieurs agents sur le même abonnement).")
 
 
 def echeance_utc(v) -> Optional[datetime]:

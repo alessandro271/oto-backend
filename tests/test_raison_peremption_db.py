@@ -145,13 +145,47 @@ def test_abonnement_plafond_futur(live):
     assert "plafond de consommation" in r
 
 
-def test_abonnement_servable_maintenant_garde_le_texte_generique(live):
-    """Plafond ÉCHU (ou jamais connu) : la réservation ordinaire sert déjà ce
-    travail — la vraie cause a cédé, le texte générique reste le plus honnête."""
+def test_abonnement_connecte_mais_pas_ouvert_ici(live):
+    """Connecté, jamais ouvert dans CETTE org : la réservation fait attendre le
+    travail (`_ABONNEMENT_OUVERT_ICI`). Ce cas portait le texte générique, qui
+    envoyait chercher un agent absent quand il fallait ouvrir l'abonnement."""
     oid = _org("r5", "r5-dem")
     _abonne("r5-dem", statut="connected")
     r = _raison("r5-dem", oid, _F, _servie(_F))
-    assert "Aucun agent ne dessert cette organisation." in r
+    assert "Aucun agent ne dessert cette organisation." not in r
+    assert "pas ouvert dans cette organisation" in r, r
+
+
+def _ouvert_ici(sub, oid):
+    from oto_mcp.db import user_subscriptions as US
+    US.poser_orgs_servies(sub, _F, [oid])
+
+
+def test_abonnement_servable_et_ouvert_ici_dit_un_travail_a_la_fois(live):
+    """Tout est en place : il ne reste que la sérialisation (un travail à la fois par
+    abonnement). Le dire, au lieu d'« aucun agent » — un worker de la famille vit."""
+    oid = _org("r5b", "r5b-dem")
+    _abonne("r5b-dem", statut="connected")
+    _ouvert_ici("r5b-dem", oid)
+    r = _raison("r5b-dem", oid, _F, _servie(_F))
+    assert "Aucun agent ne dessert cette organisation." not in r
+    assert "un travail à la" in r and "fois" in r, r
+
+
+def test_abonnement_plafond_echu_suit_l_attente_ordinaire(live):
+    oid = _org("r5c", "r5c-dem")
+    _abonne("r5c-dem", statut="paused_limit",
+            reset=datetime.now(timezone.utc) - timedelta(hours=1))
+    _ouvert_ici("r5c-dem", oid)
+    r = _raison("r5c-dem", oid, _F, _servie(_F))
+    assert "plafond" not in r and "Aucun agent ne dessert" not in r, r
+    assert "un travail à la" in r, r
+
+
+def test_abonnement_sans_proprietaire(live):
+    r = _raison(None, 1, _F, _servie(_F))
+    assert "Aucun agent ne dessert cette organisation." not in r
+    assert "pas de propriétaire" in r, r
 
 
 # ── pool ─────────────────────────────────────────────────────────────────────
@@ -168,6 +202,14 @@ def test_pool_en_pause(live):
     r = _raison("r7-dem", oid, _F, _servie(_F))
     assert "pool" in r and "pause" in r
 
+
+
+def test_pool_avec_un_preteur_servable_dit_qu_ils_etaient_occupes(live):
+    oid = _org("r7c", "r7c-dem", "r7c-preteur", mode="pool")
+    _abonne("r7c-preteur", statut="connected", pret_a=[oid])
+    r = _raison("r7c-dem", oid, _F, _servie(_F))
+    assert "Aucun agent ne dessert cette organisation." not in r
+    assert "prêteurs servables" in r, r
 
 # ── la BASE (attendu ou pas) porte toujours l'ouverture, sans « aucun agent » ni
 #    « aucun modèle » : c'est ce que le texte GARDE de la version d'avant ────
