@@ -177,6 +177,20 @@ def test_ligne_supprimee_inconnue_et_tableau_hors_perimetre(rest):
     assert (r.status_code, r.json()["error"]) == (404, "datastore_not_found")
 
 
+
+def test_hors_perimetre_les_quatre_routes_sont_un_tableau_inconnu(rest):
+    """Le cloisonnement se juge sur CHAQUE route, pas sur le fil seul : un inconnu ne
+    compte, n'écrit ni ne retire rien, et n'apprend même pas que le tableau existe."""
+    ns, ns_id, rid = _table_et_ligne(rest)
+    cid = _poster(rest, ns, rid, "à moi").json()["id"]
+    for r in (rest.get(_url(ns_id, rid), headers=_h(C)),
+              _comptes(rest, ns_id, [rid], sub=C),
+              _poster(rest, ns_id, rid, "intrus", sub=C),
+              rest.delete(f"{_url(ns_id, rid)}/{cid}", headers=_h(C))):
+        assert (r.status_code, r.json()["error"]) == (404, "datastore_not_found"), r.text
+    assert [x["body"] for x in rest.get(_url(ns, rid), headers=_h()).json()["comments"]] \
+        == ["à moi"]
+
 # ── 3 bis. les comptes par ligne ───────────────────────────────────────────────
 
 def _comptes(rest, ns, ids, sub=A):

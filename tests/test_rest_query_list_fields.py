@@ -69,6 +69,9 @@ EXEMPLES: dict[tuple[str, str], str] = {
     # #1245 — le détail de tous les connecteurs en un appel, mode d'emploi compris :
     # l'URL qu'une page Connecteurs tape au lieu d'une lecture par carte.
     ("connectors.me", "include"): "card,docs",
+    # Les commentaires des lignes AFFICHÉES d'une grille, comptés en une lecture —
+    # des `_id` de ligne tels que la page les rend.
+    ("me.datastore.comment_counts", "row_ids"): "row_1,row_2",
 }
 
 # Le reste d'un appel MINIMAL, quand aucun champ n'est requis SEUL mais qu'un parmi
