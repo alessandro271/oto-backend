@@ -212,6 +212,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "zoho",
     "zohodesk",
     "zohoanalytics",
+    # The fourth Zoho connector: e-signature, on the same Zoho OAuth (`auth/zoho.py`).
+    "zohosign",
     "salesforce",
     "pipedrive",
     "sellsy",
