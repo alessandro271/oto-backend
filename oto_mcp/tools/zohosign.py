@@ -17,7 +17,7 @@ text inline plus a short-lived signed URL to the original, a ZIP as a signed URL
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastmcp import FastMCP
 from mcp.types import ErrorData, INVALID_PARAMS
@@ -26,6 +26,9 @@ from .. import access, file_content, status_hints
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from .lecture import ACTE, LECTURE
+
+if TYPE_CHECKING:  # the client is imported lazily, at call time
+    from oto.tools.zohosign import ZohoSignClient
 
 CONNECTOR = "zohosign"
 
@@ -66,7 +69,7 @@ def _domains(data_center: Optional[str]) -> tuple[str, str]:
     return _DC_DOMAINS[dc]
 
 
-def _build(fields: dict):
+def _build(fields: dict) -> ZohoSignClient:
     from oto.tools.zohosign import ZohoSignClient
     api_domain, accounts_url = _domains(fields.get("data_center"))
     return ZohoSignClient(client_id=fields.get("client_id"),
@@ -75,7 +78,7 @@ def _build(fields: dict):
                           api_domain=api_domain, accounts_url=accounts_url)
 
 
-def _client():
+def _client() -> ZohoSignClient:
     from .zoho import _credential_state_for
     fields = access.resolve_credential_fields(CONNECTOR)
     state = _credential_state_for(CONNECTOR)(fields)
