@@ -141,7 +141,7 @@ def test_session_interactive_passe(monkeypatch):
 def test_les_routes_refusent_un_jeton_a_l_authentification():
     from oto_mcp.capabilities.registry import CAPABILITIES
     caps = [c for c in CAPABILITIES if c.key.startswith("copilot.")]
-    assert len(caps) == 5
+    assert len(caps) == 6
     for c in caps:
         assert all(b.allow_api_token is False and b.allow_issuer_token is False
                    for b in c.rest_bindings()), c.key
