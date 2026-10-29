@@ -295,13 +295,21 @@ def mark_invitation_declined(inv_id: int, sub: str) -> bool:
         return (cur.rowcount or 0) > 0
 
 
+def _consommer(conn, inv_id: int, sub: str) -> bool:
+    """Consomme l'invitation pour `sub` SI elle est encore en attente. True si CET
+    appel l'a consommée. La garde est dans le WHERE, jamais dans une lecture
+    préalable : de deux consommations simultanées (deux onglets, deux porteurs du
+    même lien), une seule obtient la ligne — l'autre attend son verrou, puis ne la
+    trouve plus en attente. Sur la transaction de l'appelant, qui y lie son geste."""
+    return conn.execute(
+        "UPDATE org_invitations SET accepted_at = NOW(), accepted_sub = %s "
+        f"WHERE id = %s AND {_PENDING} RETURNING id", (sub, inv_id),
+    ).fetchone() is not None
+
+
 def _mark_invitation_accepted(inv_id: int, sub: str) -> None:
     with _connect() as conn:
-        conn.execute(
-            "UPDATE org_invitations SET accepted_at = NOW(), accepted_sub = %s "
-            "WHERE id = %s AND accepted_at IS NULL",
-            (sub, inv_id),
-        )
+        _consommer(conn, inv_id, sub)
 
 
 def _idempotent_accept(pred: str, val, sub: str) -> Optional[dict]:
@@ -333,16 +341,19 @@ def accept_invitation(token: str, sub: str) -> Optional[dict]:
     if not token:
         return None
     inv = get_invitation_by_token(token)
-    if inv and inv.get("resource_kind"):
-        # Partage en attente d'UN objet : l'accès à cet objet, jamais une adhésion.
-        from .. import partage_en_attente
-        return partage_en_attente.honorer(inv, sub)
     if inv:
-        return _accept_invitation_row(inv, sub, actor=sub)
+        from .. import partage_en_attente
+        # Partage en attente d'UN objet : l'accès à cet objet, jamais une adhésion.
+        res = (partage_en_attente.honorer(inv, sub) if inv.get("resource_kind")
+               else _accept_invitation_row(inv, sub, actor=sub))
+        if res is not None:
+            return res
+    # Déjà consommée — avant la lecture, ou entre elle et la consommation.
     return _idempotent_accept("token_hash = %s", _hash_token(token), sub)
 
 
-def _accept_invitation_row(inv: dict, sub: str, *, actor: Optional[str]) -> dict:
+def _accept_invitation_row(inv: dict, sub: str, *,
+                           actor: Optional[str]) -> Optional[dict]:
     """Cœur de l'acceptation d'une invitation à partir d'une ligne déjà résolue (par
     token OU email lors d'une réconciliation de signup). Selon le scope :
     - **org** (org_id présent) → ajoute le membre d'org ; la MAISON n'est posée que
@@ -352,6 +363,11 @@ def _accept_invitation_row(inv: dict, sub: str, *, actor: Optional[str]) -> dict
       d'abord — invariant équipe ⊂ org) ;
     - **plateforme** (ni l'un ni l'autre) → l'invité a déjà son compte + org perso au
       signup ; l'acceptation ne fait que marquer l'invitation consommée (attribution).
+
+    **La consommation D'ABORD, puis l'adhésion, dans UNE transaction.** La ligne a été
+    lue avant (par token, par email) : entre cette lecture et l'écriture, un autre
+    appel a pu la consommer. `_consommer` tranche dans son WHERE ; perdre rend None
+    et n'écrit RIEN — et une adhésion qui échoue annule la consommation.
 
     **Accepter est un AJOUT, jamais une rétrogradation (#297).** `add_org_member` et
     `add_group_member` sont des upserts : écrire le rôle de l'invitation tel quel
@@ -384,7 +400,7 @@ def _accept_invitation_row(inv: dict, sub: str, *, actor: Optional[str]) -> dict
     org_role = inv.get("org_role")
     if org_id is not None:
         org_role = roles.max_org_role(members.get_org_role(org_id, sub), org_role)
-        members.add_org_member(org_id, sub, org_role, actor=actor)
+        members.upsert_user(sub)
     group_id = inv.get("group_id")
     group_role = inv.get("group_role")
     if group_id is not None:
@@ -393,10 +409,19 @@ def _accept_invitation_row(inv: dict, sub: str, *, actor: Optional[str]) -> dict
         from .. import group_store
         group_role = roles.max_group_role(group_store.get_group_role(group_id, sub),
                                           group_role or "group_member")
-        group_store.add_group_member(group_id, sub, group_role)
-        if org_id is not None and members.get_active_org(sub) == org_id:
-            group_store.set_active_group(sub, group_id)
-    _mark_invitation_accepted(inv["id"], sub)
+    with _connect() as conn:
+        with conn.transaction():
+            if not _consommer(conn, inv["id"], sub):
+                return None
+            if org_id is not None:
+                members.add_org_member_in(conn, org_id, sub, org_role, actor=actor)
+            if group_id is not None:
+                group_store.add_group_member_in(conn, group_id, sub, group_role)
+    if org_id is not None:
+        members._sync_mfa_mirror(org_id)
+    if (group_id is not None and org_id is not None
+            and members.get_active_org(sub) == org_id):
+        group_store.set_active_group(sub, group_id)
     # Les rôles rendus sont ceux ÉCRITS, pas ceux de l'invitation : sinon l'écho
     # annonce « tu es org_member » à quelqu'un qui vient de rester org_admin.
     return {"org_id": org_id, "org_role": org_role,
@@ -438,7 +463,9 @@ def claim_invitation_for_org(sub: str, email: str, org_id: int) -> Optional[dict
     row = _pending_for_email(email, org_id=org_id)
     if not row:
         return None
-    return _accept_invitation_row(row, sub, actor=sub)
+    # Perdue au profit du MÊME compte (double clic, deux onglets) : son succès.
+    return (_accept_invitation_row(row, sub, actor=sub)
+            or _idempotent_accept("id = %s", row["id"], sub))
 
 
 def _pending_for_email(email: str, *, org_id: Optional[int] = None) -> Optional[dict]:
