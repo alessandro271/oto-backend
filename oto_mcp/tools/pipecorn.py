@@ -186,7 +186,7 @@ def register(mcp: FastMCP) -> None:
     connector_verify.register(_NAME, _verify, couvre=connector_verify.AUTH_QUOTA)
     budget.declarer(_NAME, _NAME, "submit_enrichment", unites=_pire_par_nature)
 
-    def _client(op: str, finds: list[str]):
+    def _client(op: str, finds: list[str]) -> tuple[PipecornClient, "access.ResolvedCredential"]:
         """`(client, rc)`. Only a submission spends: it resolves with the usage checks
         (and, on a re-billed key, reserves its worst case); a read, the balance and the
         account resolve without them. On the platform key, a submission of anything but
