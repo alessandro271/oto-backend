@@ -2290,7 +2290,9 @@ parallèle : 5,6 s → 53 ms).
 
 **`total_max`** (`/rows`) borne en plus le compte : au-delà, `total` vaut `total_max` et
 `total_capped: true` le dit ; absent, le total reste exact (le dashboard pagine et
-exporte sur lui).
+exporte sur lui). Au tri méta (`_created_at` par défaut, `_updated_at`, `_id`), sans `q` ni
+filtre amincissable, la page se coupe sur les clés sans fenêtre sur tout le jeu
+(`db.datastore_page_mince`, mêmes lignes) : seul le total, exact ou borné, lit encore le tableau.
 
 ## Interroger PLUSIEURS colonnes à la fois (oto#22 barreau 1)
 
