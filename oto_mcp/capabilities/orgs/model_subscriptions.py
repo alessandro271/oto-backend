@@ -42,16 +42,15 @@ _PATH_REPLI = "/api/orgs/{id}/model-subscriptions/{family}/api-fallback"
 class Preteur(BaseModel):
     """Un membre qui prête son abonnement au pool de l'org — et RIEN de plus.
 
-    ⚠️ Ni palier, ni état de connexion, ni échéance, ni plafond perso : un abonnement
+    ⚠️ Ni palier, ni état de connexion, ni échéance, ni usage : un abonnement
     appartient à qui le paie (`capabilities/me_abonnements.py`), et prêter partage sa
     CAPACITÉ, pas son état. « Au plafond jusqu'à … » dirait à toute l'org l'usage
     TOTAL d'un compte, usage personnel compris. Même forme pour un admin d'org
-    (décision d'Alexis, 08/10/2026).
-
-    Une exception, pour l'org_admin SEUL : `limit_pct`, le plafond effectif du
-    prêteur — un RÉGLAGE qu'il a choisi (ou celui de l'org), pas son usage. Il dit
-    à qui gouverne le pool quelle part de chaque forfait les agents peuvent
-    prendre ; un membre ne le lit pas."""
+    (décision d'Alexis, 08/10/2026), à UNE exception près (décision d'Alexis,
+    29/10/2026) : l'org_admin SEUL lit `limit_pct`, le plafond effectif du prêteur —
+    un RÉGLAGE qu'il a choisi (ou celui de l'org), jamais son usage. Il dit à qui
+    gouverne le pool quelle part de chaque forfait les agents peuvent prendre ; un
+    membre ne le lit pas."""
     sub: str
     usable_now: bool = Field(
         description=("Whether this subscription is usable right now (connected, or at a "
