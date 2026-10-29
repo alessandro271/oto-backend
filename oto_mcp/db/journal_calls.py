@@ -68,6 +68,14 @@ EMITTER_SQL = (
     "l.token_kind"
 )
 
+# Les crédits que le FOURNISSEUR a déduits pour l'appel, dans son unité — à côté de
+# `quantity`, jamais dedans (commentaire DDL de `tool_calls.provider_credits`). Le même
+# DDL pour le démarrage (`_init`, sous garde de catalogue) et pour la révision
+# `20261029_1705_provider_credits`. Nullable sans défaut : écriture de catalogue seule.
+COLONNE_CREDITS_FOURNISSEUR = "provider_credits"
+DDL_COLONNE_CREDITS_FOURNISSEUR = (
+    f"ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS {COLONNE_CREDITS_FOURNISSEUR} INTEGER")
+
 
 def call_filter_clauses(
     *, sub: Optional[str] = None, tool_name: Optional[str] = None,

@@ -139,9 +139,11 @@ def units(tool: str, op: Optional[str], result) -> int:
 #: What Forager deducts for ONE answered call of each paid op, in FORAGER credits —
 #: its published grid (docs.forager.ai/api-overview/credit-pricing, read 2026-10-28;
 #: phones 15 confirmed live 2026-08-21, `oto.tools.forager`). A fact about the
-#: provider, in the provider's own unit, like Serper's `credits`: the billing reads it
-#: as `quantity` and puts the price on the Forager credit. Every op of `OPS` that is
-#: not free (`FREE_TOOLS`, `*_totals`) has a line — `test_every_paid_op_has_its_cost`.
+#: provider, in the provider's own unit: it goes to `provider_credits` (its own
+#: `tool_calls` column), NEVER to `quantity`, whose meaning for these tools is
+#: unchanged — a consumer summing `quantity` per tool must not see it switch units.
+#: Every op of `OPS` that is not free (`FREE_TOOLS`, `*_totals`) has a line —
+#: `test_every_paid_op_has_its_cost`.
 FORAGER_CREDITS: dict[tuple[str, str], int] = {
     ("forager_person", "detail"): 1,
     ("forager_person", "work_emails"): 5,
@@ -226,9 +228,11 @@ def register(mcp: FastMCP) -> None:
 
         def served(result):
             # `units` is the grant's quota axis and never reaches the ledger;
-            # `quantity` is what the billing reads: the Forager credits consumed.
-            session_org.note_call_trace(units=units(tool, op, result),
-                                        quantity=forager_credits(tool, op, result))
+            # `provider_credits` is the Forager credits consumed, beside `quantity`
+            # (left untraced here: NULL, read as 1, as before).
+            session_org.note_call_trace(
+                units=units(tool, op, result),
+                provider_credits=forager_credits(tool, op, result))
             return result
         return client, served
 
@@ -432,13 +436,15 @@ def register(mcp: FastMCP) -> None:
                 # Forager does not bill it). A fact, no rate: the price is the partner's.
                 # The billing lens reads the three `found_*` ALL OR NOTHING
                 # (`db/usage._found_from_row`): the two email counts are traced at 0.
-                # `quantity` = the Forager credits it consumed (0 on a miss), the same
-                # figure `served` notes on the shared key, so the aggregated view
-                # (NULL reads 1) does not count a miss as a billed lookup.
+                # `quantity` = the same 0/1, so the aggregated view (NULL reads 1)
+                # does not count a miss as a billed lookup. `provider_credits` = the
+                # Forager credits it consumed (0 on a miss), the figure `served` notes
+                # on the shared key.
                 trouve = 1 if phones else 0
                 session_org.note_call_trace(
                     found_work_emails=0, found_personal_emails=0, found_phones=trouve,
-                    quantity=forager_credits("forager_person", op, phones))
+                    quantity=trouve,
+                    provider_credits=forager_credits("forager_person", op, phones))
                 return served(phones)
 
             if op == "reverse_by_email":

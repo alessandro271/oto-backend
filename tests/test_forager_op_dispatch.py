@@ -395,7 +395,7 @@ def test_platform_key_runs_phone_numbers_and_meters_it(
     out = _tool("forager_person")(op="phone_numbers", person_id=7)
     assert out == [{"phone_number": "+33100000000"}]
     assert trace == {"found_work_emails": 0, "found_personal_emails": 0,
-                     "found_phones": 1, "quantity": 15}
+                     "found_phones": 1, "quantity": 1, "provider_credits": 15}
     assert platform_usage == [("forager", 1)]
 
 
@@ -413,8 +413,8 @@ def test_a_totals_count_debits_nothing(client, key_mode, setting, trace, platfor
     key_mode["platform"] = True
     setting["value"] = "forager_job_post"
     _tool("forager_job_post")(op="totals")
-    assert trace == {"quantity": 0} and platform_usage == [], (
-        "units=0: served, nothing debited, and a traced 0 bills nothing")
+    assert trace == {"provider_credits": 0} and platform_usage == [], (
+        "units=0: served, nothing debited, and Forager deducted nothing")
 
 
 def test_free_tools_note_no_units(client, key_mode, setting, platform_usage):
@@ -604,11 +604,14 @@ def test_every_paid_op_has_its_cost():
 ])
 def test_a_served_call_traces_the_forager_credits_it_consumed(
         client, key_mode, setting, trace, tool, kwargs, method, credits):
+    """The credits go to `provider_credits`; `quantity` stays untraced (NULL, read as
+    1), as before the credits were traced — its meaning for these tools does not move."""
     key_mode["platform"] = True
     setting["value"] = "forager_person, forager_organization, forager_job_post"
     getattr(client, method).return_value = [{"id": 1}]
     _tool(tool)(**kwargs)
-    assert trace["quantity"] == credits
+    assert trace["provider_credits"] == credits
+    assert "quantity" not in trace
 
 
 def test_a_contact_miss_traces_zero_credits(client, key_mode, setting, trace):
@@ -616,19 +619,42 @@ def test_a_contact_miss_traces_zero_credits(client, key_mode, setting, trace):
     setting["value"] = "forager_person"
     client.lookup_person_work_emails.return_value = []
     _tool("forager_person")(op="work_emails", person_id=1)
-    assert trace["quantity"] == 0
+    assert trace["provider_credits"] == 0 and "quantity" not in trace
 
 
-def test_the_ledger_row_carries_the_forager_credits_the_billing_reads(
-        client, key_mode, setting, trace):
-    """End to end on our side: the trace of a served call becomes the `tool_calls` row
-    the billing lens (`org.usage.calls`) serves — `quantity` = the Forager credits,
-    `key_mode` = platform. What a billing consumer multiplies by its rate."""
+def test_the_ledger_row_carries_the_forager_credits_beside_quantity(
+        client, key_mode, setting, trace, live):
+    """End to end on our side, against the database: the trace of a served call becomes
+    the `tool_calls` row (`calllog.apply_call_trace`, then `db.insert_tool_call`), and
+    the per-call billing lens (`org.usage.calls`) serves it — `provider_credits` = the
+    Forager credits, `quantity` untraced (NULL: one call, as before), `key_mode` =
+    platform. The per-tool sum is held by `tests/db/test_journal_jour_lecteurs.py`."""
+    import uuid
+
+    from oto_mcp import db, org_store
     from oto_mcp.calllog import apply_call_trace
+    from oto_mcp.db._conn import _connect
 
     key_mode["platform"] = True
     setting["value"] = "forager_person:work_emails"
     client.lookup_person_work_emails.return_value = [{"email": "a@example.com"}]
     _tool("forager_person")(op="work_emails", linkedin_public_identifier="someone")
-    row = apply_call_trace({}, {**trace, "key_mode": "platform"}, ())
-    assert row == {"quantity": 5, "key_mode": "platform"}
+
+    sub = "sub-forager-" + uuid.uuid4().hex[:6]
+    org = org_store.create_org("Forager credits", created_by=sub)
+    uid = "uid-forager-" + uuid.uuid4().hex[:6]
+    row = apply_call_trace({"sub": sub, "kind": "mcp", "tool": "forager_person",
+                            "ok": True, "org_id": org, "call_uid": uid},
+                           {**trace, "key_mode": "platform"}, ())
+    db.insert_tool_call(row)
+    with _connect() as conn:
+        ligne = conn.execute(
+            "UPDATE tool_calls SET created_at = '2026-08-20T10:00:00+00:00' "
+            "WHERE call_uid = %s RETURNING quantity, provider_credits, key_mode",
+            (uid,)).fetchone()
+    assert (ligne["quantity"], ligne["provider_credits"], ligne["key_mode"]) == (
+        None, 5, "platform")
+
+    fenetre = {"since": "2026-08-10T00:00:00+00:00", "until": "2026-08-21T00:00:00+00:00"}
+    page = db.list_billable_calls_for_org(org, "forager_person", **fenetre)
+    assert [(c["quantity"], c["provider_credits"]) for c in page["calls"]] == [(None, 5)]

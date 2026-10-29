@@ -97,7 +97,8 @@ async def resoudre_outil(fastmcp, name: str):
 # was found) also BILL: they carry the per-result price.
 # `apify_run_id` (the Apify run whose final cost the call records) BILLS too: it is
 # the job the biller counts once — on the envelope it would name a second row for it.
-_BILLING_TRACE_KEYS = ("quantity", "key_mode",
+# `provider_credits` (what the provider deducted, in its unit) BILLS like `quantity`.
+_BILLING_TRACE_KEYS = ("quantity", "provider_credits", "key_mode",
                        "found_work_emails", "found_personal_emails", "found_phones",
                        "apify_run_id")
 _UNSET = object()
@@ -146,7 +147,8 @@ async def _trace_target_call(sub: Optional[str], name: str, args: dict, ok: bool
         # row: without it, a dispatch's target would have no issuer.
         calllog.poser_emetteur(row)
         # The same rule as the middleware sink: without it, a dispatch's target
-        # had neither `key_mode` nor `quantity`, hence was never billed.
+        # had neither `key_mode` nor `quantity` (nor `provider_credits`), hence was
+        # never billed.
         # The closed list of keys poured into `args` lives in `server` (imported
         # at call time: the module is already loaded in production, and the tool
         # must not copy a second version of it).
