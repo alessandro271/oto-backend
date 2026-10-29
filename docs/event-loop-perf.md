@@ -1403,3 +1403,11 @@ lignes `org_members` que `list_org_members`) et la bêta (`access.orgs_with_opti
 d'échéance que `has_option_comp`) se lisent désormais pour toutes les orgs d'un coup, sous
 `db.reuse_connection()`. Preuve : `tests/orgs/test_list_orgs_lectures_groupees.py` (mêmes valeurs
 que le calcul org par org, requêtes constantes, un emprunt, aucune écriture).
+
+## L'embedding de requête sur un client partagé (29/10/2026)
+
+`embeddings.embed_query` (chemin de `/api/me/search`) ouvrait un `httpx.AsyncClient` neuf à chaque
+recherche, donc une poignée de main TLS par appel vers le fournisseur. Le client est partagé, créé à la
+première requête, **un par boucle d'événements** (un client lie ses connexions à sa boucle), fermé
+à l'arrêt par le lifespan ; même délai (8 s, posé sur la requête), même repli lexical en cas d'échec.
+Preuve : `tests/test_embeddings_client_partage.py` (deux appels, un client ; deux boucles, deux).

@@ -1226,6 +1226,13 @@ def main():
                 for t in tasks:
                     with contextlib.suppress(asyncio.CancelledError):
                         await t
+                # Le client HTTP partagé de l'embedding de requête (créé à la 1ʳᵉ
+                # recherche, sur cette boucle) : ses connexions se ferment ici.
+                from . import embeddings
+                try:
+                    await embeddings.fermer_client()
+                except Exception as e:
+                    logger.warning("embeddings client close at shutdown failed: %s", e)
 
         app.router.lifespan_context = _lifespan
 
