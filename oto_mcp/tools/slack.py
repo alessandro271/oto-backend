@@ -14,6 +14,7 @@ the same credential (`auth/slack.py`).
 """
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from typing import Literal, Optional, Union
 
@@ -25,6 +26,8 @@ from ..mcp_errors import McpError
 from ..connectors import verify as connector_verify
 from ..auth import slack as _slack_auth  # noqa: F401 — declares the "Add to Slack" flow
 from .lecture import ACTE, LECTURE
+
+logger = logging.getLogger(__name__)
 
 
 #: What, in the body of `auth.test`, IDENTIFIES the application — and nothing else.
@@ -163,6 +166,36 @@ def _auteur(bot: bool, user: bool, author: Optional[str]) -> bool:
             "(`xoxb-`). Only you can write there (`author=\"me\"`), or set the "
             "app's bot token on the connector card.")
     return author == "me"
+
+
+def _noter_pour_les_reponses(channel: str, tss: list, texte: str, auteur: str,
+                             thread_ts: Optional[str]) -> None:
+    """A message posted during a HOSTED run is noted under that run's agent. Its own —
+    as the app, outside a thread — is one a reply in its thread goes to; every other
+    one only tells the event route the message is OURS: posted with a user token it
+    carries no `bot_id`, and an agent answering in its own thread would restart
+    itself (`slack_events.py`).
+
+    Only the job of the request names the agent (`verrou_org.travail_de_la_requete`,
+    the job's delegation token; `db.agent_du_travail`), never an argument — a caller
+    cannot file a message under someone else's agent. Outside a hosted run (a person
+    in a conversation, a job queued by hand) nothing is noted. The message has GONE
+    OUT when we get here: a failure is logged, it never turns the post into an error."""
+    tss = [t for t in tss if t]
+    if not tss:
+        return
+    from .. import db, verrou_org
+    try:
+        v = verrou_org.travail_de_la_requete()
+        if v is None or v.job_id is None or v.org_id is None:
+            return
+        agent = db.agent_du_travail(v.job_id, v.org_id)
+        if agent is None:
+            return
+        db.slack_agent_posts.noter(v.org_id, agent, v.job_id, channel, tss, texte,
+                                   auteur, thread_ts)
+    except Exception:  # noqa: BLE001 — the message is sent; replies only lose their route
+        logger.exception("slack: message %s in %s not noted for replies", tss[0], channel)
 
 
 def _refus(e, channel: Optional[str] = None) -> ValueError:
@@ -333,6 +366,11 @@ def register(mcp: FastMCP) -> None:
         always the FIRST part, the one to reuse to reply in the same thread.
         A response with `ts` alone means one single message went out.
 
+        **From a hosted agent's run**, a message posted as the app
+        (`author="app"`) outside a thread is filed under that agent: a member's
+        reply in its thread starts the agent again, with your message and their
+        reply. Post as the app what people may answer.
+
         Read that before re-posting: a message can be deleted but NOT edited, so
         a caller who wrongly concludes it was truncated posts a duplicate instead
         of fixing one. `split_into` is what tells you, without reading the
@@ -360,6 +398,10 @@ def register(mcp: FastMCP) -> None:
                 # Both flags written out: the version probe sees them.
                 result = client.post_message(channel, text=text, thread_ts=thread_ts,
                                              unfurl_links=False, unfurl_media=False)
+        # BEFORE reading where it landed: Slack's event for it may already be on its way.
+        _noter_pour_les_reponses(result.get("channel") or channel,
+                                 list(result.get("ts_all") or [result.get("ts")]),
+                                 text, qui, thread_ts)
         return {**result, "_author": qui, "_channel": _ou(client, channel)}
 
     @mcp.tool()
