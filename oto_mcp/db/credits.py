@@ -177,18 +177,24 @@ def solde(payer: str) -> dict:
 # autre ne peut pas écrire ici) et d'un rôle qui peut insérer dans `credit_movements` ou
 # dans `credit_holds` (`settled_as_of` ne recule pas devant une réservation validée en
 # retard) ; ni la nôtre, ni le nettoyage automatique. Une session que notre rôle ne peut
-# pas lire (sans `pg_read_all_stats`, celle d'un autre rôle n'a que sa base et son rôle)
-# et une transaction préparée (hors sessions) ont un début inconnu : elles rendent
-# l'horizon indéterminable.
+# pas lire (sans `pg_read_all_stats`, celle d'un autre rôle n'a que sa base et son rôle),
+# une session au suivi coupé (`disabled`) et une transaction préparée (hors sessions) ont
+# un début inconnu : elles rendent l'horizon indéterminable. Une session LISIBLE sans état
+# (`state` NULL : elle démarre, pas encore authentifiée) n'en fait pas partie : aucune de
+# ses transactions ne précède son `backend_start`, qui la borne — la compter rendait
+# l'horizon nul à chaque connexion ouverte par un pool pendant la lecture.
 _SESSIONS_ECRIVANTES = """
 SELECT least(clock_timestamp() - make_interval(secs => %s),
              min(least(a.xact_start, a.query_start))
-                 FILTER (WHERE a.backend_type IS NOT NULL AND a.state <> 'idle')
+                 FILTER (WHERE a.backend_type IS NOT NULL AND a.state <> 'idle'),
+             min(a.backend_start)
+                 FILTER (WHERE a.backend_type IS NOT NULL AND a.state IS NULL)
        )::text AS borne,
-       count(*) FILTER (WHERE a.backend_type IS NULL OR a.state IS NULL
-                          OR a.state = 'disabled')
-         + (SELECT count(*) FROM pg_prepared_xacts p
-            WHERE p.database = current_database()) AS indeterminees
+       count(*) FILTER (WHERE a.backend_type IS NULL
+                          OR (a.state IS NULL AND a.backend_start IS NULL)) AS illisibles,
+       count(*) FILTER (WHERE a.state = 'disabled') AS sans_suivi,
+       (SELECT count(*) FROM pg_prepared_xacts p
+        WHERE p.database = current_database()) AS preparees
 FROM pg_stat_activity a LEFT JOIN pg_roles r ON r.oid = a.usesysid
 WHERE a.datname = current_database() AND a.pid <> pg_backend_pid()
   AND a.backend_type IS DISTINCT FROM 'autovacuum worker'
@@ -240,7 +246,9 @@ def page_de_mouvements(xid: int, id_: int, limite: int) -> dict:
     (lu AVANT l'instantané de la page, `_SESSIONS_ECRIVANTES`), et le plus ancien
     mouvement déjà validé que l'horizon retient encore (lu DANS l'instantané de la
     page). Chaque terme ne fait qu'avancer d'une lecture à l'autre : `as_of` ne recule
-    jamais, quel que soit le curseur. `None` quand une transaction de la base a un début illisible.
+    jamais, quel que soit le curseur. `None` quand une transaction de la base a un début illisible
+    (session d'un rôle illisible, suivi coupé, transaction préparée) ; une session lisible
+    qui démarre est bornée par son `backend_start`.
 
     `settled_as_of` = le plus ancien de `as_of` et du début (`created_at`) de la plus
     ancienne réservation, tous payeurs, encore OUVERTE ou réglée par un mouvement que
@@ -256,15 +264,16 @@ def page_de_mouvements(xid: int, id_: int, limite: int) -> dict:
     with _connect() as conn:
         s = conn.execute(_SESSIONS_ECRIVANTES, (_MARGE_S,)).fetchone()
         rows = conn.execute(_PAGE, (s["borne"], str(xid), id_, limite)).fetchall()
-    if s["indeterminees"]:
-        logger.warning("credits: horizon indéterminable, %s transaction(s) de la base "
-                       "au début illisible (rôle sans pg_read_all_stats, ou transaction "
-                       "préparée) : as_of et settled_as_of non servis",
-                       s["indeterminees"])
+    indeterminees = s["illisibles"] + s["sans_suivi"] + s["preparees"]
+    if indeterminees:
+        logger.warning("credits: horizon indéterminable : %s session(s) illisible(s) (rôle "
+                       "sans pg_read_all_stats), %s au suivi coupé, %s transaction(s) "
+                       "préparée(s) ; as_of et settled_as_of non servis",
+                       s["illisibles"], s["sans_suivi"], s["preparees"])
     mouvements = [{k: v for k, v in r.items()
                    if k not in ("as_of", "settled_as_of", "_ordre")}
                   for r in rows if r["id"] is not None]
-    if s["indeterminees"]:
+    if indeterminees:
         return {"mouvements": mouvements, "as_of": None, "settled_as_of": None}
     return {"mouvements": mouvements, "as_of": rows[0]["as_of"],
             "settled_as_of": rows[0]["settled_as_of"]}

@@ -147,7 +147,10 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
     transaction qui courait alors).
   - **`null`** quand une transaction de la base a un début illisible : une session
     d'un autre rôle quand le rôle du cœur n'a pas `pg_read_all_stats` (elle n'expose
-    alors ni son état ni son début), ou une transaction préparée. Le cœur ne promet
+    alors ni son état ni son début), une session au suivi coupé (`disabled`), ou une
+    transaction préparée. Une session lisible qui démarre (`state` encore NULL, une
+    connexion qu'un pool ouvre) n'en est pas : elle est bornée par son `backend_start`,
+    qu'aucune de ses transactions ne précède. Le journal nomme la raison. Le cœur ne promet
     rien plutôt qu'un horizon faux, et le journalise. **Prérequis de production** : le
     rôle applicatif porte `pg_read_all_stats` (ou `pg_monitor`).
 - **`settled_as_of`**, sur chaque page, vide comprise : l'instant sous lequel tout appel

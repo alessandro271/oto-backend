@@ -367,6 +367,35 @@ def test_une_session_au_debut_illisible_rend_as_of_nul(live, monkeypatch):
             conn.execute(f"DROP ROLE {role}")
 
 
+
+def test_une_session_lisible_qui_demarre_borne_as_of_sans_le_rendre_nul(live):
+    """Une connexion que le pool ouvre pendant la lecture : lisible (le rôle lit toutes
+    les sessions), `state` encore NULL. Elle ne rend plus l'horizon nul : son
+    `backend_start` le borne. Une session illisible (`backend_start` NULL aussi) et une
+    au suivi coupé le rendent toujours indéterminable. `pg_stat_activity` est doublé par
+    une vue temporaire, que la session lit avant `pg_catalog`."""
+    from oto_mcp.db import credits as mod
+    with _connect() as conn:
+        def lire(state, backend_start):
+            conn.execute("DROP VIEW IF EXISTS pg_temp.pg_stat_activity")
+            conn.execute(
+                "CREATE TEMP VIEW pg_stat_activity AS SELECT current_database() AS datname, "
+                "0 AS pid, (SELECT oid FROM pg_roles WHERE rolname = current_user) "
+                "AS usesysid, 'client backend'::text AS backend_type, "
+                f"({state})::text AS state, NULL::timestamptz AS xact_start, "
+                "NULL::timestamptz AS query_start, "
+                f"({backend_start})::timestamptz AS backend_start")
+            return conn.execute(mod._SESSIONS_ECRIVANTES, (mod._MARGE_S,)).fetchone()
+        s = lire("NULL", "NOW() - interval '1 hour'")
+        assert s["illisibles"] == s["sans_suivi"] == 0
+        assert datetime.fromisoformat(s["borne"]) <= datetime.now(timezone.utc) - timedelta(minutes=59)
+        s = lire("NULL", "NULL")
+        assert s["illisibles"] == 1
+        s = lire("'disabled'", "NOW()")
+        assert s["sans_suivi"] == 1
+        conn.execute("DROP VIEW pg_temp.pg_stat_activity")
+        conn.rollback()
+
 # ── settled_as_of : l'horizon des appels réglés ──────────────────────────────
 
 def _horizons(apres=None) -> tuple[datetime, datetime]:
