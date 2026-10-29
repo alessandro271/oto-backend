@@ -1322,6 +1322,20 @@ Mesuré sur le jeu, aller-retour simulé à 3,14 ms, médiane de 20 appels : lis
 `oto_connector op=list` et `oto_list_my_tools`) 159 et 617 ms → 25 et 102 ms. Réponses
 identiques octet pour octet. Preuves : `tests/test_connecteurs_me_rapide_1148.py`.
 
+### La gouvernance de la liste des tableaux, par lot (29/10/2026)
+
+`GET /api/datastores` jugeait `ownership.can_govern` tableau par tableau : propriétaire
+relu deux fois, escalade, puis une lecture des partages par principal de l'acteur — 5 à
+10 lectures par tableau, chacune sur son propre emprunt au pool. La liste juge désormais
+toute la page par `ownership.can_govern_many` (la règle de `can_govern`, partagée, pas
+recopiée) : le propriétaire vient de la ligne listée, l'escalade se juge une fois par
+propriétaire distinct, les partages `gérant` se lisent en une requête
+(`db.manager_resource_grants`) ; le handler tient UN emprunt (`db.reuse_connection`, le
+chemin ne fait que lire). `GET /api/me/datastores/shared` juge par le même lot. Réponses
+inchangées. Preuves : `tests/datastore/test_liste_tableaux_lectures_groupees.py`
+(requêtes constantes de 4 à 20 tableaux, un emprunt, aucune écriture, parité avec
+`can_govern` cas par cas).
+
 ## Le convoi du GIL, encore : douze fils sur le même compte (#1108, 20/10/2026)
 
 Une semaine de relevés (la pile de tous les fils, ci-dessus) : 850 gels de 1 à 2,2 s, la

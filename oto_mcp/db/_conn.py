@@ -239,11 +239,12 @@ def reuse_connection() -> Iterator[None]:
     TOUTE la transaction en échec, `InFailedSqlTransaction` sur la première lecture
     suivante). `status_for` est une PROJECTION (aucune écriture sur son chemin). Trois
     appelants, et
-    trois seuls pour lesquels ces deux propriétés sont vérifiées : `status_for`,
-    `connectors.me` (#1148), qui l'englobe, et `org.list` (`GET /api/me/orgs`) — un banc
-    relève chaque requête de leur chemin et rougit sur une écriture
-    (`tests/test_connecteurs_me_une_connexion_1148.py`,
-    `tests/orgs/test_list_orgs_lectures_groupees.py`).
+    quatre seuls pour lesquels ces deux propriétés sont vérifiées : `status_for`,
+    `connectors.me` (#1148), qui l'englobe, `org.list` (`GET /api/me/orgs`) et la liste
+    des tableaux (`GET /api/datastores`) — un banc relève chaque requête de leur chemin
+    et rougit sur une écriture (`tests/test_connecteurs_me_une_connexion_1148.py`,
+    `tests/orgs/test_list_orgs_lectures_groupees.py`,
+    `tests/datastore/test_liste_tableaux_lectures_groupees.py`).
 
     Ré-entrant : un `reuse_connection()` imbriqué dans un autre ne fait rien (la
     connexion déjà empruntée par le bloc englobant sert aux deux).
