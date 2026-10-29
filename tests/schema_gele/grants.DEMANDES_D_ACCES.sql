@@ -18,7 +18,7 @@ reminded_at TIMESTAMPTZ,
 expires_at TIMESTAMPTZ NOT NULL DEFAULT now() + interval '14 days'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_access_requests_en_attente
-ON access_requests (requester_sub, kind, cle_cible) WHERE status = 'pending';
+ON access_requests (org_id, requester_sub, kind, cle_cible) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_access_requests_org_en_attente
 ON access_requests (org_id, id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_access_requests_demandeur

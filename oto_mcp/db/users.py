@@ -386,10 +386,12 @@ _UNIQUE_INDEX_SUB_TABLES = (
     # DISTINCT, la comparaison du dédoublonnage l'est aussi (`IS NOT DISTINCT FROM`).
     ("org_entitlements", "sub", ("org_id", "right_key", "source"), None),
     # Les demandes d'accès EN ATTENTE : `uq_access_requests_en_attente` =
-    # `(requester_sub, kind, cle_cible) WHERE status = 'pending'`. Les deux comptes ont
-    # demandé la même chose ⟹ celle du compte survivant reste, l'autre tombe (une
-    # demande en attente n'accorde rien ; la personne en garde une).
-    ("access_requests", "requester_sub", ("kind", "cle_cible"), "{a}.status = 'pending'"),
+    # `(org_id, requester_sub, kind, cle_cible) WHERE status = 'pending'`. Les deux
+    # comptes ont demandé la même chose DANS LA MÊME ORG ⟹ celle du compte survivant
+    # reste, l'autre tombe (une demande en attente n'accorde rien ; la personne en garde
+    # une). La même demande dans deux orgs n'est pas un doublon : les deux restent.
+    ("access_requests", "requester_sub", ("org_id", "kind", "cle_cible"),
+     "{a}.status = 'pending'"),
 )
 
 # Colonnes JSONB qui NOMMENT une personne (`user:<sub>`) et la SUIVENT à la fusion :

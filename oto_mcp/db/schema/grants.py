@@ -224,7 +224,9 @@ DEMANDES_D_ACCES = """
 -- activation, outils d'un agent, équipe) SOUS L'IDENTITÉ de qui approuve, ses gardes
 -- comprises. `kind` = le geste demandé ; `cible` = ce qu'il vise (JSONB) ; `cle_cible`
 -- = sa forme canonique en texte, pour l'unicité : UNE demande en attente par
--- (demandeur, geste, cible) — redemander relance celle qui existe. `demande` = ce qui
+-- (org, demandeur, geste, cible) — redemander relance celle qui existe. L'org est
+-- dans l'index et non dans `cle_cible` : la clé d'un connecteur (`connector:<nom>`)
+-- ne la porte pas, et une personne membre de deux orgs y demande deux choses. `demande` = ce qui
 -- est demandé (un rôle, des outils), `decision` = ce qui a été réellement accordé.
 -- Une demande en attente dont `expires_at` est passée ne se sert plus en attente ; elle
 -- passe `expired` quand la même demande est refaite (l'unicité la libère).
@@ -249,7 +251,7 @@ CREATE TABLE IF NOT EXISTS access_requests (
     expires_at TIMESTAMPTZ NOT NULL DEFAULT now() + interval '14 days'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_access_requests_en_attente
-    ON access_requests (requester_sub, kind, cle_cible) WHERE status = 'pending';
+    ON access_requests (org_id, requester_sub, kind, cle_cible) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_access_requests_org_en_attente
     ON access_requests (org_id, id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_access_requests_demandeur

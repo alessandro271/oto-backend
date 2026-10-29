@@ -6,7 +6,7 @@ Une table NEUVE, née entière, et ses index — le DDL est le fragment
 `access_requests (id, org_id → orgs ON DELETE CASCADE, requester_sub, kind, cible,
 cle_cible, demande, note, status, decided_by, decided_at, decision, decision_note,
 created_at, reminded_at, expires_at)`, index unique partiel « une demande en attente
-par (demandeur, geste, cible) », index partiel des demandes en attente d'une org, et
+par (org, demandeur, geste, cible) », index partiel des demandes en attente d'une org, et
 `(requester_sub)` / `(decided_by)` (la fusion de comptes repointe ces colonnes).
 
 **Verrous.** `AccessExclusiveLock` sur la table neuve (vide, instantané) ; la clé

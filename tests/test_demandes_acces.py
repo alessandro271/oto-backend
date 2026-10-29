@@ -308,3 +308,140 @@ def test_acces_a_un_agent_le_proprietaire_partage(client, monde):
     assert ownership.can_access(MOI, "runner_trigger", str(tid), "write")
     r = _demander(client, monde, {"kind": "agent_access", "trigger_id": tid})
     assert (r.status_code, r.json().get("error")) == (409, "already_granted")
+
+
+# ── 6. l'org dans l'unicité, le plafond, la revue bornée ───────────────────────────
+
+def test_la_meme_demande_dans_deux_orgs_en_fait_deux(client, monde):
+    """`cle_cible` d'un connecteur ne porte pas l'org : sans `org_id` dans l'unicité,
+    l'org B recevait la demande ouverte dans l'org A (et son admin ne la voyait pas)."""
+    from oto_mcp import providers
+    from oto_mcp.connectors import activation as connector_activation
+    nom = sorted(providers.REGISTRY)[2]
+    connector_activation.set_activation(nom, True, set_by=ADMIN)
+    for org in (monde["a"], monde["b"]):
+        connector_activation.set_activation(nom, False, org_id=org, set_by=ADMIN)
+    body = {"kind": "connector_activation", "connector": nom}
+    dans_a = _demander(client, monde, body).json()
+    dans_b = _demander(client, monde, body, org=monde["b"]).json()
+    assert dans_a["created"] is True and dans_b["created"] is True, (dans_a, dans_b)
+    ida, idb = dans_a["request"]["id"], dans_b["request"]["id"]
+    assert ida != idb
+    assert idb in [x["id"] for x in _boite(client, monde, DEHORS, org=monde["b"])["requests"]]
+    assert ida not in [x["id"] for x in _boite(client, monde, DEHORS, org=monde["b"])["requests"]]
+    # Redemander dans B rend celle de B, pas celle de A.
+    again = _demander(client, monde, body, org=monde["b"]).json()
+    assert again["created"] is False and again["request"]["id"] == idb
+
+
+def test_la_fusion_de_comptes_ne_dedoublonne_que_dans_la_meme_org(monde):
+    """Les deux comptes d'une personne ont la même demande en attente dans l'org A, et
+    l'ancien la même aussi dans l'org B : A garde celle du survivant, B reste."""
+    from oto_mcp.db import demandes_acces as store
+    db = monde["db"]
+    vieux, neuf = "sub-demandes-vieux-" + uuid.uuid4().hex[:6], "sub-demandes-neuf-" + uuid.uuid4().hex[:6]
+    for sub in (vieux, neuf):
+        db.upsert_user(sub, email=f"{sub}@demandes.invalid", name=sub)
+    cle = "connector:fusion-" + uuid.uuid4().hex[:6]
+    cible = {"connector": cle.split(":", 1)[1]}
+    garde, _ = store.creer(monde["a"], neuf, "connector_activation", cible, cle, {}, None,
+                           plafond=99)
+    store.creer(monde["a"], vieux, "connector_activation", cible, cle, {}, None, plafond=99)
+    dans_b, _ = store.creer(monde["b"], vieux, "connector_activation", cible, cle, {}, None,
+                            plafond=99)
+    assert db.migrate_sub(vieux, neuf, operator_source="test") is True
+    en_a = [d["id"] for d in store.du_demandeur(neuf, monde["a"]) if d["cle_cible"] == cle]
+    en_b = [d["id"] for d in store.du_demandeur(neuf, monde["b"]) if d["cle_cible"] == cle]
+    assert en_a == [garde["id"]] and en_b == [dans_b["id"]]
+
+
+def test_le_plafond_de_demandes_en_attente(client, monde, monkeypatch):
+    from oto_mcp import org_store
+    from oto_mcp.capabilities import demandes_acces as cap
+    monkeypatch.setattr(cap, "EN_ATTENTE_MAX", 3)
+    sub = "sub-demandes-plafond-" + uuid.uuid4().hex[:6]
+    monde["db"].upsert_user(sub, email=f"{sub}@demandes.invalid", name=sub)
+    org_store.add_org_member(monde["a"], sub)
+    corps = [{"kind": "resource_access", "resource_type": "project",
+              "resource_id": str(_projet(monde))} for _ in range(4)]
+    ids = []
+    for body in corps[:3]:
+        r = _demander(client, monde, body, sub=sub)
+        assert r.status_code == 201 and r.json()["created"] is True, r.text
+        ids.append(r.json()["request"]["id"])
+    r = _demander(client, monde, corps[3], sub=sub)
+    assert (r.status_code, r.json().get("error")) == (409, "too_many_pending_requests"), r.text
+    # Redemander une demande qui attend la rend, plafond atteint ou non.
+    again = _demander(client, monde, corps[0], sub=sub).json()
+    assert again["created"] is False and again["request"]["id"] == ids[0]
+    # Une demande annulée libère sa place.
+    assert _geste(client, monde, ids[0], "cancel", sub).status_code == 200
+    r = _demander(client, monde, corps[3], sub=sub)
+    assert r.status_code == 201 and r.json()["created"] is True, r.text
+
+
+def test_la_revue_bornee_garde_les_plus_recentes(client, monde, monkeypatch):
+    from oto_mcp.capabilities import demandes_acces as cap
+    ancienne = _demander(client, monde, {"kind": "resource_access", "resource_type": "project",
+                                         "resource_id": str(_projet(monde))}).json()["request"]
+    recente = _demander(client, monde, {"kind": "resource_access", "resource_type": "project",
+                                        "resource_id": str(_projet(monde))}).json()["request"]
+    vue = _boite(client, monde, PROPRIO)
+    ids = [x["id"] for x in vue["requests"]]
+    assert vue["truncated"] is False and ids.index(recente["id"]) < ids.index(ancienne["id"])
+    monkeypatch.setattr(cap, "REVUE_MAX", 1)
+    vue = _boite(client, monde, PROPRIO)
+    assert vue["truncated"] is True
+    assert [x["id"] for x in vue["requests"]] == [recente["id"]]
+
+
+# ── 7. ce qui ne se lit pas, et le demandeur parti ─────────────────────────────────
+
+def test_un_agent_d_une_autre_org_est_inconnu_comme_un_id_absent(client, monde):
+    """`agent_access` lit l'existence d'un agent PRIVÉ de l'org (c'est l'objet du geste,
+    `test_acces_a_un_agent_le_proprietaire_partage`), jamais celle d'un agent d'ailleurs ;
+    `agent_tools` ne la lit pas même dans l'org : 404 pour un agent qu'on ne voit pas."""
+    db = monde["db"]
+    dehors = db.create_trigger(monde["b"], DEHORS, procedure="p", tz="Europe/Paris",
+                               tools=["oto_whoami"], cron="0 9 * * *", label="ailleurs")
+    dehors = int(dehors["id"] if isinstance(dehors, dict) else dehors)
+    prive = db.create_trigger(monde["a"], PROPRIO, procedure="p", tz="Europe/Paris",
+                              tools=["oto_whoami"], cron="0 9 * * *", label="secret")
+    prive = int(prive["id"] if isinstance(prive, dict) else prive)
+    for tid in (dehors, 999999999):
+        r = _demander(client, monde, {"kind": "agent_access", "trigger_id": tid})
+        assert (r.status_code, r.json().get("error")) == (404, "target_not_found"), r.text
+    for tid in (prive, 999999999):
+        r = _demander(client, monde, {"kind": "agent_tools", "trigger_id": tid,
+                                      "tools": ["serper_search"]})
+        assert (r.status_code, r.json().get("error")) == (404, "target_not_found"), r.text
+
+
+def test_le_nom_d_une_equipe_se_lit_comme_group_list_le_sert(client, monde):
+    """Aucune équipe n'est cachée à un membre de l'org : `group.list` les nomme toutes,
+    et la demande sert le même nom à qui n'en est pas membre."""
+    gs = monde["group_store"]
+    nom = "eq-" + uuid.uuid4().hex[:6]
+    gid = gs.create_group(monde["a"], nom, created_by=ADMIN)
+    req = _demander(client, monde, {"kind": "team_join", "group_id": gid}).json()["request"]
+    assert req["target_label"] == nom
+    r = client.get(f"/api/orgs/{monde['a']}/groups", headers=_h(MOI, monde["a"]))
+    assert r.status_code == 200, r.text
+    assert nom in [g["name"] for g in r.json()["groups"]]
+
+
+def test_approuver_la_demande_d_un_partant_n_accorde_rien(client, monde):
+    from oto_mcp import org_store, ownership
+    sub = "sub-demandes-partant-" + uuid.uuid4().hex[:6]
+    monde["db"].upsert_user(sub, email=f"{sub}@demandes.invalid", name=sub)
+    org_store.add_org_member(monde["a"], sub)
+    pid = _projet(monde)
+    req = _demander(client, monde, {"kind": "resource_access", "resource_type": "project",
+                                    "resource_id": str(pid)}, sub=sub).json()["request"]
+    org_store.remove_org_member(monde["a"], sub)
+    r = _geste(client, monde, req["id"], "approve", PROPRIO)
+    assert (r.status_code, r.json().get("error")) == (409, "requester_left"), r.text
+    assert not ownership.can_access(sub, "project", str(pid), "read")
+    # Toujours en attente, et déclinable.
+    r = _geste(client, monde, req["id"], "decline", PROPRIO)
+    assert r.status_code == 200 and r.json()["status"] == "declined", r.text

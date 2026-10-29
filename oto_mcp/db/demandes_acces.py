@@ -31,31 +31,61 @@ _VIVANTE = "status = 'pending' AND expires_at > now()"
 RELANCE_HEURES = 24
 
 
+class PlafondAtteint(Exception):
+    """Le demandeur a déjà `plafond` demandes vivantes dans l'org : la capacité le
+    traduit en refus nommé (ce module ne juge aucun droit, il compte)."""
+
+
 def creer(org_id: int, requester_sub: str, kind: str, cible: dict, cle_cible: str,
-          demande: dict, note: Optional[str]) -> tuple[dict, bool]:
-    """Pose la demande, ou rend celle qui attend déjà pour (demandeur, geste, cible).
-    Rend `(demande, creee)`. Une demande en attente mais ÉCHUE passe d'abord `expired`,
-    pour libérer l'unicité : redemander après l'échéance repart à neuf."""
+          demande: dict, note: Optional[str], *, plafond: int) -> tuple[dict, bool]:
+    """Pose la demande, ou rend celle qui attend déjà pour (org, demandeur, geste,
+    cible). Rend `(demande, creee)`. Une demande en attente mais ÉCHUE passe d'abord
+    `expired`, pour libérer l'unicité : redemander après l'échéance repart à neuf.
+
+    L'org est dans la clé : `cle_cible` d'un connecteur (`connector:<nom>`) ne la porte
+    pas, et la même personne, membre de deux orgs, demande le même connecteur à chacune
+    — sans l'org, la seconde org recevait la demande ouverte dans la première.
+
+    `plafond` : au-delà de ce nombre de demandes VIVANTES du demandeur dans l'org, une
+    demande NEUVE lève `PlafondAtteint` ; redemander une demande qui attend la rend,
+    plafond atteint ou non. Le compte précède l'insertion sans verrou : deux créations
+    simultanées peuvent le dépasser d'une — un plafond d'abus, pas un quota exact."""
     with _connect() as conn:
         conn.execute(
             "UPDATE access_requests SET status = 'expired' "
-            "WHERE requester_sub = %s AND kind = %s AND cle_cible = %s "
+            "WHERE org_id = %s AND requester_sub = %s AND kind = %s AND cle_cible = %s "
             "AND status = 'pending' AND expires_at <= now()",
-            (requester_sub, kind, cle_cible))
+            (int(org_id), requester_sub, kind, cle_cible))
+        attend = _en_attente_meme(conn, org_id, requester_sub, kind, cle_cible)
+        if attend is not None:
+            return attend, False
+        n = conn.execute(
+            f"SELECT count(*) AS n FROM access_requests WHERE org_id = %s "
+            f"AND requester_sub = %s AND {_VIVANTE}",
+            (int(org_id), requester_sub)).fetchone()["n"]
+        if n >= plafond:
+            raise PlafondAtteint(n)
         r = conn.execute(
             f"INSERT INTO access_requests (org_id, requester_sub, kind, cible, cle_cible, "
             f"demande, note) VALUES (%s, %s, %s, %s, %s, %s, %s) "
-            f"ON CONFLICT (requester_sub, kind, cle_cible) WHERE status = 'pending' "
+            f"ON CONFLICT (org_id, requester_sub, kind, cle_cible) WHERE status = 'pending' "
             f"DO NOTHING RETURNING {_COLONNES}",
             (int(org_id), requester_sub, kind, Jsonb(cible), cle_cible, Jsonb(demande),
              note)).fetchone()
         if r is not None:
             return dict(r), True
-        r = conn.execute(
-            f"SELECT {_COLONNES} FROM access_requests WHERE requester_sub = %s "
-            f"AND kind = %s AND cle_cible = %s AND status = 'pending'",
-            (requester_sub, kind, cle_cible)).fetchone()
-    return dict(r), False
+        # Perdue contre une création simultanée de la même demande : on rend celle-là.
+        return _en_attente_meme(conn, org_id, requester_sub, kind, cle_cible), False
+
+
+def _en_attente_meme(conn, org_id: int, requester_sub: str, kind: str,
+                     cle_cible: str) -> Optional[dict]:
+    """La demande en attente sous l'unicité `uq_access_requests_en_attente`."""
+    r = conn.execute(
+        f"SELECT {_COLONNES} FROM access_requests WHERE org_id = %s AND requester_sub = %s "
+        f"AND kind = %s AND cle_cible = %s AND status = 'pending'",
+        (int(org_id), requester_sub, kind, cle_cible)).fetchone()
+    return dict(r) if r else None
 
 
 def lire(request_id: int) -> Optional[dict]:
@@ -65,13 +95,15 @@ def lire(request_id: int) -> Optional[dict]:
     return dict(r) if r else None
 
 
-def en_attente(org_id: int, *, limit: int = 200) -> list[dict]:
-    """Les demandes vivantes d'une org, la plus ancienne d'abord : la capacité filtre
-    ensuite celles que l'appelant peut décider."""
+def en_attente(org_id: int, *, limit: int) -> list[dict]:
+    """Les `limit` demandes vivantes d'une org les plus RÉCENTES, la plus récente
+    d'abord : au-delà de la borne, ce sont les plus anciennes qui ne se servent pas
+    (elles échoient à 14 jours), jamais celles qui viennent d'arriver. La capacité
+    filtre ensuite celles que l'appelant peut décider."""
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
             f"SELECT {_COLONNES} FROM access_requests WHERE org_id = %s AND {_VIVANTE} "
-            f"ORDER BY id LIMIT %s", (int(org_id), int(limit))).fetchall()]
+            f"ORDER BY id DESC LIMIT %s", (int(org_id), int(limit))).fetchall()]
 
 
 def du_demandeur(requester_sub: str, org_id: int, *, limit: int = 50) -> list[dict]:

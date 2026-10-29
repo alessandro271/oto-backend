@@ -32,7 +32,7 @@ from typing import Callable, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from .. import db, group_store, ownership, providers, roles
+from .. import db, group_store, org_store, ownership, providers, roles
 from ..connectors import activation as connector_activation
 from . import _acces_agent
 from ._authz import ORG_MEMBER
@@ -43,6 +43,13 @@ from .resources_contract import KIND_OF
 KINDS = ("resource_access", "connector_activation", "agent_access", "agent_tools", "team_join")
 NOTE_MAX = 1000
 OUTILS_MAX = 50
+#: Demandes VIVANTES d'une personne dans une org, au plus : au-delà, une demande neuve
+#: est refusée (409 `too_many_pending_requests`) jusqu'à ce qu'une se décide, s'annule
+#: ou échoie. Borne l'écriture d'un seul compte, et donc ce que `box=review` doit juger.
+EN_ATTENTE_MAX = 20
+#: Demandes vivantes d'une org que `box=review` juge, au plus — les plus RÉCENTES
+#: (`db.demandes_acces.en_attente`) ; au-delà, `truncated` le dit.
+REVUE_MAX = 200
 _ROLES = ("viewer", "editor", "manager")
 
 # --- Entrées / sorties --------------------------------------------------------
@@ -156,6 +163,9 @@ class RequestList(BaseModel):
     pending_count: int = Field(description=(
         "`review`: how many requests the caller can decide (the badge). `sent`: how "
         "many of the caller's are still pending."))
+    truncated: bool = Field(default=False, description=(
+        f"`review`: the organization has more than {REVUE_MAX} pending requests; only the "
+        f"{REVUE_MAX} newest were judged, so `pending_count` is a lower bound."))
 
 
 class Reminded(BaseModel):
@@ -310,6 +320,13 @@ def _agent_acces_poser(ctx: ResolvedCtx, inp: CreateRequestInput):
     if role not in ("viewer", "editor"):
         raise AuthzDenied(400, "invalid_role", "An agent is shared as `viewer` or `editor`.")
     agent = _agent(ctx.org_id, tid)
+    # Un agent que l'appelant ne VOIT pas se demande quand même : c'est l'objet du geste
+    # (l'accès à l'agent privé d'un collègue, dont on tient l'id d'un lien ou de lui),
+    # comme `resource_access` sur un projet privé. Qu'il EXISTE dans l'org se lit donc,
+    # par id et dans l'org de l'appel seulement (`get_trigger` filtre l'org : un agent
+    # d'une autre org est inconnu) ; son NOM ne se lit pas (`_agent_libelle_lisible`).
+    # Rendre 404 à qui ne le voit pas fermerait le geste. `agent_tools`, lui, rend 404
+    # (`_agent_poser`) : on ne demande des outils que pour un agent qu'on voit.
     if agent is None:
         raise AuthzDenied(404, "target_not_found", "No such agent in this organization.")
     n = _acces_agent.niveau(ctx.sub, ctx.org_id, agent)
@@ -381,6 +398,10 @@ def _equipe_accorder(d: dict, accorde: dict):
 
 
 def _equipe_libelle(sub: str, d: dict) -> Optional[str]:
+    """Le nom de l'équipe, à quiconque lit la demande, sans contrôle : aucune équipe
+    n'est cachée aux membres de son org — `group.list` (`ORG_MEMBER_OF`) les nomme
+    toutes, membre de l'équipe ou non. Demandeur et décideur lisent la demande depuis
+    son org ; ce nom ne leur apprend rien que `group.list` ne serve déjà."""
     g = group_store.get_group(int(d["cible"]["group_id"]))
     return g.get("name") if g else None
 
@@ -453,9 +474,13 @@ def _create(ctx: ResolvedCtx, inp: CreateRequestInput) -> dict:
         cible, cle, demande = _agent_poser(ctx, inp)
     else:
         cible, cle, demande = _equipe_poser(ctx, inp)
-    d, creee = db.demandes_acces.creer(ctx.org_id, ctx.sub, inp.kind, cible, cle, demande,
-                                       inp.note)
-    d = d
+    try:
+        d, creee = db.demandes_acces.creer(ctx.org_id, ctx.sub, inp.kind, cible, cle,
+                                           demande, inp.note, plafond=EN_ATTENTE_MAX)
+    except db.demandes_acces.PlafondAtteint:
+        raise AuthzDenied(409, "too_many_pending_requests",
+                          f"You already have {EN_ATTENTE_MAX} pending requests in this "
+                          "organization: cancel one, or wait for a decision.") from None
     return {"request": _servie(ctx.sub, d, _emails([d]), peut=False), "created": creee}
 
 
@@ -469,12 +494,13 @@ def _list(ctx: ResolvedCtx, inp: ListRequestsInput) -> dict:
             s["decided_by_email"] = emails.get(d.get("decided_by"))
         return {"box": "sent", "requests": servies,
                 "pending_count": sum(1 for s in servies if s["status"] == "pending")}
-    a_decider = [d for d in db.demandes_acces.en_attente(ctx.org_id)
-                 if _peut_decider(ctx.sub, d)]
+    # Une de plus que la borne : savoir s'il en reste au-delà, sans les compter.
+    vivantes = db.demandes_acces.en_attente(ctx.org_id, limit=REVUE_MAX + 1)
+    a_decider = [d for d in vivantes[:REVUE_MAX] if _peut_decider(ctx.sub, d)]
     emails = _emails(a_decider)
     return {"box": "review",
             "requests": [_servie(ctx.sub, d, emails, peut=True) for d in a_decider],
-            "pending_count": len(a_decider)}
+            "pending_count": len(a_decider), "truncated": len(vivantes) > REVUE_MAX}
 
 
 def _de_l_org(ctx: ResolvedCtx, request_id: int) -> dict:
@@ -534,6 +560,14 @@ async def _approve(ctx: ResolvedCtx, inp: ApproveRequestInput) -> dict:
     # est hors de la boucle (`docs/event-loop-perf.md`).
     def _preparer():
         d = _a_decider(ctx, inp.request_id)
+        # Le demandeur a pu quitter l'org depuis sa demande : rien ne s'accorde alors —
+        # un partage de ressource sait viser une personne hors de l'org, et l'aurait
+        # posé. Appartenance DIRECTE (`org_store`), pas un rôle effectif : c'est l'état
+        # d'un tiers, pas celui de l'acteur courant (`docs/org-context.md`). La demande
+        # reste en attente, déclinable, jusqu'à son échéance.
+        if org_store.get_org_role(int(d["org_id"]), d["requester_sub"]) is None:
+            raise AuthzDenied(409, "requester_left",
+                              "The requester is no longer a member of this organization.")
         accorde = _accorde(d, inp)
         key, cible = GESTES[d["kind"]].accorder(d, accorde)
         return d, accorde, _rejouer(ctx, key, cible)
@@ -610,6 +644,8 @@ CAPABILITIES += [
                           "(plateforme ou hôte), que personne dans l'org ne rouvre"),
             DeclaredError(409, "you_can_grant",
                           "`agent_tools` : l'appelant peut changer lui-même les outils de cet agent"),
+            DeclaredError(409, "too_many_pending_requests",
+                          f"l'appelant a déjà {EN_ATTENTE_MAX} demandes en attente dans l'org"),
         ),
         description=(
             "Ask for access you are blocked on, in the active organization: a role on a "
@@ -629,8 +665,8 @@ CAPABILITIES += [
         rest=RestBinding(verb="GET", path=_CHEMIN, provisoire=True),
         description=(
             "The access requests of the active organization the caller can decide "
-            "(`box=review`, with `pending_count` for a badge), or the caller's own "
-            "(`box=sent`)."
+            "(`box=review`, newest first, with `pending_count` for a badge), or the "
+            "caller's own (`box=sent`)."
         ),
     ),
     Capability(
@@ -647,6 +683,8 @@ CAPABILITIES += [
             DeclaredError(400, "tools_not_asked", "`tools` nomme un outil qui n'était pas demandé"),
             DeclaredError(400, "missing_fields", "`tools` vide : accorder au moins un outil, ou refuser"),
             DeclaredError(400, "invalid_role", "`agent_access` : un rôle autre que viewer/editor"),
+            DeclaredError(409, "requester_left",
+                          "le demandeur n'est plus membre de l'org de la demande : rien n'est accordé"),
         ),
         description=(
             "Approve a pending request: grants it as the caller, through the same action "
