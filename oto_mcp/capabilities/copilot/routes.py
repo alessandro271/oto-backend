@@ -133,8 +133,11 @@ class RevertInput(BaseModel):
 
 
 class DictationInput(BaseModel):
-    #: The clip the panel recorded (`MediaRecorder`), base64. 4 MB of audio at most.
-    audio_base64: str = Field(min_length=1, max_length=6_000_000)
+    #: The clip the panel recorded (`MediaRecorder`), base64. 3 MB of audio at most
+    #: (`dictee.MAX_OCTETS`, 4,000,000 base64 characters), checked by `dictee.decoder`
+    #: (422 `dictation_invalid`); this field's bound stays under the body bound (4 MiB,
+    #: `bornes_processus.CORPS_OCTETS`) so that check is reached rather than a 413.
+    audio_base64: str = Field(min_length=1, max_length=4_100_000)
     mime_type: str = Field(max_length=100)
     #: How long the person spoke, as the panel timed it: what the quota is checked
     #: against before ElevenLabs is called.

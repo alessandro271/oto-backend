@@ -18,7 +18,8 @@ Garde :
 - **forme stricte** : un préfixe de la liste FERMÉE `media_store.PREFIXES_TRANSIT`, puis
   32 caractères hexadécimaux. Aucun `/` de tête, `..` ni préfixe arbitraire ne passe :
   rien hors de `tmp/<préfixe de transit>/<appelant>/` ;
-- **éphémère** : la règle de cycle de vie du stockage purge `tmp/` en un jour.
+- **éphémère** : la règle de cycle de vie du stockage purge `tmp/` en un jour ; un
+  consommateur qui n'en a plus besoin le supprime avant (`supprimer`).
 
 Appels BLOQUANTS (I/O S3) : depuis un handler sync (threadpool), jamais dans la boucle.
 """
@@ -56,14 +57,32 @@ def deposer(prefix: str, data: bytes, mime: str, filename: str, *,
     return out
 
 
-def lire(ref: object, *, max_bytes: int) -> tuple[bytes, Optional[str], str]:
-    """`(octets, nom d'origine, type)` de la référence `ref`, si elle est de l'appelant."""
+def supprimer(ref: object) -> None:
+    """Supprime le dépôt désigné par `ref`, sous l'appelant, dès qu'il a servi — la purge
+    de `tmp/` reste le filet. `TransitError` si la référence est mal formée ou si le
+    stockage refuse : à l'appelant de le journaliser."""
+    prefix, digest = _decomposer(ref)
+    sub = access.current_user_sub_or_raise()
+    try:
+        media_store.delete_transit(prefix, sub, digest)
+    except media_store.MediaError as e:
+        raise TransitError(
+            f"the transit file could not be deleted: storage error ({e.code}).") from None
+
+
+def _decomposer(ref: object) -> tuple[str, str]:
+    """`(préfixe, empreinte)` d'une référence de forme stricte, ou `TransitError`."""
     m = _FORME.fullmatch(ref) if isinstance(ref, str) else None
     if m is None or m.group(1) not in media_store.PREFIXES_TRANSIT:
         raise TransitError(
             "source transit: `ref` must be the reference returned by the tool that "
             "served the file (`<prefix>/<32 hex characters>`), copied as is.")
-    prefix, digest = m.groups()
+    return m.group(1), m.group(2)
+
+
+def lire(ref: object, *, max_bytes: int) -> tuple[bytes, Optional[str], str]:
+    """`(octets, nom d'origine, type)` de la référence `ref`, si elle est de l'appelant."""
+    prefix, digest = _decomposer(ref)
     sub = access.current_user_sub_or_raise()
     try:
         objet = media_store.lire_objet(media_store.cle_transit(prefix, sub, digest),

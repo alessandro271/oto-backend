@@ -402,6 +402,20 @@ def upload_transit(prefix: str, owner_id: str, data: bytes, content_type: str,
     return digest
 
 
+def delete_transit(prefix: str, owner_id: str, digest: str) -> None:
+    """Supprime un dépôt de transit (`upload_transit`) dès qu'il a servi, sans attendre
+    la purge de `tmp/`. Contrairement à `delete_by_key`, un échec LÈVE (`MediaError`) :
+    l'appelant le journalise. `prefix` ∈ `PREFIXES_TRANSIT`."""
+    if prefix not in PREFIXES_TRANSIT:
+        raise MediaError(500, "unknown_prefix", f"Préfixe de transit inconnu : {prefix!r}.")
+    try:
+        _get_client().delete_object(Bucket=_bucket(), Key=cle_transit(prefix, owner_id, digest))
+    except MediaError:
+        raise
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "delete_failed", str(e))
+
+
 def delete_by_url(url: str) -> None:
     """Supprime l'objet pointé par `url` (best-effort — n'échoue jamais).
 

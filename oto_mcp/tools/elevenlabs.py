@@ -73,11 +73,11 @@ _HINT = "full=true returns the raw records."
 # the code (same device as `tools/forager.py`): the `platform.ops` setting
 # (`connector_settings`, platform scope, `oto_admin_connector_setting`) lists them,
 # comma-separated, `elevenlabs_act:<op>` or `elevenlabs_act` for every op. Unset: speech
-# and transcription — music, sound and voice design spend far more per call and are
-# opened on purpose.
+# only — transcription, music, sound and voice design are opened on purpose (transcription
+# bills a length the caller declares, see `MAX_TRANSCRIBE_BYTES_PLATFORM`).
 OPS: dict[str, frozenset[str]] = {"elevenlabs_act": frozenset(_ACT_OPS)}
 PLATFORM_OPS_KEY = "platform.ops"
-PLATFORM_OPS_DEFAULT = "elevenlabs_act:create_speech,elevenlabs_act:create_transcript"
+PLATFORM_OPS_DEFAULT = "elevenlabs_act:create_speech"
 
 # Speech models billed half a credit per character (ElevenLabs' price list). Any other
 # model — and the API's default when `model_id` is omitted, `eleven_multilingual_v2` —
@@ -104,6 +104,13 @@ TRANSCRIBE_CREDITS_PER_MINUTE = 330
 MAX_TRANSCRIBE_SECONDS = 300
 MAX_TRANSCRIBE_BYTES = 10 * 1024 * 1024
 AUDIO_TOO_LONG = "audio_too_long"
+# On the shared key the length is DECLARED (`audio_seconds`, required there), not
+# measured: the quota is checked against it, and the call bills at least where the last
+# word ends. What bounds an understated length is the file's size: 1 MB is a few minutes
+# of compressed speech at worst, so one call can never cost more than that.
+MAX_TRANSCRIBE_BYTES_PLATFORM = 1 * 1024 * 1024
+AUDIO_SECONDS_REQUIRED = "audio_seconds_required"
+AUDIO_TOO_LARGE = "audio_too_large"
 
 
 def parse_platform_ops(value: str) -> frozenset[tuple[str, Optional[str]]]:
@@ -445,11 +452,12 @@ def register(mcp: FastMCP) -> None:
     def _transcribe(source: Any, language_code: Optional[str],
                     audio_seconds: Optional[float], model_id: Optional[str]) -> dict:
         """Speech to text. The file is read server-side (`file_source`) BEFORE the key
-        is resolved: a source that cannot be read spends nothing. On the shared key, a
-        clip over `MAX_TRANSCRIBE_SECONDS` is refused first; the quota is checked
-        against `audio_seconds`, and the call bills the longer of `audio_seconds` and
-        where the last word ends (a missing or understated length cannot bill less
-        than what was heard)."""
+        is resolved: a source that cannot be read spends nothing. On the shared key,
+        before ElevenLabs is called: an op the instance does not serve, a missing
+        `audio_seconds`, a clip over `MAX_TRANSCRIBE_SECONDS` or a file over
+        `MAX_TRANSCRIBE_BYTES_PLATFORM` is refused; the quota is checked against
+        `audio_seconds`, and the call bills the longer of `audio_seconds` and where the
+        last word ends (an understated length cannot bill less than what was heard)."""
         from .. import file_source
         if audio_seconds is not None and (isinstance(audio_seconds, bool) or not isinstance(
                 audio_seconds, (int, float)) or audio_seconds <= 0):
@@ -460,13 +468,24 @@ def register(mcp: FastMCP) -> None:
             raise _bad(f"ElevenLabs: the audio could not be read ({e}). Nothing was done.")
         key, is_platform = access.resolve_api_key(_NAME, units=transcribe_credits(audio_seconds))
         if is_platform:
-            if audio_seconds is not None and audio_seconds > MAX_TRANSCRIBE_SECONDS:
-                raise _bad(f"{AUDIO_TOO_LONG}: {audio_seconds:.0f} s of audio, at most "
-                           f"{MAX_TRANSCRIBE_SECONDS} s per call on the shared key. Cut "
-                           "the clip, or set your own ElevenLabs key. Nothing was done.")
             if not _served("elevenlabs_act", "create_transcript", platform_ops()):
                 raise _bad("elevenlabs_act op='create_transcript' needs your own "
                            "ElevenLabs key: the shared key here does not transcribe.")
+            if audio_seconds is None:
+                raise _bad(f"{AUDIO_SECONDS_REQUIRED}: on the shared key, declare the "
+                           "clip's length in seconds (`audio_seconds`): the quota is "
+                           "checked against it. Your own ElevenLabs key lifts this rule. "
+                           "Nothing was done.")
+            if audio_seconds > MAX_TRANSCRIBE_SECONDS:
+                raise _bad(f"{AUDIO_TOO_LONG}: {audio_seconds:.0f} s of audio, at most "
+                           f"{MAX_TRANSCRIBE_SECONDS} s per call on the shared key. Cut "
+                           "the clip, or set your own ElevenLabs key. Nothing was done.")
+            if len(rf.data) > MAX_TRANSCRIBE_BYTES_PLATFORM:
+                raise _bad(f"{AUDIO_TOO_LARGE}: the audio is {len(rf.data)} bytes, at most "
+                           f"{MAX_TRANSCRIBE_BYTES_PLATFORM} per call on the shared key "
+                           f"({MAX_TRANSCRIBE_BYTES_PLATFORM // (1024 * 1024)} MB). Cut or "
+                           "compress the clip, or set your own ElevenLabs key. Nothing was "
+                           "done.")
         client = ElevenLabsClient(api_key=key)
         result = _run(lambda: client.transcribe_speech(
             rf.data, filename=rf.filename, content_type=rf.mime,
@@ -613,7 +632,8 @@ def register(mcp: FastMCP) -> None:
           project file, a URL…), `language_code` pins the language (else detected),
           `audio_seconds` its length. Returns `text`, `language_code` and `words`
           (each with its start and end, seconds). Billed per second of audio
-          (~330 credits a minute); at most 300 seconds per call on the shared key.
+          (~330 credits a minute). On the shared key, when the instance serves it:
+          `audio_seconds` is required, at most 300 seconds and 1 MB of audio per call.
         - `create_voice_design` — up to three previews of a voice described in
           `voice_description`, each reading `text` (or a text the model writes with
           `auto_generate_text=true`); each preview has its `generated_voice_id` and
@@ -641,7 +661,7 @@ def register(mcp: FastMCP) -> None:
             prompt_influence: Sound only: how literally to follow the text, 0 to 1.
             loop: Sound only: make it loop seamlessly.
             source: Transcription only: the audio file, e.g. {"kind": "transit", "ref": "..."} or {"kind": "url", "url": "https://..."}.
-            audio_seconds: Transcription only: the clip's length in seconds — what the quota is checked against before the call.
+            audio_seconds: Transcription only: the clip's length in seconds — what the quota is checked against before the call; required on the shared key.
             voice_description: Voice design only: the voice in words, e.g. age, accent, tone, pace.
             auto_generate_text: Voice design only: let the model write the preview's line.
             seed: 0 to 4294967295, to make a take reproducible as far as the model allows.

@@ -445,10 +445,9 @@ def test_the_setting_refuses_what_the_tool_would_not_understand(value, error):
         E.parse_platform_ops(value)
 
 
-def test_the_default_is_speech_and_transcription_only():
+def test_the_default_is_speech_only():
     from oto_mcp.tools import elevenlabs as E
-    assert E.parse_platform_ops(E.PLATFORM_OPS_DEFAULT) == {
-        ("elevenlabs_act", "create_speech"), ("elevenlabs_act", "create_transcript")}
+    assert E.parse_platform_ops(E.PLATFORM_OPS_DEFAULT) == {("elevenlabs_act", "create_speech")}
 
 
 def test_an_unreadable_setting_RAISES_rather_than_serving_the_default(monkeypatch):
@@ -700,6 +699,8 @@ def clip(monkeypatch):
 
 
 _SRC = {"kind": "transit", "ref": "copilot-dictation/" + "a" * 32}
+#: The instance opens transcription on the shared key: it is not in the default.
+_OUVERT = "elevenlabs_act:create_speech,elevenlabs_act:create_transcript"
 
 
 @pytest.mark.parametrize("seconds, credits", [(None, 1), (0.1, 1), (6, 33), (60, 330),
@@ -711,11 +712,12 @@ def test_transcribe_credits(seconds, credits):
 
 def test_transcribe_on_the_platform_key_bills_the_longer_of_length_and_words(
         client, platform, trace, setting, clip):
+    setting["value"] = _OUVERT
     client.transcribe_speech.return_value = {
-        "text": "Bonjour Tulina", "language_code": "fra",
+        "text": "Bonjour Marie", "language_code": "fra",
         "words": [{"text": "Bonjour", "start": 0.1, "end": 0.6, "type": "word"},
                   {"text": " ", "start": 0.6, "end": 0.7, "type": "spacing"},
-                  {"text": "Tulina", "start": 0.7, "end": 12.0, "type": "word"}]}
+                  {"text": "Marie", "start": 0.7, "end": 12.0, "type": "word"}]}
     out = _tool("elevenlabs_act")(op="create_transcript", source=_SRC, audio_seconds=6,
                                   language_code="fr")
     assert clip == [(_SRC, 10 * 1024 * 1024)]
@@ -724,8 +726,8 @@ def test_transcribe_on_the_platform_key_bills_the_longer_of_length_and_words(
         b"webm-bytes", filename="dictation.webm", content_type="audio/webm",
         model_id="scribe_v2", language_code="fr")
     assert trace == [{"quantity": 66, "units": 66}], "12 s heard beats 6 s declared"
-    assert out["text"] == "Bonjour Tulina"
-    assert [w["word"] for w in out["words"]] == ["Bonjour", "Tulina"]
+    assert out["text"] == "Bonjour Marie"
+    assert [w["word"] for w in out["words"]] == ["Bonjour", "Marie"]
 
 
 def test_transcribe_on_the_customers_key_notes_quantity_only(client, trace, setting, clip):
@@ -736,9 +738,42 @@ def test_transcribe_on_the_customers_key_notes_quantity_only(client, trace, sett
 
 def test_transcribe_too_long_on_the_shared_key_is_refused_before_elevenlabs(
         client, platform, trace, setting, clip):
+    setting["value"] = _OUVERT
     with pytest.raises(McpError, match="audio_too_long"):
         _tool("elevenlabs_act")(op="create_transcript", source=_SRC, audio_seconds=301)
     assert not client.method_calls and trace == []
+
+
+def test_transcribe_unset_the_shared_key_does_not_transcribe(
+        client, platform, trace, setting, clip):
+    with pytest.raises(McpError, match="does not transcribe"):
+        _tool("elevenlabs_act")(op="create_transcript", source=_SRC, audio_seconds=3)
+    assert not client.method_calls and trace == []
+
+
+def test_transcribe_without_a_length_on_the_shared_key_is_refused_before_elevenlabs(
+        client, platform, trace, setting, clip):
+    setting["value"] = _OUVERT
+    with pytest.raises(McpError, match="audio_seconds_required") as e:
+        _tool("elevenlabs_act")(op="create_transcript", source=_SRC)
+    assert "own ElevenLabs key" in str(e.value) and "Nothing was done." in str(e.value)
+    assert not client.method_calls and trace == []
+
+
+def test_transcribe_too_large_on_the_shared_key_is_refused_before_elevenlabs(
+        client, platform, trace, setting, clip, monkeypatch):
+    from oto_mcp.tools import elevenlabs as E
+    setting["value"] = _OUVERT
+    monkeypatch.setattr(E, "MAX_TRANSCRIBE_BYTES_PLATFORM", len(b"webm-bytes") - 1)
+    with pytest.raises(McpError, match="audio_too_large"):
+        _tool("elevenlabs_act")(op="create_transcript", source=_SRC, audio_seconds=3)
+    assert not client.method_calls and trace == []
+
+
+def test_transcribe_on_the_customers_key_needs_no_length(client, trace, setting, clip):
+    client.transcribe_speech.return_value = {"text": "Hi", "words": []}
+    _tool("elevenlabs_act")(op="create_transcript", source=_SRC)
+    assert trace == [{"quantity": 1}]
 
 
 def test_transcribe_closed_by_the_setting(client, platform, trace, setting, clip):

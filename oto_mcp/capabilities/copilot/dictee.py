@@ -9,7 +9,9 @@ through `outils.executer` → `meta.executer_cible`, as the person, in the viewe
 the guards (activation, access level), the key's cascade (the org's own ElevenLabs key
 first, else the shared key when it is granted), the quota and the metering all apply,
 exactly as for an agent's call. The audio itself never enters a tool's arguments (which
-the journal keeps): only the short transit reference does; `tmp/` is purged in a day.
+the journal keeps): only the short transit reference does. It is kept only while it is
+transcribed: deleted as soon as the call returns, whatever it answered — `tmp/`, purged
+in a day, is the safety net.
 """
 from __future__ import annotations
 
@@ -30,7 +32,10 @@ PREFIXE = "copilot-dictation"
 #: A dictation is a sentence or two: two minutes is generous, and bounds what one
 #: request can spend.
 MAX_SECONDES = 120
-MAX_OCTETS = 4 * 1024 * 1024
+#: Under the process's body bound (4 MiB, `bornes_processus.CORPS_OCTETS`) once in
+#: base64 (×4/3: 4,000,000 characters) with the other fields: an over-large clip is
+#: refused by name (422), not by the bound (413). 3 MiB would be the whole bound in base64.
+MAX_OCTETS = 3_000_000
 #: What the panel records with `MediaRecorder` (webm/opus on Chromium and Firefox,
 #: mp4/aac on Safari). Parameters (`;codecs=opus`) are dropped before the check.
 TYPES = frozenset({"audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav",
@@ -56,7 +61,7 @@ def decoder(audio_base64: str, mime_type: str) -> tuple[bytes, str]:
     if not data:
         raise DicteeRefusee("The clip is empty.")
     if len(data) > MAX_OCTETS:
-        raise DicteeRefusee(f"The clip is over {MAX_OCTETS // (1024 * 1024)} MB.")
+        raise DicteeRefusee(f"The clip is over {MAX_OCTETS // 1_000_000} MB.")
     return data, mime
 
 
@@ -74,6 +79,17 @@ def _deposer(sub: str, data: bytes, mime: str) -> dict:
         return transit.deposer(PREFIXE, data, mime, f"dictation.{_EXTENSION[mime]}")["source"]
 
 
+def _supprimer(sub: str, source: dict) -> None:
+    """Deletes the deposited clip once transcribed. A failure is logged and changes
+    nothing in the answer: the purge of `tmp/` is the safety net."""
+    from ... import transit
+    try:
+        with auth_hooks.sub_override(sub):
+            transit.supprimer(source.get("ref"))
+    except transit.TransitError as e:
+        logger.warning("copilot : audio de dictée non supprimé (%s) : %s", sub, e)
+
+
 async def transcrire(sub: str, org: Optional[int], data: bytes, mime: str,
                      secondes: float, langue: Optional[str]) -> dict:
     """`{"ok": True, "text"}`, or `{"ok": False, "message"}` — the call's own refusal
@@ -81,12 +97,21 @@ async def transcrire(sub: str, org: Optional[int], data: bytes, mime: str,
     tool = await _outil()
     if tool is None:
         return {"ok": False, "message": f"{OUTIL} is not served by this instance."}
-    source = await run_in_threadpool(_deposer, sub, data, mime)
+    from ... import transit
+    try:
+        source = await run_in_threadpool(_deposer, sub, data, mime)
+    except transit.TransitError as e:
+        # Storage down: the call's refusal (409), never a 500.
+        logger.warning("copilot : dictée non déposée (%s) : %s", sub, e)
+        return {"ok": False, "message": str(e)[:600]}
     b = Boite(frozenset({OUTIL}), {OUTIL: tool}, [])
     args = {"op": "create_transcript", "source": source, "audio_seconds": secondes}
     if langue:
         args["language_code"] = langue
-    issue = await executer(b, sub, OUTIL, args, org=org, projet=None, run_id=None)
+    try:
+        issue = await executer(b, sub, OUTIL, args, org=org, projet=None, run_id=None)
+    finally:
+        await run_in_threadpool(_supprimer, sub, source)
     donnees = issue.donnees if isinstance(issue.donnees, dict) else {}
     if not issue.ok:
         message = donnees.get("error") if isinstance(donnees.get("error"), str) else issue.texte

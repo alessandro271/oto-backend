@@ -127,14 +127,27 @@ qui dépasse le délai n'est pas annulée : elle est réglée comme tout appel.
 Le panneau enregistre la personne (`MediaRecorder`) et envoie le clip en base64, son type
 et sa durée ; le serveur le transcrit avec ElevenLabs (Scribe) — **jamais** la
 reconnaissance du navigateur. Le clip est déposé en transit sous la personne
-(`copilot-dictation`, `tmp/` purgé en un jour), puis `elevenlabs_act op=create_transcript`
-reçoit la seule référence de transit — l'audio n'entre jamais dans les arguments, que le
-journal garde. Même chemin que la réponse dite : la personne, l'org consultée, clé de l'org
-puis clé plateforme octroyée, quota et `quantity` en crédits ElevenLabs (~330 par minute
-d'audio, la plus longue de la durée déclarée et de la fin du dernier mot). Clip refusé
-(vide, pas audio, > 4 Mo ou > 120 s) → 422 `dictation_invalid` ; refus de l'appel (pas de
-clé, pas d'octroi, quota épuisé, ElevenLabs indisponible) → 409 `dictation_unavailable`,
-avec ses mots.
+(`copilot-dictation`), puis `elevenlabs_act op=create_transcript` reçoit la seule
+référence de transit — l'audio n'entre jamais dans les arguments, que le journal garde.
+**L'audio n'est gardé que le temps de la transcription** : supprimé dès que l'appel rend,
+réussi ou non (`transit.supprimer`) ; un échec de suppression est journalisé et ne change
+pas la réponse, la règle d'expiration du bucket (`tmp/` purgé en un jour) reste le filet.
+Même chemin que la réponse dite : la personne, l'org consultée, clé de l'org puis clé
+plateforme octroyée, quota et `quantity` en crédits ElevenLabs (~330 par minute d'audio, la
+plus longue de la durée déclarée et de la fin du dernier mot). Sur la clé plateforme, la
+transcription n'est servie que si l'instance l'ouvre (`platform.ops` du connecteur, hors du
+défaut) ; `audio_seconds` y est obligatoire, et l'audio borné à 300 s et 1 Mo par appel.
+Clip refusé (vide, pas audio, > 3 Mo ou > 120 s) → 422 `dictation_invalid` — 3 Mo d'audio
+font 4 millions de caractères en base64, sous la borne du corps (4 Mio,
+`bornes_processus`), qui ne répond donc pas 413 à sa place ; refus de l'appel (pas de clé,
+pas d'octroi, quota épuisé, ElevenLabs indisponible) ou stockage indisponible au dépôt →
+409 `dictation_unavailable`, avec ses mots.
+
+**Risque résiduel sur la clé partagée** : la durée est **déclarée** par le panneau, pas
+mesurée. Le quota se vérifie sur elle, et l'appel facture au moins la fin du dernier mot
+entendu ; une durée sous-déclarée reste possible. Ce qui plafonne le coût d'un appel est la
+borne de taille (1 Mo d'audio sur la clé partagée) : quelques minutes d'audio compressé au
+pire.
 
 ## Les outils (`outils.py`, `classement.py`)
 
