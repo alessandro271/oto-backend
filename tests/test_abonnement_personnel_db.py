@@ -167,23 +167,25 @@ def test_une_pause_ANCIENNE_n_est_servie_qu_au_worker_qui_SONDE(live):
     assert pris and pris["id"] == travail, "pause ANCIENNE : la sonde tranchera"
 
 
-@pytest.mark.parametrize("fenetre,org,sondee", [
-    ("seven_day", 9407, True),        # mesuré le 28/10 : 27 % sous 25 %, relevé à 75 %
-    ("five_hour", 9408, True),
-    ("seven_day_opus", 9409, False),  # propre à un modèle : la sonde n'en mesure rien
+@pytest.mark.parametrize("fenetre,epuise,org,sondee", [
+    ("seven_day", False, 9407, True),        # mesuré le 28/10 : 27 % sous 25 %, relevé à 75 %
+    ("five_hour", False, 9408, True),
+    ("seven_day_opus", False, 9409, False),  # propre à un modèle : la sonde n'en mesure rien
+    ("seven_day", True, 9420, False),        # refus du FOURNISSEUR : son échéance fait foi
 ])
 def test_une_pause_ANCIENNE_du_COMPTE_est_sondee_meme_de_fenetre_connue(
-        live, fenetre, org, sondee):
-    """Fenêtre connue ou non (28/10/2026) : la sonde lit la capacité réelle sous le
-    plafond du moment. Seule une fenêtre propre à un modèle garde son échéance."""
+        live, fenetre, epuise, org, sondee):
+    """Fenêtre connue ou non (28/10/2026) : une pause de NOTRE seuil se sonde, la sonde lit
+    la capacité réelle sous le plafond du moment. Gardent leur échéance : une fenêtre
+    propre à un modèle, et un refus du fournisseur sur une fenêtre connue."""
     from oto_mcp import db
     from oto_mcp.db import user_subscriptions as US
     from oto_mcp.db._conn import _connect
-    s = _personne(f"abo-nomme-{fenetre}")
-    US.upsert_sandbox(s, _FAMILLE, f"sandbox-{fenetre}")
+    s = _personne(f"abo-nomme-{fenetre}-{epuise}")
+    US.upsert_sandbox(s, _FAMILLE, f"sandbox-{fenetre}-{epuise}")
     with _connect() as conn:
         futur = conn.execute("SELECT NOW() + interval '5 days' AS t").fetchone()["t"]
-    US.marquer_statut(s, _FAMILLE, US.PLAFOND, limit_reset_at=futur, epuise=True,
+    US.marquer_statut(s, _FAMILLE, US.PLAFOND, limit_reset_at=futur, epuise=epuise,
                       fenetre=fenetre)
     assert US.get_subscription(s, _FAMILLE)["limit_fenetre"] == fenetre
     travail = _travail(org, s)

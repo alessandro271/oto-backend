@@ -87,13 +87,19 @@ def pause_en_vigueur(ab: str, sonde: bool = False) -> str:
 
     `sonde` : le worker sondera le forfait avant de lancer — une pause plus vieille que
     `VERIFICATION_S` ne freine plus, que sa fenêtre soit connue ou non : la sonde lit la
-    capacité RÉELLE sous le plafond du moment. Seule exception, une fenêtre propre à un
-    modèle (`propre_a_un_modele`), que la sonde ne mesure pas. ⚠️ L'horloge est `updated_at` : toute autre écriture
+    capacité RÉELLE sous le plafond du moment. Deux exceptions : une fenêtre propre à un
+    modèle (`propre_a_un_modele`), que la sonde ne mesure pas, et un refus du
+    fournisseur sur une fenêtre connue, dont l'échéance est la sienne. ⚠️ L'horloge est `updated_at` : toute autre écriture
     de la ligne (plafond perso, sandbox, connexion) la rajeunit, ce qui ne fait que
     retarder la revérification — le sens sûr. Ne pas la « corriger » en colonne dédiée
     sans raison."""
     du_compte = ", ".join(f"'{f}'" for f in FENETRES_DU_COMPTE)
-    fraiche = (f" AND ({ab}.{COLONNE_FENETRE} NOT IN ({du_compte}) OR {ab}.updated_at > "
+    # Un refus du FOURNISSEUR (`limit_epuise`) sur une fenêtre connue garde son
+    # échéance : c'est la sienne, et la sonder ne coûterait que des appels — seule une
+    # pause de NOTRE seuil dépend d'un réglage qui bouge.
+    fraiche = (f" AND ({ab}.{COLONNE_FENETRE} NOT IN ({du_compte}) "
+               f"OR ({ab}.limit_epuise AND {ab}.{COLONNE_FENETRE} IS NOT NULL) "
+               f"OR {ab}.updated_at > "
                f"NOW() - make_interval(secs => {int(VERIFICATION_S)}))"
                if sonde else "")
     return (f"COALESCE({ab}.statut = '{PLAFOND}' AND {ab}.limit_reset_at > NOW()"
