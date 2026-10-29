@@ -160,7 +160,8 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   son règlement, à venir, sera daté de plus tard. Juger réglés les appels d'une
   période se fait donc sur `settled_as_of`, pas sur `as_of`, sans connaître l'échéance.
   - **Le calcul** : le plus ancien de `as_of` et du début (`created_at`) de la plus
-    ancienne réservation, tous payeurs confondus, encore OUVERTE ou réglée par un
+    ancienne réservation — tous payeurs confondus, ou ceux du seul `payer` passé en
+    paramètre — encore OUVERTE ou réglée par un
     mouvement `settle` que l'horizon du curseur retient encore (`xid >=
     pg_snapshot_xmin`) — lu dans le MÊME instantané que la page et le terme (3)
     d'`as_of`. Toute réservation posée avant est close (réglée, libérée ou échue), et
@@ -180,6 +181,10 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
     son `created_at` (`NOW()`, le début de la transaction) —, ou elle a commencé après.
     D'où le terme (2), qui compte aussi les rôles qui peuvent insérer dans
     `credit_holds`.
+  - **Par payeur** (`?payer=org:<id>`) : le même calcul sur les seules réservations de
+    ce payeur, et la même preuve de monotonie, restreinte à lui. Le relevé d'un payeur
+    n'attend plus l'appel asynchrone d'un autre (24 h au pire) ; la page et `as_of`
+    restent ceux du flux entier.
   - **`null`** quand `as_of` l'est.
 - Le curseur porte les règlements (échéances comprises), les versements et les transferts.
   Les réservations en cours se lisent dans le solde (`holds_open`).
