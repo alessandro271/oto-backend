@@ -81,6 +81,35 @@ def fonction_du_modele(model: Optional[str]) -> Optional[str]:
     return f"{PREFIXE_DES_MODELES}{cle_du_modele(model)}"
 
 
+def fonctions_connues(connector: str) -> frozenset[str]:
+    """The functions of `connector` the scale can price: a model call of the catalogue
+    (`messages:<model>`, `fonction_du_modele`) for the model connector, a
+    function with a declared cost for any other. Empty: an unknown connector."""
+    if connector == MODELE_CONNECTOR:
+        from .. import runner_models
+        return frozenset(fonction_du_modele(m.id) for m in runner_models.MODELES
+                         if m.family == MODELE_CONNECTOR)
+    from oto.connectors.declared import DECLARED
+    return frozenset(f for f, d in DECLARED.get(connector, {}).items() if "cost" in d)
+
+
+def verifier_les_noms(lus: dict[tuple[str, str], str]) -> None:
+    """The startup guard of the per-function modes (`credits_modes.modes_par_fonction`),
+    here because it reads the model catalogue: every entry names at least one function
+    the scale can price, or raises naming it."""
+    for connector, function in lus:
+        connues = fonctions_connues(connector)
+        p = modes._prefixe(function)
+        if not connues:
+            raise ValueError(f"{modes._ENV_MODE_FONCTIONS}: `{connector}.{function}` — unknown "
+                             f"connector `{connector}`: no function of it has a price")
+        if (function not in connues if p is None
+                else not any(f.startswith(p) for f in connues)):
+            raise ValueError(f"{modes._ENV_MODE_FONCTIONS}: `{connector}.{function}` names no "
+                             f"priced function of `{connector}` (one of "
+                             f"{', '.join(sorted(connues))})")
+
+
 def mode_du_modele(model: Optional[str]) -> str:
     """The budget mode of a call to `model` (`credits.mode_de` on its scale function); a
     job that names no model reads the mode of `messages:` itself."""
@@ -91,9 +120,11 @@ def sous_le_plancher(sub: Optional[str], org: Optional[int],
                      model: Optional[str]) -> Optional[dict]:
     """Before a hosted agent's job starts on a re-billed key: does its payer have the
     floor (`credits.plancher_travail`) available — balance minus open holds? Returns
-    None when the job may start, else `{needed, available}` — in `enforce` only: `report`
-    logs what it would refuse and returns None, and so does `off` or a floor of 0. A
-    ledger that cannot be read refuses in `enforce` (`available: None`)."""
+    None when the job may start, else `{code, needed, available}` — in `enforce` only:
+    `report` logs what it would refuse and returns None, and so does `off` or a floor of
+    0. `code` names the refusal: `insufficient_credits` (below the floor, final), or
+    `spend_ledger_unavailable` when the balance cannot be read (`available: None`) —
+    replayable: the job goes back to the queue, neither served nor stopped."""
     plancher = modes.plancher_travail()
     m = mode_du_modele(model)
     if plancher <= 0 or m == "off":
@@ -105,13 +136,15 @@ def sous_le_plancher(sub: Optional[str], org: Optional[int],
     except Exception:
         logger.exception("crédits (%s) : solde illisible au plancher (org %s) — %s", m,
                          org, "refusé" if m == "enforce" else "servi")
-        return {"needed": plancher, "available": None} if m == "enforce" else None
+        return ({"code": budget.INDISPONIBLE, "needed": plancher, "available": None}
+                if m == "enforce" else None)
     if disponible >= plancher:
         return None
     logger.warning("crédits (%s) : %s à %d disponibles, sous le plancher %d d'un travail "
                    "— %s", m, qui, disponible, plancher,
                    "refusé" if m == "enforce" else "servi")
-    return {"needed": plancher, "available": disponible} if m == "enforce" else None
+    return ({"code": budget.INSUFFISANT, "needed": plancher, "available": disponible}
+            if m == "enforce" else None)
 
 
 def _lignes_du_modele(lignes: dict, fonction: Optional[str]) -> Optional[dict]:

@@ -41,8 +41,7 @@ for an asynchronous job, the job (`meta.job_id`).
 nothing — it logs what `enforce` would refuse; `enforce` refuses with a named code;
 `off` reserves nothing. Named refusals: `insufficient_credits`, `credits_unpriced`
 (the function has no line in the scale), `spend_ledger_unavailable` (the ledger could
-not be written: retryable). An unreadable setting refuses to start
-(`verifier_reglages`).
+not be written: retryable). An unreadable setting refuses to start (`verifier_reglages`).
 
 Off the event loop: every function here that reads or writes the database is called
 from a worker thread (the tool's, or the edge's `run_in_threadpool`).
@@ -126,12 +125,13 @@ def marge_sync_s() -> int:
 
 
 def verifier_reglages() -> None:
-    """The startup guard: every `OTO_CREDITS_*` setting is read once, and an unreadable
-    one refuses to start, naming it."""
+    """The startup guard: each `OTO_CREDITS_*` setting is read once, or refuses to start."""
     modes.verifier()  # the instance's mode, and the per-function ones (`credits_modes`)
+    from .credits_tours import verifier_les_noms  # it reads the model catalogue
+    verifier_les_noms(modes.modes_par_fonction())
     hold_max_s()
     marge_sync_s()
-    if mode() != "off" and bornes_processus.reglages().outil_s <= 0:
+    if modes.un_mode_arme() and bornes_processus.reglages().outil_s <= 0:
         logger.warning("crédits : OTO_BORNE_OUTIL_S=0 (borne d'un appel d'outil désarmée) "
                        "— l'échéance d'un appel synchrone sans `timeout_s` déclaré est "
                        "OTO_CREDITS_HOLD_MAX_S (%d s)", hold_max_s())
