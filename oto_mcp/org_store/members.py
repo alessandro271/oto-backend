@@ -381,6 +381,23 @@ def list_org_members_with_users(org_id: int) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def count_org_members(org_ids: list[int]) -> dict[int, int]:
+    """`len(list_org_members(o))` pour chaque org, en UNE requête : les mêmes lignes
+    (`org_members` seul, ni compte de service ni filtre), comptées. Une org sans
+    membre vaut 0. Sert la liste des orgs d'un compte, qui comptait org par org."""
+    ids = sorted({int(o) for o in org_ids})
+    if not ids:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT org_id, count(*) AS n FROM org_members "
+            "WHERE org_id = ANY(%s) GROUP BY org_id",
+            (ids,),
+        ).fetchall()
+    comptes = {r["org_id"]: r["n"] for r in rows}
+    return {o: comptes.get(o, 0) for o in ids}
+
+
 def list_member_events(org_id: int, *, limit: int,
                        before_id: Optional[int] = None) -> list[dict]:
     """Le journal des entrées/sorties de l'org, le plus récent d'abord, par pages de

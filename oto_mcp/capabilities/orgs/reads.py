@@ -262,37 +262,47 @@ def _members(org_id: int, *, exposer_operateur: bool) -> list[dict]:
 logger = logging.getLogger(__name__)
 
 
-def _beta_dans(sub: str, org_id: int) -> bool:
-    """`beta` par org — fail-CLOSED et TRACÉ. C'est l'appel d'amorçage du front :
-    une panne du seam des options ne doit pas blanchir le sélecteur d'espaces,
-    et une bêta qui s'ouvrirait sur un hoquet ne se verrait pas."""
+def _beta_dans(sub: str, org_ids: list[int]) -> set[int]:
+    """Les orgs où `sub` est `beta` — fail-CLOSED et TRACÉ. C'est l'appel d'amorçage
+    du front : une panne du seam des options ne doit pas blanchir le sélecteur
+    d'espaces, et une bêta qui s'ouvrirait sur un hoquet ne se verrait pas. Une
+    lecture pour toutes les orgs (`access.orgs_with_option`), pas une par org."""
     try:
-        return access.has_option(sub, BETA_OPTION, org=org_id)
+        return access.orgs_with_option(sub, BETA_OPTION, org_ids)
     except Exception:
-        logger.warning("beta lookup fail-CLOSED for %s in org %s", sub, org_id,
+        logger.warning("beta lookup fail-CLOSED for %s in orgs %s", sub, org_ids,
                        exc_info=True)
-        return False
+        return set()
 
 
 def _list_my_orgs(ctx: ResolvedCtx, inp: NoInput) -> dict:
-    orgs, active = [], None
     # Vue bornée à O (oto#270) : la cible n'est vue que dans O — ses autres orgs n'y
     # figurent pas, et O n'est « active » que si c'est bien sa maison.
     borne = session_org.current_view_as_bound_org()
-    for o in org_store.list_orgs_for_user(ctx.sub):
-        if borne is not None and int(o["org_id"]) != borne:
-            continue
+    # Lecture seule de bout en bout : UNE connexion pour l'appel, et le compte des
+    # membres comme la bêta lus pour toutes les orgs d'un coup — jamais par org.
+    with db.reuse_connection():
+        return _list_my_orgs_lu(ctx, borne)
+
+
+def _list_my_orgs_lu(ctx: ResolvedCtx, borne: Optional[int]) -> dict:
+    orgs, active = [], None
+    lignes = [o for o in org_store.list_orgs_for_user(ctx.sub)
+              if borne is None or int(o["org_id"]) == borne]
+    ids = [o["org_id"] for o in lignes]
+    membres = org_store.count_org_members(ids)
+    beta = _beta_dans(ctx.sub, ids)
+    for o in lignes:
         if o["is_active"]:
             active = o["org_id"]
         orgs.append({  # superset REST(id/member_count/my_role) + MCP(org_id/role/active)
             "id": o["org_id"], "org_id": o["org_id"], "name": o["name"],
             # logo EFFECTIF : upload sinon dérivé logo.dev du domaine déclaré.
             "logo_url": org_store.effective_logo_url(o),
-            "member_count": len(org_store.list_org_members(o["org_id"])),
+            "member_count": membres.get(o["org_id"], 0),
             "my_role": o["org_role"], "role": o["org_role"], "active": o["is_active"],
-            # `org=` EXPLICITE : calcul contre CETTE org, jamais contre current_org
-            # (le seam le prévoit pour la fiche admin — même besoin ici).
-            "beta": _beta_dans(ctx.sub, o["org_id"]),
+            # Calcul contre CETTE org (orgs explicites), jamais contre current_org.
+            "beta": o["org_id"] in beta,
             # Lu dans la même requête que la liste (`list_orgs_for_user`), jamais
             # par org : même étiquette que la fiche (`is_personal_org`).
             "personal": o["personal"],

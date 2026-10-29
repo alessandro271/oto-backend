@@ -1380,3 +1380,12 @@ inchangée sans changement, appel qui aboutit pendant qu'une autre transaction t
 ligne) et `tests/api/test_une_authentification_par_requete.py` (une vérification, une
 garde, un upsert par requête ; pause, appartenance, options plus strictes et verrou de
 délégation éprouvés à l'envers).
+
+## La liste de mes orgs, une lecture par fait et non par org (29/10/2026)
+
+`org.list` (`GET /api/me/orgs`) relisait pour chaque org tous ses membres pour un `len`, plus la bêta
+(deux lectures) : 3 requêtes par org. Le compte des membres (`org_store.count_org_members`, mêmes
+lignes `org_members` que `list_org_members`) et la bêta (`access.orgs_with_option`, même règle
+d'échéance que `has_option_comp`) se lisent désormais pour toutes les orgs d'un coup, sous
+`db.reuse_connection()`. Preuve : `tests/orgs/test_list_orgs_lectures_groupees.py` (mêmes valeurs
+que le calcul org par org, requêtes constantes, un emprunt, aucune écriture).
