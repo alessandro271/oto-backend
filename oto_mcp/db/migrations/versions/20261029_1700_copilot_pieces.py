@@ -16,7 +16,7 @@ Retour arrière : retire la table (les pièces déjà jointes ne se résolvent p
 modèle lit à leur place qu'un fichier a été montré ; les objets restent dans le
 stockage jusqu'à leur purge).
 
-Révision : 20261028_1200_copilot_pieces
+Révision : 20261029_1700_copilot_pieces
 Précédente : 20261027_1800_row_comments
 """
 from __future__ import annotations
@@ -25,8 +25,8 @@ from alembic import op
 
 from oto_mcp.db.schema.copilot import PIECES
 
-revision = "20261028_1200_copilot_pieces"
-down_revision = "20261027_1800_row_comments"
+revision = "20261029_1700_copilot_pieces"
+down_revision = "20261029_1200_pret_du_forfait"
 branch_labels = None
 depends_on = None
 

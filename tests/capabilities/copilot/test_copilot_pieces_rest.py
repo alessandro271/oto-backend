@@ -267,3 +267,80 @@ def test_maintenance_purge_les_pieces_de_plus_de_trente_jours(monde, monkeypatch
     assert f"copilot-attachments/k/{vieille}" in retires
     assert f"copilot-attachments/k/{fraiche}" not in retires
     assert set(store.pieces([vieille, fraiche], B, monde["org"])) == {fraiche}
+
+
+def test_quota_de_depot_par_personne_sur_vingt_quatre_heures(monde, outils, monkeypatch):
+    """Summed on the rows of the SAME sub, whatever the org, over 24 sliding hours: an
+    older deposit no longer counts, another person's never does."""
+    from oto_mcp.capabilities.copilot import pieces
+    from oto_mcp.db import copilot as store
+    from oto_mcp.db._conn import _connect
+    avant_a, avant_b = store.volume_depose(A, 24), store.volume_depose(B, 24)
+    ancienne = f"att_{uuid.uuid4().hex}"
+    store.creer_piece(ancienne, B, monde["org"], f"copilot-attachments/k/{ancienne}",
+                      "vieux.pdf", "application/pdf", 10**9)
+    with _connect() as c:
+        c.execute("UPDATE copilot_attachments SET created_at = NOW() - interval '25 hours' "
+                  "WHERE id = %s", (ancienne,))
+    assert store.volume_depose(B, 24) == avant_b
+    monkeypatch.setattr(pieces, "QUOTA_DEPOT", avant_b + len(PNG))
+    assert _depot(monde, B, PNG, "a.png", "image/png").status_code == 200
+    assert store.volume_depose(B, 24) == avant_b + len(PNG)
+    r = _depot(monde, B, PNG, "b.png", "image/png")
+    assert (r.status_code, r.json()["error"]) == (429, "attachment_quota_exceeded")
+    assert "MB at most per person over 24 hours" in r.json()["detail"]
+    assert not any(k.endswith("/b.png") for k in outils["stock"].objets)
+    assert store.volume_depose(A, 24) == avant_a
+    # Another org of the same person counts too.
+    monkeypatch.setattr(pieces, "QUOTA_DEPOT", 10**12)
+    assert _depot(monde, A, PNG, "c.png", "image/png", org=monde["autre"]).status_code == 200
+    assert store.volume_depose(A, 24) == avant_a + len(PNG)
+
+
+def _jouer_en_flux(monde, morceaux: int, taille: int, entetes: list) -> tuple[int, dict, int]:
+    """The upload route played in ASGI, its body delivered chunk by chunk, COUNTING what
+    the handler pulled from the stream (`TestClient` hands the body over at once)."""
+    import asyncio
+    tires = {"n": 0}
+
+    async def _receive():
+        tires["n"] += 1
+        return {"type": "http.request", "body": b"o" * taille,
+                "more_body": tires["n"] < morceaux}
+
+    envoye: dict = {}
+
+    async def _send(message):
+        if message["type"] == "http.response.start":
+            envoye["status"] = message["status"]
+        elif message["type"] == "http.response.body":
+            envoye["corps"] = envoye.get("corps", b"") + message.get("body", b"")
+
+    chemin = "/api/copilot/attachments"
+    scope = {"type": "http", "method": "POST", "path": chemin, "raw_path": chemin.encode(),
+             "query_string": b"", "http_version": "1.1", "scheme": "http",
+             "server": ("t", 80), "client": ("c", 1), "root_path": "",
+             "headers": [(b"authorization", f"Bearer {A}".encode()),
+                         (b"x-oto-org", str(monde["org"]).encode()),
+                         (b"content-type", b"multipart/form-data; boundary=frontiere"),
+                         *entetes]}
+    asyncio.run(monde["client"].app(scope, _receive, _send))
+    return envoye["status"], json.loads(envoye["corps"]), tires["n"]
+
+
+def test_un_content_length_au_dela_de_la_borne_est_refuse_sans_rien_lire(monde, outils):
+    annonce = str(20 * 1024 * 1024 + 10 * 1024 * 1024).encode()
+    status, corps, tires = _jouer_en_flux(monde, morceaux=1, taille=1,
+                                          entetes=[(b"content-length", annonce)])
+    assert (status, corps["error"]) == (413, "attachment_too_large")
+    assert tires == 0
+
+
+def test_sans_content_length_la_lecture_s_arrete_a_la_borne(monde, outils, monkeypatch):
+    from oto_mcp.api import uploads
+    from oto_mcp.capabilities.copilot import pieces
+    monkeypatch.setattr(pieces, "MAX_DEPOT", 64)
+    monkeypatch.setattr(uploads, "_MARGE_MULTIPART", 64)
+    status, corps, tires = _jouer_en_flux(monde, morceaux=10_000, taille=32, entetes=[])
+    assert (status, corps["error"]) == (413, "attachment_too_large")
+    assert tires <= 5, f"{tires} morceaux lus pour une borne de 128 octets"

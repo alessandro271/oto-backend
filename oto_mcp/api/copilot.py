@@ -11,7 +11,10 @@ session interactive seulement (le jeton est refusé deux fois — à l'authentif
 sur le geste de la requête, que ce handler pose comme l'adaptateur des capacités),
 membre de l'org consultée (`ORG_MEMBER`), allowlist, jamais en « voir en tant que ».
 Le corps se lit en flux, borné au plus gros type accepté, et seulement une fois la porte
-passée ; le jugement du type et de la taille est `capabilities/copilot/pieces.py`.
+passée : un `Content-Length` annoncé au-delà (plus l'enveloppe multipart) est refusé
+413 sans rien lire, un corps sans annonce s'arrête dès qu'il passe la borne
+(`uploads.lire_multipart_borne`). Le jugement du type et de la taille, et le quota de
+dépôt par personne (429), sont `capabilities/copilot/pieces.py`.
 
 La table de routes reste assemblée dans `api.routes.make_routes` ; ce module ne porte
 que le handler.
@@ -89,8 +92,9 @@ piece_depot.contrat = ContratDeRoute(
         "partie `file`. Images png, jpeg, gif, webp (5 Mo), PDF (20 Mo), texte UTF-8 "
         "text/plain, text/markdown, text/csv, application/json (512 Ko) — le type est "
         "jugé sur les OCTETS et doit être celui que le fichier annonce. Rend `{id, name, "
-        "media_type, size}` ; le tour le nomme dans `attachments`. Ce qui est accepté : "
-        "`GET` sur le même chemin."),
+        "media_type, size}` ; le tour le nomme dans `attachments`. 200 Mo au plus par "
+        "personne sur 24 heures glissantes. Ce qui est accepté : `GET` sur le même "
+        "chemin."),
     Output=PieceDeposee,
     errors=(
         DeclaredError(403, "api_token_forbidden",
@@ -100,7 +104,11 @@ piece_depot.contrat = ContratDeRoute(
         DeclaredError(403, "copilot_view_as", "the request views as someone else"),
         DeclaredError(400, "invalid_multipart", "le corps n'est pas un multipart lisible"),
         DeclaredError(400, "missing_file", "aucune partie `file`, ou un fichier vide"),
-        DeclaredError(413, "attachment_too_large", "au-delà de la borne de son type"),
+        DeclaredError(413, "attachment_too_large",
+                      "au-delà de la borne de son type, ou un Content-Length annoncé "
+                      "au-delà de la plus grande"),
+        DeclaredError(429, "attachment_quota_exceeded",
+                      "200 Mo déposés au plus par personne sur 24 heures glissantes"),
         DeclaredError(415, "attachment_type",
                       "type non accepté, ou contenu qui n'est pas le type annoncé"),
     ),

@@ -72,6 +72,28 @@ def test_fichier_vide():
     assert (e.value.status, e.value.code) == (400, "missing_file")
 
 
+def test_depot_refuse_au_dela_du_quota_de_la_personne(monkeypatch):
+    """The bound counts what the person has already deposited PLUS this file: exactly at
+    the bound passes, one byte over is refused before anything is stored."""
+    lus, ecrits = [], []
+
+    def volume(sub, heures):
+        lus.append((sub, heures))
+        return pieces.QUOTA_DEPOT - len(PNG)
+    monkeypatch.setattr(pieces.store, "volume_depose", volume)
+    monkeypatch.setattr(pieces.store, "creer_piece", lambda *a: None)
+    monkeypatch.setattr(pieces.media_store, "upload_object",
+                        lambda *a, **k: ecrits.append(a) or "k")
+    assert pieces.deposer("s", 1, PNG, "a.png", "image/png")["size"] == len(PNG)
+    with pytest.raises(pieces.Refus) as e:
+        pieces.deposer("s", 1, PNG + b"\x00", "a.png", "image/png")
+    assert (e.value.status, e.value.code) == (429, "attachment_quota_exceeded")
+    assert "200 MB" in e.value.message and "24 hours" in e.value.message
+    assert len(ecrits) == 1
+    assert lus == [("s", 24), ("s", 24)]
+    assert pieces.QUOTA_DEPOT == 200 * 1024 * 1024
+
+
 def test_nom_affiche_sans_chemin_ni_controle():
     assert pieces.nom_affiche("../../etc/passwd") == "passwd"
     assert pieces.nom_affiche("C:\\Users\\x\\Relevé été.pdf") == "Relevé été.pdf"
@@ -179,6 +201,41 @@ def test_une_url_par_jambe_les_etapes_relisent_la_meme(base):
     deux = pieces.resoudre(h, "s", 1, memo, presigner=p, lire=lambda k: b"")
     assert un[2] == deux[2]
     assert len(base) == 1           # read once per leg
+
+
+def test_l_url_envoyee_au_fournisseur_vit_dix_minutes(base, monkeypatch):
+    """The URL leaves our perimeter: it is signed for 10 minutes, not the instance's
+    default hour — and only this use is shortened."""
+    from oto_mcp import media_store
+    signees = []
+
+    def presign_get(key, *, expiry=None):
+        signees.append((key, expiry))
+        return f"https://stockage.invalid/{key}"
+    monkeypatch.setattr(media_store, "presign_get", presign_get)
+    h = _histoire(marques_courant=("att_img", "att_pdf"))
+    pieces.resoudre(h, "s", 1, {}, lire=lambda k: b"")
+    assert signees == [("k/img", 600), ("k/pdf", 600)]
+    assert pieces._URL_DUREE_S == 600
+
+
+def test_le_memo_resigne_bien_avant_l_echeance(base, monkeypatch):
+    """Reused within the leg for 5 minutes, signed again after: a URL sent always has
+    5 more minutes to live."""
+    assert pieces._URL_FRAICHE_S == 300 <= pieces._URL_DUREE_S // 2
+    horloge = {"t": 1000.0}
+    monkeypatch.setattr(pieces.time, "monotonic", lambda: horloge["t"])
+    h = _histoire(marques_courant=("att_img",))
+    memo, p = {}, _presigner()
+
+    def url():
+        out = pieces.resoudre(h, "s", 1, memo, presigner=p, lire=lambda k: b"")
+        return out[2]["content"][2]["source"]["url"]
+    premiere = url()
+    horloge["t"] += pieces._URL_FRAICHE_S - 1
+    assert url() == premiere
+    horloge["t"] += 2
+    assert url() != premiere
 
 
 def test_piece_d_un_autre_jamais_resolue(base):

@@ -197,6 +197,18 @@ def pieces(ids: list[str], sub: str, org_id: Optional[int]) -> dict[str, dict]:
     return {r["id"]: r for r in rows}
 
 
+def volume_depose(sub: str, heures: int) -> int:
+    """Les octets que `sub` a déposés en pièces jointes ces `heures` dernières heures,
+    toutes orgs confondues (le quota de dépôt, `capabilities/copilot/pieces.py`) ; 0 sans
+    dépôt. La fenêtre glisse : l'index `(created_at)` borne la lecture aux dépôts récents."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(size), 0) AS octets FROM copilot_attachments "
+            "WHERE sub = %s AND created_at > NOW() - make_interval(hours => %s)",
+            (sub, int(heures))).fetchone()
+    return int(row["octets"])
+
+
 def pieces_purgeables(jours: int, limite: int = 5000) -> list[dict]:
     """Les pièces déposées il y a plus de `jours` (leur clé, pour retirer l'objet)."""
     with _connect() as conn:

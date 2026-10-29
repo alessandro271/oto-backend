@@ -18,9 +18,9 @@ for an image (5 MB), 20 MB for a PDF, 512 KB for text, inlined into the request.
 file, before the person's text. Each model request resolves them on a COPY of the
 history (`resoudre`): in the CURRENT turn (the latest message carrying the person's
 words, and so every step of that turn) a marker becomes a label and the real content —
-an image or a PDF by a fresh presigned URL that the provider fetches, a text file inlined
-as a text document. In an EARLIER turn it becomes one line saying a file was shown, so a
-file is not billed again on every later turn. A marker never reaches the API unresolved.
+an image or a PDF by a fresh presigned URL that the provider fetches (valid 10 minutes,
+`_URL_DUREE_S`), a text file inlined as a text document. In an EARLIER turn it becomes
+one line saying a file was shown, so a file is not billed again on every later turn. A marker never reaches the API unresolved.
 
 The URLs are presigned ONCE per leg (`memo`, the leg's own, never stored): a fresh URL
 on each step would change the message, and the prompt cache that rereads the history
@@ -61,6 +61,14 @@ TYPES: dict[str, int] = {
 }
 #: The largest file the upload reads before judging it.
 MAX_DEPOT = max(TYPES.values())
+#: What one person may deposit in all, over a sliding window of `FENETRE_QUOTA_H` hours,
+#: whatever the org: the files are stored (30 days) and each one can be sent to the
+#: model, so an unbounded upload is storage and spend paid by the instance. Summed on
+#: the rows (`copilot_attachments.size`), not in memory: blue, green and preprod share
+#: the base. Two uploads at the same instant may pass it by one file — a bound, not an
+#: accounting.
+QUOTA_DEPOT = 200 * 1024 * 1024
+FENETRE_QUOTA_H = 24
 
 _EXTENSIONS = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp", ".pdf": PDF,
@@ -70,9 +78,15 @@ _EXTENSIONS = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 _ALIAS = {"image/jpg": "image/jpeg", "image/pjpeg": "image/jpeg",
           "text/x-markdown": "text/markdown"}
 _NOM_MAX = 200
-#: A presigned URL is reused within a leg for this long, then signed again (the
-#: signature lasts `media_store.presign_expiry()`, 1 h by default).
-_URL_FRAICHE_S = 1800
+#: How long a presigned URL sent to the model's provider stays valid. Shorter than the
+#: instance's default (`media_store.presign_expiry()`, 1 h): the URL leaves our perimeter
+#: (the provider fetches it, and may log the request that carries it), and whoever holds
+#: it reads the file without any identity. The provider fetches it within the request;
+#: ten minutes is ample for that and bounds a leaked URL's use.
+_URL_DUREE_S = 600
+#: A presigned URL is reused within a leg for this long, then signed again: well before
+#: it expires (`_URL_DUREE_S`), so a URL sent is always valid for 5 more minutes.
+_URL_FRAICHE_S = 300
 
 
 class Refus(Exception):
@@ -162,9 +176,14 @@ def juger(data: bytes, declare: Optional[str], nom: str) -> str:
 
 def deposer(sub: str, org_id: Optional[int], data: bytes, filename: Optional[str],
             declare: Optional[str]) -> dict:
-    """Judges, stores and records one file. Sync (storage and base)."""
+    """Judges, stores and records one file, within the person's quota (429
+    `attachment_quota_exceeded`, `QUOTA_DEPOT`). Sync (storage and base)."""
     nom = nom_affiche(filename)
     media_type = juger(data, declare, nom)
+    if store.volume_depose(sub, FENETRE_QUOTA_H) + len(data) > QUOTA_DEPOT:
+        raise Refus(429, "attachment_quota_exceeded",
+                    f"Attachment quota reached: {QUOTA_DEPOT // (1024 * 1024)} MB at most "
+                    f"per person over {FENETRE_QUOTA_H} hours. Try again later.")
     # One object per upload (`propre_au_depot`): purging one person's file must never
     # remove another's identical one.
     cle = media_store.upload_object(PREFIXE, sub, data, media_type, nom,
@@ -236,6 +255,10 @@ def _contenu(ligne: dict, presigner: Callable[[str], str],
                         "title": nom}]
 
 
+def _presigner_court(cle: str) -> str:
+    return media_store.presign_get(cle, expiry=_URL_DUREE_S)
+
+
 def _lire_texte(cle: str) -> bytes:
     return media_store.fetch_object(cle, max_bytes=MAX_TEXTE)
 
@@ -245,7 +268,7 @@ def resoudre(messages: list[dict], sub: str, org_id: Optional[int], memo: dict, 
              lire: Optional[Callable[[str], bytes]] = None) -> list[dict]:
     """The messages as sent to the model: every marker resolved (module docstring).
     A COPY when there is any marker; the stored history is never touched. Sync."""
-    presigner = presigner or media_store.presign_get
+    presigner = presigner or _presigner_court
     lire = lire or _lire_texte
     if not any(isinstance(m.get("content"), list) and any(
             isinstance(b, dict) and b.get("type") == MARQUE for b in m["content"])

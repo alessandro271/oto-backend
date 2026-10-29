@@ -401,12 +401,14 @@ nom = "copilot"
 # The in-app agent (Ask): its capability, its store, its tables.
 sources = [
   "oto_mcp/capabilities/copilot/**",
+  "oto_mcp/api/copilot.py",
   "oto_mcp/db/copilot.py",
   "oto_mcp/db/schema/copilot.py",
 ]
 tests = [
   "tests/capabilities/copilot/test_*.py",
   "tests/test_migration_20261026_copilot.py",
+  "tests/test_migration_20261029_copilot_pieces.py",
 ]
 
 [[volet]]

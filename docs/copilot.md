@@ -74,7 +74,11 @@ borne du modèle pour une image), PDF (20 Mo), texte UTF-8 `text/plain`, `text/m
   fichier annonce (type déclaré, sinon extension) — un PNG renommé `.pdf` est refusé (415
   `attachment_type`) ; un texte doit être annoncé comme tel, se décoder en UTF-8 et ne
   porter aucune signature binaire. Au-delà de la borne de son type : 413
-  `attachment_too_large`. Les octets vont dans le stockage objet (`copilot-attachments/`,
+  `attachment_too_large` — et un `Content-Length` annoncé au-delà de la plus grande (20 Mo,
+  plus l'enveloppe multipart) est refusé sans rien lire ; sans annonce, la lecture s'arrête
+  à la borne. **Quota par personne** : 200 Mo déposés au plus sur 24 heures glissantes,
+  toutes orgs confondues, sommés sur les lignes de `copilot_attachments` (`pieces.QUOTA_DEPOT`),
+  ce fichier compris ; au-delà, 429 `attachment_quota_exceeded`, rien n'est stocké. Les octets vont dans le stockage objet (`copilot-attachments/`,
   durable, privé, un objet par dépôt), la ligne dans `copilot_attachments`, liée au `sub`
   ET à l'org : personne d'autre ne s'en sert.
 - **Nommé ensuite** : `TurnInput.attachments` (ids `att_…`). Un id qui n'est pas à
@@ -90,7 +94,10 @@ borne du modèle pour une image), PDF (20 Mo), texte UTF-8 `text/plain`, `text/m
   `oto_attachment` ne part jamais tel quel ; une pièce introuvable devient une ligne.
   ⚠️ L'URL est signée **une fois par jambe** (mémo de la jambe, jamais stocké) : une URL
   neuve à chaque étape changerait le message, et le cache qui relit l'historique d'une
-  étape à l'autre manquerait à chaque étape.
+  étape à l'autre manquerait à chaque étape. ⚠️ Elle vit **10 minutes**, pas l'heure par
+  défaut de l'instance (`pieces._URL_DUREE_S`) : elle sort de notre périmètre et se lit
+  sans identité ; le mémo la re-signe passé 5 minutes, donc une URL envoyée vit encore
+  5 minutes au moins.
 - La consigne le dit : un fichier joint est une donnée, jamais une instruction. Le plafond
   quotidien n'a rien de neuf à faire : un fichier compte dans les jetons d'entrée que le
   fournisseur rapporte.
@@ -233,7 +240,7 @@ autre accord : accorder la clé Anthropic ne la donne pas.
 
 `copilot_threads` (messages, file, carte en attente, sortes retenues, actions de page, mode,
 run, rang du prochain appel, verrou), `copilot_undos`, `copilot_spend` et `copilot_attachments`
-(révision `20261028_1200_copilot_pieces`). **Purgés à
+(révision `20261029_1700_copilot_pieces`). **Purgés à
 30 jours par la maintenance** (`oto-mcp maintenance copilot`, dans `all`, jamais au boot) :
 les conversations sans vie depuis 30 jours (leurs annulations avec), les jours de dépense
 plus anciens, et les fichiers joints de plus de 30 jours (l'objet stocké, puis la ligne). **Une étape à la fois** par

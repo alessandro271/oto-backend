@@ -1,4 +1,4 @@
-"""La révision `20261028_1200_copilot_pieces` pose la table des fichiers joints de l'agent intégré.
+"""La révision `20261029_1700_copilot_pieces` pose la table des fichiers joints de l'agent intégré.
 
 Une table NEUVE que le démarrage pose aussi (même fragment) : la révision doit la
 poser sur une base d'AVANT, ne rien faire sur une base que le démarrage a déjà servie,
@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 RACINE = Path(__file__).resolve().parent.parent
-_PRECEDENTE = "20261027_1800_row_comments"
-_REVISION = "20261028_1200_copilot_pieces"
+_PRECEDENTE = "20261029_1200_pret_du_forfait"
+_REVISION = "20261029_1700_copilot_pieces"
 _TABLES = ["copilot_attachments"]
 
 
