@@ -678,6 +678,15 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `20261023_1033_trigger_updated_at` : ordre indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_UPDATED_AT):
         conn.execute(runner_triggers.DDL_COLONNE_UPDATED_AT)
+    # L'auteur de la dernière retouche d'un agent et le prêt de son forfait — les mêmes
+    # que pose la révision `20261029_1200_pret_du_forfait` : ordre indifférent entre
+    # elles. ⚠️ Littéraux, jamais une constante : `updated_by` est une colonne-compte, et
+    # l'inventaire de la fusion (`test_migrate_sub_inventory.py`) lit CE fichier.
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_UPDATED_BY):
+        conn.execute("ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS updated_by TEXT")
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_PRET_DU_FORFAIT):
+        conn.execute(
+            "ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS forfait_prete_model TEXT")
     # L'épisode de blocage annoncé d'un agent — la même que pose la révision
     # `20261023_1040_echec_annonce` : ordre indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", alertes_agents.COLONNE_ECHEC_ANNONCE):

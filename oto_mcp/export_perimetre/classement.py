@@ -236,7 +236,7 @@ CLASSEMENT: dict[str, Table] = {
     "runner_jobs": possedee(ParOrg(), comptes=("sub",)),
     "runner_fleets": possedee(ParOrg(), comptes=("sub",)),
     "runner_triggers": possedee(ParOrg(), secrets=("hook_signing_secret_enc",),
-                                comptes=("sub",)),
+                                comptes=("sub", "updated_by")),
     "runner_hook_deliveries": possedee(ParOrg()),
     "runner_trigger_links": possedee(ParOrg(), comptes=("created_by",)),
     "agent_episodes": exclue(ParOrg(), "état d'exploitation de la PLATEFORME sur les agents "

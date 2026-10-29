@@ -495,6 +495,10 @@ _SUB_COLUMNS = [
     # rattachées à un identifiant mort, donc invisibles au compte fusionné : déroulés
     # et activité perdus de vue, déclencheurs orphelins) :
     ("runs", "sub"), ("project_activity", "sub"), ("runner_triggers", "sub"),
+    # `runner_triggers.updated_by` = l'AUTEUR de la dernière retouche d'un agent,
+    # colonne d'auteur hors PK, sans FK ni unicité : UPDATE nu. Non repointée, le
+    # propriétaire lirait « modifié par » un compte disparu.
+    ("runner_triggers", "updated_by"),
     # `runner_fleets.sub` = qui a DÉCLARÉ le passage (R4). Même raison que les
     # déclencheurs : une flotte rattachée à un identifiant mort devient invisible au
     # compte fusionné, et son auteur n'est plus lisible dans l'audit d'un passage.
