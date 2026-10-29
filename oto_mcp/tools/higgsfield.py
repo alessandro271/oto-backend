@@ -13,7 +13,9 @@ key resolved per call via `access.resolve_api_key("higgsfield")`: the customer's
 
 **The price guard.** `create_generation` REQUIRES `max_usd`. It estimates first (free), reads a
 dollar amount with `oto.tools.higgsfield.price_of`, and submits only when that amount
-is known and at most `max_usd`; otherwise nothing is sent. Higgsfield answers some
+is known and at most `max_usd`; otherwise nothing is sent. `max_usd` itself is bounded by
+the instance (`OTO_HIGGSFIELD_MAX_USD_PAR_APPEL`): above it, refused before Higgsfield is
+called (`max_usd_above_cap`). Higgsfield answers some
 estimates with a sentence of per-second prices instead of an amount: the amount read
 from it is flagged `approximate`.
 
@@ -30,6 +32,7 @@ what makes them verifiable by the version-skew probe
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Literal, Optional
 
 from fastmcp import FastMCP
@@ -50,6 +53,17 @@ _ACT_OPS = ("create_generation", "cancel", "delete", "create_upload")
 _DROP_MODELS = frozenset({"fnf_job_set_type", "is_workflow", "input_schema", "base_credits"})
 _HINT = "full=true returns the raw records."
 
+# The most ONE generation may be allowed to cost on this instance, whatever `max_usd`
+# says: a slip (`max_usd=500` meant as 5) or an amount dictated by a text the agent read
+# must not empty a prepaid balance in one call. A choice of the INSTANCE, read at each
+# call: unset = 5 dollars, the order of one long high-resolution clip — an instance that
+# needs dearer jobs raises it on purpose. Set but not a positive amount RAISES, never the
+# default in silence: a typo would lift a ceiling someone meant to lower (same rule as
+# `OTO_COPILOT_DAILY_CAP_USD`).
+ENV_MAX_USD = "OTO_HIGGSFIELD_MAX_USD_PAR_APPEL"
+MAX_USD_DEFAULT = "5"
+MAX_USD_ABOVE_CAP = "max_usd_above_cap"
+
 
 class HiggsfieldASec(RuntimeError):
     """The Higgsfield balance cannot pay for the job. Higgsfield says so with a 403,
@@ -61,6 +75,19 @@ class HiggsfieldASec(RuntimeError):
 
 def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
+
+
+def max_usd_cap() -> float:
+    """The instance's ceiling on `max_usd`, in US dollars, read at each call."""
+    raw = os.environ.get(ENV_MAX_USD, MAX_USD_DEFAULT).strip()
+    try:
+        cap = float(raw)
+    except ValueError:
+        raise RuntimeError(f"higgsfield: {ENV_MAX_USD}={raw!r} is not an amount in "
+                           "US dollars") from None
+    if not cap > 0 or cap == float("inf"):
+        raise RuntimeError(f"higgsfield: {ENV_MAX_USD}={raw!r} must be a positive amount")
+    return cap
 
 
 def _detail(e) -> str:
@@ -293,14 +320,15 @@ def register(mcp: FastMCP) -> None:
           then pass `public_url` in `params` (`image_url`, `video_url`…). A file that is
           already at a public https address needs no upload.
 
-        Output files are public addresses deleted after seven days (`expires_after`
-        shortens it, 3600 seconds or more): download them right away.
+        Output links (images, videos) are the provider's PUBLIC addresses, readable by
+        anyone holding the link for seven days (`expires_after` shortens it, 3600 seconds
+        or more): download them right away, never paste them anywhere public.
 
         Args:
             op: What to do (see above).
             model: `create_generation`: the model slug from `higgsfield` op='list_models'.
             params: `create_generation`: the model's own parameters, e.g. {"prompt": "…", "image_url": "https://…", "duration": 5, "resolution": "720p"}.
-            max_usd: `create_generation`: the most this job may cost, in US dollars; above it, or when the price cannot be read, nothing is sent.
+            max_usd: `create_generation`: the most this job may cost, in US dollars, at most the instance's ceiling (refused above it); above `max_usd`, or when the price cannot be read, nothing is sent.
             request_id: `cancel`, `delete`: the job's id.
             content_type: `create_upload`: the input file's type.
             idempotency_key: `create_generation`: your own key (1-255 visible ASCII characters) to make a repeat safe; a fresh one otherwise.
@@ -315,6 +343,11 @@ def register(mcp: FastMCP) -> None:
             cap = _need(max_usd, "max_usd", op)
             if isinstance(cap, bool) or not isinstance(cap, (int, float)) or cap <= 0:
                 raise _bad("`max_usd` must be a positive amount in US dollars. Nothing was sent.")
+            ceiling = max_usd_cap()
+            if cap > ceiling:
+                raise _bad(f"{MAX_USD_ABOVE_CAP}: max_usd ${cap:.2f} is above this instance's "
+                           f"ceiling of ${ceiling:.2f} per generation. Nothing was sent; split "
+                           "the work into cheaper jobs, or ask the instance's operator.")
             price = _priced(m, p)
             usd = price["usd"]
             if usd is None:

@@ -7,6 +7,8 @@ join to the client:
   passed as is;
 - the PRICE GUARD: `create_generation` estimates first and submits only a job whose price is
   read and at most `max_usd`; an unreadable price or one above the cap sends nothing;
+- the instance's CEILING on `max_usd` (`OTO_HIGGSFIELD_MAX_USD_PAR_APPEL`): above it,
+  `max_usd_above_cap` before Higgsfield is called; an unreadable setting raises;
 - an EMPTY balance (403 on a generation) told apart from a refused key, by a 402 in
   the chain; a refused key keeps its 401;
 - intent refusals (an argument of another op, a missing required argument);
@@ -42,6 +44,7 @@ _MODELS = {"total": 3, "items": [
 
 @pytest.fixture
 def client(monkeypatch):
+    monkeypatch.delenv("OTO_HIGGSFIELD_MAX_USD_PAR_APPEL", raising=False)
     inst, built = MagicMock(), []
 
     def fabrique(**kw):
@@ -201,7 +204,7 @@ def test_generate_with_an_unreadable_price_sends_nothing(client, estimate, param
     client.estimate.return_value = estimate
     with pytest.raises(McpError, match=f"cannot be read .*{needle}.*not sent"):
         _tool("higgsfield_act")(op="create_generation", model="bytedance/seedance-2.5/video-edit",
-                                params=params, max_usd=100)
+                                params=params, max_usd=5)
     client.generate.assert_not_called()
 
 
@@ -210,6 +213,39 @@ def test_generate_needs_a_positive_cap(client, max_usd):
     with pytest.raises(McpError, match="max_usd"):
         _tool("higgsfield_act")(op="create_generation", model="z-image/turbo", params={"prompt": "x"},
                                 max_usd=max_usd)
+    client.estimate.assert_not_called()
+    client.generate.assert_not_called()
+
+
+@pytest.mark.parametrize("setting,max_usd", [(None, 5.01), (None, 500), ("2", 2.5)])
+def test_max_usd_above_the_instance_ceiling_is_refused_before_any_call(
+        client, monkeypatch, setting, max_usd):
+    from oto_mcp.tools.higgsfield import MAX_USD_ABOVE_CAP
+    if setting is not None:
+        monkeypatch.setenv("OTO_HIGGSFIELD_MAX_USD_PAR_APPEL", setting)
+    with pytest.raises(McpError) as e:
+        _tool("higgsfield_act")(op="create_generation", model="z-image/turbo",
+                                params={"prompt": "x"}, max_usd=max_usd)
+    assert e.value.error.message.startswith(f"{MAX_USD_ABOVE_CAP}:")
+    client.estimate.assert_not_called()
+    client.generate.assert_not_called()
+
+
+def test_a_raised_ceiling_lets_a_dearer_job_through(client, monkeypatch):
+    monkeypatch.setenv("OTO_HIGGSFIELD_MAX_USD_PAR_APPEL", "20")
+    client.estimate.return_value = {"usd": "12.5"}
+    client.generate.return_value = {"status": "queued", "request_id": _RID}
+    out = _tool("higgsfield_act")(op="create_generation", model="z-image/turbo",
+                                  params={"prompt": "x"}, max_usd=15)
+    assert out["request_id"] == _RID
+
+
+@pytest.mark.parametrize("setting", ["", "cinq", "0", "-1", "nan", "inf"])
+def test_an_unreadable_ceiling_raises_and_never_falls_back(client, monkeypatch, setting):
+    monkeypatch.setenv("OTO_HIGGSFIELD_MAX_USD_PAR_APPEL", setting)
+    with pytest.raises(RuntimeError, match="OTO_HIGGSFIELD_MAX_USD_PAR_APPEL"):
+        _tool("higgsfield_act")(op="create_generation", model="z-image/turbo",
+                                params={"prompt": "x"}, max_usd=1)
     client.estimate.assert_not_called()
     client.generate.assert_not_called()
 

@@ -474,6 +474,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "Relais d'upload Pennylane (cabinet) simultanés par processus ; au-delà, "
              "503 `relay_busy` réessayable.",
              ("oto_mcp/tools/pennylane_firm_relais.py:55",)),
+    Variable("OTO_HIGGSFIELD_MAX_USD_PAR_APPEL", Classe.REGLAGE, "5",
+             "Connecteur Higgsfield : plafond, en dollars, du `max_usd` qu'une génération "
+             "peut déclarer (`higgsfield_act` op=create_generation). Au-dessus : refus "
+             "nommé `max_usd_above_cap`, avant tout appel à Higgsfield. Lu à chaque "
+             "appel ; une valeur qui n'est pas un montant positif lève (jamais le défaut "
+             "en silence).",
+             ("oto_mcp/tools/higgsfield.py:82",)),
     Variable("MIN_TOKEN_IAT", Classe.REGLAGE, "0",
              "Horodatage Unix plancher : un jeton émis avant est refusé (révocation "
              "globale par date).",
