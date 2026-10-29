@@ -505,11 +505,11 @@ def test_le_releve_agrege_somme_ce_que_la_lentille_detaille(journal):
     assert (r["since_effectif"], r["until_effectif"]) == (journal["since"], journal["until"])
     assert r["tools"] == [
         {"tool": "fullenrich_enrich_linkedin", "key_mode": None, "calls": 1, "quantity": 1,
-         "jobs": 0},
+         "jobs": 0, "provider_credits": None},
         {"tool": "linkedin_aiark_search", "key_mode": "org", "calls": 3, "quantity": 3,
-         "jobs": 0},
+         "jobs": 0, "provider_credits": None},
         {"tool": "linkedin_aiark_search", "key_mode": "platform", "calls": 4,
-         "quantity": 46, "jobs": 0},
+         "quantity": 46, "jobs": 0, "provider_credits": None},
     ]
     detail = db.list_billable_calls_for_org(journal["org"], "linkedin_aiark_search", **fenetre)
     assert detail["total"] == sum(x["calls"] for x in r["tools"]

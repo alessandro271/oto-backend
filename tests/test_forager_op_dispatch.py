@@ -513,7 +513,7 @@ def test_a_miss_traces_zero_phones(client, trace, platform_usage):
     client.lookup_person_phone_numbers.return_value = []
     _tool("forager_person")(op="phone_numbers", linkedin_public_identifier="someone")
     assert trace == {"found_work_emails": 0, "found_personal_emails": 0,
-                     "found_phones": 0, "quantity": 0}
+                     "found_phones": 0, "quantity": 0, "provider_credits": 0}
     assert platform_usage == [], "own key: nothing debited on the platform counters"
 
 
