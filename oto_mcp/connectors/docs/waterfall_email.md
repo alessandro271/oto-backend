@@ -1,7 +1,7 @@
 ## prerequisite — connect the providers you want it to try
 
 this connector has no key of its own: each step calls another connector's tool, with that connector's key.
-- connect the providers you want in the cascade on their own cards, and have them activated for your org — hunter, apollo, ai ark (`aiark`), kaspr, lusha, dropcontact, lemlist, fullenrich, forager
+- connect the providers you want in the cascade on their own cards, and have them activated for your org — hunter, apollo, ai ark (`aiark`), kaspr, lusha, dropcontact, lemlist, fullenrich, forager, pipecorn
 - with the default order, providers you hold your **own** key for (and the free steps) run first, the shared platform keys next; an order you write is kept as written
 - a provider with no usable key is skipped without being called
 - each step is billed by its provider exactly as a direct call would be — the waterfall adds no cost of its own
@@ -17,7 +17,7 @@ set **steps** on this card: the provider keys, comma-separated, in the order you
 ## usage — a person's professional email
 
 one person per call, stopping at the first provider that returns an email.
-- `waterfall_email` — default order: hunter (name + domain) → aiark → apollo → kaspr → lusha → forager (your own key, or the shared one where this instance opens email lookups) → dropcontact → lemlist → fullenrich; an asynchronous step still `pending` ends the cascade
+- `waterfall_email` — default order: hunter (name + domain) → aiark → apollo → kaspr → lusha → forager (your own key, or the shared one where this instance opens email lookups) → pipecorn (after the synchronous steps; its own cascade of providers, from a linkedin url, or name + domain or company; waited up to 20 s within the call's time budget, then the next providers are tried; billed when it finds an email, even if another provider found first) → dropcontact → lemlist → fullenrich; an asynchronous step still `pending` ends the cascade
 - dropcontact, lemlist and fullenrich answer asynchronously: each step waits up to ~25 s, otherwise it is `pending` and the response gives the collect call to make later (fullenrich usually takes 30 s to 4 min)
 - the email is not verified here — chain `zerobounce_verify_email` or `hunter_email_verify` if you need it
 - `dry_run=true` shows the plan (order, key per step, arguments) without spending anything

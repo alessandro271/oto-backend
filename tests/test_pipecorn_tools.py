@@ -13,8 +13,13 @@ ce qui est PROPRE à ce module :
   trouvaille par sorte demandée ; sur une clé refacturée, la relève finie règle chaque
   sorte à ce qu'elle a trouvé, une relève échouée libère ; sur la clé du client, rien ;
 - l'email personnel d'un tiers est refusé sur toute clé, refus nommé, AVANT toute
-  résolution de clé ;
-- la clé partagée ne sert QUE le téléphone, refusé AVANT toute dépense sinon ;
+  résolution de clé ; les recherches synchrones (profil, société, technologies, offres)
+  rendent leur réponse SANS aucun champ d'email ni de téléphone ;
+- la clé partagée sert le téléphone et l'email pro (au budget d'unités) ; le solde, et
+  les recherches synchrones (hors budget) sur toute clé qui n'est pas celle de
+  l'appelant, sont refusés AVANT tout envoi ;
+- une recherche synchrone trace `quantity` 1 ou 0 (jamais absent) et ses crédits
+  Pipecorn (`provider_credits`) ; un 404 est un non-trouvé, rien de facturé ;
 - une réponse illisible est un refus nommé, jamais une clé refusée ;
 - la traduction des refus Pipecorn (402 sur la clé partagée ≠ sur la sienne) et la sonde.
 
@@ -99,6 +104,11 @@ def client():
         cls.return_value.get_enrichment.return_value = FINI
         cls.return_value.get_credits.return_value = {"credits": {"enrichment": 2500}}
         cls.return_value.get_account_info.return_value = {"account": {"plan": "growth"}}
+        cls.return_value.enrich_person.return_value = {"full_name": "Jane Doe", "positions": []}
+        cls.return_value.enrich_account.return_value = {"company_name": "Acme",
+                                                        "domain": "acme.com"}
+        cls.return_value.company_stack.return_value = {"technologies": ["HubSpot"]}
+        cls.return_value.company_hiring.return_value = {"total_jobs": 0, "jobs": []}
         yield cls
 
 
@@ -168,18 +178,22 @@ def test_l_email_personnel_d_un_tiers_est_refuse_sur_toute_cle(key, trace, clien
     assert trace == {}
 
 
-@pytest.mark.parametrize("kwargs", [
-    {"find": ["email"], "linkedin_url": URL},
-    {"find": ["phone", "email"], "linkedin_url": URL},
-    {"op": "credits"},
-    {"op": "account"},
-])
-def test_cle_partagee_refuse_tout_sauf_le_telephone_avant_depense(key, trace, client, kwargs):
+@pytest.mark.parametrize("find", [["email"], ["phone", "email"]])
+def test_cle_partagee_sert_le_telephone_et_l_email_pro(key, trace, client, find):
+    key["mode"] = "platform"
+    out = _fn()(find=find, linkedin_url=URL)
+    assert key["check_usage"] is True
+    assert client.return_value.submit_enrichment.call_args.args == (find,)
+    assert out["find"] == find and trace == {"quantity": 0, "units": 1}
+
+
+@pytest.mark.parametrize("kwargs", [{"op": "credits"}, {"op": "account"}])
+def test_cle_partagee_refuse_le_solde(key, trace, client, kwargs):
     key["mode"] = "platform"
     with pytest.raises(McpError, match="needs your own Pipecorn key"):
         _fn()(**kwargs)
-    client.return_value.submit_enrichment.assert_not_called()
     client.return_value.get_credits.assert_not_called()
+    client.return_value.get_account_info.assert_not_called()
     assert trace == {}
 
 
@@ -382,3 +396,180 @@ def test_sonde_une_reponse_illisible_est_une_panne(client):
     with pytest.raises(RuntimeError, match="unreadable answer") as e:
         pipecorn._verify({"key": KEY})
     assert not isinstance(e.value, verify.NonAutorise)
+
+
+# --- person / company / stack / jobs : synchrones, sur la clé de l'appelant ------------
+
+def _lookup_args(op):
+    return {"linkedin_url": URL} if op == "person" else {"domain": "acme.com"}
+
+
+@pytest.mark.parametrize("op, method, answer, credits", [
+    ("person", "enrich_person", {"full_name": "Jane Doe", "positions": []}, 1),
+    ("company", "enrich_account", {"company_name": "Acme", "domain": "acme.com"}, 1),
+    ("stack", "company_stack", {"technologies": ["HubSpot"]}, 3),
+    ("jobs", "company_hiring", {"total_jobs": 2, "jobs": [{"job_title": "AE"}] * 2}, 2),
+])
+def test_une_recherche_synchrone_trace_un_trouve_et_ses_credits(key, trace, client, op,
+                                                                method, answer, credits):
+    getattr(client.return_value, method).return_value = answer
+    out = _fn()(op=op, **_lookup_args(op))
+    assert key["check_usage"] is False
+    assert trace == {"quantity": 1, "provider_credits": credits}
+    assert out["found"] is True and out["pipecorn_credits"] == credits
+
+
+@pytest.mark.parametrize("op, method, answer, credits", [
+    ("person", "enrich_person", {"positions": []}, 0),
+    ("company", "enrich_account", {}, 0),
+    # Facturée à la requête, trouvée ou non.
+    ("stack", "company_stack", {"technologies": []}, 3),
+    ("jobs", "company_hiring", {"total_jobs": 0, "jobs": []}, 0),
+])
+def test_une_recherche_synchrone_vide_trace_un_zero(key, trace, client, op, method, answer,
+                                                    credits):
+    getattr(client.return_value, method).return_value = answer
+    out = _fn()(op=op, **_lookup_args(op))
+    assert trace == {"quantity": 0, "provider_credits": credits}
+    assert out["found"] is False
+
+
+@pytest.mark.parametrize("op, method", [
+    ("person", "enrich_person"), ("company", "enrich_account"),
+    ("stack", "company_stack"), ("jobs", "company_hiring")])
+def test_un_404_est_un_non_trouve_qui_ne_coute_rien(key, trace, client, op, method):
+    getattr(client.return_value, method).side_effect = _upstream(404, {"error": "not found"})
+    out = _fn()(op=op, **_lookup_args(op))
+    assert out == {"found": False, "pipecorn_credits": 0}
+    assert trace == {"quantity": 0, "provider_credits": 0}
+
+
+@pytest.mark.parametrize("mode", ["platform", "tenant"])
+@pytest.mark.parametrize("op, method", [
+    ("person", "enrich_person"), ("company", "enrich_account"),
+    ("stack", "company_stack"), ("jobs", "company_hiring")])
+def test_une_recherche_synchrone_hors_de_la_cle_de_l_appelant_est_refusee(key, trace, client,
+                                                                          mode, op, method):
+    """Hors du budget d'unités : refusée AVANT tout envoi sur une clé partagée."""
+    key["mode"] = mode
+    with pytest.raises(McpError, match="needs your own Pipecorn key") as e:
+        _fn()(op=op, **_lookup_args(op))
+    assert "credit budget" in str(e.value)
+    getattr(client.return_value, method).assert_not_called()
+    assert trace == {}
+
+
+def test_aucun_contact_ne_sort_d_une_recherche_synchrone(key, trace, client):
+    """Un profil qui porterait un email personnel, un téléphone, ou une équipe d'offre qui
+    en porterait : retirés de la sortie, l'email personnel d'un tiers d'abord."""
+    client.return_value.enrich_person.return_value = {
+        "full_name": "Jane Doe", "personal_email": "jane@example.test",
+        "personal_emails": ["jane@example.test"], "email": "jane@acme.example",
+        "mobile_phone": "+33600000000",
+        "positions": [{"title": "VP Sales", "current": True, "work_email": "j@acme.example"}]}
+    out = _fn()(op="person", linkedin_url=URL)
+    assert out == {"full_name": "Jane Doe", "positions": [{"title": "VP Sales",
+                                                           "current": True}],
+                   "found": True, "pipecorn_credits": 1}
+    client.return_value.company_hiring.return_value = {"jobs": [{
+        "job_title": "AE", "hiring_team": [{"name": "John Roe", "email": "john@acme.example",
+                                            "phone": "+15550000000"}]}]}
+    out = _fn()(op="jobs", domain="acme.com")
+    assert out["jobs"] == [{"job_title": "AE", "hiring_team": [{"name": "John Roe"}]}]
+    client.return_value.enrich_account.return_value = {"company_name": "Acme",
+                                                       "phone": "+33100000000",
+                                                       "emails": ["contact@acme.example"]}
+    assert _fn()(op="company", domain="acme.com") == {
+        "company_name": "Acme", "found": True, "pipecorn_credits": 1}
+
+
+def test_les_offres_passent_leurs_filtres(key, trace, client):
+    _fn()(op="jobs", company_name="Acme", posted_within_days=90, limit=10,
+          job_title_keywords=["sales"], excluded_job_title_keywords=["intern"],
+          job_country_codes=["FR"])
+    kw = client.return_value.company_hiring.call_args.kwargs
+    assert kw["name"] == "Acme" and kw["posted_within_days"] == 90 and kw["limit"] == 10
+    assert kw["job_title_keywords"] == ["sales"] and kw["job_country_codes"] == ["FR"]
+    assert kw["excluded_job_title_keywords"] == ["intern"]
+
+
+def test_la_societe_par_sa_page_linkedin_et_son_pays(key, trace, client):
+    _fn()(op="company", company_name="Acme", country_code="FR",
+          company_linkedin_url="https://www.linkedin.com/company/acme/")
+    kw = client.return_value.enrich_account.call_args.kwargs
+    assert kw == {"domain": None, "name": "Acme",
+                  "linkedin_url": "https://www.linkedin.com/company/acme/",
+                  "country_code": "FR", "timeout": (10, 60)}
+
+
+@pytest.mark.parametrize("kwargs, name", [
+    ({"op": "company", "domain": "acme.com", "limit": 5}, "limit"),
+    ({"op": "person", "linkedin_url": URL, "domain": "acme.com"}, "domain"),
+    ({"op": "stack", "domain": "acme.com", "country_code": "FR"}, "country_code"),
+    ({"find": ["phone"], "linkedin_url": URL, "company_linkedin_url": URL},
+     "company_linkedin_url"),
+    ({"find": ["phone"], "linkedin_url": URL, "timeout_s": 20}, "timeout_s"),
+    ({"op": "result", "enrichment_id": ID, "timeout_s": 20}, "timeout_s"),
+    ({"op": "credits", "timeout_s": 20}, "timeout_s"),
+])
+def test_un_argument_hors_de_son_op_est_refuse(key, client, kwargs, name):
+    with pytest.raises(McpError, match=f"does not take `{name}`"):
+        _fn()(**kwargs)
+
+
+def test_les_offres_sans_description_par_defaut(key, trace, client):
+    client.return_value.company_hiring.return_value = {
+        "total_jobs": 1, "jobs": [{"job_title": "AE", "description": "long text"}]}
+    out = _fn()(op="jobs", domain="acme.com")
+    assert out["jobs"] == [{"job_title": "AE"}]
+    out = _fn()(op="jobs", domain="acme.com", full_description=True)
+    assert out["jobs"][0]["description"] == "long text"
+
+
+def test_une_entree_de_recherche_manquante_est_un_refus_nomme(key, trace):
+    # Le vrai client : son refus local devient un INVALID_PARAMS, rien n'est envoyé.
+    with pytest.raises(McpError, match="company_name"):
+        _fn()(op="person", firstname="Jane", lastname="Doe")
+    assert trace == {}
+
+
+# --- le délai d'une recherche synchrone ------------------------------------------
+
+@pytest.mark.parametrize("op, method", [
+    ("person", "enrich_person"), ("company", "enrich_account"),
+    ("stack", "company_stack"), ("jobs", "company_hiring")])
+def test_timeout_s_borne_l_attente_du_client(key, trace, client, op, method):
+    """`timeout_s` (le temps qui reste à une cascade) devient `(connexion, lecture)` ;
+    sans lui, le délai propre du client."""
+    from oto.tools.pipecorn.client import HTTP_TIMEOUT
+    _fn()(op=op, **_lookup_args(op), timeout_s=23)
+    assert getattr(client.return_value, method).call_args.kwargs["timeout"] == (10, 23)
+    _fn()(op=op, **_lookup_args(op), timeout_s=4)
+    assert getattr(client.return_value, method).call_args.kwargs["timeout"] == (4, 4)
+    _fn()(op=op, **_lookup_args(op))
+    assert getattr(client.return_value, method).call_args.kwargs["timeout"] == HTTP_TIMEOUT
+
+
+@pytest.mark.parametrize("error", ["ReadTimeout", "ConnectTimeout"])
+@pytest.mark.parametrize("op, method", [
+    ("person", "enrich_person"), ("company", "enrich_account"),
+    ("stack", "company_stack"), ("jobs", "company_hiring")])
+def test_un_depassement_est_un_refus_nomme_jamais_un_succes(key, trace, client, op, method,
+                                                           error):
+    """Envoyée, sans réponse à temps : ni trouvé ni non-trouvé, un refus nommé qui dit
+    que Pipecorn a pu facturer ; rien n'est tracé comme trouvé."""
+    import requests
+    getattr(client.return_value, method).side_effect = getattr(requests.exceptions, error)()
+    with pytest.raises(McpError) as e:
+        _fn()(op=op, **_lookup_args(op), timeout_s=12)
+    assert e.value.error.data["code"] == "pipecorn_timeout"
+    assert "no answer within 12 s" in e.value.error.message
+    assert "may have billed the lookup" in e.value.error.message
+    assert trace == {}
+
+
+@pytest.mark.parametrize("bad", [0, -3, True])
+def test_un_timeout_s_qui_n_est_pas_un_delai_est_refuse(key, client, bad):
+    with pytest.raises(McpError, match="`timeout_s` must be a positive number"):
+        _fn()(op="company", domain="acme.com", timeout_s=bad)
+    client.return_value.enrich_account.assert_not_called()

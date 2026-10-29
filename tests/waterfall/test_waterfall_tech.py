@@ -67,7 +67,9 @@ def test_tech_cherchee_ne_stoppe_que_si_detectee(calls):
     out = _run("waterfall_tech", domain="acme.com", technologies="HubSpot, Spendesk")
     assert out["provider"] == "theirstack" and out["tech"]["source"] == "job_postings"
     assert out["tech"]["matched"] == ["HubSpot", "Spendesk"]
-    assert [a["status"] for a in out["attempts"]] == ["no_match"] * 5 + ["found"]
+    # Pipecorn, the caller's own key only, is skipped before any call on the shared key.
+    assert [a["status"] for a in out["attempts"]] == ["no_match", "skipped"] + \
+        ["no_match"] * 4 + ["found"]
 
     calls["made"].clear()
     out = _run("waterfall_tech", domain="acme.com", technologies=["nextjs"])
@@ -79,7 +81,7 @@ def test_tech_jamais_detectee_rend_un_non_trouve(calls):
     calls["answers"]["apify_run_sync"] = IssueCible(ok=True, result=_APIFY_TECH)
     calls["answers"]["theirstack_companies_search"] = IssueCible(ok=True, result=_THEIRSTACK_TECH)
     out = _run("waterfall_tech", domain="acme.com", technologies=["Shopify"])
-    assert out["found"] is False and len(out["attempts"]) == 6
+    assert out["found"] is False and len(out["attempts"]) == 7
 
 
 def test_tech_par_nom_seulement_theirstack_et_l_homonyme_ecarte(calls):

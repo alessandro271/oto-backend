@@ -3,12 +3,31 @@ each provider's answer is read."""
 from __future__ import annotations
 
 from .etape import Step
-from .fournisseurs import (_DROPCONTACT_COLLECT, _DROPCONTACT_IDS, _FULLENRICH_COLLECT,
-                           _FULLENRICH_IDS, _LEMLIST_COLLECT, _NAMES_AND_DOMAIN,
-                           _PERSON_IDS, _apollo_args, _forager_shared, _dropcontact_args,
-                           _dropcontact_profile, _fullenrich_args, _fullenrich_profile,
-                           _lemlist_args, _lemlist_first, _lusha_contact, _lusha_first)
+from .fournisseurs import (PIPECORN_POLL, _DROPCONTACT_COLLECT, _DROPCONTACT_IDS,
+                           _FULLENRICH_COLLECT, _FULLENRICH_IDS, _LEMLIST_COLLECT,
+                           _NAMES_AND_DOMAIN, _PERSON_IDS, _apollo_args, _forager_shared,
+                           _dropcontact_args, _dropcontact_profile, _fullenrich_args,
+                           _fullenrich_profile, _lemlist_args, _lemlist_first,
+                           _lusha_contact, _lusha_first, _pipecorn_collect)
 from .valeurs import _deep, _email_find, _emails_in, _get, _not_input, _slug
+
+def _pipecorn_email_args(i: dict) -> dict:
+    """By the LinkedIn profile when there is one (enough on its own), else the names at
+    the company — its domain, else its name."""
+    args = {"op": "enrich", "find": ["email"]}
+    if i.get("linkedin_url"):
+        return {**args, "linkedin_url": i["linkedin_url"]}
+    company = ({"domain": i["domain"]} if i.get("domain")
+               else {"company_name": i["company_name"]})
+    return {**args, "firstname": i["first_name"], "lastname": i["last_name"], **company}
+
+
+def _pipecorn_email(res, inputs):
+    if not isinstance(res, dict):
+        return None
+    return _email_find(_not_input(_emails_in(res.get("email")), inputs, "email"),
+                       res.get("email_status"))
+
 
 def _hunter_email(res, inputs):
     data = _get(res, "data") or {}
@@ -77,6 +96,13 @@ def _lemlist_email(res, inputs):
 
 #: Synchronous steps first, by provider cost and yield; the asynchronous ones last (a
 #: `pending` one stops the cascade), the slowest — FullEnrich, 30 s to 4 min — at the end.
+#: Pipecorn opens the asynchronous ones, after every synchronous step: a caller whose
+#: email the first providers find neither waits for it nor pays it on top. One lookup
+#: runs its own cascade of providers and bills only an email found. Not done within its
+#: 20 s, the next providers are tried, and it is read once more at the end if the
+#: budget leaves time — even when another provider found, since Pipecorn bills an email
+#: it finds all the same; past the budget it stays `pending`. The table mode leaves it
+#: out with the other asynchronous steps.
 EMAIL_STEPS: tuple[Step, ...] = (
     Step("hunter", "hunter_email_finder", (_NAMES_AND_DOMAIN,),
          lambda i: {"domain": i["domain"], "first_name": i["first_name"],
@@ -118,6 +144,16 @@ EMAIL_STEPS: tuple[Step, ...] = (
          explains=("Forager's database, from a LinkedIn profile — your own key, or the "
                    "shared one where this instance opens email lookups.")),
     # The asynchronous ones: each may wait up to `appel.POLL_BUDGET_S` for its answer.
+    Step("pipecorn", "pipecorn", _PERSON_IDS,
+         _pipecorn_email_args, _pipecorn_email,
+         "3 Pipecorn credits per email found, nothing on a miss (asynchronous)",
+         collect=_pipecorn_collect("email"), asks="work_emails", poll=PIPECORN_POLL,
+         falls_through=True,
+         explains=(
+             "Pipecorn runs its own cascade of email providers — from a LinkedIn "
+             "profile, or name and company; waited up to 20 s, then the other providers "
+             "are tried. Billed when it finds an email, even if another provider found "
+             "first.")),
     Step("dropcontact", "dropcontact_enrich", _DROPCONTACT_IDS,
          _dropcontact_args, _dropcontact_email,
          "1 Dropcontact credit per email found (own key only; asynchronous)",

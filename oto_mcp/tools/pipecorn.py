@@ -1,5 +1,6 @@
-"""Pipecorn tool — waterfall contact enrichment (mobile phone, work email), asynchronous,
-and the account's balance.
+"""Pipecorn tool — waterfall contact enrichment (mobile phone, work email), asynchronous;
+a person's profile, a company's firmographics, technologies and job postings,
+synchronous; and the account's balance.
 
 Wraps `oto.tools.pipecorn.PipecornClient`. The key comes from the cascade (own key >
 platform grant) via `access.resolve_credential("pipecorn")`.
@@ -9,11 +10,17 @@ credits — like any enrichment read here. No `pipecorn_act` (`tests/test_conven
 
 **Asynchronous.** `op="enrich"` SUBMITS the lookup (Pipecorn queues it and answers at
 once with an `enrichment_id`); `op="result"` reads it back (free), `pending` until
-Pipecorn's own cascade of providers is done. `waterfall_phone` polls it like its other
-asynchronous steps (`waterfall/telephone.py`).
+Pipecorn's own cascade of providers is done. `waterfall_phone` and `waterfall_email` poll
+it with their own wait (`waterfall/fournisseurs.py::PIPECORN_POLL`). The profile, company,
+technologies and job postings (`person`, `company`, `stack`, `jobs`) are synchronous;
+`timeout_s` bounds their wait (a cascade passes what is left of its budget,
+`Step.bounded_by_deadline`), and no answer within it is the named refusal
+`pipecorn_timeout`, never a success: Pipecorn may have billed the lookup.
 
 **A third party's personal email is refused**, on every key, before anything is resolved
-or sent (`pipecorn_personal_email_refused`): the client refuses it too.
+or sent (`pipecorn_personal_email_refused`): the client refuses it too. The synchronous
+lookups are priced for no contact: their answers are served through the client's
+`without_contacts` (every email and phone field removed, a hiring team's included).
 
 **Metering** (facts, no price), UNCONDITIONAL — own key or shared key: the consumer
 filters on `key_mode`. Pipecorn bills per result FOUND, in its credits, when the lookup
@@ -33,6 +40,11 @@ result).
   Every finished read of the same lookup traces the same figures: the consumer counts
   it once by its `enrichment_id` (the read's argument, the lens's `job_id`,
   `db.usage.BILLABLE_JOB_ARGS`).
+- a synchronous lookup traces, on its call, `quantity` = 1 when it found something (a
+  person, a company, a technology, a job), else 0 (never absent), and
+  `provider_credits` = the Pipecorn credits it cost (`LOOKUP_CREDITS`): 1 a person or a
+  company resolved, 3 a technology stack (per request, found or not; a 404 aside), 1 per
+  job returned.
 
 **Units budget** (`access/credits.py`): the submission is in the perimeter, as the
 connectors library's `pipecorn.submit_enrichment`, PRICED PER KIND FOUND — the units
@@ -44,9 +56,17 @@ releases it, and one never read is settled at the amount reserved when its hold 
 (`credits_echeances`). On the customer's own key nothing is reserved: Pipecorn bills
 that key.
 
-**The shared key** serves a PHONE lookup only (the first step of `waterfall_phone`):
-an email and the balance ask for the customer's own key, refused BEFORE anything is
-spent. A result is read with the key that submitted it.
+The synchronous lookups are NOT in the perimeter: it holds one connector function per
+tool (`credits.declarer`, keyed by the tool's name — this one is
+`pipecorn.submit_enrichment`), and a synchronous settlement reads the quantity in the
+answer (`cost.settle`) or settles the worst case, where no Pipecorn answer says what it
+cost (a miss would settle 1 credit, a job list its 100). Hence:
+
+**The shared key** (any key that is not the caller's own: the platform's, a tenant's)
+serves the contact lookup — a phone, a work email —, in the units budget above. The four
+synchronous lookups, outside it, and the balance (the key owner's) ask for the
+customer's own key, refused BEFORE anything is sent. A result is read with the key that
+submitted it.
 
 Client calls are written out (`client.submit_enrichment(…)`) so the version-skew
 probe (`test_tools_client_methods_exist`) can check them.
@@ -58,18 +78,30 @@ from typing import Literal, Optional
 from fastmcp import FastMCP
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, session_org
+from .. import access, output_projection, session_org
 from ..access import credits as budget
 from ..access import credits_releve
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
+from ..waterfall.ordre import _OWN_KEY
 from .lecture import LECTURE
 
 _NAME = "pipecorn"
 
-#: What a lookup may ask for, and what the shared key serves of it.
+#: What a contact lookup may ask for — all of it served on the shared key, in the units
+#: budget (`_pire_par_nature`).
 FINDS = ("phone", "email")
-PLATFORM_FINDS = frozenset({"phone"})
+
+#: The synchronous lookups, and the client method each calls.
+LOOKUPS = {"person": "enrich_person", "company": "enrich_account",
+           "stack": "company_stack", "jobs": "company_hiring"}
+
+#: What a lookup's answer names when it found someone or something.
+_NAMED_BY = {"person": ("full_name", "title", "positions"),
+             "company": ("company_name", "domain", "linkedin_url")}
+
+#: A 404 on a synchronous lookup: no such person or company, nothing billed.
+_MISS: dict = {}
 
 #: The kinds a lookup asks, as the units budget's units (FullEnrich's names): what is
 #: priced per lookup FOUND, kind by kind.
@@ -181,33 +213,38 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
 def register(mcp: FastMCP) -> None:
     from oto.tools.common.errors import UpstreamHTTPError
     from oto.tools.pipecorn import (PipecornClient, PipecornUnreadable, credits_spent,
-                                    found_kinds)
+                                    found_kinds, without_contacts)
+    from oto.tools.pipecorn.client import HTTP_TIMEOUT, LOOKUP_CREDITS
+    from requests.exceptions import Timeout
 
     connector_verify.register(_NAME, _verify, couvre=connector_verify.AUTH_QUOTA)
     budget.declarer(_NAME, _NAME, "submit_enrichment", unites=_pire_par_nature)
 
-    def _client(op: str, finds: list[str]) -> tuple[PipecornClient, "access.ResolvedCredential"]:
-        """`(client, rc)`. Only a submission spends: it resolves with the usage checks
-        (and, on a re-billed key, reserves its worst case); a read, the balance and the
-        account resolve without them. On the platform key, a submission of anything but
-        a phone, and the balance, are refused BEFORE a credit is spent, naming what the
-        shared key serves."""
+    def _client(op: str) -> tuple[PipecornClient, "access.ResolvedCredential"]:
+        """`(client, rc)`. Only a submission resolves with the usage checks (and, on a
+        re-billed key, reserves its worst case): a read, a synchronous lookup on the
+        caller's own key, the balance and the account resolve without them. Refused
+        BEFORE anything is sent, naming what the shared key serves: a synchronous lookup
+        on any key that is not the caller's own (outside the units budget), the balance
+        and the account on the platform key."""
         rc = access.resolve_credential(_NAME, check_usage=(op == "enrich"))
-        refused = (op == "enrich" and not set(finds) <= PLATFORM_FINDS) or \
-            op in ("credits", "account")
-        if rc.is_platform and refused:
+        if (op in LOOKUPS and rc.mode not in _OWN_KEY) or \
+                (op in ("credits", "account") and rc.is_platform):
             from ..auth.hooks import current_user_sub_from_token
             from .. import links
             sub = current_user_sub_from_token()
-            what = "the balance" if op != "enrich" else \
-                ", ".join(f for f in finds if f not in PLATFORM_FINDS)
+            why = ("the balance is the key owner's" if op in ("credits", "account") else
+                   "a synchronous lookup is not in this instance's credit budget yet, so "
+                   "the shared key does not serve it")
             raise _bad(
-                f"pipecorn op={op!r} ({what}) needs your own Pipecorn key: the shared key "
-                "here covers phone lookups only. Set your own key"
+                f"pipecorn op={op!r} needs your own Pipecorn key: {why}. The shared key "
+                "here covers phone and work email lookups. Set your own key"
                 f"{links.ou_poser_la_cle(sub, org=access.current_org(sub), connecteur=_NAME)}.")
         return PipecornClient(api_key=rc.key), rc
 
-    def _run(fn, is_platform: bool = False):
+    def _run(fn, is_platform: bool = False, miss=None):
+        """The call; `miss` (a synchronous lookup) is what a 404 answers — nothing found,
+        nothing billed — instead of a refusal."""
         try:
             return fn()
         except ValueError as e:
@@ -220,71 +257,175 @@ def register(mcp: FastMCP) -> None:
                          f"be read from it ({e}). Retry later; a submitted lookup may "
                          "have been accepted: read it back rather than submit it again.")
         except UpstreamHTTPError as e:
+            if miss is not None and e.status_code == 404:
+                return miss
             raise _bad(_upstream_message(e, is_platform))
+
+    def _lookup(op: str, client, given: dict, timeout_s) -> dict:
+        """A synchronous lookup, on the caller's own key: served without its contact
+        fields, traced `quantity` 1 when it found something (else 0, never absent) and
+        `provider_credits` what Pipecorn billed (`LOOKUP_CREDITS`). Waits `timeout_s`
+        at most (the client's own read bound otherwise): no answer within it is the
+        refusal `pipecorn_timeout`."""
+        company = {"domain": given["domain"], "name": given["company_name"],
+                   "linkedin_url": given["company_linkedin_url"]}
+        wait = HTTP_TIMEOUT if timeout_s is None else (min(10, timeout_s), timeout_s)
+        calls = {
+            "person": lambda: client.enrich_person(
+                linkedin_url=given["linkedin_url"], first_name=given["firstname"],
+                last_name=given["lastname"], company_name=given["company_name"],
+                timeout=wait),
+            "company": lambda: client.enrich_account(
+                **company, country_code=given["country_code"], timeout=wait),
+            "stack": lambda: client.company_stack(**company, timeout=wait),
+            "jobs": lambda: client.company_hiring(
+                **company, posted_within_days=given["posted_within_days"],
+                limit=given["limit"], job_title_keywords=given["job_title_keywords"],
+                excluded_job_title_keywords=given["excluded_job_title_keywords"],
+                job_country_codes=given["job_country_codes"],
+                full_description=given["full_description"], timeout=wait),
+        }
+        try:
+            raw = _run(calls[op], miss=_MISS)
+        except Timeout:
+            # Sent, and no answer in time (connect or read): never a miss nor a find.
+            # What Pipecorn did with it is unknown — nothing is traced as found.
+            raise _refus("pipecorn_timeout",
+                         f"Pipecorn op={op!r}: no answer within {wait[1]:g} s; Pipecorn "
+                         "may have billed the lookup. Do not retry it blindly.",
+                         timeout_s=wait[1])
+        if not isinstance(raw, dict):
+            raise _refus("pipecorn_unreadable_answer",
+                         f"Pipecorn answered op={op!r} with something that is not an "
+                         f"object: {str(raw)[:200]}")
+        answer = without_contacts(raw)
+        price = LOOKUP_CREDITS[LOOKUPS[op]]
+        if op == "jobs":
+            jobs = answer.get("jobs") if isinstance(answer.get("jobs"), list) else []
+            found, credits = bool(jobs), price * len(jobs)
+        elif op == "stack":
+            # Billed per REQUEST, found or not — a 404 (no such company) aside.
+            found = bool(answer.get("technologies") or
+                         answer.get("technologies_with_confidence"))
+            credits = 0 if raw is _MISS else price
+        else:
+            found = any(answer.get(k) for k in _NAMED_BY[op])
+            credits = price if found else 0
+        session_org.note_call_trace(quantity=int(found), provider_credits=credits)
+        if op == "jobs" and not given["full_description"]:
+            # The default view: each posting without its description snippet — title,
+            # place, date, link and hiring team are what a list is read for.
+            answer = output_projection.project(answer, items_path="jobs",
+                                               item_drop=("description",))
+        return {**answer, "found": found, "pipecorn_credits": credits}
 
     @mcp.tool(name="pipecorn", annotations=LECTURE)
     def pipecorn(
-        op: Literal["enrich", "result", "credits", "account"] = "enrich",
+        op: Literal["enrich", "result", "person", "company", "stack", "jobs", "credits",
+                    "account"] = "enrich",
         find: Optional[list[Literal["phone", "email", "personal_email"]]] = None,
         linkedin_url: Optional[str] = None,
         firstname: Optional[str] = None,
         lastname: Optional[str] = None,
         domain: Optional[str] = None,
         company_name: Optional[str] = None,
+        company_linkedin_url: Optional[str] = None,
+        country_code: Optional[str] = None,
         phone_type: Optional[Literal["all", "mobile"]] = None,
         phone_country_codes: Optional[list[str]] = None,
         enrichment_id: Optional[str] = None,
+        posted_within_days: Optional[Literal[7, 30, 60, 90, 180]] = None,
+        limit: Optional[int] = None,
+        job_title_keywords: Optional[list[str]] = None,
+        excluded_job_title_keywords: Optional[list[str]] = None,
+        job_country_codes: Optional[list[str]] = None,
+        full_description: Optional[bool] = None,
+        timeout_s: Optional[float] = None,
     ) -> dict:
-        """Pipecorn — find a person's mobile phone or work email (asynchronous: submit,
-        then read the result); the account's balance.
+        """Pipecorn — a person's mobile phone or work email (asynchronous: submit, then
+        read the result); a person's profile; a company's firmographics, technologies
+        and open job postings; the account's balance.
 
-        Pipecorn queries many data providers one after the other and stops at the first
-        that answers. You only pay for what is found, in Pipecorn credits: 3 a work
-        email, 30 a phone — and a phone only when a MOBILE is found. A miss costs
-        nothing. A third party's personal email is never looked up: `personal_email`
-        is refused, on any key.
+        You only pay for what is found, in Pipecorn credits: 3 a work email, 30 a phone
+        (only when a MOBILE is found), 1 a profile or a company resolved, 1 per job
+        posting returned; a technology stack is 3 per request. A miss costs nothing. A
+        third party's personal email is never looked up nor served: `personal_email` is
+        refused on any key, and the profile, company and job lookups come without any
+        email or phone.
 
-        op="enrich" (default) — SUBMIT one person; answers at once with
+        op="enrich" (default) — SUBMIT a contact lookup; answers at once with
           `enrichment_id`. `find`: `phone`, `email` or both (default `["phone"]`).
-          - `phone` needs `linkedin_url` (a profile URL).
-          - `email` takes `linkedin_url`, or `firstname` + `lastname` + `domain` or
-            `company_name`.
-          - `phone_type="mobile"` keeps looking until a provider has a mobile and
-            drops landlines; `phone_country_codes=["FR"]` keeps phones to countries.
-        op="result" — read it back: `enrichment_id`, and the same `find` as the
-          submission. `done: false` while Pipecorn is still looking — read again in a
-          few seconds (usually under a minute; reads are free). Done: `email`,
-          `email_status` (deliverable or catch-all), `phone` (numbers, as Pipecorn
-          writes them — with or without `+`), `phone_details` [{number, type}], and
-          `pipecorn_credits`, what the lookup cost. A miss is empty fields, not an
-          error.
+          `phone` needs `linkedin_url` (a profile URL); `email` takes `linkedin_url`,
+          or `firstname` + `lastname` + `domain` or `company_name`.
+          `phone_type="mobile"` keeps looking until a provider has a mobile;
+          `phone_country_codes=["FR"]` keeps phones to countries.
+        op="result" — read it back: `enrichment_id`, and the same `find`. `done: false`
+          while Pipecorn is still looking — read again in a few seconds (reads are
+          free). Done: `email`, `email_status`, `phone` (as Pipecorn writes them),
+          `phone_details` [{number, type}], and `pipecorn_credits`, what it cost.
+        op="person" — a profile: title, positions with each company's domain,
+          headline, location, tenure. `linkedin_url`, or `firstname` + `lastname` +
+          `company_name`.
+        op="company" — firmographics: industry, headcount and its growth, department
+          headcount, revenue range, headquarters, funding, web traffic. `domain`,
+          `company_name` and/or `company_linkedin_url`; `country_code` narrows a name.
+        op="stack" — the technologies a company uses, with a confidence. Same company
+          arguments.
+        op="jobs" — a company's open job postings (title, url, location, date, hiring
+          team). Same company arguments; `posted_within_days` (7, 30 by default, 60,
+          90, 180), `limit` (at most 100: billed per job, so bound it),
+          `job_title_keywords`, `excluded_job_title_keywords`, `job_country_codes`;
+          `full_description=True` adds each description in full.
+          person, company, stack and jobs answer `found` and `pipecorn_credits`, and
+          need your own Pipecorn key. `timeout_s` bounds their wait in seconds; no
+          answer within it is the refusal `pipecorn_timeout` (it may have been billed).
         op="credits" — the balance: `credits.enrichment` is what lookups spend.
         op="account" — the plan and the email behind the key.
 
-        For a person's phone across several providers, prefer `waterfall_phone`: it
-        submits and reads this for you.
+        For a contact, prefer the waterfalls (`waterfall_phone`, `waterfall_email`):
+        they submit and read this for you.
 
         Examples —
           pipecorn(find=["phone"], linkedin_url="https://www.linkedin.com/in/jane-doe/",
                    phone_type="mobile")
           pipecorn(op="result", enrichment_id="…", find=["phone"])
+          pipecorn(op="jobs", domain="acme.com", limit=20, job_country_codes=["FR"])
         """
         given = {"find": find, "linkedin_url": linkedin_url, "firstname": firstname,
                  "lastname": lastname, "domain": domain, "company_name": company_name,
+                 "company_linkedin_url": company_linkedin_url, "country_code": country_code,
                  "phone_type": phone_type, "phone_country_codes": phone_country_codes,
-                 "enrichment_id": enrichment_id}
-        takes = {"enrich": set(given) - {"enrichment_id"},
-                 "result": {"enrichment_id", "find"}}.get(op, set())
+                 "enrichment_id": enrichment_id, "posted_within_days": posted_within_days,
+                 "limit": limit, "job_title_keywords": job_title_keywords,
+                 "excluded_job_title_keywords": excluded_job_title_keywords,
+                 "job_country_codes": job_country_codes,
+                 "full_description": full_description, "timeout_s": timeout_s}
+        company = {"domain", "company_name", "company_linkedin_url", "timeout_s"}
+        takes = {"enrich": {"find", "linkedin_url", "firstname", "lastname", "domain",
+                            "company_name", "phone_type", "phone_country_codes"},
+                 "result": {"enrichment_id", "find"},
+                 "person": {"linkedin_url", "firstname", "lastname", "company_name",
+                            "timeout_s"},
+                 "company": company | {"country_code"},
+                 "stack": company,
+                 "jobs": company | {"posted_within_days", "limit", "job_title_keywords",
+                                    "excluded_job_title_keywords", "job_country_codes",
+                                    "full_description"}}.get(op, set())
         stray = sorted(k for k, v in given.items() if v is not None and k not in takes)
         if stray:
             raise _bad(f"op='{op}' does not take {', '.join(f'`{k}`' for k in stray)}. "
                        "Nothing was done.")
+        if timeout_s is not None and (isinstance(timeout_s, bool) or timeout_s <= 0):
+            raise _bad(f"`timeout_s` must be a positive number of seconds; got "
+                       f"{timeout_s!r}. Nothing was done.")
         finds = _finds(find)
         if "personal_email" in finds:
             raise _refus("pipecorn_personal_email_refused",
                          "a third party's personal email is never looked up, on any "
                          "key. Ask for `email` (work email) or `phone`. Nothing was done.")
-        client, rc = _client(op, finds)
+        client, rc = _client(op)
+        if op in LOOKUPS:
+            return _lookup(op, client, given, timeout_s)
 
         if op == "credits":
             return _run(lambda: client.get_credits())

@@ -348,3 +348,237 @@ def test_pipecorn_sur_la_cle_partagee_passe_derriere_les_cles_de_l_appelant(call
                dry_run=True)
     order = [a["provider"] for a in out["attempts"]]
     assert order[:2] == ["kaspr", "pipecorn"]
+
+
+# --- pipecorn ailleurs : email (asynchrone, en tête), personne, société, techno -------
+
+def _email_releve(email):
+    return IssueCible(ok=True, result={"done": True, "status": "finished", "email": email,
+                                       "email_status": "deliverable",
+                                       "pipecorn_credits": 3 if email else 0})
+
+
+def test_pipecorn_ouvre_l_email_par_le_nom_et_le_domaine(calls, horloge):
+    calls["answers"]["pipecorn"] = [SOUMIS, _email_releve("Jane@Acme.com")]
+    out = _run("waterfall_email", first_name="Jane", last_name="Doe", domain="acme.com",
+               providers=["pipecorn"])
+    assert out["provider"] == "pipecorn"
+    assert out["email"] == {"email": "jane@acme.com", "all": ["jane@acme.com"],
+                            "status": "deliverable"}
+    assert calls["made"][0] == ("pipecorn", {"op": "enrich", "find": ["email"],
+                                             "firstname": "Jane", "lastname": "Doe",
+                                             "domain": "acme.com"})
+    assert calls["made"][1][1] == {"op": "result", "enrichment_id": PID, "find": ["email"]}
+
+
+def test_pipecorn_email_par_le_profil_seul_quand_il_y_en_a_un(calls, horloge):
+    calls["answers"]["pipecorn"] = [SOUMIS, _email_releve("jane@acme.com")]
+    _run("waterfall_email", first_name="Jane", last_name="Doe", domain="acme.com",
+         linkedin_url="https://www.linkedin.com/in/jane-doe/", providers=["pipecorn"])
+    assert calls["made"][0][1] == {"op": "enrich", "find": ["email"],
+                                   "linkedin_url": "https://www.linkedin.com/in/jane-doe/"}
+
+
+def test_un_email_trouve_au_premier_fournisseur_n_attend_ni_ne_paie_pipecorn(calls, horloge):
+    """Pipecorn passe APRÈS les étapes synchrones : Hunter trouve, Pipecorn n'est jamais
+    soumis — ni attente, ni second paiement."""
+    calls["answers"]["pipecorn"] = [SOUMIS, _email_releve("jane@acme.com")]
+    calls["answers"]["hunter_email_finder"] = IssueCible(
+        ok=True, result={"data": {"email": "jane@acme.com"}})
+    debut = horloge["now"]
+    out = _run("waterfall_email", first_name="Jane", last_name="Doe", domain="acme.com")
+    assert out["provider"] == "hunter"
+    assert "pipecorn" not in _made(calls)
+    assert horloge["now"] - debut < 1
+
+
+def test_pipecorn_email_attend_20_s_au_plus_puis_passe_la_main_a_hunter(calls, horloge):
+    calls["answers"]["pipecorn"] = [SOUMIS, IssueCible(ok=True, result={"done": False})]
+    calls["answers"]["hunter_email_finder"] = IssueCible(
+        ok=True, result={"data": {"email": "jane@acme.com"}})
+    debut = horloge["now"]
+    out = _run("waterfall_email", first_name="Jane", last_name="Doe", domain="acme.com",
+               providers=["pipecorn", "hunter"])
+    assert out["provider"] == "hunter"
+    assert 19 <= horloge["now"] - debut <= 21
+    assert out["pending"] == [{"provider": "pipecorn", "tool": "pipecorn", "arguments": {
+        "op": "result", "enrichment_id": PID, "find": ["email"]}}]
+
+
+def test_pipecorn_email_fini_apres_hunter_est_dit_paye(calls, horloge):
+    """Un email que Pipecorn trouve après le repli est payé tout de même : le reçu le dit."""
+    calls["answers"]["pipecorn"] = [SOUMIS] + [
+        IssueCible(ok=True, result={"done": False})] * 7 + [_email_releve("j.doe@acme.com")]
+    calls["answers"]["hunter_email_finder"] = IssueCible(
+        ok=True, result={"data": {"email": "jane@acme.com"}})
+    out = _run("waterfall_email", first_name="Jane", last_name="Doe", domain="acme.com",
+               providers=["pipecorn", "hunter"])
+    assert out["provider"] == "hunter"
+    assert out["attempts"][0]["status"] == "found_late"
+    assert "billed" in out["attempts"][0]["message"]
+    step = next(s for s in email.EMAIL_STEPS if s.key == "pipecorn")
+    assert "even if another provider found first" in step.explains
+
+
+def test_pipecorn_email_sert_sur_la_cle_partagee(calls, horloge):
+    calls["modes"] = {"pipecorn": "platform"}
+    calls["answers"]["pipecorn"] = [SOUMIS, _email_releve("jane@acme.com")]
+    out = _run("waterfall_email", first_name="Jane", last_name="Doe", domain="acme.com",
+               providers=["pipecorn"])
+    assert out["provider"] == "pipecorn"
+
+
+_PROFIL = {"found": True, "full_name": "Jane Doe", "title": "VP Sales",
+           "lk_headline": "VP Sales at Acme", "location": "Paris, France",
+           "linkedin_profile_url": "https://www.linkedin.com/in/jane-doe",
+           "positions": [{"title": "Head of Sales", "current": False, "company_name": "Old"},
+                         {"title": "VP Sales", "current": True, "company_name": "Acme",
+                          "company_domain": "acme.com"}]}
+_SOCIETE = {"found": True, "company_name": "Acme", "domain": "acme.com",
+            "industry": "Software", "employee_count": 248, "employee_range": "201-500",
+            "headquarters": {"country": "France", "city": "Paris"},
+            "linkedin_url": "https://www.linkedin.com/company/acme"}
+
+
+@pytest.mark.parametrize("ns, kwargs", [
+    ("waterfall_person", {"linkedin_url": "https://www.linkedin.com/in/jane-doe/"}),
+    ("waterfall_company", {"domain": "acme.com"}),
+    ("waterfall_tech", {"domain": "acme.com"}),
+])
+@pytest.mark.parametrize("mode", ["platform", "tenant"])
+def test_pipecorn_synchrone_hors_de_la_cle_partagee(calls, ns, kwargs, mode):
+    """Une recherche synchrone n'entre pas au budget d'unités : sautée AVANT l'appel sur
+    toute clé qui n'est pas celle de l'appelant."""
+    calls["modes"] = {"pipecorn": mode}
+    out = _run(ns, providers=["pipecorn"], **kwargs)
+    assert out["attempts"][0]["code"] == "own_key_required"
+    assert "pipecorn" not in _made(calls)
+
+
+def test_pipecorn_personne_lit_le_poste_en_cours(calls, horloge):
+    calls["modes"] = {"pipecorn": "org"}
+    calls["answers"]["pipecorn"] = IssueCible(ok=True, result=_PROFIL)
+    out = _run("waterfall_person", linkedin_url="https://www.linkedin.com/in/jane-doe/",
+               providers=["pipecorn"])
+    assert out["provider"] == "pipecorn"
+    assert out["person"]["title"] == "VP Sales" and out["person"]["company_name"] == "Acme"
+    assert out["person"]["company_domain"] == "acme.com"
+    assert calls["made"][0][1] == {"op": "person",
+                                   "linkedin_url": "https://www.linkedin.com/in/jane-doe/",
+                                   "timeout_s": 40}
+
+
+def test_pipecorn_personne_par_le_nom_a_la_societe(calls, horloge):
+    calls["modes"] = {"pipecorn": "org"}
+    calls["answers"]["pipecorn"] = IssueCible(ok=True, result=_PROFIL)
+    _run("waterfall_person", first_name="Jane", last_name="Doe", company_name="Acme",
+         providers=["pipecorn"])
+    assert calls["made"][0][1] == {"op": "person", "firstname": "Jane", "lastname": "Doe",
+                                   "company_name": "Acme", "timeout_s": 40}
+
+
+def test_pipecorn_personne_introuvable_passe_la_main(calls):
+    calls["modes"] = {"pipecorn": "org"}
+    calls["answers"]["pipecorn"] = IssueCible(ok=True, result={"found": False})
+    out = _run("waterfall_person", linkedin_url="https://www.linkedin.com/in/jane-doe/",
+               providers=["pipecorn", "apollo"])
+    assert out["attempts"][0]["status"] == "no_match"
+
+
+def test_pipecorn_societe_par_domaine(calls, horloge):
+    calls["modes"] = {"pipecorn": "org"}
+    calls["answers"]["pipecorn"] = IssueCible(ok=True, result=_SOCIETE)
+    out = _run("waterfall_company", domain="acme.com", providers=["pipecorn"])
+    assert out["provider"] == "pipecorn"
+    assert out["company"]["employees"] == 248 and out["company"]["city"] == "Paris"
+    assert calls["made"][0][1] == {"op": "company", "domain": "acme.com", "timeout_s": 40}
+
+
+def test_pipecorn_societe_par_nom_ecarte_l_homonyme(calls):
+    calls["modes"] = {"pipecorn": "org"}
+    calls["answers"]["pipecorn"] = IssueCible(ok=True, result={**_SOCIETE,
+                                                                "company_name": "Zenith"})
+    out = _run("waterfall_company", company_name="Acme", country="US",
+               providers=["pipecorn"])
+    assert out["found"] is False
+
+
+def test_pipecorn_techno_noms_ou_confiance(calls, horloge):
+    calls["modes"] = {"pipecorn": "org"}
+    calls["answers"]["pipecorn"] = IssueCible(ok=True, result={
+        "found": True, "technologies_with_confidence": [
+            {"name": "HubSpot", "confidence": "high"}, {"name": "React", "confidence": 0.9}]})
+    out = _run("waterfall_tech", domain="acme.com", providers=["pipecorn"])
+    assert out["provider"] == "pipecorn"
+    assert out["tech"]["technologies"] == ["HubSpot", "React"]
+    assert calls["made"][0][1] == {"op": "stack", "domain": "acme.com", "timeout_s": 40}
+
+
+# --- pipecorn synchrone : borné au temps qui reste dans la cascade ----------------------
+
+@pytest.mark.parametrize("ns, kwargs", [
+    ("waterfall_person", {"linkedin_url": "https://www.linkedin.com/in/jane-doe/"}),
+    ("waterfall_company", {"domain": "acme.com"}),
+    ("waterfall_tech", {"domain": "acme.com"}),
+])
+def test_pipecorn_synchrone_attend_ce_qui_reste_du_budget(calls, horloge, monkeypatch,
+                                                          ns, kwargs):
+    """Une étape payée avant lui a pris 28,6 s sur 40 : Pipecorn reçoit `timeout_s` 11,
+    jamais les 60 s de son client."""
+    from oto_mcp.waterfall import moteur
+    avant, outil = {"waterfall_person": ("apollo", "apollo_match_person"),
+                    "waterfall_company": ("apollo", "apollo_enrich_organization"),
+                    "waterfall_tech": ("theirstack", "theirstack_companies_search")}[ns]
+    calls["modes"] = {"pipecorn": "org", outil: "org"}
+    vrai = moteur.appel._call
+
+    async def lent(mcp, sub, tool, args, attempt):
+        if tool == outil:
+            horloge["now"] += 28.6
+        return await vrai(mcp, sub, tool, args, attempt)
+    monkeypatch.setattr(moteur.appel, "_call", lent)
+    _run(ns, providers=[avant, "pipecorn"], **kwargs)
+    envoye = [a for n, a in calls["made"] if n == "pipecorn"]
+    assert envoye and envoye[0]["timeout_s"] == 11
+
+
+@pytest.mark.parametrize("ns, kwargs", [
+    ("waterfall_person", {"linkedin_url": "https://www.linkedin.com/in/jane-doe/"}),
+    ("waterfall_company", {"domain": "acme.com"}),
+    ("waterfall_tech", {"domain": "acme.com"}),
+])
+def test_pipecorn_synchrone_saute_sans_appel_quand_il_reste_trop_peu(calls, horloge,
+                                                                     monkeypatch, ns, kwargs):
+    """Moins de `BOUNDED_MIN_S` restantes : sautée `time_budget`, rien d'envoyé, rien de
+    facturé — plutôt qu'une recherche coupée après dépense."""
+    from oto_mcp.waterfall import moteur
+    calls["modes"] = {"pipecorn": "org"}
+    monkeypatch.setattr(moteur, "DEADLINE_S", moteur.BOUNDED_MIN_S - 0.5)
+    out = _run(ns, providers=["pipecorn"], **kwargs)
+    assert out["attempts"][0]["status"] == "skipped"
+    assert out["attempts"][0]["code"] == "time_budget"
+    assert "pipecorn" not in _made(calls)
+
+
+def test_un_depassement_pipecorn_est_un_echec_nomme_de_l_etape(calls, horloge):
+    """Le refus `pipecorn_timeout` de l'outil, tel que `executer_cible` le rend (un
+    `INVALID_PARAMS` classé `invalid_input`, le nom dans le message) : l'étape ÉCHOUE,
+    jamais un non-trouvé ni un trouvé ; la cascade passe à la suivante."""
+    calls["modes"] = {"pipecorn": "org", "apollo_enrich_organization": "org"}
+    calls["answers"]["pipecorn"] = IssueCible(
+        ok=False, code="invalid_input",
+        message="Refusal `pipecorn_timeout`: Pipecorn op='company': no answer within 40 s; "
+                "Pipecorn may have billed the lookup. Do not retry it blindly.")
+    out = _run("waterfall_company", domain="acme.com", providers=["pipecorn", "apollo"])
+    by = {a["provider"]: a for a in out["attempts"]}
+    assert by["pipecorn"]["status"] == "failed"
+    assert "pipecorn_timeout" in by["pipecorn"]["message"]
+    assert "may have billed" in by["pipecorn"]["message"]
+    assert "apollo_enrich_organization" in _made(calls)
+
+
+def test_le_plan_a_blanc_ne_pose_pas_le_delai(calls):
+    """`timeout_s` se calcule à l'appel : le plan à blanc montre les arguments de la table."""
+    calls["modes"] = {"pipecorn": "org"}
+    out = _run("waterfall_company", domain="acme.com", providers=["pipecorn"], dry_run=True)
+    assert out["attempts"][0]["arguments"] == {"op": "company", "domain": "acme.com"}

@@ -30,8 +30,10 @@ def test_s_arrete_au_premier_trouve(calls):
                domain="https://www.acme.com/x", linkedin_url="https://www.linkedin.com/in/jane-doe/")
     assert out["found"] is True and out["provider"] == "apollo"
     assert out["email"] == {"email": "jane@acme.com", "all": ["jane@acme.com"], "status": "verified"}
-    # AI Ark passes before Apollo: it found nothing here.
-    assert _made(calls) == ["hunter_email_finder", "linkedin_aiark_person", "apollo_match_person"]
+    # AI Ark passes before Apollo: it found nothing here. Pipecorn, after the
+    # synchronous steps, is never reached: Apollo found first.
+    assert _made(calls) == ["hunter_email_finder", "linkedin_aiark_person",
+                            "apollo_match_person"]
     assert calls["made"][0][1] == {"domain": "acme.com", "first_name": "Jane", "last_name": "Doe"}
     assert out["order_from"] == "default"
 
@@ -43,8 +45,8 @@ def test_les_cles_de_l_appelant_passent_devant(calls):
     order = [a["provider"] for a in out["attempts"]]
     # Propres clés d'abord, dans l'ordre du défaut (kaspr avant lusha), puis le reste.
     assert order[:2] == ["kaspr", "lusha"]
-    assert order[2:] == ["hunter", "aiark", "apollo", "forager", "dropcontact", "lemlist",
-                         "fullenrich"]
+    assert order[2:] == ["hunter", "aiark", "apollo", "forager", "pipecorn", "dropcontact",
+                         "lemlist", "fullenrich"]
     assert out["attempts"][0]["key"] == "user"
 
 
@@ -87,8 +89,8 @@ def test_etape_sans_ses_entrees_sautee_sans_appel(calls):
             {"address": "x@acme.com", "status": "unknown"},
             {"address": "jane@acme.com", "status": "valid"}]}})
     out = _run("waterfall_email", linkedin_url="https://linkedin.com/in/jane-doe")
-    first = out["attempts"][0]
-    assert (first["provider"], first["status"], first["code"]) == ("hunter", "skipped", "missing_input")
+    hunter = next(a for a in out["attempts"] if a["provider"] == "hunter")
+    assert (hunter["status"], hunter["code"]) == ("skipped", "missing_input")
     assert out["provider"] == "aiark" and out["email"]["email"] == "jane@acme.com"
     assert "hunter_email_finder" not in _made(calls)
 

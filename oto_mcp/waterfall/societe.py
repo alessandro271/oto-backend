@@ -134,6 +134,29 @@ def _aiark_company(res, inputs):
     return None
 
 
+def _pipecorn_company(res, inputs):
+    """Pipecorn's account. By name, it must BE the company asked (namesake guard)."""
+    if not isinstance(res, dict) or not res.get("found"):
+        return None
+    name = res.get("company_name")
+    domain = _domain(res.get("domain") or res.get("website"))
+    if not inputs.get("domain") and not _same_company(inputs, name, domain):
+        return None
+    hq = res.get("headquarters") or {}
+    return _clean({
+        "name": name,
+        "domain": domain or inputs.get("domain"),
+        "industry": res.get("industry"),
+        "employees": res.get("employee_count"),
+        # A size BAND (`201-500`), as Pipecorn gives it.
+        "employees_band": res.get("employee_range"),
+        "city": hq.get("city") if isinstance(hq, dict) else None,
+        "country": hq.get("country") if isinstance(hq, dict) else None,
+        "linkedin_url": res.get("linkedin_url"),
+        "type": res.get("company_type"),
+    }, ("name",))
+
+
 def _theirstack_company(res, inputs):
     for rec in (_get(res, "data") or [])[:3]:
         if isinstance(rec, dict) and _same_company(inputs, rec.get("name"),
@@ -252,6 +275,17 @@ COMPANY_STEPS: tuple[Step, ...] = (
          explains=(
              "LinkedIn-sourced company profile — industry, headcount, revenue range, "
              "phone.")),
+    # The caller's own Pipecorn key only: a synchronous lookup is outside the units
+    # budget, the shared key does not serve it (`tools/pipecorn.py`).
+    Step("pipecorn", "pipecorn", (("domain",), ("company_name",)),
+         lambda i: ({"op": "company", "domain": i["domain"]} if i.get("domain")
+                    else {"op": "company", "company_name": i["company_name"]}),
+         _pipecorn_company,
+         "1 Pipecorn credit per company found, nothing on a miss (own key only)",
+         asks="company", own_key_only=True, bounded_by_deadline=True,
+         explains=(
+             "Pipecorn's company record — industry, headcount and its growth, size band, "
+             "headquarters, LinkedIn page. Your own Pipecorn key only.")),
     Step("apollo", "apollo_enrich_organization", (("domain",),),
          lambda i: {"domain": i["domain"]}, _apollo_company, "1 Apollo credit",
          explains=(

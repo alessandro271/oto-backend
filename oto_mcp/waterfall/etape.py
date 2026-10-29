@@ -102,6 +102,10 @@ class Step:
     asks: str = ""
     max_units: Optional[int] = None
     per_item: bool = False
+    # A SYNCHRONOUS call that would otherwise wait its client's own read bound (Pipecorn:
+    # 60 s): the cascade passes it what is left of its budget as `timeout_s`, and skips
+    # it, before any call, when too little is left (`moteur.BOUNDED_MIN_S`).
+    bounded_by_deadline: bool = False
 
 
 def _bills(step: Step) -> bool:

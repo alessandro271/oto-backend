@@ -6,8 +6,8 @@ from typing import Optional
 from urllib.parse import unquote
 
 from .etape import Step
-from .fournisseurs import (_LEMLIST_COLLECT, _LEMLIST_EXCLUDES, _NAMES_AND_DOMAIN,
-                           _PERSON_IDS, _apollo_args, _cognism_contact_args,
+from .fournisseurs import (_LEMLIST_COLLECT, _LEMLIST_EXCLUDES, _NAMES_AND_COMPANY,
+                           _NAMES_AND_DOMAIN, _PERSON_IDS, _apollo_args, _cognism_contact_args,
                            _forager_shared, _lemlist_args, _lemlist_first, _lemlist_lead, _lusha_contact, _lusha_first)
 from .valeurs import _clean, _domain, _find_key, _get, _norm_name, _pick, _slug
 
@@ -75,6 +75,31 @@ def _lemlist_person(res, inputs):
     raw = _get(r, "data.linkedin")
     digest = _get(r, "found.linkedin")
     return _generic_person(raw if isinstance(raw, dict) else digest, inputs)
+
+
+def _pipecorn_person_args(i: dict) -> dict:
+    if i.get("linkedin_url"):
+        return {"op": "person", "linkedin_url": i["linkedin_url"]}
+    return {"op": "person", "firstname": i["first_name"], "lastname": i["last_name"],
+            "company_name": i["company_name"]}
+
+
+def _pipecorn_person(res, inputs):
+    """Pipecorn's profile (served without any contact field): the CURRENT position
+    (`current`) names the title, the company and its domain."""
+    if not isinstance(res, dict) or not res.get("found"):
+        return None
+    current = next((p for p in res.get("positions") or []
+                    if isinstance(p, dict) and p.get("current")), {})
+    return _person(
+        full_name=res.get("full_name"),
+        title=current.get("title") or res.get("title"),
+        headline=res.get("lk_headline"),
+        company_name=current.get("company_name"),
+        company_domain=_domain(current.get("company_domain")),
+        location=res.get("location"),
+        linkedin_url=inputs.get("linkedin_url") or res.get("linkedin_profile_url"),
+    )
 
 
 def _plain_slug(linkedin_url: str) -> str:
@@ -146,6 +171,16 @@ PERSON_STEPS: tuple[Step, ...] = (
          explains=(
              "lemlist's shared people database — current title, company, seniority, "
              "location, with a pattern-guessed email; spends no credits.")),
+    # The caller's own Pipecorn key only: a synchronous lookup is outside the units
+    # budget, the shared key does not serve it (`tools/pipecorn.py`).
+    Step("pipecorn", "pipecorn", (("linkedin_url",), _NAMES_AND_COMPANY),
+         _pipecorn_person_args, _pipecorn_person,
+         "1 Pipecorn credit per profile found, nothing on a miss (own key only)",
+         asks="person", own_key_only=True, bounded_by_deadline=True,
+         explains=(
+             "Pipecorn's profile — current title and company with its domain, past "
+             "positions, tenure, location; from a LinkedIn profile, or name and company. "
+             "Your own Pipecorn key only.")),
     Step("aiark", "linkedin_aiark_person", (("linkedin_url",),),
          lambda i: {"op": "export", "url": i["linkedin_url"]},
          _aiark_person, "AI Ark export credits",

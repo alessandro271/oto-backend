@@ -152,7 +152,9 @@ encore, aucune étape suivante n'est payée pour la même recherche — pas mêm
 complétion.
 lemlist est BYO seulement : sans clé de l'appelant, l'étape est sautée sans appel.
 
-**L'exception qui passe la main : Pipecorn** (en tête du téléphone).
+**L'exception qui passe la main : Pipecorn** (en tête du téléphone ; à l'email, après les
+étapes synchrones — qui trouvait déjà l'email au premier fournisseur n'attend ni ne paie
+Pipecorn en plus).
 `pipecorn op=enrich` soumet, `pipecorn op=result` relève (gratuit). L'étape a SA propre
 cadence (`Step.poll` : première relève à 2 s, puis toutes les 3 s, **20 s au plus**),
 **dans** le budget de la cascade (`DEADLINE_S`, 40 s) : l'appel entier tient sous les
@@ -161,7 +163,7 @@ cadence (`Step.poll` : première relève à 2 s, puis toutes les 3 s, **20 s au 
 essayés, puis elle est relue UNE fois en fin de cascade s'il reste du temps — même quand
 un autre a trouvé : finie, cette relecture règle la recherche à ce qu'elle a trouvé et sa
 trouvaille sert si rien d'autre n'a trouvé (`found_late` sinon, **payée tout de même** :
-Pipecorn débite un mobile trouvé). Toujours en cours, ou plus de temps, elle reste dans
+Pipecorn débite un mobile ou un email trouvé). Toujours en cours, ou plus de temps, elle reste dans
 `pending[]`, à relever plus tard ; jamais un appel coupé après dépense. Sur une clé
 refacturée, une recherche jamais relue est réglée au pire (un résultat par sorte
 demandée) à l'échéance de sa réservation (`credits_echeances`) : d'où la relecture.
@@ -186,12 +188,18 @@ demandée) à l'échéance de sa réservation (`credits_echeances`) : d'où la r
 - **Email** : hunter → aiark (sur une vraie liste, les mêmes emails qu'Apollo, qui facture
   sa correspondance même sans email) → apollo → kaspr → lusha → forager (clé de l'appelant
   seulement, sauf si l'instance ouvre `forager_person:work_emails` sur sa clé partagée) →
-  dropcontact → lemlist → fullenrich (les asynchrones en dernier).
+  pipecorn (`pipecorn op=enrich find=["email"]`, par le profil LinkedIn, sinon prénom + nom
+  + domaine ou société : sa propre cascade, ASYNCHRONE comme au téléphone — 20 s au plus
+  dans le budget de l'appel puis repli ; facturée à l'email trouvé, même si un autre a
+  trouvé ; absente du mode tableau ; APRÈS les synchrones, pour qu'un email trouvé au
+  premier fournisseur ne coûte ni attente ni second paiement) → dropcontact → lemlist →
+  fullenrich (les asynchrones en dernier).
 - **Téléphone** : pipecorn (`pipecorn op=enrich find=["phone"] phone_type="mobile"`,
   depuis un profil LinkedIn : sa propre cascade de fournisseurs, ASYNCHRONE, attendue
   20 s au plus dans le budget de l'appel puis repli sur la suite — voir « Les étapes
   asynchrones » ; facturée au seul mobile trouvé, à la relève, même si un autre a trouvé ;
-  aucune clé partagée n'est promise (connecteur fermé, clé de l'appelant) ;
+  aucune clé partagée n'est promise (connecteur fermé, clé de l'appelant ; octroyée, elle
+  sert le téléphone et l'email pro, dans le budget d'unités) ;
   absente du mode tableau comme toute étape asynchrone) → kaspr →
   lusha → forager → apollo (`apollo_reveal_phone`, asynchrone, clé de l'appelant
   seulement) → lemlist → dropcontact → fullenrich. Pas d'AI Ark. En tête de la table, mais
@@ -200,12 +208,15 @@ demandée) à l'échéance de sa réservation (`credits_echeances`) : d'où la r
 - **Société** : `fr` (le registre français, UNE ligne à deux entrées : `fr_get` par SIREN,
   sinon `fr_search` par nom, France seulement, gratuit) → lemlist (`lemlist_database
   op=companies`, par `currentCompanyWebsiteUrl` ; voir « La base de lemlist ») → aiark
-  (`linkedin_aiark_search op=companies`, domaine ou nom) → apollo (domaine) → theirstack
+  (`linkedin_aiark_search op=companies`, domaine ou nom) → pipecorn (`op=company`, domaine,
+  sinon nom vérifié contre la société demandée ; clé de l'appelant seulement) → apollo
+  (domaine) → theirstack
   (domaine) → cognism (domaine ou nom).
 - **Personne** : linkedin (`linkedin_unipile_profile`, le compte LinkedIn connecté de
   l'appelant, gratuit) → `lemlist_db` (`lemlist_database op=people`, par
   `leadLinkedInSlug`, sinon `username` + `currentCompanyWebsiteUrl` ; la clé `lemlist` reste
-  l'enrichissement asynchrone) → aiark (export) → apollo → forager (`op=detail`, clé de l'appelant
+  l'enrichissement asynchrone) → pipecorn (`op=person`, profil LinkedIn, sinon prénom + nom
+  + société ; clé de l'appelant seulement) → aiark (export) → apollo → forager (`op=detail`, clé de l'appelant
   seulement, sauf `forager_person:detail` ouvert sur la clé partagée) → cognism →
   lusha (recherche sans `reveal`, le mode bon marché) → lemlist (`linkedin_enrichment`).
 - **Lus par des noms de clés connus, faute de forme figée par un test ici** : Kaspr,
@@ -213,6 +224,14 @@ demandée) à l'échéance de sa réservation (`credits_echeances`) : d'où la r
   société Forager, Cognism, Lusha, Unipile, le profil LinkedIn brut de lemlist, le domaine
   d'une société AI Ark. À confirmer sur une réponse réelle avant de s'y fier — et à figer
   alors par un test de son extraction.
+- **Pipecorn hors de la clé partagée** (personne, société, technologies) : une recherche
+  synchrone n'entre pas au budget d'unités (`access/credits.py` : une fonction par outil,
+  et un règlement synchrone lit la quantité dans la réponse, que Pipecorn ne donne pas) —
+  l'étape est `own_key_only`, sautée sans appel sur une clé partagée. Son appel est
+  borné au temps qui reste dans le budget de la cascade (`Step.bounded_by_deadline` :
+  `timeout_s` posé juste avant l'appel, au plus 60 s ; moins de 3 s restantes → `skipped`
+  `time_budget`, sans appel), le mode tableau compris ; sans réponse à temps, refus nommé
+  `pipecorn_timeout` (la recherche a pu être facturée), jamais un succès.
 - **Absents, et pourquoi** : HitHorizons (deux appels par société, aucune forme connue),
   Topograph et Crunchbase (un « introuvable » ne s'y distingue pas d'une panne :
   `internal`).
@@ -233,7 +252,9 @@ apollo puis aiark (la fiche société de chaque fournisseur de données, mesuré
 ~100 technologies catégorisées chacune, site ET outils métier — CRM, pile data, paiement ;
 source `vendor_database` ; une fiche par domaine, `max_units=1`) →
 theirstack (~3 crédits par société ; par domaine `limit=1`, par nom `limit=3` et la garde
-d'homonyme). Le reçu dit `source` : `website`, `vendor_database` ou `job_postings`.
+d'homonyme) → pipecorn (`op=stack`, sa fiche technologies avec une confiance ; 3 crédits
+Pipecorn par requête, trouvé ou non, d'où la DERNIÈRE place : ce qui facture sans résultat
+passe en dernier ; clé de l'appelant seulement). Le reçu dit `source` : `website`, `vendor_database` ou `job_postings`.
 ⚠️ L'étape du crawl s'appelait `website` jusqu'au 20/10/2026 : aucun alias, un réglage
 `steps` qui la nomme encore la voit ignorée (`ignored_steps`), un appel qui la passe en
 `providers` est refusé — l'écrire `apify`.

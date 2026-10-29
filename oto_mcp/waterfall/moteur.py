@@ -17,6 +17,12 @@ from .valeurs import _bad
 #: (`capabilities/tools_me.py`), the tightest bound a caller meets (MCP: 120 s). A step
 #: that would start after it is skipped (`time_budget`).
 DEADLINE_S = 40.0
+#: A step that bounds its own call (`Step.bounded_by_deadline`) is given what is left of
+#: the budget, at most `BOUNDED_MAX_S` (its client's own read bound), and is skipped
+#: when less than `BOUNDED_MIN_S` is left: a lookup cut off may be billed with nothing
+#: to show, one not started costs nothing.
+BOUNDED_MIN_S = 3
+BOUNDED_MAX_S = 60
 
 
 def _receipt(kind, found, provider, value, attempts, source, ignored, pending) -> dict:
@@ -98,6 +104,14 @@ async def _run_step(mcp: FastMCP, sub, step: Step, mode: str, inputs: dict,
         attempt.update(status="skipped", code="time_budget",
                        message=f"a {run_s} s run does not fit in what is left of the call")
         return None
+    if step.bounded_by_deadline:
+        left = int(deadline - time.monotonic())
+        if left < BOUNDED_MIN_S:
+            attempt.update(status="skipped", code="time_budget",
+                           message=f"{max(left, 0)} s left in the call: too little for "
+                                   "this lookup to answer")
+            return None
+        args = {**args, "timeout_s": min(left, BOUNDED_MAX_S)}
     issue = await appel._call(mcp, sub, step.tool, args, attempt)
     if issue is not None and paid:
         budget["paid_steps"] = budget.get("paid_steps", 0) + 1
