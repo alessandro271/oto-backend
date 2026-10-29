@@ -2,6 +2,8 @@
 `telephone.py`, `personne.py`) — ce que chaque fournisseur reçoit et comment sa réponse
 est lue ; les étapes réservées à la clé de l'appelant sont sautées AVANT l'appel sur la
 clé partagée."""
+import pytest
+
 from oto_mcp.tools.meta import IssueCible
 from oto_mcp.waterfall import email, personne
 
@@ -196,3 +198,153 @@ def test_un_reglage_forager_illisible_garde_l_etape_sur_la_cle_de_l_appelant(cal
                providers=["forager"])
     assert out["attempts"][0]["code"] == "own_key_required"
     assert "forager_person" not in _made(calls)
+
+
+# --- pipecorn, en tête du téléphone (asynchrone) ---------------------------------------
+
+PID = "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a"
+SOUMIS = IssueCible(ok=True, result={"enrichment_id": PID, "status": "pending",
+                                     "find": ["phone"]})
+
+
+@pytest.fixture
+def horloge(monkeypatch):
+    """Une horloge virtuelle : l'attente de Pipecorn (20 s au plus) passe sans attendre."""
+    import types
+    from oto_mcp.waterfall import appel, moteur
+    t = {"now": 1000.0}
+
+    async def dormir(s):
+        t["now"] += s
+    faux = types.SimpleNamespace(monotonic=lambda: t["now"])
+    monkeypatch.setattr(appel, "_sleep", dormir)
+    monkeypatch.setattr(appel, "time", faux)
+    monkeypatch.setattr(moteur, "time", faux)
+    return t
+
+
+def _releve(details):
+    return IssueCible(ok=True, result={
+        "done": True, "status": "finished", "phone": [d["number"] for d in details],
+        "phone_details": details, "pipecorn_credits": 30 if details else 0})
+
+
+def test_pipecorn_ouvre_le_telephone_soumet_un_mobile_puis_releve(calls, horloge):
+    calls["answers"]["pipecorn"] = [
+        SOUMIS,
+        IssueCible(ok=True, result={"done": False, "status": "pending"}),
+        _releve([{"number": "+33612345678", "type": "mobile"}]),
+    ]
+    out = _run("waterfall_phone", linkedin_url="https://www.linkedin.com/in/jane-doe/")
+    assert out["found"] is True and out["provider"] == "pipecorn"
+    assert out["phone"] == {"phone": "+33612345678", "all": ["+33612345678"]}
+    assert calls["made"][0] == ("pipecorn", {
+        "op": "enrich", "find": ["phone"],
+        "linkedin_url": "https://www.linkedin.com/in/jane-doe/", "phone_type": "mobile"})
+    relevé = {"op": "result", "enrichment_id": PID, "find": ["phone"]}
+    assert calls["made"][1:] == [("pipecorn", relevé), ("pipecorn", relevé)]
+
+
+def test_pipecorn_sans_mobile_passe_la_main(calls, horloge):
+    calls["answers"]["pipecorn"] = [SOUMIS, _releve([])]
+    calls["answers"]["kaspr_enrich_linkedin"] = IssueCible(
+        ok=True, result={"profile": {"phone": "+33 6 11 22 33 44"}})
+    out = _run("waterfall_phone", linkedin_url="https://www.linkedin.com/in/jane-doe/")
+    assert out["provider"] == "kaspr"
+    assert _made(calls)[:3] == ["pipecorn", "pipecorn", "kaspr_enrich_linkedin"]
+
+
+def test_pipecorn_attend_20_s_au_plus_puis_passe_la_main(calls, horloge):
+    calls["answers"]["pipecorn"] = [SOUMIS, IssueCible(ok=True, result={"done": False})]
+    calls["answers"]["kaspr_enrich_linkedin"] = IssueCible(
+        ok=True, result={"profile": {"phone": "+33 6 11 22 33 44"}})
+    debut = horloge["now"]
+    out = _run("waterfall_phone", linkedin_url="https://www.linkedin.com/in/jane-doe/")
+    assert out["provider"] == "kaspr" and out["found"] is True
+    lectures = [a for n, a in calls["made"] if n == "pipecorn" and a.get("op") == "result"]
+    # 2 s, puis toutes les 3 s jusqu'à 20 s ; puis UNE relecture en fin de cascade.
+    assert len(lectures) == 1 + 6 + 1
+    assert 19 <= horloge["now"] - debut <= 21
+    by = {a["provider"]: a for a in out["attempts"]}
+    assert by["pipecorn"]["status"] == "pending"
+    assert out["pending"] == [{"provider": "pipecorn", "tool": "pipecorn", "arguments": {
+        "op": "result", "enrichment_id": PID, "find": ["phone"]}}]
+
+
+def test_l_attente_de_pipecorn_compte_dans_le_budget_de_la_cascade(calls, horloge,
+                                                                  monkeypatch):
+    # Un budget de 8 s : Pipecorn est relu à 2, 5 et 8 s, puis plus rien ne part — ni
+    # Kaspr ni la relecture finale. La recherche reste `pending`, à relever plus tard :
+    # l'appel tient sous la borne REST, aucun appel n'est coupé après dépense.
+    from oto_mcp.waterfall import moteur
+    monkeypatch.setattr(moteur, "DEADLINE_S", 8.0)
+    calls["answers"]["pipecorn"] = [SOUMIS, IssueCible(ok=True, result={"done": False})]
+    debut = horloge["now"]
+    out = _run("waterfall_phone", linkedin_url="https://www.linkedin.com/in/jane-doe/")
+    lectures = [a for n, a in calls["made"] if n == "pipecorn" and a.get("op") == "result"]
+    assert len(lectures) == 3
+    assert horloge["now"] - debut == 8
+    assert "kaspr_enrich_linkedin" not in _made(calls)
+    by = {a["provider"]: a for a in out["attempts"]}
+    assert by["kaspr"]["code"] == "time_budget"
+    assert out["found"] is False
+    assert out["pending"] == [{"provider": "pipecorn", "tool": "pipecorn", "arguments": {
+        "op": "result", "enrichment_id": PID, "find": ["phone"]}}]
+
+
+def test_apres_l_attente_de_pipecorn_les_suivants_ont_ce_qui_reste(calls, horloge):
+    # 20 s pour Pipecorn sur 40 : Kaspr ne trouve rien, Lusha passe encore.
+    calls["answers"]["pipecorn"] = [SOUMIS, IssueCible(ok=True, result={"done": False})]
+    calls["answers"]["lusha_search_and_enrich"] = IssueCible(ok=True, result={
+        "results": [{"phones": ["+33612345678"]}]})
+    out = _run("waterfall_phone", linkedin_url="https://www.linkedin.com/in/jane-doe/")
+    assert out["provider"] == "lusha"
+
+
+def test_pipecorn_fini_apres_le_repli_est_relu_et_sert_si_rien_n_a_trouve(calls, horloge):
+    # Rien en 20 s ; les suivants ne trouvent rien ; la relecture finale a le mobile.
+    calls["answers"]["pipecorn"] = [SOUMIS] + [
+        IssueCible(ok=True, result={"done": False})] * 7 + [
+        _releve([{"number": "+33612345678", "type": "mobile"}])]
+    out = _run("waterfall_phone", linkedin_url="https://www.linkedin.com/in/jane-doe/",
+               providers=["pipecorn", "kaspr"])
+    assert out["provider"] == "pipecorn" and out["phone"]["phone"] == "+33612345678"
+    assert "pending" not in out
+    assert out["attempts"][0]["status"] == "found"
+
+
+def test_pipecorn_fini_apres_un_autre_est_note_sans_remplacer(calls, horloge):
+    calls["answers"]["pipecorn"] = [SOUMIS] + [
+        IssueCible(ok=True, result={"done": False})] * 7 + [
+        _releve([{"number": "+33600000000", "type": "mobile"}])]
+    calls["answers"]["kaspr_enrich_linkedin"] = IssueCible(
+        ok=True, result={"profile": {"phone": "+33 6 11 22 33 44"}})
+    out = _run("waterfall_phone", linkedin_url="https://www.linkedin.com/in/jane-doe/",
+               providers=["pipecorn", "kaspr"])
+    assert out["provider"] == "kaspr"
+    assert out["attempts"][0]["status"] == "found_late"
+    assert "billed" in out["attempts"][0]["message"]
+    assert "pending" not in out
+
+
+def test_pipecorn_un_numero_masque_n_est_pas_un_trouve(calls, horloge):
+    calls["answers"]["pipecorn"] = [
+        SOUMIS, _releve([{"number": "Contacts not shared", "type": "mobile"}])]
+    out = _run("waterfall_phone", linkedin_url="https://www.linkedin.com/in/jane-doe/",
+               providers=["pipecorn"])
+    assert out["found"] is False
+
+
+def test_pipecorn_sans_profil_linkedin_est_saute(calls):
+    out = _run("waterfall_phone", full_name="Jane Doe", domain="acme.com", dry_run=True)
+    by = {a["provider"]: a for a in out["attempts"]}
+    assert by["pipecorn"]["status"] == "skipped"
+    assert "pipecorn" not in _made(calls)
+
+
+def test_pipecorn_sur_la_cle_partagee_passe_derriere_les_cles_de_l_appelant(calls):
+    calls["modes"] = {"kaspr_enrich_linkedin": "user"}
+    out = _run("waterfall_phone", linkedin_url="https://www.linkedin.com/in/jane-doe/",
+               dry_run=True)
+    order = [a["provider"] for a in out["attempts"]]
+    assert order[:2] == ["kaspr", "pipecorn"]

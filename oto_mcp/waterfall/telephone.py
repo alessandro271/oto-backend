@@ -2,7 +2,7 @@
 each provider's answer is read. No AI Ark: it sells no phone."""
 from __future__ import annotations
 
-from .etape import Step
+from .etape import Collect, Step
 from .fournisseurs import (_APOLLO_REVEAL_COLLECT, _DROPCONTACT_COLLECT,
                            _DROPCONTACT_IDS, _FULLENRICH_COLLECT, _FULLENRICH_IDS,
                            _LEMLIST_COLLECT, _NAMES_AND_DOMAIN, _PERSON_IDS, _apollo_args,
@@ -10,6 +10,28 @@ from .fournisseurs import (_APOLLO_REVEAL_COLLECT, _DROPCONTACT_COLLECT,
                            _fullenrich_profile, _lemlist_args, _lemlist_first,
                            _lusha_contact, _lusha_first)
 from .valeurs import _deep, _get, _phone_find, _phones_in, _slug
+
+def _pipecorn_phone(res, inputs):
+    # Asked with `phone_type="mobile"`: every number left is a mobile (or a number that
+    # cannot be told from one), and one the workspace suppressed reads "Contacts not
+    # shared" — `_phone` drops it. The result lists the numbers under `phone`.
+    if not isinstance(res, dict):
+        return None
+    numbers = [d.get("number") for d in res.get("phone_details") or [] if isinstance(d, dict)]
+    return _phone_find(_phones_in(numbers or res.get("phone") or res.get("phones") or []))
+
+
+#: Pipecorn's lookup is asynchronous: the submission answers with an `enrichment_id`,
+#: read back (free) by the same tool with `op="result"` until `done`.
+_PIPECORN_COLLECT = Collect(
+    "pipecorn",
+    lambda submitted: ({"op": "result", "enrichment_id": submitted["enrichment_id"],
+                        "find": ["phone"]}
+                       if isinstance(submitted, dict) and submitted.get("enrichment_id")
+                       else None),
+    lambda res: isinstance(res, dict) and bool(res.get("done")),
+)
+
 
 def _kaspr_phone(res, inputs):
     return _phone_find(_deep(res, "phone", _phones_in))
@@ -53,10 +75,36 @@ def _lemlist_phone(res, inputs):
     return isinstance(found, dict) and _phone_find(_phones_in(found.get("phone")))
 
 
+#: Pipecorn's own wait (`Step.poll`): first read after 2 s, then every 3 s (its reads
+#: are free and exempt from its rate limit), 20 s at most — inside the cascade's 40 s
+#: (`moteur.DEADLINE_S`), so the whole call stays under the 45 s of the REST face —
+#: then the cascade falls back on the next providers (`Step.falls_through`), with what
+#: is left of the budget.
+PIPECORN_POLL = (2.0, 3.0, 20.0)
+
 #: Synchronous steps first, by provider cost and yield; the asynchronous ones last (a
 #: `pending` one stops the cascade): Apollo's reveal on the caller's own key, then the
-#: slow ones — FullEnrich, 30 s to 4 min, at the end.
+#: slow ones — FullEnrich, 30 s to 4 min, at the end. EXCEPT Pipecorn, which heads the
+#: table although it is asynchronous: one lookup runs its own cascade of providers and
+#: bills only a mobile found. It does not stop the cascade: not done within its 20 s,
+#: the next providers are tried, and it is read once more at the end if the budget
+#: leaves time — even when another provider found, since Pipecorn bills a mobile it
+#: finds all the same; past the budget it stays `pending`, to be read later.
+#: The table mode leaves it out with the other asynchronous steps
+#: (`tools/waterfall_lignes.py`). The default order still puts the caller's own keys
+#: ahead of a shared one (`ordre._plan`).
 PHONE_STEPS: tuple[Step, ...] = (
+    Step("pipecorn", "pipecorn", (("linkedin_url",),),
+         lambda i: {"op": "enrich", "find": ["phone"],
+                    "linkedin_url": i["linkedin_url"], "phone_type": "mobile"},
+         _pipecorn_phone,
+         "30 Pipecorn credits per mobile found, nothing on a miss (asynchronous)",
+         collect=_PIPECORN_COLLECT, asks="phones", poll=PIPECORN_POLL,
+         falls_through=True,
+         explains=("Pipecorn runs its own cascade of phone providers — mobiles only, "
+                   "from a LinkedIn profile; waited up to 20 s, then the other "
+                   "providers are tried. Billed when it finds a mobile, even "
+                   "if another provider found first.")),
     Step("kaspr", "kaspr_enrich_linkedin", (("linkedin_url",),),
          lambda i: {"linkedin_id": i["linkedin_url"], "with_phone": True,
                     "data_to_get": ["phone"],

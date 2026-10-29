@@ -111,6 +111,14 @@ async def _run_step(mcp: FastMCP, sub, step: Step, mode: str, inputs: dict,
     if step.collect is not None:
         collected, collect_args, finished = await appel._poll(mcp, sub, step, result,
                                                              deadline)
+        if not finished and step.falls_through:
+            # Not done within its wait (bounded by the cascade's budget): the cascade
+            # goes on, and reads it once more at the end if time is left (`_late_reads`).
+            attempt.update(status="pending", falls_through=True,
+                           collect={"tool": step.collect.tool, "arguments": collect_args},
+                           message="not finished within its wait — the cascade went "
+                                   "on to the next providers")
+            return None
         if not finished:
             collect = {"tool": step.collect.tool, "arguments": collect_args}
             attempt.update(status="pending", collect=collect,
@@ -226,6 +234,10 @@ async def _run_cascade(mcp: FastMCP, ns: str, kind: str, steps: tuple[Step, ...]
                 continue    # nobody here passes: the next provider is tried
         found = got
         winner = step.key if found is not None else None
+    late_pending: list[dict] = []
+    if not dry_run:
+        found, winner = await _late_reads(mcp, sub, order, inputs, attempts, found,
+                                          winner, late_pending, deadline)
     if found is None and fallback is not None:
         found, winner = fallback, fallback_step
         if not dry_run and qualification._per_step(kind, qualify):
@@ -270,7 +282,7 @@ async def _run_cascade(mcp: FastMCP, ns: str, kind: str, steps: tuple[Step, ...]
         found = {**found, "people": people[:inputs["limit"]],
                  "count": min(len(people), inputs["limit"])}
     out = _receipt(kind, found is not None, winner, found, attempts, source, ignored,
-                   pending)
+                   pending + late_pending)
     if tally.reports:
         out["qualification"] = tally.receipt(qualify)
         if (qualification._per_step(kind, qualify) and found
@@ -281,6 +293,43 @@ async def _run_cascade(mcp: FastMCP, ns: str, kind: str, steps: tuple[Step, ...]
             # second, billed cascade. The full records on demand.
             out["unqualified"] = tally.rejected if qualify.get("show") else tally.compact()
     return out
+
+
+async def _late_reads(mcp: FastMCP, sub, order: list[Step], inputs: dict,
+                      attempts: list[dict], found, winner, late_pending: list[dict],
+                      deadline: float):
+    """The steps that fell through still pending (`Step.falls_through`): read ONCE more,
+    free, when the cascade ends — even when another provider found: the read is what
+    settles the lookup at what it found (its tool notes it), where a lookup never read
+    would be settled at its worst case when its hold expires. Its find answers if
+    nothing else did (`found_late` otherwise: billed by its provider all the same).
+    Still running, or no time left in the call's budget: it stays in the receipt's
+    `pending`, with the call that collects it."""
+    by_key = {s.key: s for s in order}
+    for attempt in attempts:
+        if not attempt.get("falls_through") or attempt.get("status") != "pending":
+            continue
+        step, collect = by_key[attempt["provider"]], attempt["collect"]
+        if time.monotonic() >= deadline:
+            late_pending.append({"provider": step.key, **collect})
+            continue
+        issue = await appel.collect_once(mcp, sub, step, collect["arguments"])
+        if issue is None or not issue.ok or issue.retenu \
+                or not step.collect.done(_payload(issue)):
+            late_pending.append({"provider": step.key, **collect})
+            continue
+        attempt.pop("collect", None)
+        late = step.extract(_payload(issue), inputs)
+        if not late:
+            attempt.update(status="no_match", message="finished after the fallback")
+        elif found is None:
+            attempt.update(status="found", message="finished after the fallback")
+            found, winner = late, step.key
+        else:
+            attempt.update(status="found_late", found=late,
+                           message="finished after another provider answered — "
+                                   "billed by its provider all the same")
+    return found, winner
 
 
 def _continue_with(out: dict, order: list[Step], winner: Optional[str], inputs: dict,

@@ -152,6 +152,20 @@ encore, aucune étape suivante n'est payée pour la même recherche — pas mêm
 complétion.
 lemlist est BYO seulement : sans clé de l'appelant, l'étape est sautée sans appel.
 
+**L'exception qui passe la main : Pipecorn** (en tête du téléphone).
+`pipecorn op=enrich` soumet, `pipecorn op=result` relève (gratuit). L'étape a SA propre
+cadence (`Step.poll` : première relève à 2 s, puis toutes les 3 s, **20 s au plus**),
+**dans** le budget de la cascade (`DEADLINE_S`, 40 s) : l'appel entier tient sous les
+45 s de la face REST, et les étapes suivantes ont ce qui reste. Pas finie à temps, elle
+**n'arrête pas** la cascade (`Step.falls_through`) : les fournisseurs suivants sont
+essayés, puis elle est relue UNE fois en fin de cascade s'il reste du temps — même quand
+un autre a trouvé : finie, cette relecture règle la recherche à ce qu'elle a trouvé et sa
+trouvaille sert si rien d'autre n'a trouvé (`found_late` sinon, **payée tout de même** :
+Pipecorn débite un mobile trouvé). Toujours en cours, ou plus de temps, elle reste dans
+`pending[]`, à relever plus tard ; jamais un appel coupé après dépense. Sur une clé
+refacturée, une recherche jamais relue est réglée au pire (un résultat par sorte
+demandée) à l'échéance de sa réservation (`credits_echeances`) : d'où la relecture.
+
 ## Ce que le waterfall refuse d'être
 
 - **Un appel d'outil arbitraire** : `providers` et `steps` ne nomment que des clés de la
@@ -173,8 +187,16 @@ lemlist est BYO seulement : sans clé de l'appelant, l'étape est sautée sans a
   sa correspondance même sans email) → apollo → kaspr → lusha → forager (clé de l'appelant
   seulement, sauf si l'instance ouvre `forager_person:work_emails` sur sa clé partagée) →
   dropcontact → lemlist → fullenrich (les asynchrones en dernier).
-- **Téléphone** : kaspr → lusha → forager → apollo (`apollo_reveal_phone`, asynchrone,
-  clé de l'appelant seulement) → lemlist → dropcontact → fullenrich. Pas d'AI Ark.
+- **Téléphone** : pipecorn (`pipecorn op=enrich find=["phone"] phone_type="mobile"`,
+  depuis un profil LinkedIn : sa propre cascade de fournisseurs, ASYNCHRONE, attendue
+  20 s au plus dans le budget de l'appel puis repli sur la suite — voir « Les étapes
+  asynchrones » ; facturée au seul mobile trouvé, à la relève, même si un autre a trouvé ;
+  aucune clé partagée n'est promise (connecteur fermé, clé de l'appelant) ;
+  absente du mode tableau comme toute étape asynchrone) → kaspr →
+  lusha → forager → apollo (`apollo_reveal_phone`, asynchrone, clé de l'appelant
+  seulement) → lemlist → dropcontact → fullenrich. Pas d'AI Ark. En tête de la table, mais
+  l'ordre par défaut reste trié (propres clés d'abord, `ordre._plan`) : sur la clé
+  partagée, pipecorn passe derrière une clé Kaspr ou Lusha de l'appelant.
 - **Société** : `fr` (le registre français, UNE ligne à deux entrées : `fr_get` par SIREN,
   sinon `fr_search` par nom, France seulement, gratuit) → lemlist (`lemlist_database
   op=companies`, par `currentCompanyWebsiteUrl` ; voir « La base de lemlist ») → aiark
@@ -525,6 +547,7 @@ Une ligne `Step(...)` dans la table : la clé, l'outil (déjà monté — vérif
 résultat SERVI, après rédaction), une note de coût, et `collect` si le fournisseur répond
 plus tard ; `asks`, `max_units`, `per_item` si l'outil facture ce qu'on lui demande ou
 par résultat (le plan les sert). Une étape asynchrone se range APRÈS les synchrones
-(`tests/test_waterfall.py`). Un test de son extraction sur une réponse réelle du
+(`tests/test_waterfall.py`), sauf si elle passe la main (`falls_through`, avec son
+attente bornée `poll`). Un test de son extraction sur une réponse réelle du
 fournisseur, anonymisée (`tests/waterfall/`).
 La clé devient aussitôt utilisable dans le réglage `steps` de la carte.
