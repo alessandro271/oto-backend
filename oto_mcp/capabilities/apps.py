@@ -23,10 +23,12 @@ par elle, ses équipes, moi ici, ou partagées à l'un de ces principals.
 ET restauration d'une révision : sa forme, que chaque tableau, champ et agent déclarés
 sont à la portée de l'AUTEUR, et qu'ils vivent dans l'org de l'app (`org_de_l_app`). Un
 manifeste invalide est refusé en 400 `invalid_manifest` avec la liste de ce qui ne va
-pas ; `op=validate` rend cette liste sans rien écrire.
+pas ; `op=validate` rend cette liste sans rien écrire. Le HTML, lui, se LIT à
+l'écriture sans jamais refuser (`apps_html.py`) : ce qu'il demande hors du manifeste
+revient en `warnings`.
 
 **Écrire une app est réservé à la population bêta** (option `beta`, la même que celle
-qui ouvre `oto_apps` et l'écran du front) : `create`, `update`, `archive`,
+qui ouvre `oto_apps` et l'écran du front) : `create`, `update`, `patch`, `archive`,
 `unarchive`, `restore`, `file`, `unfile` refusent 403 `apps_beta_only` aux autres, sur
 les deux faces, fail-closed. Lire une app reste ouvert à qui la lit.
 
@@ -45,8 +47,10 @@ from .. import access, db, ownership
 from ..tool_visibility import BETA_OPTION
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .apps_html import avertissements
 from .apps_manifeste import auteur, forme, org_de_l_app
 from .orgs import partage_par_defaut
+from .remplacements import RemplacementRefuse, appliquer
 from .registry import CAPABILITIES
 
 logger = logging.getLogger(__name__)
@@ -57,12 +61,12 @@ MAX_HTML = 512_000
 MAX_TITLE = 200
 MAX_PROJECTS = 200
 _THUMB_KEYS = {"image", "color", "emoji", "design"}
-_ECRITURES = frozenset({"create", "update", "archive", "unarchive", "restore", "file",
-                        "unfile"})
+_ECRITURES = frozenset({"create", "update", "patch", "archive", "unarchive", "restore",
+                        "file", "unfile"})
 
 
 class AppInput(BaseModel):
-    op: Literal["list", "get", "create", "update", "archive", "unarchive",
+    op: Literal["list", "get", "create", "update", "patch", "archive", "unarchive",
                 "revisions", "restore", "validate", "file", "unfile", "read_file",
                 "put_file"]
     project_id: Optional[int] = Field(
@@ -78,6 +82,10 @@ class AppInput(BaseModel):
     thumbnail: Optional[dict] = None
     clear_thumbnail: Optional[bool] = None
     expected_rev: Optional[str] = None
+    edits: Optional[list[dict]] = Field(default=None, description=(
+        "patch: exact replacements in the app's HTML, applied in order, all or nothing — "
+        "`[{\"find\": \"…\", \"replace\": \"…\"}]`; `find` must appear exactly once "
+        "(or pass `\"all\": true`)."))
     revision_id: Optional[int] = None
     archived: Optional[bool] = None
     file_id: Optional[int] = Field(
@@ -135,6 +143,12 @@ class AppOut(BaseModel):
     ok: Optional[bool] = None
     # read_file : le fichier rendu pour un agent (`file_content.render_for_agent`).
     file: Optional[dict] = None
+    # create, update, restore, validate, patch : ce que le HTML demande hors du
+    # manifeste (`apps_html.py`) — un avertissement, l'app est écrite quand même.
+    warnings: Optional[list[str]] = None
+    # patch : un reçu, jamais le HTML — l'op existe pour ne pas le faire transiter.
+    rev: Optional[str] = None
+    replaced: Optional[int] = None
 
 
 def _require(cond, code: str, msg: str, status: int = 400) -> None:
@@ -261,6 +275,27 @@ def _view(sub: str, row: dict) -> dict:
     return {k: row[k] for k in AppView.model_fields if k in row}
 
 
+def _avertir(manifest: Optional[dict], html: Optional[str]) -> dict:
+    """`{"warnings": […]}` quand le HTML demande hors du manifeste, sinon `{}`.
+    Appelé AVANT l'écriture : un défaut du lecteur de HTML refuse sans rien écrire,
+    plutôt qu'un 500 après une création commitée qu'un agent rejouerait en doublon."""
+    w = avertissements(manifest or {}, html)
+    return {"warnings": w} if w else {}
+
+
+def _devenir_auteur_ou_refus(ctx: ResolvedCtx, row: dict) -> None:
+    """Toute écriture fait de son auteur celui de l'app (`updated_by`), dont les droits
+    bornent chaque lecteur. Écrire sans pouvoir lire ce que l'app déclare la casserait
+    pour tous : rejugé, refusé nommé."""
+    if row.get("updated_by") != ctx.sub:
+        _, problems = _problemes(ctx.sub, org_de_l_app(row), row["manifest"])
+        if problems:
+            raise AuthzDenied(
+                403, "would_break_app",
+                "Saving would make you this app's author, and you can't reach "
+                "everything it uses: " + " ".join(problems))
+
+
 def _org_list(ctx: ResolvedCtx, archived: bool) -> tuple[list[dict], set[int]]:
     """Les apps de l'org active : possédées par l'org ou ses équipes, mes apps perso
     créées ici, et celles partagées à l'un des principals de la liste — les mêmes
@@ -308,11 +343,17 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
 
     if inp.op == "validate":
         # Jugé contre l'org où l'app vit : la sienne, ou l'org active pour une app à
-        # créer.
-        org = (org_de_l_app(_app_or_404(sub, inp.app_id, "read")) if inp.app_id is not None
-               else ctx.org_id)
-        _, problems = _problemes(sub, org, inp.manifest)
-        return {"ok": not problems, "problems": problems}
+        # créer. Le HTML : celui passé, sinon celui de l'app ; jamais contre un
+        # manifeste à corriger (chaque appel y paraîtrait hors manifeste).
+        app = _app_or_404(sub, inp.app_id, "read") if inp.app_id is not None else None
+        org = org_de_l_app(app) if app is not None else ctx.org_id
+        clean, problems = _problemes(sub, org, inp.manifest)
+        out: dict = {"ok": not problems, "problems": problems}
+        if not problems:
+            manifeste = app["manifest"] if inp.manifest is None and app is not None else clean
+            html = inp.html if inp.html is not None else (app or {}).get("html")
+            out.update(_avertir(manifeste, html))
+        return out
 
     if inp.op == "create":
         _require(ctx.org_id is not None, "no_active_org",
@@ -322,6 +363,7 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
                      "You can't file an app in this project.", 403)
         _content(inp, creating=True)
         manifest = _checked_manifest(ctx, int(ctx.org_id), inp.manifest)
+        extra = _avertir(manifest, inp.html)
         # À qui la crée, dans l'org active : privée, comme un agent — l'org l'ouvre
         # seulement si un admin l'a réglé (`partage_par_defaut`, type `app`).
         row = db.apps.create(("user", sub), int(ctx.org_id), title=inp.title.strip(),
@@ -332,7 +374,7 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         if role:
             ownership.grant(APP_RTYPE, str(row["id"]), "org", str(ctx.org_id), role=role,
                             granted_by=db.MARQUE_PARTAGE_PAR_DEFAUT)
-        return {"app": _view(sub, row)}
+        return {"app": _view(sub, row), **extra}
 
     row = _app_or_404(sub, inp.app_id,
                       "read" if inp.op in ("get", "revisions", "read_file", "put_file") else "write")
@@ -401,10 +443,28 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         _require(old is not None, "unknown_revision", "No such revision of this app.", 404)
         # Restaurer, c'est RÉÉCRIRE l'app sous son nom : le manifeste d'hier est rejugé
         # contre celui qui restaure (il devient l'auteur) et l'org de l'app d'aujourd'hui.
-        changed = _update(sub, row, inp.expected_rev, title=old["title"],
-                          manifest=_checked_manifest(ctx, org_de_l_app(row), old["manifest"]),
+        manifest = _checked_manifest(ctx, org_de_l_app(row), old["manifest"])
+        extra = _avertir(manifest, old["html"])
+        changed = _update(sub, row, inp.expected_rev, title=old["title"], manifest=manifest,
                           html=old["html"], thumbnail=old["thumbnail"])
-        return {"app": _view(sub, changed)}
+        return {"app": _view(sub, changed), **extra}
+
+    if inp.op == "patch":
+        # Changer une ligne sans renvoyer 40 000 caractères : un agent qui réécrit tout
+        # le HTML pour un tri y laisse un tour de modèle entier, ou s'y fait couper.
+        # Les gardes d'update : bêta (`_ECRITURES`), écriture sur l'app, auteur qui lit
+        # ce que l'app déclare, taille (bornée AVANT de remplacer), révision.
+        try:
+            html, n = appliquer(row.get("html") or "", inp.edits, max_len=MAX_HTML)
+        except RemplacementRefuse as e:
+            raise AuthzDenied(400, "invalid_edits", str(e)) from None
+        _devenir_auteur_ou_refus(ctx, row)
+        # Le manifeste, un patch n'y touche pas : celui de l'app lue.
+        extra = _avertir(row.get("manifest"), html)
+        # Le HTML est calculé sur la révision LUE : sans `expected_rev`, on écrit contre
+        # elle, sinon une écriture concurrente serait écrasée sans un mot.
+        changed = _update(sub, row, inp.expected_rev or row["rev"], html=html)
+        return {"rev": changed["rev"], "replaced": n, **extra}
 
     # update
     _content(inp, creating=False)
@@ -412,24 +472,18 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         manifest = _checked_manifest(ctx, org_de_l_app(row), inp.manifest)
     else:
         manifest = None
-        # Toute écriture fait de son auteur celui de l'app (`updated_by`), dont les
-        # droits bornent chaque lecteur. Changer le titre ou la vignette sans pouvoir
-        # lire ce que l'app déclare la casserait pour tous : rejugé, refusé nommé.
-        if row.get("updated_by") != ctx.sub:
-            _, problems = _problemes(ctx.sub, org_de_l_app(row), row["manifest"])
-            if problems:
-                raise AuthzDenied(
-                    403, "would_break_app",
-                    "Saving would make you this app's author, and you can't reach "
-                    "everything it uses: " + " ".join(problems))
+        # Changer le titre ou la vignette fait aussi de moi l'auteur.
+        _devenir_auteur_ou_refus(ctx, row)
     thumb: Any = ...
     if inp.clear_thumbnail:
         thumb = None
     elif inp.thumbnail is not None:
         thumb = _thumbnail(inp.thumbnail)
+    extra = _avertir(manifest if manifest is not None else row["manifest"],
+                     inp.html if inp.html is not None else row["html"])
     changed = _update(sub, row, inp.expected_rev, title=inp.title.strip() if inp.title else None,
                       manifest=manifest, html=inp.html, thumbnail=thumb)
-    return {"app": _view(sub, changed)}
+    return {"app": _view(sub, changed), **extra}
 
 
 def _update(sub: str, row: dict, expected_rev: Optional[str], **fields) -> dict:
@@ -466,10 +520,18 @@ CAPABILITIES += [
             "`content` or `content_base64`, `media_type`: hand a RESULT file back to the "
             "app, for the person whose run this is — they get it with oto.files() / "
             "oto.download; PDF, Word, Excel, text, CSV, JSON, 20 MB) / update (`app_id`, any of those; pass "
-            "`expected_rev` from get → 409 if it changed) / archive / unarchive / "
+            "`expected_rev` from get → 409 if it changed) / patch (`app_id`, `edits`: "
+            "exact find → replace in the HTML, each `find` unique, all or nothing; "
+            "returns `rev`, `replaced` and `warnings`, never the HTML — prefer it to "
+            "update for any change smaller than the whole page) / archive / unarchive / "
             "revisions / restore (`revision_id`) / file / unfile (`app_id`, "
-            "`project_id`) / validate (`manifest`, and `app_id` for an existing app: "
-            "the problems a create would refuse, nothing written). Every declared "
+            "`project_id`) / validate (`manifest`, and `app_id` for an existing app, "
+            "optional `html`: the problems a create would refuse, nothing written). "
+            "create, update, patch, restore and validate also return `warnings`: "
+            "oto.rows / oto.aggregate calls that sort, filter, group or measure on a "
+            "field the manifest doesn't declare (`_created_at` / `_updated_at` are "
+            "always sortable and filterable) — the open app would refuse them, so fix "
+            "them first. Every declared "
             "table and agent must be within YOUR reach and in the app's organization: "
             "otherwise 400 invalid_manifest, each problem listed. Writing apps is open "
             "to beta accounts only.\n"
@@ -491,8 +553,8 @@ CAPABILITIES += [
         mcp="oto_apps",
         rest=RestBinding("POST", "/api/me/apps", allow_api_token=False),
         errors=(DeclaredError(403, "apps_beta_only",
-                              "create, update, archive, unarchive, restore, file or "
-                              "unfile by an account without the beta option"),),
+                              "create, update, patch, archive, unarchive, restore, "
+                              "file or unfile by an account without the beta option"),),
     ),
 ]
 

@@ -34,6 +34,8 @@ MAX_TABLES = 20
 MAX_AGENTS = 20
 # Le manifeste sérialisé, en caractères : il est relu à CHAQUE appel d'une app ouverte.
 MAX_MANIFEST = 32_000
+# Ce qu'une app trie et filtre toujours, déclaré ou non.
+DATES = frozenset({"_created_at", "_updated_at"})
 
 
 def _liste_de_noms(v: Any) -> Optional[list[str]]:
@@ -157,6 +159,14 @@ def org_de_l_app(app: dict) -> Optional[int]:
         return (int(app["context_org_id"]) if app.get("context_org_id")
                 else org_store.get_personal_org(str(i)))
     return None
+
+
+def lisible(t: dict, champ: str) -> bool:
+    """Un champ que le tableau déclaré `t` ouvre — ou l'élément d'une liste par sa
+    colonne (`tags[]`, `contacts[].role`). Sans liste de champs, tout ce que le lecteur
+    voit. La règle de l'appel (`apps_appel.py`) et de la lecture du HTML (`apps_html.py`)."""
+    fields = t.get("fields")
+    return fields is None or champ.split("[")[0].split(".")[0] in fields
 
 
 def tableau_de_l_org(ns_id: str, org_id: Optional[int]) -> bool:

@@ -75,14 +75,40 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
   agent **vivent dans l'org de l'app** (`org_de_l_app`) — jamais dans l'org active de
   l'auteur ni du lecteur. Un manifeste qui nomme ce que l'auteur ne voit pas,
   ou ce qui vit ailleurs, est refusé, 400 `invalid_manifest`, chaque problème listé ;
-  `op=validate` (`app_id`, sinon l'org active) rend la liste sans rien écrire.
+  `op=validate` (`app_id`, sinon l'org active ; `html` optionnel) rend la liste sans
+  rien écrire.
+- **Le HTML se LIT à l'écriture, sans refuser** (`capabilities/apps_html.py`) —
+  `create`, `update`, `patch`, `restore` et `validate` (qui prend aussi `html`) rendent
+  `warnings` : chaque appel `oto.rows` / `oto.aggregate` écrit en clair (le pont
+  sous un autre nom compris, `const T = window.oto`) qui trie, filtre, regroupe,
+  mesure ou cherche hors de ce que le manifeste déclare, avec sa ligne. Ce sont
+  exactement les appels que l'app ouverte se verrait refuser (« An app can only sort
+  on a field it declares. ») devant son premier lecteur : l'agent qui écrit les
+  corrige tout de suite. Seul le contenu des `<script>` est lu, commentaires blanchis ;
+  un appel par variable n'est pas jugé, un `orderBy` / `groupBy` hors appel l'est
+  contre tous les tableaux. Avertir, jamais refuser : c'est une lecture du texte, pas
+  une exécution. Les avertissements se calculent AVANT l'écriture (un défaut du lecteur
+  refuse sans rien écrire, jamais après une création commitée), et la lecture est
+  bornée (`MAX_APPELS` appels examinés, `MAX_ARGS` caractères d'arguments par appel).
+- **`op=patch` édite le HTML sans le réémettre** (`capabilities/remplacements.py`,
+  moteur partagé) : `edits = [{find, replace, all?}]`, appliqués dans l'ordre, tout ou
+  rien ; chaque `find` exact et unique (deux occurrences qui se chevauchent sont
+  ambiguës aussi ; sinon `all: true`), absent ou ambigu → 400 `invalid_edits` qui
+  nomme l'edit, rien d'écrit ; la longueur que le HTML AURAIT est jugée avant chaque
+  remplacement (au plus 512 000 caractères). Mêmes gardes que `update` : bêta,
+  écriture sur l'app, auteur qui lit ce que l'app déclare (→ 403 `would_break_app`),
+  révision ; `expected_rev` → 409, et sans `expected_rev`, la révision LUE (une
+  écriture concurrente n'est jamais écrasée sans un mot). Il rend un **reçu** (`rev`,
+  `replaced`, `warnings`), jamais le HTML : l'op existe pour qu'un agent change une
+  ligne d'une app de 40 000 caractères en deux cents jetons, au lieu de la réécrire
+  entière — ce qui coupait l'agent intégré à `max_tokens`.
 - **Chaque tableau déclaré est rangé par son NUMÉRO** (résolu à l'écriture pour
   l'auteur) : un nom résoudrait dans l'org active de qui le lit.
 - **`set`, `add`, `agents` bornent les gestes** de l'appel d'une app (plus bas).
 
 ## Qui écrit une app
 
-- **La population bêta seule** : `create`, `update`, `archive`, `unarchive`,
+- **La population bêta seule** : `create`, `update`, `patch`, `archive`, `unarchive`,
   `restore`, `file`, `unfile` exigent l'option `beta` (`access.has_option`, dans l'org de l'appel) — la
   même population que `oto_apps` (`BETA_TOOLS`) et l'écran du front. Les autres :
   403 `apps_beta_only`, sur les deux faces ; une panne du seam des options refuse
@@ -286,7 +312,7 @@ dans un faux formulaire d'une app — seule donnée que l'auteur n'a pas déjà.
 ## Révisions et conflits
 
 `rev` est une ETag de contenu (titre, manifeste, HTML, vignette), comme celle des
-pages. `update` accepte `expected_rev` et refuse en 409 `conflict` si l'app a changé.
+pages. `update` et `patch` acceptent `expected_rev` et refusent en 409 `conflict` si l'app a changé.
 Chaque mise à jour écrit d'abord l'état précédent dans `app_revisions` ; seules les
 50 plus récentes sont gardées (`db.apps.MAX_REVISIONS`, purge dans la même
 transaction). `restore` remet une révision (en écrivant à son tour l'état courant),

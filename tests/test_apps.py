@@ -242,7 +242,8 @@ def test_ranger_et_lire_un_fichier_sont_classes_pour_la_lecture_seule():
     from oto_mcp.api.routes import _READ_OPS
     assert "read_file" in _READ_OPS
     assert not {"file", "unfile", "put_file"} & _READ_OPS
-    assert {"file", "unfile"} <= A._ECRITURES
+    assert {"file", "unfile", "patch"} <= A._ECRITURES
+    assert "patch" not in _READ_OPS
 
 
 # ── La population bêta ──────────────────────────────────────────────────────
@@ -250,6 +251,7 @@ def test_ranger_et_lire_un_fichier_sont_classes_pour_la_lecture_seule():
 _ECRITURES = [
     dict(op="create", title="x", manifest={}),
     dict(op="update", app_id=5, title="y"),
+    dict(op="patch", app_id=5, edits=[{"find": "x", "replace": "y"}]),
     dict(op="archive", app_id=5),
     dict(op="unarchive", app_id=5),
     dict(op="restore", app_id=5, revision_id=3),
@@ -491,3 +493,101 @@ def test_donner_l_app_a_une_personne_la_range_dans_une_org_ou_elle_est(monkeypat
     A._reparenter("5", "user", "dehors")
     A._reparenter("5", "org", "7")
     assert vus == [("user", "membre", 42), ("user", "dehors", 900), ("org", "7", None)]
+
+
+# ── Ce que le HTML demande hors du manifeste ────────────────────────────────
+
+_TRI = '<script>oto.rows("leads", {orderBy: "score"})</script>'
+
+
+def test_ecrire_rend_les_avertissements_du_html(seams):
+    """L'app s'écrit quand même ; qui l'écrit apprend tout de suite qu'elle sera
+    refusée à l'ouverture."""
+    out = A._app(CTX, A.AppInput(op="create", title="x", manifest=GOOD, html=_TRI))
+    assert out["app"] and any('"score"' in w for w in out["warnings"])
+    assert seams["create"]
+    ok = A._app(CTX, A.AppInput(op="create", title="x", manifest=GOOD,
+                                html='<script>oto.rows("leads", {orderBy: "_created_at"})</script>'))
+    assert "warnings" not in ok
+
+
+def test_un_defaut_du_lecteur_de_html_n_ecrit_rien(seams, monkeypatch):
+    """Les avertissements se calculent AVANT l'écriture : un lecteur qui casse refuse
+    sans laisser une app créée qu'un agent recréerait en doublon."""
+    def casse(manifest, html):
+        raise RuntimeError("lecteur en panne")
+    monkeypatch.setattr(A, "avertissements", casse)
+    with pytest.raises(RuntimeError):
+        A._app(CTX, A.AppInput(op="create", title="x", manifest=GOOD, html=_TRI))
+    with pytest.raises(RuntimeError):
+        A._app(CTX, A.AppInput(op="patch", app_id=5, edits=[{"find": "x", "replace": "y"}]))
+    assert seams["create"] == [] and seams["update"] == []
+
+
+def test_validate_juge_le_html(seams):
+    out = A._app(CTX, A.AppInput(op="validate", manifest=GOOD, html=_TRI))
+    assert out["ok"] is True and out["warnings"]
+
+
+def test_validate_ne_juge_pas_le_html_d_un_manifeste_a_corriger(seams):
+    out = A._app(CTX, A.AppInput(op="validate", manifest={"tables": "leads"}, html=_TRI))
+    assert out["ok"] is False and "warnings" not in out
+
+
+# ── op=patch : changer une ligne sans renvoyer le HTML ──────────────────────
+
+def test_patch_remplace_et_rend_un_recu_sans_html(seams):
+    out = A._app(CTX, A.AppInput(op="patch", app_id=5, expected_rev="abc",
+                                 edits=[{"find": "<p>x</p>", "replace": "<p>y</p>"}]))
+    assert out == {"rev": "abc", "replaced": 1}
+    (app_id, by, fields), = seams["update"]
+    assert (app_id, by, fields["html"]) == (5, "u1", "<p>y</p>")
+    assert set(fields) == {"html"}
+
+
+def test_patch_refuse_tout_et_n_ecrit_rien(seams):
+    e = _refus(lambda: A._app(CTX, A.AppInput(op="patch", app_id=5, edits=[
+        {"find": "<p>", "replace": "<div>"}, {"find": "absent", "replace": "z"}])))
+    assert (e.status, e.code) == (400, "invalid_edits")
+    assert seams["update"] == []
+
+
+def test_patch_trop_long_refuse_sans_ecrire(seams):
+    e = _refus(lambda: A._app(CTX, A.AppInput(op="patch", app_id=5, edits=[
+        {"find": "x", "replace": "y" * (A.MAX_HTML + 1)}])))
+    assert (e.status, e.code) == (400, "invalid_edits") and seams["update"] == []
+
+
+def test_patch_rend_les_avertissements(seams, monkeypatch):
+    monkeypatch.setattr(A.db.apps, "get", lambda i: dict(ROW, id=i, manifest=GOOD, html=_TRI))
+    out = A._app(CTX, A.AppInput(op="patch", app_id=5, edits=[
+        {"find": "<script>", "replace": "<script>/* v2 */"}]))
+    assert out["replaced"] == 1 and any('"score"' in w for w in out["warnings"])
+
+
+def test_patch_conflit(seams):
+    e = _refus(lambda: A._app(CTX, A.AppInput(op="patch", app_id=5, expected_rev="old",
+                                              edits=[{"find": "x", "replace": "y"}])))
+    assert (e.status, e.code) == (409, "conflict")
+
+
+def test_patch_sans_expected_rev_ecrit_contre_la_revision_lue(seams, monkeypatch):
+    """Le HTML remplacé est calculé sur la révision LUE : l'écrire sans elle écraserait
+    sans un mot une écriture passée entre la lecture et l'écriture."""
+    vus = []
+
+    def update(app_id, *, by, expected_rev=None, **fields):
+        vus.append(expected_rev)
+        return dict(ROW, **fields)
+    monkeypatch.setattr(db.apps, "update", update)
+    A._app(CTX, A.AppInput(op="patch", app_id=5, edits=[{"find": "x", "replace": "y"}]))
+    assert vus == ["abc"]
+
+
+def test_patch_sans_lire_ce_que_l_app_declare_est_refuse(seams, monkeypatch):
+    """Comme update : patcher fait de soi l'auteur, dont les droits bornent chaque lecteur."""
+    monkeypatch.setattr(db.apps, "get", lambda i: dict(
+        ROW, id=i, updated_by="autre", manifest={"tables": {"t": {"table": "99"}}}))
+    e = _refus(lambda: A._app(CTX, A.AppInput(op="patch", app_id=5,
+                                              edits=[{"find": "x", "replace": "y"}])))
+    assert (e.status, e.code) == (403, "would_break_app") and seams["update"] == []

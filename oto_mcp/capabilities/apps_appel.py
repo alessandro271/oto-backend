@@ -77,7 +77,7 @@ from .. import client_trace, config, db, geste, ownership
 from . import _acces_agent
 from ._authz import ORG_MEMBER
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
-from .apps_manifeste import org_de_l_app, tableau_de_l_org
+from .apps_manifeste import DATES, lisible, org_de_l_app, tableau_de_l_org
 from .registry import CAPABILITIES
 
 APP_RTYPE = "app"
@@ -85,7 +85,6 @@ MAX_ROWS = 200
 # Ce qu'une ligne porte toujours, en plus des champs déclarés : de quoi la désigner
 # et la dater.
 _META = frozenset({"_id", "_revision", "_created_at", "_updated_at"})
-_DATES = frozenset({"_created_at", "_updated_at"})
 _AGG_OPS = frozenset({"count_rows", "count", "sum", "avg", "min", "max"})
 MAX_INPUT = 300
 MAX_NOTE = 4000
@@ -255,19 +254,12 @@ def _table(app: dict, alias: Optional[str], want: str = "read") -> tuple[str, di
     return ns, t
 
 
-def _lisible(t: dict, champ: str) -> bool:
-    """Un champ déclaré — ou l'élément d'une liste par sa colonne (`tags[]`,
-    `contacts[].role`). Sans liste de champs, tout ce que le lecteur voit."""
-    fields = t.get("fields")
-    return fields is None or champ.split("[")[0].split(".")[0] in fields
-
-
 def _filtre(t: dict, raw: Any) -> Optional[str]:
     if raw is None:
         return None
     if not isinstance(raw, dict):
         raise _refus(400, "invalid_filter", "A filter is an object of field → value.")
-    caches = sorted(k for k in raw if k not in _DATES and not _lisible(t, k))
+    caches = sorted(k for k in raw if k not in DATES and not lisible(t, k))
     if caches:
         raise _refus(403, "undeclared_field",
                      f"An app can only filter on the fields it declares (not {', '.join(caches)}).")
@@ -794,7 +786,7 @@ def _call(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
     if inp.action == "read_rows":
         order_by = o.get("order_by")
         if order_by is not None and (not isinstance(order_by, str)
-                                     or (order_by not in _DATES and not _lisible(t, order_by))):
+                                     or (order_by not in DATES and not lisible(t, order_by))):
             raise _refus(403, "undeclared_field", "An app can only sort on a field it declares.")
         q = o.get("q")
         if q and t.get("fields") is not None:
@@ -810,7 +802,7 @@ def _call(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
 
     # read_aggregate
     group_by = o.get("group_by")
-    if group_by is not None and (not isinstance(group_by, str) or not _lisible(t, group_by)):
+    if group_by is not None and (not isinstance(group_by, str) or not lisible(t, group_by)):
         raise _refus(403, "undeclared_field", "An app can only group on a field it declares.")
     metrics = o.get("metrics") or [{"op": "count_rows", "label": "count"}]
     if not isinstance(metrics, list) or len(metrics) > 10:
@@ -820,7 +812,7 @@ def _call(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
         m = m if isinstance(m, dict) else {}
         if m.get("op") not in _AGG_OPS:
             raise _refus(400, "invalid_metrics", f"Unknown metric “{m.get('op')}”.")
-        if m.get("field") is not None and (not isinstance(m["field"], str) or not _lisible(t, m["field"])):
+        if m.get("field") is not None and (not isinstance(m["field"], str) or not lisible(t, m["field"])):
             raise _refus(403, "undeclared_field", "An app can only measure the fields it declares.")
         # Pas de `where` par métrique : il filtrerait sur un champ non déclaré.
         propres.append({"op": m["op"], **({"field": m["field"]} if m.get("field") else {}),
