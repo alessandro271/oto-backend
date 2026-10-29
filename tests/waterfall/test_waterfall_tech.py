@@ -67,9 +67,8 @@ def test_tech_cherchee_ne_stoppe_que_si_detectee(calls):
     out = _run("waterfall_tech", domain="acme.com", technologies="HubSpot, Spendesk")
     assert out["provider"] == "theirstack" and out["tech"]["source"] == "job_postings"
     assert out["tech"]["matched"] == ["HubSpot", "Spendesk"]
-    # Pipecorn, the caller's own key only, is skipped before any call on the shared key.
-    assert [a["status"] for a in out["attempts"]] == ["no_match", "skipped"] + \
-        ["no_match"] * 4 + ["found"]
+    # Pipecorn comes last: TheirStack's find stops the cascade before it.
+    assert [a["status"] for a in out["attempts"]] == ["no_match"] * 5 + ["found"]
 
     calls["made"].clear()
     out = _run("waterfall_tech", domain="acme.com", technologies=["nextjs"])

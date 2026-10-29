@@ -312,11 +312,6 @@ def register(mcp: FastMCP) -> None:
             found = any(answer.get(k) for k in _NAMED_BY[op])
             credits = price if found else 0
         session_org.note_call_trace(quantity=int(found), provider_credits=credits)
-        if op == "jobs" and not given["full_description"]:
-            # The default view: each posting without its description snippet — title,
-            # place, date, link and hiring team are what a list is read for.
-            answer = output_projection.project(answer, items_path="jobs",
-                                               item_drop=("description",))
         return {**answer, "found": found, "pipecorn_credits": credits}
 
     @mcp.tool(name="pipecorn", annotations=LECTURE)
@@ -425,7 +420,13 @@ def register(mcp: FastMCP) -> None:
                          "key. Ask for `email` (work email) or `phone`. Nothing was done.")
         client, rc = _client(op)
         if op in LOOKUPS:
-            return _lookup(op, client, given, timeout_s)
+            answer = _lookup(op, client, given, timeout_s)
+            if op == "jobs" and not full_description:
+                # The default view: each posting without its description snippet —
+                # title, place, date, link and hiring team are what a list is read for.
+                answer = output_projection.project(answer, items_path="jobs",
+                                                   item_drop=("description",))
+            return answer
 
         if op == "credits":
             return _run(lambda: client.get_credits())
