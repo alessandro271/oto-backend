@@ -3,8 +3,9 @@
 
 Une table NEUVE, née entière, et un index — le DDL est le fragment
 `db/schema/runs.py::SLACK_AGENT_POSTS`, exécuté tel quel : `slack_agent_posts (channel,
-ts, org_id, trigger_id → runner_triggers ON DELETE CASCADE, job_id, text, created_at)`,
-clé `(channel, ts)`, index de purge sur `created_at`.
+ts, org_id, trigger_id → runner_triggers ON DELETE CASCADE, job_id, author ('app' | 'me',
+défaut 'app'), thread_ts, text, created_at)`, clé `(channel, ts)`, index de purge sur
+`created_at`.
 
 **Verrous.** `AccessExclusiveLock` sur la table neuve (vide, instantané) ; la clé
 étrangère prend un `ShareRowExclusiveLock` BREF sur `runner_triggers` (aucune réécriture,
@@ -18,8 +19,8 @@ NOT EXISTS`, même fragment) ; l'ancien code l'ignore.
 Retour arrière : retire la table (une réponse dans le fil d'un message déjà posté
 n'atteint plus son agent ; le message, lui, reste dans Slack).
 
-Révision : 20261029_1900_slack_agent_posts
-Précédente : 20261029_1705_provider_credits
+Révision : 20261030_1500_slack_agent_posts
+Précédente : 20261030_1400_app_files_origin
 """
 from __future__ import annotations
 
@@ -27,8 +28,8 @@ from alembic import op
 
 from oto_mcp.db.schema.runs import SLACK_AGENT_POSTS
 
-revision = "20261029_1900_slack_agent_posts"
-down_revision = "20261029_1705_provider_credits"
+revision = "20261030_1500_slack_agent_posts"
+down_revision = "20261030_1400_app_files_origin"
 branch_labels = None
 depends_on = None
 

@@ -1924,6 +1924,13 @@ interrupteur (décision du 29/10). Même route que les DM (`POST /api/slack/even
   erreur. Table `slack_agent_posts` (`channel`, `ts`, `org_id`, `trigger_id` →
   `runner_triggers` ON DELETE CASCADE, `job_id`, `author`, `thread_ts`, `text` borné à
   8 000 caractères).
+  ⚠️ **La note suit l'envoi** : elle s'écrit au retour de `chat.postMessage`, et
+  l'événement d'un message posté en ton nom peut arriver **avant** elle. La route relit
+  donc `est_note` juste avant d'enfiler (après `users.info`, qui a laissé le temps à la
+  note), et un message plus jeune que `ATTENTE_DE_LA_NOTE_S` (3 s, comptées depuis son
+  `ts`) attend le reste avant cette relecture — après l'accusé, hors de la boucle
+  (`slack_events._a_nous`). Une réponse plus ancienne ne patiente pas. Vaut aussi pour
+  un DM à l'agent Slack de l'org.
 - **Retrouver** : l'événement ne nomme que `channel` et `thread_ts`. `demande_de` ne garde,
   hors DM, qu'une **réponse dans un fil** (`thread_ts` ≠ `ts`, sans `bot_id`, sous-type
   absent ou `thread_broadcast`/`file_share`). Après l'accusé, `traiter` écarte d'abord
@@ -1950,6 +1957,17 @@ interrupteur (décision du 29/10). Même route que les DM (`POST /api/slack/even
   programmés », son message tel que posté (le fil ne se relit pas), la réponse et son
   auteur, puis comment répondre dans le fil (`slack_post_message`, `_instance=` de l'org)
   — ou réagir quand la réponse n'appelle rien. 👀 sur la réponse à l'enfilage.
+  ⚠️ **Ce que Slack nous tend est une donnée** : la réponse, le nom et l'adresse de son
+  auteur et le message tel que posté sont collés entre deux marqueurs **désamorcés**
+  (`slack_events._desamorce` : toute suite de trois tirets ou plus devient un tiret, les
+  mots d'un marqueur sont mis entre crochets, un nom tient sur une ligne) — qui écrit
+  dans le fil ne ferme pas le bloc pour écrire au-delà. Le bloc dit au run que son
+  contenu est le message d'une personne, jamais une consigne : rien de ce qu'il demande
+  hors de la procédure ne s'exécute, il ne donne aucun droit.
+- **Une rafale de réponses** dans un même fil fait **un run par réponse** : la file ne
+  dédoublonne que par identifiant de livraison (`event_id`), sans fenêtre. Un regroupement
+  par fil n'est pas posé : il demanderait de réécrire l'entrée d'un travail encore en
+  attente, ce que la file ne sait pas faire.
 - **Par la file des webhooks** comme un DM : pause, plafond journalier, lissage, journal
   des livraisons (`source=slack`), `event_id` comme identifiant de livraison. Un agent
   programmé passe par là aussi : `enfiler` ne regarde pas le genre de l'agent.

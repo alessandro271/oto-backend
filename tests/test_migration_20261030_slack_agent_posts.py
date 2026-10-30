@@ -1,4 +1,4 @@
-"""La révision `20261029_1900_slack_agent_posts` pose la table `slack_agent_posts`.
+"""La révision `20261030_1500_slack_agent_posts` pose la table `slack_agent_posts`.
 
 Une table NEUVE que le démarrage pose aussi (même fragment) : la révision doit la poser
 sur une base d'AVANT, ne rien faire sur une base que le démarrage a déjà servie, et la
@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 RACINE = Path(__file__).resolve().parent.parent
-_PRECEDENTE = "20261029_1705_provider_credits"
-_REVISION = "20261029_1900_slack_agent_posts"
+_PRECEDENTE = "20261030_1400_app_files_origin"
+_REVISION = "20261030_1500_slack_agent_posts"
 
 
 def _alembic():
