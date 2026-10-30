@@ -25,6 +25,7 @@ from _refus_atteignables import atteignables
 
 from oto_mcp import openapi
 from oto_mcp.capabilities import registry
+from oto_mcp.capabilities._authz import CODE_PLATEFORME_SEULE
 from oto_mcp.capabilities._types import DeclaredError
 
 _ADMIN = "/api/admin/"
@@ -51,6 +52,20 @@ def test_il_y_a_des_refus_declares():
             ("org.invite.create", 409, "already_invited")} <= cles
 
 
+def _branches(regle) -> list:
+    """Une règle d'autz et, à travers ses `BY_OP`, toutes ses branches."""
+    return [regle] + [b for r in getattr(regle, "autz_branches", ()) for b in _branches(r)]
+
+
+def _leve_par_sa_garde(cap, e) -> bool:
+    """`platform_only` se lève AVANT le handler, dans `PLATFORM_OPERATOR_OPT`, que le
+    parcours ne suit pas : déclaré, il exige cette règle parmi les branches de la capacité.
+    Que la garde refuse vraiment : `test_recettes_plateforme.py`."""
+    return (e.status, e.code) == (403, CODE_PLATEFORME_SEULE) and any(
+        getattr(r, "platform_floor", None) == "operator" and not hasattr(r, "autz_branches")
+        for r in _branches(cap.authz))
+
+
 @pytest.mark.parametrize("paire", _declarations(), ids=_ids)
 def test_un_refus_declare_est_ATTEIGNABLE_par_cette_capacite(paire):
     """L'axe corrigé le 2026-09-01 (#792) : ce test demandait qu'un code EXISTE dans
@@ -70,7 +85,7 @@ def test_un_refus_declare_est_ATTEIGNABLE_par_cette_capacite(paire):
     """
     cap, e = paire
     assert isinstance(e, DeclaredError)
-    assert atteignables(cap.handler).accepte(e.status, e.code), (
+    assert atteignables(cap.handler).accepte(e.status, e.code) or _leve_par_sa_garde(cap, e), (
         f"{cap.key} déclare {e.status} `{e.code}` mais son chemin ne peut pas le "
         "lever : déclaration décorative — le document promettrait un refus que le "
         "serveur ne rend jamais, et un client généré s'y brancherait.")
