@@ -597,6 +597,18 @@ def test_l_app_d_editeur_ne_lie_aucune_region(monkeypatch):
     assert z.app_region("zoho", "u1") == ""
 
 
+def test_la_copie_de_l_app_d_oto_ne_lie_rien(monkeypatch):
+    """La clé d'un consentement sur l'app d'oto : ni région imposée (le choix reste), ni
+    avertissement d'organisation non vérifiée, alors que l'app reste prête."""
+    _portee(monkeypatch, byo={"client_id": "oto-eu", "client_secret": "s",
+                              "refresh_token": "r", "data_center": "eu"}, editeur=("zoho",))
+    monkeypatch.setattr(z.credentials_store, "get_editor_app",
+                        lambda c, dc: {"client_id": f"oto-{dc}", "client_secret": "s"})
+    assert z.app_ready("zoho", "u1") is True
+    assert z.app_region("zoho", "u1") == ""
+    assert z.app_warnings("zoho", "u1") == []
+
+
 def test_une_cle_sans_app_ne_lie_rien(monkeypatch):
     """Une clé à portée sans client_id/secret (consentement en cours) ne fixe rien."""
     _portee(monkeypatch, byo={"refresh_token": "r", "data_center": "eu"})

@@ -76,6 +76,33 @@ def test_app_fields_falls_back_to_editor_app(monkeypatch):
     assert zoho_oauth.app_fields("zoho", "sub-x", "com", org=None, group=None) == {}
 
 
+def test_une_copie_de_l_app_d_editeur_ne_lie_pas_la_region(monkeypatch):
+    """Un consentement sur l'app d'oto en range une copie avec le jeton (`persist`) : la
+    région choisie à tort la première fois ne doit pas interdire la bonne ensuite."""
+    copie = {"client_id": "oto-eu", "client_secret": "s", "refresh_token": "r",
+             "data_center": "eu"}
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: _FakeCred(copie))
+    monkeypatch.setattr(credentials_store, "get_editor_app",
+                        lambda c, dc: {"client_id": f"oto-{dc}", "client_secret": "s"})
+    app = zoho_oauth.app_fields("zohosign", "sub-x", "com", org=None, group=None)
+    assert app["client_id"] == "oto-com"
+    assert zoho_oauth.consent_region(app, "com") == "com"
+    # Sans région demandée : rien de lié, l'écran proposera le choix.
+    assert zoho_oauth.app_fields("zohosign", "sub-x", org=None, group=None) == {}
+
+
+def test_une_app_apportee_garde_sa_region(monkeypatch):
+    """Contre-épreuve : un client_id qui n'est pas celui d'oto reste une app apportée."""
+    apportee = {"client_id": "byo", "client_secret": "s", "data_center": "eu"}
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: _FakeCred(apportee))
+    monkeypatch.setattr(credentials_store, "get_editor_app",
+                        lambda c, dc: {"client_id": f"oto-{dc}", "client_secret": "s"})
+    app = zoho_oauth.app_fields("zohosign", "sub-x", "com", org=None, group=None)
+    assert app["client_id"] == "byo"
+    with pytest.raises(zoho_oauth.ZohoOAuthError):
+        zoho_oauth.consent_region(app, "com")
+
+
 def test_app_fields_ignores_editor_app_without_region(monkeypatch):
     """Sans région, pas de repli : l'app d'éditeur est keyée par data center."""
     monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: _FakeCred({}))

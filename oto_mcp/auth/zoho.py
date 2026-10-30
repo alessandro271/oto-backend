@@ -264,9 +264,22 @@ def app_fields(connector: str, sub: str, data_center: str = "", *,
                 connector, want="byo", sub=sub, emit_on_failure=False).fields or {}
     except McpError:  # NOMINAL state: no credential brought at this level
         byo = {}
-    if byo.get("client_id") and byo.get("client_secret"):
+    if (byo.get("client_id") and byo.get("client_secret")
+            and not _copy_of_editor_app(connector, byo)):
         return byo
     return editor_app(connector, data_center)
+
+
+def _copy_of_editor_app(connector: str, fields: dict) -> bool:
+    """Is this credential a consent on oto's PUBLISHER app? `persist` stores a copy of the
+    app next to the token, so the shape alone reads as a brought app. It is not one: it
+    must not bind the region of the next consent (a member who first picked the wrong
+    region could never pick the right one) nor raise `ORG_UNVERIFIED`. Compared with the
+    publisher app of the credential's own region; one rotated since stays a brought app."""
+    region = _region_of(fields)
+    if not region:
+        return False
+    return editor_app(connector, region).get("client_id") == fields.get("client_id")
 
 
 def resolve_app(fields: Optional[dict]) -> tuple[str, str]:
