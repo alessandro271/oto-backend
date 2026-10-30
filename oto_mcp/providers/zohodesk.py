@@ -6,6 +6,7 @@ describe it). See `providers/_model.py` for the `Connector` contract.
 from __future__ import annotations
 
 from ._model import CredentialField, _c
+from .zoho import data_center_field
 
 CONNECTOR = _c(
     "zohodesk", ["zohodesk"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
@@ -37,8 +38,7 @@ CONNECTOR = _c(
         CredentialField("zoho_org_id", "Expected Zoho organization ID", secret=False,
                         required=False,
                         help="the organization ID shown in Zoho Desk (Setup → Developer Space → API)"),
-        CredentialField("data_center", "Data center (com, eu, in, au, jp, ca)",
-                        secret=False, help="eu"),
+        data_center_field(),
     ),
 )
 

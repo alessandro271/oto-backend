@@ -357,3 +357,22 @@ def test_aucune_url_de_retour_ecrite_en_dur_dans_la_prose_client():
         for ligne in src.splitlines():
             if "oauth/callback" in ligne and "mcp.oto." in ligne and not ligne.lstrip().startswith("#"):
                 raise AssertionError(f"{f} code une URL de retour en dur : {ligne.strip()[:110]}")
+
+
+def test_le_proprietaire_et_les_valeurs_pretes_ne_sont_servis_que_declares(monkeypatch):
+    """`app_owner` et `ready_options` : déclarés, ils répondent ; non déclarés ou en panne,
+    la carte reste neutre et l'écran de connexion ne tombe pas."""
+    def _panne(sub):
+        raise RuntimeError("coffre indisponible")
+
+    monkeypatch.setitem(connector_flow._FLOWS, "avec", connector_flow.Flow(
+        "avec", start=lambda c, v: None,
+        app_owner=lambda sub: "member", ready_options=lambda sub: {"region": ("eu",)}))
+    monkeypatch.setitem(connector_flow._FLOWS, "sans", connector_flow.Flow("sans", start=lambda c, v: None))
+    monkeypatch.setitem(connector_flow._FLOWS, "panne", connector_flow.Flow(
+        "panne", start=lambda c, v: None, app_owner=_panne, ready_options=_panne))
+    assert connector_flow.app_owner("avec", "u") == "member"
+    assert connector_flow.ready_options("avec", "u") == {"region": ["eu"]}
+    for nom in ("sans", "panne"):
+        assert connector_flow.app_owner(nom, "u") is None
+        assert connector_flow.ready_options(nom, "u") == {}

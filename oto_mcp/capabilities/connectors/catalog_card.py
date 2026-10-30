@@ -73,6 +73,9 @@ class CredentialField(BaseModel):
         "CLOSED set of accepted values — a select, not a free field. Empty = "
         "free. A value outside the list is refused on WRITE, with the expected set "
         "in the message."))
+    choice_labels: dict[str, str] = Field(default={}, description=(
+        "What the select shows for a value of `choices`. A value without a label shows "
+        "as itself."))
 
 
 class AuthDescriptor(BaseModel):
@@ -148,7 +151,7 @@ class ConnectFlow(BaseModel):
     on the client side). `null` on the ~85 connectors that have no flow: the front
     then renders its usual fields form.
 
-    The last four fields exist ONLY on the authenticated projection
+    The last fields, from `callback_url` on, exist ONLY on the authenticated projection
     (`GET /api/me/connectors?verbose=true`) and never in the public catalog: they
     answer to whoever asks, which an anonymous catalog cannot do."""
     label: str
@@ -176,6 +179,14 @@ class ConnectFlow(BaseModel):
     # Named codes about this user's applicable app — `zoho_org_unverified`: the app names
     # no expected Zoho organization, so any Zoho account can consent to it. Empty = none.
     warnings: list[str] = []
+    # Who owns this user's applicable app: `member`, `group`, `org`, `tenant` or `editor`
+    # (oto's). `null` = not declared, or no app. Says what the card offers about a bound
+    # parameter: their own key they can change, a shared one they cannot.
+    app_owner: Optional[str] = None
+    # The values of a parameter a start can succeed with now (`{name: [values]}`), when
+    # that depends on the value: the Zoho regions oto publishes an app for. Empty = no
+    # constraint to announce.
+    ready_options: dict[str, list[str]] = {}
 
 
 class FreeTier(BaseModel):

@@ -28,6 +28,7 @@ from ..auth import zoho as zoho_oauth
 from ..connectors import flow as connector_flow
 from ..connectors import health as connector_health
 from ..connectors import verify as connector_verify
+from ..providers.zoho import REGIONS
 
 # Standard CRM modules probed to prove a real READ scope (at least one
 # `ZohoCRM.modules.<m>.READ`). We stop at the first readable one; all in scope-mismatch =
@@ -170,9 +171,8 @@ for _c in ("zoho", "zohodesk", "zohoanalytics", "zohosign"):
     status_hints.register(_c, _pending_action_for(_c))
     status_hints.register_state(_c, _credential_state_for(_c))
     # The consent flow, declared like the rest: the front derives a region select
-    # + a button from it, without knowing that "zoho" exists. The regions live HERE and
-    # nowhere else — they used to be copied even into a registry label
-    # that announced a data center the code rejects.
+    # + a button from it, without knowing that "zoho" exists. The regions live in
+    # `providers/zoho.REGIONS`, also behind the key's field.
     connector_flow.declare(
         _c,
         start=lambda ctx, values, _c=_c: _start_flow(ctx, _c, values),
@@ -187,14 +187,14 @@ for _c in ("zoho", "zohodesk", "zohoanalytics", "zohosign"):
         fixed=lambda sub, _c=_c: (
             {"data_center": r} if (r := zoho_oauth.app_region(_c, sub)) else {}),
         warnings=lambda sub, _c=_c: zoho_oauth.app_warnings(_c, sub),
+        app_owner=lambda sub, _c=_c: zoho_oauth.app_owner(_c, sub),
+        ready_options=lambda sub, _c=_c: (
+            {"data_center": r} if (r := zoho_oauth.app_ready_regions(_c, sub)) else {}),
         params=(connector_flow.FlowParam(
-            name="data_center", label="Region of your Zoho account", default="eu",
-            help="the OAuth app and the token are bound to their data center",
-            options=tuple((dc, lbl) for dc, lbl in (
-                ("eu", "Europe (zoho.eu)"), ("com", "International (zoho.com)"),
-                ("in", "India (zoho.in)"), ("au", "Australia (zoho.com.au)"),
-                ("jp", "Japan (zoho.jp)"), ("ca", "Canada (zohocloud.ca)"),
-            ) if dc in _DC_DOMAINS)),
+            # No default: a preselected Europe was accepted unread by accounts on zoho.com.
+            name="data_center", label="Region of your Zoho account",
+            help="look at your Zoho address: zoho.eu is Europe, zoho.com is International",
+            options=tuple((dc, lbl) for dc, lbl in REGIONS if dc in _DC_DOMAINS)),
         ),
     )
 

@@ -106,9 +106,10 @@ VERIFICATION_SCOPES = {
     "zohosign": (),
 }
 
-#: The Zoho connectors whose consented organization cannot be read. A brought app
-#: without `zoho_org_id` consents with the `ORG_UNVERIFIED` warning and no organization
-#: shown; an app that names one is refused (`ZohoOrgUnverifiable`), never stored unchecked.
+#: The Zoho connectors whose consented organization cannot be read. Their card has no
+#: `zoho_org_id` field: a brought app consents with the `ORG_UNVERIFIABLE` warning, which
+#: asks for nothing impossible, and no organization shown; an app that names one all the
+#: same is refused (`ZohoOrgUnverifiable`), never stored unchecked.
 ORG_UNREADABLE = frozenset({"zohosign"})
 
 
@@ -194,7 +195,17 @@ class EditorApp(dict):
     design: `check_org` has nothing to compare it with."""
 
 
-class DedicatedApp(dict):
+class BroughtApp(dict):
+    """The fields of an app someone brought — a dict that says who (`owner`: `member`,
+    `group`, `org`, `tenant`). The screen needs it to say what the member can do about a
+    region this app imposes: change their own key, or ask whoever owns the shared one."""
+
+    def __init__(self, fields: dict, owner: str):
+        super().__init__(fields)
+        self.owner = owner
+
+
+class DedicatedApp(BroughtApp):
     """The fields of a DEDICATED app — a dict that says where it comes from: its
     `data_center` is the app's own region, which binds the consent (`consent_region`).
     A brought credential's `data_center` binds it the same way."""
@@ -209,7 +220,7 @@ def dedicated_app(connector: str, org_id: Optional[int],
         if owner_id:
             app = credentials_store.get_dedicated_app(owner_type, owner_id, connector)
             if app is not None:
-                return DedicatedApp(app["fields"])
+                return DedicatedApp(app["fields"], owner_type)
     return {}
 
 
@@ -260,13 +271,14 @@ def app_fields(connector: str, sub: str, data_center: str = "", *,
     # site B7). A vault error is a refusal, not an absence.
     try:
         with _under(org, group):
-            byo = access.resolve_credential(
-                connector, want="byo", sub=sub, emit_on_failure=False).fields or {}
+            resolved = access.resolve_credential(
+                connector, want="byo", sub=sub, emit_on_failure=False)
+        byo = resolved.fields or {}
     except McpError:  # NOMINAL state: no credential brought at this level
         byo = {}
     if (byo.get("client_id") and byo.get("client_secret")
             and not _copy_of_editor_app(connector, byo)):
-        return byo
+        return BroughtApp(byo, "member" if resolved.mode == "user" else resolved.mode)
     return editor_app(connector, data_center)
 
 
@@ -290,9 +302,9 @@ def resolve_app(fields: Optional[dict]) -> tuple[str, str]:
     if cid and sec:
         return cid, sec
     raise ZohoOAuthError(
-        "No Zoho OAuth app available for this region. Fill in the \"client id\" "
-        "and \"client secret\" of a Zoho self client on the connector's card (or "
-        "ask your org to share theirs), then restart the connection.")
+        "No Zoho application is available for this region. Add your own on this "
+        "connector's card (its client ID and client secret), or ask an admin of your "
+        "organization to share theirs, then start again.")
 
 
 def consent_region(app: dict, data_center: Optional[str]) -> str:
@@ -346,29 +358,52 @@ def has_app(connector: str, sub: str, data_center: str = "", *,
 def app_ready(connector: str, sub: str) -> bool:
     """The promise of the connection screen (`connect.app_ready`, served row by row by
     `GET /api/me/connectors`): `has_app` without a region. Cf. `_applicable_app`."""
-    return _applicable_app(connector, sub)[0]
+    return _applicable_app(connector, sub).ready
 
 
 def app_region(connector: str, sub: str) -> str:
     """The region the applicable app BINDS (`connect.fixed`), `""` if none does — oto's
     publisher app, keyed by the region chosen on click. The front then shows the region
     instead of a select whose other choices `consent_region` refuses."""
-    return _applicable_app(connector, sub)[1]
+    return _applicable_app(connector, sub).region
+
+
+def app_owner(connector: str, sub: str) -> str:
+    """Who owns the applicable app (`connect.app_owner`): `member`, `group`, `org`,
+    `tenant`, `editor` for oto's, `""` if there is none."""
+    return _applicable_app(connector, sub).owner
+
+
+def app_ready_regions(connector: str, sub: str) -> tuple[str, ...]:
+    """The regions a consent can start in when that depends on the region
+    (`connect.ready_options`): those oto publishes an app for. Empty under a brought app,
+    which does not depend on it."""
+    return _applicable_app(connector, sub).ready_regions
 
 
 def app_warnings(connector: str, sub: str) -> list[str]:
-    """`connect.warnings`: `[ORG_UNVERIFIED]` when the applicable app was BROUGHT (team,
-    org, member) without the Zoho organization it expects — any Zoho account could then
-    consent to it, and the consent goes through unchecked (`check_org`)."""
-    return [ORG_UNVERIFIED] if _applicable_app(connector, sub)[2] else []
+    """`connect.warnings`: the organization warning (`org_warning`) when the applicable
+    app was BROUGHT (team, org, member) without the Zoho organization it expects — any
+    Zoho account could then consent to it, and the consent goes through unchecked
+    (`check_org`)."""
+    return [org_warning(connector)] if _applicable_app(connector, sub).org_unverified else []
+
+
+class ApplicableApp(NamedTuple):
+    """What the connection screen is told about the app. Never a secret."""
+    ready: bool
+    region: str
+    org_unverified: bool
+    owner: str
+    ready_regions: tuple[str, ...]
 
 
 @lecture_d_appel
-def _applicable_app(connector: str, sub: str) -> tuple[bool, str, bool]:
-    """`(app_ready, region, org unverified)` in ONE pass, read once per call
-    (`lecture_d_appel`): the listing asks all three for each of the three Zoho connectors
-    (oto-backend#1148). Never a secret in the answer — whether an app exists, the region
-    it carries, and whether it names the Zoho organization it expects.
+def _applicable_app(connector: str, sub: str) -> ApplicableApp:
+    """The `ApplicableApp` in ONE pass, read once per call (`lecture_d_appel`): the listing
+    asks all of it for each of the three Zoho connectors (oto-backend#1148). Never a secret
+    in the answer — whether an app exists, the region it carries, who owns it, and whether
+    it names the Zoho organization it expects.
 
     `has_app` asks the RESOLUTION whether an app was brought: on a member who brought
     none — the common case — the failed cascade builds its diagnostic (reachable
@@ -385,7 +420,8 @@ def _applicable_app(connector: str, sub: str) -> tuple[bool, str, bool]:
     # its region (the one query that decrypts, only when such an app exists).
     if credentials_store.dedicated_app_owners(connector, org, group):
         dediee = dedicated_app(connector, org, group)
-        return True, _region_of(dediee), not expected_org(dediee)
+        return ApplicableApp(True, _region_of(dediee), not expected_org(dediee),
+                             dediee.owner, ())
     groups = group_store.list_groups_for_user(sub, org) if org is not None else []
     sonde = access.preloaded_presence_probe(sub, org=org, groups=groups)
     a_portee = next(chain_shadow.resolution_rungs(
@@ -394,8 +430,10 @@ def _applicable_app(connector: str, sub: str) -> tuple[bool, str, bool]:
     if a_portee is not None:
         byo = app_fields(connector, sub, org=org, group=group)
         if byo.get("client_id") and byo.get("client_secret"):
-            return True, _region_of(byo), not expected_org(byo)
-    return _has_editor_app(connector), "", False
+            return ApplicableApp(True, _region_of(byo), not expected_org(byo),
+                                 byo.owner, ())
+    regions = _editor_regions(connector)
+    return ApplicableApp(bool(regions), "", False, "editor" if regions else "", regions)
 
 
 def _region_of(app: dict) -> str:
@@ -410,6 +448,14 @@ def _region_of(app: dict) -> str:
 # dedicated app), and the callback compares it to what the NEW token reads.
 
 ORG_UNVERIFIED = "zoho_org_unverified"
+# The same situation on a connector whose card has no `zoho_org_id` to fill in: only the
+# right account can be asked for, never a field that does not exist.
+ORG_UNVERIFIABLE = "zoho_org_unverifiable"
+
+
+def org_warning(connector: str) -> str:
+    """The warning of a brought app that names no organization, for this connector."""
+    return ORG_UNVERIFIABLE if connector in ORG_UNREADABLE else ORG_UNVERIFIED
 
 
 def expected_org(app: dict) -> str:
@@ -429,7 +475,7 @@ class ConsentedOrg(NamedTuple):
 
 class OrgCheck(NamedTuple):
     """What `check_org` says of a consent that may be stored. `warning` = `None` or
-    `ORG_UNVERIFIED`; `consented` = the organizations read in warning mode, so the return
+    `org_warning(connector)`; `consented` = the organizations read in warning mode, so the return
     of the consent SHOWS which one was consented (nothing of it is kept) — empty when
     nothing was read (publisher app, expected org found, or a read that failed)."""
     warning: Optional[str] = None
@@ -439,7 +485,7 @@ class OrgCheck(NamedTuple):
 def check_org(connector: str, data_center: str, tokens: dict, app: dict) -> OrgCheck:
     """Before anything is stored. Publisher app (oto's): nothing to compare, nothing read.
     A brought app that names no organization: the consent goes through, SIGNALED
-    (`ORG_UNVERIFIED`), with the organizations the token reaches when they can be read
+    (`org_warning`), with the organizations the token reaches when they can be read
     (`_read_to_show`: a failed read refuses nothing). Expected organization among those
     consented: `OrgCheck()`. Mismatch or unreadable: the token is REVOKED at Zoho and
     `ZohoOrgMismatch` / `ZohoOrgUnverifiable` is raised."""
@@ -447,7 +493,8 @@ def check_org(connector: str, data_center: str, tokens: dict, app: dict) -> OrgC
         return OrgCheck()
     attendue = expected_org(app)
     if not attendue:
-        return OrgCheck(ORG_UNVERIFIED, _read_to_show(connector, data_center, tokens, app))
+        return OrgCheck(org_warning(connector),
+                        _read_to_show(connector, data_center, tokens, app))
     try:
         orgs = consented_orgs(connector, data_center, tokens, app)
     except Exception as e:  # noqa: BLE001 — network, scope, unexpected shape
@@ -520,19 +567,23 @@ def revoke(data_center: str, tokens: dict) -> None:
         logger.warning("zoho_revocation_failed: %s", type(e).__name__)
 
 
-def _has_editor_app(connector: str) -> bool:
-    """Does oto publish an app for this connector, in any region?
-    Fail-open: a read outage must not hide the button (at worst, `start`
-    will return an actionable message).
+def _editor_regions(connector: str) -> tuple[str, ...]:
+    """The regions oto publishes an app for on this connector. A read outage answers
+    "none": the screen then says no app is available, and a reload settles it.
 
     The WHOLE list, filtered here: the three Zoho connectors of one listing share one
     read of it (`lecture_d_appel`, oto-backend#1148), not one per connector."""
     try:
-        return any(a["connector"] == connector
-                   for a in credentials_store.list_editor_apps())
-    # noqa: SILENT — fail-open: a read outage must not hide the button
+        return tuple(a["data_center"] for a in credentials_store.list_editor_apps()
+                     if a["connector"] == connector)
+    # noqa: SILENT — fail-open: a read outage must not turn the listing into an error
     except Exception:  # noqa: BLE001
-        return False
+        return ()
+
+
+def _has_editor_app(connector: str) -> bool:
+    """Does oto publish an app for this connector, in any region?"""
+    return bool(_editor_regions(connector))
 
 
 # --- signed state (delegated to the factory) ----------------------------------

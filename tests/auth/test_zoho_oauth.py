@@ -31,12 +31,13 @@ def test_app_comes_from_the_resolved_credential():
 
 
 def test_no_app_yet_is_actionable():
-    with pytest.raises(z.ZohoOAuthError, match="client id"):
+    with pytest.raises(z.ZohoOAuthError, match="client ID"):
         z.resolve_app({})
 
 
 class _Resolved:
-    def __init__(self, fields): self.fields = fields
+    def __init__(self, fields, mode="user"):
+        self.fields, self.mode = fields, mode
 
 
 def test_app_fields_reads_the_cascade(monkeypatch):
@@ -484,7 +485,7 @@ def test_le_byo_se_resout_sous_l_org_et_l_equipe_demandees(monkeypatch):
 
 
 def test_la_region_est_celle_de_l_app_dediee():
-    app = z.DedicatedApp({"client_id": "a", "client_secret": "b", "data_center": "com"})
+    app = z.DedicatedApp({"client_id": "a", "client_secret": "b", "data_center": "com"}, "group")
     assert z.consent_region(app, "") == "com"
     assert z.consent_region(app, "COM") == "com"
     with pytest.raises(z.ZohoOAuthError, match="data_center=com"):
@@ -557,7 +558,7 @@ def test_le_depart_signe_le_niveau_et_l_equipe_du_contexte(monkeypatch):
 
 # --- la région que l'app applicable LIE, servie à l'écran (`connect.fixed`) ----------
 
-def _portee(monkeypatch, *, dediee=(), a_portee=True, byo=None, editeur=()):
+def _portee(monkeypatch, *, dediee=(), a_portee=True, byo=None, editeur=(), mode="user"):
     monkeypatch.setattr(z.access, "current_org", lambda sub: 35)
     monkeypatch.setattr(z.access, "current_group", lambda sub: 4)
     monkeypatch.setattr(z.credentials_store, "dedicated_app_owners",
@@ -567,9 +568,9 @@ def _portee(monkeypatch, *, dediee=(), a_portee=True, byo=None, editeur=()):
     monkeypatch.setattr(z.chain_shadow, "resolution_rungs",
                         lambda *a, **k: iter([object()] if a_portee else []))
     monkeypatch.setattr(z.access, "resolve_credential",
-                        lambda *a, **k: _Resolved(byo or {}))
+                        lambda *a, **k: _Resolved(byo or {}, mode))
     monkeypatch.setattr(z.credentials_store, "list_editor_apps",
-                        lambda: [{"connector": c} for c in editeur])
+                        lambda: [{"connector": c, "data_center": "eu"} for c in editeur])
     monkeypatch.setattr(z.credentials_store, "get_editor_app", lambda *a: None)
     _apps(monkeypatch)
 
@@ -788,6 +789,56 @@ def test_une_revocation_en_echec_est_journalisee_sous_son_nom(monkeypatch, caplo
         with pytest.raises(z.ZohoOrgMismatch):
             z.check_org("zoho", "eu", TOKENS, EQUIPE)
     assert "zoho_revocation_failed" in caplog.text
+
+
+@pytest.mark.parametrize("mode, attendu", [("user", "member"), ("group", "group"),
+                                           ("org", "org"), ("tenant", "tenant")])
+def test_la_carte_nomme_le_proprietaire_de_la_cle(monkeypatch, mode, attendu):
+    """L'écran offre de changer SA clé, et dit à qui s'adresser pour une clé partagée."""
+    _portee(monkeypatch, byo={**APP, "data_center": "eu"}, mode=mode)
+    assert z.app_owner("zoho", "u1") == attendu
+    assert z.app_region("zoho", "u1") == "eu"
+
+
+@pytest.mark.parametrize("porteur", ["group", "org"])
+def test_la_carte_nomme_le_proprietaire_de_l_app_dediee(monkeypatch, porteur):
+    _portee(monkeypatch, dediee=(porteur,))
+    _apps(monkeypatch, **{porteur: {"client_id": "1000.X", "client_secret": "s",
+                                    "data_center": "com"}})
+    assert z.app_owner("zoho", "u1") == porteur
+
+
+def test_l_app_d_editeur_dit_ses_regions_et_aucune_cle_n_en_contraint(monkeypatch):
+    """L'app d'oto se choisit par région : l'écran annonce celles qui existent, avant le
+    clic. Une clé apportée ne dépend pas de cette liste."""
+    _portee(monkeypatch, a_portee=False, editeur=("zoho",))
+    assert z.app_owner("zoho", "u1") == "editor"
+    assert z.app_ready_regions("zoho", "u1") == ("eu",)
+    _portee(monkeypatch, byo={**APP, "data_center": "com"}, editeur=("zoho",))
+    assert z.app_ready_regions("zoho", "u1") == ()
+
+
+def test_sans_aucune_app_la_carte_ne_promet_rien(monkeypatch):
+    _portee(monkeypatch, a_portee=False)
+    assert z.app_ready("zoho", "u1") is False
+    assert z.app_owner("zoho", "u1") == ""
+    assert z.app_ready_regions("zoho", "u1") == ()
+
+
+def test_une_copie_de_l_app_d_editeur_n_est_pas_la_cle_du_membre(monkeypatch):
+    """Consentir sur l'app d'oto en range une copie : la carte ne doit pas la présenter
+    comme l'application du membre."""
+    _portee(monkeypatch, byo={**APP, "data_center": "eu"}, editeur=("zoho",))
+    monkeypatch.setattr(z.credentials_store, "get_editor_app", lambda *a: dict(APP))
+    assert z.app_owner("zoho", "u1") == "editor"
+    assert z.app_region("zoho", "u1") == ""
+
+
+def test_le_message_sans_app_ne_parle_pas_de_self_client():
+    with pytest.raises(z.ZohoOAuthError) as e:
+        z.resolve_app({})
+    assert "self client" not in str(e.value)
+    assert "ask an admin" in str(e.value)
 
 
 def test_la_carte_signale_une_cle_d_equipe_sans_org(monkeypatch):

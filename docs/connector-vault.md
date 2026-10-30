@@ -834,7 +834,12 @@ consentement.
   `GET /api/me/connectors`) porte `{data_center: <région>}` quand l'app applicable en lie
   une — le front montre la région au lieu du choix. Lu dans le même passage qu'`app_ready`
   (`auth/zoho.py::_applicable_app`, une fois par appel), sans secret ; vide pour l'app
-  d'éditeur, qui se choisit par région au clic.
+  d'éditeur, qui se choisit par région au clic. Le même passage sert `connect.app_owner`
+  (`member`, `group`, `org`, `tenant`, `editor`) : l'écran offre de changer ou de retirer SA
+  clé, et nomme à qui s'adresser pour une clé partagée ; et `connect.ready_options`
+  (`{data_center: [régions]}`, celles où oto publie une app, vide sous une app apportée) :
+  l'écran dit qu'une région n'a pas d'app avant le clic. Le champ `data_center` d'une clé est
+  une liste fermée sans valeur présélectionnée (`providers/zoho.data_center_field`).
 - **Organisation consentie** (`zoho_org_id`, champ non secret, optionnel, de la clé et de
   l'app dédiée) : n'importe quel compte Zoho peut consentir à une app server-based. Au retour,
   AVANT de ranger, `check_org` lit l'organisation que le jeton neuf atteint (CRM `GET
@@ -843,7 +848,8 @@ consentement.
   révocation se journalise `zoho_revocation_failed`), rien de rangé, retour
   `connect=zoho_org_mismatch&consented_org=<nom>`. Organisation illisible alors qu'elle est
   attendue : même refus (`connect=error`). App apportée SANS `zoho_org_id` : le consentement
-  passe, SIGNALÉ (`warning=zoho_org_unverified` au retour, `connect.warnings` sur la carte).
+  passe, SIGNALÉ (`warning=zoho_org_unverified` au retour, `connect.warnings` sur la carte ;
+  `zoho_org_unverifiable` sur Zoho Sign, dont la carte n'a pas ce champ : `auth/zoho.org_warning`).
   Personne côté admin n'a de compte dans l'org Zoho du membre pour y lire son identifiant :
   le retour MONTRE donc l'org consentie — `consented_org=<nom>&consented_org_id=<id>`,
   répétés par org (appariés par position) —, l'identifiant affiché étant celui que l'aide du

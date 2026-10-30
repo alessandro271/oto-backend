@@ -70,6 +70,10 @@ class CredentialField:
     # breaks things: a value outside the list is refused at WRITE time, with the expected
     # set in the message.
     choices: tuple[str, ...] = ()
+    # What the select SHOWS for a value of `choices`, as `(value, label)` pairs: `com` says
+    # nothing to someone who only knows their Zoho address. A value without a label shows
+    # as itself.
+    choice_labels: tuple[tuple[str, str], ...] = ()
     # ACCEPTED PREFIXES of the value (a key whose shape tells what it is). Empty = free.
     # A value that starts with none of them is refused at WRITE time, with the expected
     # prefixes in the message — never the value: the field may be secret. E.g. the
@@ -474,7 +478,8 @@ class Connector:
             "fields": [
                 {"name": f.name, "label": f.label, "secret": f.secret,
                  "required": f.required, "help": f.help,
-                 "when": list(f.when), "choices": list(f.choices)}
+                 "when": list(f.when), "choices": list(f.choices),
+                 "choice_labels": dict(f.choice_labels)}
                 for f in self.secret_fields
             ],
         }

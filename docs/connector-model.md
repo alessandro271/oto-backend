@@ -248,7 +248,7 @@ si chacun de ses scopes est dans la fermeture des scopes du niveau par `scope_im
   `ZohoCRM.org.READ` au CRM, `Desk.basic.READ` à Desk, aucun à Zoho Sign, qui ne documente
   aucune lecture d'organisation : `auth/zoho.ORG_UNREADABLE`, une app qui nomme un
   `zoho_org_id` y est refusée, sans quoi le consentement passe avec l'avertissement
-  `zoho_org_unverified`) — HORS des niveaux, qui disent quels
+  `zoho_org_unverifiable`, les autres connecteurs avec `zoho_org_unverified`) — HORS des niveaux, qui disent quels
   outils sont servis ; la liste exacte demandée est figée par
   `test_les_scopes_du_consentement_sont_figes`. Cliquets :
   `tests/connectors/test_access_levels.py` (`full` == le consentement d'avant, à l'octet) et

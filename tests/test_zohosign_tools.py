@@ -11,6 +11,7 @@ import asyncio
 import pytest
 from fastmcp import FastMCP
 
+from oto_mcp import providers
 from oto_mcp.auth import zoho as zoho_oauth
 from oto_mcp.connectors import access_levels as al
 from oto_mcp.mcp_errors import McpError
@@ -214,7 +215,28 @@ def test_une_app_qui_nomme_une_organisation_est_refusee(monkeypatch):
 def test_une_app_sans_organisation_passe_avec_l_avertissement():
     verdict = zoho_oauth.check_org("zohosign", "eu", {"access_token": "a"},
                                    {"client_id": "c"})
-    assert verdict == zoho_oauth.OrgCheck(zoho_oauth.ORG_UNVERIFIED, ())
+    # Pas `ORG_UNVERIFIED` : son texte renvoie à un champ que cette carte n'a pas.
+    assert verdict == zoho_oauth.OrgCheck(zoho_oauth.ORG_UNVERIFIABLE, ())
+
+
+def test_la_carte_n_annonce_pas_un_champ_qu_elle_n_a_pas():
+    champs = {f.name for f in providers.REGISTRY["zohosign"].secret_fields}
+    assert "zoho_org_id" not in champs
+    assert zoho_oauth.org_warning("zohosign") == zoho_oauth.ORG_UNVERIFIABLE
+    for connecteur in ("zoho", "zohodesk", "zohoanalytics"):
+        assert "zoho_org_id" in {f.name for f in providers.REGISTRY[connecteur].secret_fields}
+        assert zoho_oauth.org_warning(connecteur) == zoho_oauth.ORG_UNVERIFIED
+
+
+def test_chaque_region_du_champ_de_la_cle_est_nommee():
+    """Liste fermée, sans présélection, et chaque valeur dit quelque chose à qui ne connaît
+    que son adresse Zoho."""
+    for connecteur in ("zoho", "zohodesk", "zohosign", "zohoanalytics"):
+        champ = next(f for f in providers.REGISTRY[connecteur].secret_fields
+                     if f.name == "data_center")
+        assert {"eu", "com"} <= set(champ.choices)
+        assert set(dict(champ.choice_labels)) == set(champ.choices)
+        assert champ.required and champ.help != "eu"
 
 
 def test_chaque_region_du_consentement_a_ses_hotes():

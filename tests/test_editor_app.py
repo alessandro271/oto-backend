@@ -50,6 +50,8 @@ def test_cascade_never_yields_platform_for_zoho():
 # --- le repli ------------------------------------------------------------------
 
 class _FakeCred:
+    mode = "user"
+
     def __init__(self, fields):
         self.fields = fields
 
@@ -128,7 +130,7 @@ def test_build_auth_url_uses_editor_app(monkeypatch):
 def test_resolve_app_message_is_actionable():
     with pytest.raises(zoho_oauth.ZohoOAuthError) as e:
         zoho_oauth.resolve_app({})
-    assert "self client" in str(e.value).lower()
+    assert "add your own" in str(e.value).lower()
 
 
 # --- le rangement --------------------------------------------------------------

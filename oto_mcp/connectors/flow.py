@@ -111,6 +111,14 @@ class Flow:
     # Named codes the card shows about the requester's applicable app, e.g.
     # `zoho_org_unverified`: the app names no Zoho organization, any account can consent.
     warnings: Optional[Callable[[str], list]] = None
+    # Who owns the requester's applicable app: `member`, `group`, `org`, `tenant`, `editor`.
+    # What the card can say about a bound parameter depends on it: their own key they can
+    # change, a shared one they cannot. `None` = not declared, the card stays neutral.
+    app_owner: Optional[Callable[[str], str]] = None
+    # The values of a parameter a start can succeed with now (`{name: [values]}`), when
+    # that depends on the value: the regions oto publishes an app for. The card says so
+    # before the click. `None` or an absent name = no constraint to announce.
+    ready_options: Optional[Callable[[str], dict]] = None
 
 
 _FLOWS: dict[str, Flow] = {}
@@ -122,7 +130,9 @@ def declare(connector: str, *, start: Callable[..., FlowStart],
             app_ready: Optional[Callable[[str], bool]] = None,
             app_ready_scopes: Optional[Callable[[str], list]] = None,
             fixed: Optional[Callable[[str], dict]] = None,
-            warnings: Optional[Callable[[str], list]] = None) -> None:
+            warnings: Optional[Callable[[str], list]] = None,
+            app_owner: Optional[Callable[[str], str]] = None,
+            ready_options: Optional[Callable[[str], dict]] = None) -> None:
     """Declare this connector's connection flow. Called at MODULE level (like
     `status_hints.register_state`): it is a pure declaration, it must be readable
     at import, without waiting for the FastMCP mount."""
@@ -136,7 +146,8 @@ def declare(connector: str, *, start: Callable[..., FlowStart],
                              params=tuple(params), label=label,
                              callback_path=callback_path, app_ready=app_ready,
                              app_ready_scopes=app_ready_scopes,
-                             fixed=fixed, warnings=warnings)
+                             fixed=fixed, warnings=warnings, app_owner=app_owner,
+                             ready_options=ready_options)
 
 
 def supports(connector: str) -> bool:
@@ -294,3 +305,30 @@ def warnings(connector: str, sub: str) -> list[str]:
     except Exception:  # noqa: BLE001
         logger.warning("warnings failed for %s", connector, exc_info=True)
         return []
+
+
+def app_owner(connector: str, sub: str) -> Optional[str]:
+    """Who owns this user's applicable app — `None` if not declared or no app. Like
+    `app_ready`, authenticated projection only; fail-open: the card then stays neutral."""
+    f = _FLOWS.get(connector)
+    if not f or f.app_owner is None or not sub:
+        return None
+    try:
+        return f.app_owner(sub) or None
+    except Exception:  # noqa: BLE001
+        logger.warning("app_owner failed for %s", connector, exc_info=True)
+        return None
+
+
+def ready_options(connector: str, sub: str) -> dict:
+    """`{parameter: [values a start can succeed with]}` — `{}` if nothing constrains them.
+    Authenticated projection only. Fail-open, LOGGED: at worst the card promises nothing
+    before the click, and the start says what is wrong."""
+    f = _FLOWS.get(connector)
+    if not f or f.ready_options is None or not sub:
+        return {}
+    try:
+        return {k: list(v) for k, v in (f.ready_options(sub) or {}).items()}
+    except Exception:  # noqa: BLE001
+        logger.warning("ready_options failed for %s", connector, exc_info=True)
+        return {}

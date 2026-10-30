@@ -6,6 +6,7 @@ describe it). See `providers/_model.py` for the `Connector` contract.
 from __future__ import annotations
 
 from ._model import CredentialField, _c
+from .zoho import data_center_field
 
 # The fourth Zoho connector: same credential as the CRM and Desk (OAuth2 self-client
 # or server-based consent, `auth/zoho.py`), same region field. byo_user OR byo_org: an
@@ -26,8 +27,7 @@ CONNECTOR = _c(
         CredentialField("refresh_token", "Refresh Token", secret=True,
                         required=False,
                         help="1000.xxxxx.yyyyy — leave empty if you sign in via Zoho"),
-        CredentialField("data_center", "Data center (com, eu, in, au, jp, ca)",
-                        secret=False, help="eu"),
+        data_center_field(),
     ),
 )
 

@@ -7,6 +7,26 @@ from __future__ import annotations
 
 from ._model import CredentialField, _c
 
+# The Zoho regions, as a person recognizes them: the end of their Zoho address. One home,
+# shared by the key's field (the four connectors) and the consent's select (`tools/zoho.py`).
+REGIONS = (
+    ("eu", "Europe (zoho.eu)"), ("com", "International (zoho.com)"),
+    ("in", "India (zoho.in)"), ("au", "Australia (zoho.com.au)"),
+    ("jp", "Japan (zoho.jp)"), ("ca", "Canada (zohocloud.ca)"),
+)
+
+
+def data_center_field(*extra_regions: tuple[str, str]) -> CredentialField:
+    """The key's region: a closed list with no preselected value. Free text with `eu` as
+    its help was copied as is by someone whose account is on zoho.com, and the wrong
+    region then bound every consent (`auth/zoho.consent_region`)."""
+    regions = REGIONS + extra_regions
+    return CredentialField(
+        "data_center", "Data center (region of your Zoho account)", secret=False,
+        choices=tuple(value for value, _ in regions), choice_labels=regions,
+        help="look at your Zoho address: zoho.eu is Europe, zoho.com is International")
+
+
 # zoho / zohodesk: OAuth2 self-client → multi-field credential (ADR 0011,
 # like silae), resolved via resolve_credential_fields. byo_user OR byo_org
 # (zoho: shareable org/group key — a sales team shares one self-client).
@@ -36,8 +56,7 @@ CONNECTOR = _c(
         CredentialField("zoho_org_id", "Expected Zoho organization ID", secret=False,
                         required=False,
                         help="the Org ID shown in Zoho CRM (Setup → Company Details)"),
-        CredentialField("data_center", "Data center (com, eu, in, au, jp, ca)",
-                        secret=False, help="eu"),
+        data_center_field(),
     ),
 )
 
