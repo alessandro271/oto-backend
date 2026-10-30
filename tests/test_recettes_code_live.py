@@ -1,5 +1,5 @@
-"""Les recettes EN CODE (#1202, lot 2) de bout en bout par `oto_recipe` : la plateforme
-seule éprouve et publie, l'épreuve n'écrit rien, une exécution écrit par clé dans le seul
+"""Les recettes EN CODE (#1202, lot 2) de bout en bout par `oto_recipe` : le membre
+éprouve et publie, l'épreuve n'écrit rien, une exécution écrit par clé dans le seul
 tableau qu'elle désigne, et le reçu reste des comptes.
 
 Vrai store (`live`) et vrai bac à sable : sans bac à sable, ÉCHEC en CI, passé sur un
@@ -110,20 +110,12 @@ def _code(exc) -> str:
     return getattr(exc.value, "code", None) or exc.value.args[1]
 
 
-def test_le_membre_ecrit_la_plateforme_eprouve_et_publie(capa):
-    from oto_mcp.capabilities._types import AuthzDenied
-    appeler, plateforme = capa
+def test_le_membre_ecrit_eprouve_et_publie_sa_recette(capa):
+    appeler, _ = capa
     slug = f"code-{uuid.uuid4().hex[:6]}"
     assert appeler(op="create", slug=slug, title="t", recipe=_corps())["version"] == {
         "version": 1, "status": "proposee"}
-    for op in ("test", "publish"):
-        with pytest.raises(AuthzDenied) as e:
-            appeler(op=op, slug=slug, version=1, params={"company": "acme"})
-        assert _code(e) == "platform_only"
-    with pytest.raises(AuthzDenied) as e:
-        appeler(op="test", recipe=_corps(), params={"company": "acme"})
-    assert _code(e) == "platform_only"
-    plateforme["oui"] = True
+    assert appeler(op="test", recipe=_corps(), params={"company": "acme"})["receipt"]["ok"]
     essai = appeler(op="test", slug=slug, params={"company": "acme"})["receipt"]
     # L'épreuve lit, mais n'écrit rien : `data_write` y est refusé.
     assert essai["ok"] and essai["result"] == {"lus": 3, "ecriture": "write_in_test"}
