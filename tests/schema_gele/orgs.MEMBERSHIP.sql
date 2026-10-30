@@ -4,6 +4,7 @@ sub TEXT NOT NULL,
 org_role TEXT NOT NULL DEFAULT 'org_member',
 is_active BOOLEAN NOT NULL DEFAULT FALSE,
 joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+agent_preset_shared BOOLEAN NOT NULL DEFAULT FALSE,
 PRIMARY KEY (org_id, sub)
 );
 CREATE INDEX IF NOT EXISTS idx_org_members_sub ON org_members(sub);

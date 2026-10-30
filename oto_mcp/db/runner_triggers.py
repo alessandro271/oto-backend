@@ -107,6 +107,51 @@ def poser_partage_par_defaut(org_id: int, valeur: Optional[dict]) -> bool:
     return row is not None
 
 
+# --- Le préréglage d'une personne dans une org (`capabilities/preset_agents.py`) -------
+# Sur son APPARTENANCE : il vaut pour cette org, et quitter l'org l'efface. Une colonne
+# hors du DDL assemblé pour une base existante : posée par la révision
+# `20261031_0040_agent_preset` ET par le démarrage, sous garde de catalogue.
+COLONNE_PRESET_PARTAGE = "agent_preset_shared"
+DDL_COLONNE_PRESET_PARTAGE = (f"ALTER TABLE org_members ADD COLUMN IF NOT EXISTS "
+                              f"{COLONNE_PRESET_PARTAGE} BOOLEAN NOT NULL DEFAULT FALSE")
+
+
+def preset_agent_partage(sub: str, org_id: int) -> bool:
+    """Cette personne a-t-elle consenti d'avance à partager ses agents neufs dans cette
+    org ? False si elle n'en est pas membre."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {COLONNE_PRESET_PARTAGE} AS v FROM org_members "
+            "WHERE org_id = %s AND sub = %s", (org_id, sub),
+        ).fetchone()
+    return bool(row and row["v"])
+
+
+def poser_preset_agent_partage(sub: str, org_id: int, partage: bool) -> bool:
+    """Pose le préréglage de cette personne dans cette org. False si elle n'en est pas
+    membre : rien n'est écrit."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"UPDATE org_members SET {COLONNE_PRESET_PARTAGE} = %s "
+            "WHERE org_id = %s AND sub = %s RETURNING sub", (partage, org_id, sub),
+        ).fetchone()
+    return row is not None
+
+
+def membres_en_preset_partage(org_id: int) -> list[dict]:
+    """Les membres de l'org dont les agents neufs naissent partagés : ce que son admin
+    voit (`oto_org_settings domain=partage_par_defaut`)."""
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(
+            f"""
+            SELECT m.sub, u.email FROM org_members m
+            LEFT JOIN users u ON u.sub = m.sub
+            WHERE m.org_id = %s AND m.{COLONNE_PRESET_PARTAGE}
+            ORDER BY m.joined_at, m.sub
+            """, (org_id,),
+        ).fetchall()]
+
+
 _COLS = ("id, org_id, sub, label, folder, procedure, project_id, tools, "
          "outils_plateforme AS platform_tools, "
          "input, max_steps, "

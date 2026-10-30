@@ -33,7 +33,9 @@ agent (`forfaits_pretes`) — c'est à lui seul de le prêter, agent par agent. 
   autre modèle le rend caduc (fail-closed), qui emprunte par lui n'y pose pas un autre
   modèle d'abonnement, et le transfert l'efface (`db.reprendre_trigger`). Il ne se pose
   ni ne se retire que par le titulaire (ni admin d'org, ni éditeur, ni admin de
-  plateforme), et n'est jamais rétroactif.
+  plateforme), et n'est jamais rétroactif. `op=lend` est le geste, à une exception près :
+  le préréglage du titulaire (`preset_agents`) le fait d'avance sur ses agents à venir,
+  sur son consentement, et sauf refus de l'admin de l'org.
 Ne prêtent jamais : un partage posé par un admin (`granted_by` ≠ propriétaire), ceux de
 la révision 0035 et du réglage `partage_par_defaut` (marqués), ceux d'un ancien
 propriétaire.

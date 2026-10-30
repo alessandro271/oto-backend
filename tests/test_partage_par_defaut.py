@@ -31,6 +31,7 @@ def stockage(monkeypatch):
     monkeypatch.setattr(P.db, "partage_par_defaut_stocke",
                         lambda org: etat["v"] if org == ORG else None)
     monkeypatch.setattr(P.db, "poser_partage_par_defaut", _poser)
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: False)
     return etat
 
 
@@ -41,20 +42,38 @@ def _console(op, **kw):
 
 def test_sans_reglage_tout_type_vaut_aucun(stockage):
     assert _console("get") == {"org_id": ORG,
-                               "partage_par_defaut": {"agent": "aucun", "app": "aucun"},
+                               "partage_par_defaut": {"agent": "aucun", "app": "aucun",
+                                                      "preset_agent": "permis"},
                                "values": {"agent": ["aucun", "lecture"],
-                                          "app": ["aucun", "lecture", "ecriture"]}}
+                                          "app": ["aucun", "lecture", "ecriture"],
+                                          "preset_agent": ["permis", "refuse"]}}
     assert P.role_a_la_naissance(ORG, "agent") is None
     assert P.role_a_la_naissance(ORG, "app") is None
 
 
 def test_lecture_se_pose_et_aucun_le_retire(stockage):
     assert _console("set", partage={"agent": "lecture"})["partage_par_defaut"] == {
-        "agent": "lecture", "app": "aucun"}
+        "agent": "lecture", "app": "aucun", "preset_agent": "permis"}
     assert stockage["v"] == {"agent": "lecture"}
     assert P.role_a_la_naissance(ORG, "agent") == "viewer"
     _console("set", partage={"agent": "aucun"})
     assert stockage["v"] is None, "`aucun` partout = rien de stocké, comme avant"
+
+
+def test_l_admin_refuse_les_prereglages_et_seul_le_refus_se_stocke(stockage):
+    assert _console("set", partage={"preset_agent": "refuse"})["partage_par_defaut"] == {
+        "agent": "aucun", "app": "aucun", "preset_agent": "refuse"}
+    assert stockage["v"] == {"preset_agent": "refuse"}
+    _console("set", partage={"preset_agent": "permis"})
+    assert stockage["v"] is None, "`permis` est le défaut : rien de stocké"
+
+
+def test_seul_l_admin_lit_qui_a_pose_shared(stockage, monkeypatch):
+    monkeypatch.setattr(P.db, "membres_en_preset_partage",
+                        lambda org: [{"sub": "s", "email": "m@example.org"}])
+    assert "preset_agent_shared" not in _console("get")
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: True)
+    assert _console("get")["preset_agent_shared"] == [{"sub": "s", "email": "m@example.org"}]
 
 
 def test_une_app_peut_naitre_partagee_en_ecriture(stockage):

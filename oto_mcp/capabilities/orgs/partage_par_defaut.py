@@ -1,9 +1,15 @@
 """Le partage par défaut d'une org : ce qu'un objet NEUF reçoit d'office, par type.
 
 **Privé par défaut, toujours.** Le code ne partage jamais d'office un objet neuf : seul
-ce réglage, posé par un admin de l'org, le fait. Une valeur par type d'objet,
+ce réglage, posé par un admin de l'org, le fait pour tous ; une personne ne le fait que
+pour SES agents (`preset_agents`). Une valeur par type d'objet,
 `{"agent": "aucun" | "lecture", "app": "aucun" | "lecture" | "ecriture"}` ; lu par
 `oto_trigger op=create` et `oto_apps op=create`. Sans réglage : `aucun` pour chaque type.
+
+`preset_agent` (`permis` par défaut | `refuse`) n'est pas un type d'objet : c'est la
+porte de l'admin sur ces préréglages personnels. `refuse` interdit d'en poser un en
+`shared` et l'ignore à la création ; il ne touche à aucun agent déjà né, et un préréglage
+déjà posé reprend effet si l'admin rouvre.
 
 Une app accepte `ecriture` : elle n'a pas d'identité à elle — chaque geste d'une app
 ouverte agit au nom de son LECTEUR, borné par les droits de son AUTEUR (le dernier à
@@ -24,13 +30,14 @@ silence. L'admin le repose.
 
 Le partage né du réglage est MARQUÉ (`db.MARQUE_PARTAGE_PAR_DEFAUT` en `granted_by`) : il
 se retire sans toucher aux partages faits à la main. Il ne prête jamais un forfait
-personnel : prêter est un geste du TITULAIRE, agent par agent (nommer un éditeur, ou
-`oto_trigger op=lend` pour une équipe ou l'org), et `db._forfait_prete` ne lit que les
-partages posés par le propriétaire. Aucun réglage
-d'admin ne partage en écriture ni ne prête un forfait à sa place.
+personnel : prêter est un geste du TITULAIRE (nommer un éditeur, `oto_trigger op=lend`
+pour une équipe ou l'org, ou son propre préréglage, `preset_agents`, consenti une fois
+pour ses agents à venir), et `db._forfait_prete` ne lit que les partages posés par le
+propriétaire. Aucun réglage d'admin ne partage en écriture ni ne prête un forfait à sa
+place.
 
 MCP seul, par la console `oto_org_settings domain=partage_par_defaut` (`org_console.py`) :
-`get` membre, `set` admin de l'org.
+`get` membre (l'admin de l'org y lit aussi qui a posé `shared`), `set` admin de l'org.
 """
 from __future__ import annotations
 
@@ -41,12 +48,17 @@ from .._types import AuthzDenied
 
 AUCUN, LECTURE, ECRITURE = "aucun", "lecture", "ecriture"
 VALEURS = (AUCUN, LECTURE, ECRITURE)
+PRESET, PERMIS, REFUSE = "preset_agent", "permis", "refuse"
 
-#: Par type d'objet : les valeurs qu'il accepte. `ecriture` est une valeur CONNUE du
+#: Par clé du réglage : les valeurs qu'elle accepte. `ecriture` est une valeur CONNUE du
 #: réglage, refusée pour un agent (tête de module) — d'où un refus nommé, pas
 #: « valeur inconnue ».
 TYPES: dict[str, tuple[str, ...]] = {"agent": (AUCUN, LECTURE),
-                                     "app": (AUCUN, LECTURE, ECRITURE)}
+                                     "app": (AUCUN, LECTURE, ECRITURE),
+                                     PRESET: (PERMIS, REFUSE)}
+
+#: Ce que vaut une clé non posée. Égale à son défaut, elle ne se stocke pas.
+DEFAUTS: dict[str, str] = {"agent": AUCUN, "app": AUCUN, PRESET: PERMIS}
 
 #: Le rôle du partage posé à la naissance, par valeur.
 ROLES = {LECTURE: "viewer", ECRITURE: "editor"}
@@ -61,10 +73,10 @@ def _illisible(org_id: int, stocke) -> AuthzDenied:
 
 
 def lire(org_id: int) -> dict[str, str]:
-    """Le réglage de l'org, une valeur par type connu (`aucun` quand rien n'est posé).
+    """Le réglage de l'org, une valeur par clé connue (`DEFAUTS` quand rien n'est posé).
     Lève `default_sharing_unreadable` sur une valeur stockée qu'on ne sait pas lire."""
     stocke = db.partage_par_defaut_stocke(org_id)
-    reglage = {t: AUCUN for t in TYPES}
+    reglage = dict(DEFAUTS)
     if stocke is None:
         return reglage
     if not isinstance(stocke, dict):
@@ -86,7 +98,7 @@ def poser(org_id: int, partage: Optional[dict]) -> dict[str, str]:
     réglage appliqué. Rien n'est écrit si une seule valeur est refusée."""
     if not partage:
         raise AuthzDenied(400, "missing_default_sharing",
-                          "`partage` requis pour set : {type: aucun|lecture}, "
+                          "`partage` requis pour set : {type: valeur}, "
                           f"types : {', '.join(TYPES)}.")
     for t, v in partage.items():
         if t not in TYPES:
@@ -105,7 +117,7 @@ def poser(org_id: int, partage: Optional[dict]) -> dict[str, str]:
                               f"`{t}` vaut {' | '.join(TYPES[t])} (reçu {v!r}). "
                               "Rien n'a été modifié.")
     reglage = {**lire(org_id), **partage}
-    a_stocker = {t: v for t, v in reglage.items() if v != AUCUN}
+    a_stocker = {t: v for t, v in reglage.items() if v != DEFAUTS[t]}
     if not db.poser_partage_par_defaut(org_id, a_stocker or None):
         raise AuthzDenied(404, "unknown_org", f"Org #{org_id} inconnue.")
     return reglage

@@ -163,7 +163,7 @@ def creation(org, monkeypatch):
     org["cree"] = False
     monkeypatch.setattr(db, "partage_par_defaut_stocke",
                         lambda o: org["reglage"] if o == ORG else None)
-    monkeypatch.setattr(db, "get_account_profile", lambda sub: {"profile": {}})
+    monkeypatch.setattr(db, "preset_agent_partage", lambda sub, org: False)
     monkeypatch.setattr(db, "triggers_for_procedure", lambda o, p: [])
     monkeypatch.setattr(db, "create_trigger", lambda o, sub, **k: org.update(cree=True) or {
         "id": 7, "org_id": o, "sub": sub, **k})
@@ -208,8 +208,8 @@ def test_en_lecture_l_org_voit_l_agent_sans_pouvoir_le_modifier(creation, monkey
 
 
 def _preset(monkeypatch, valeur):
-    profil = {"profile": {"agent_sharing": {str(ORG): valeur}}}
-    monkeypatch.setattr(RT.db, "get_account_profile", lambda sub: profil)
+    monkeypatch.setattr(RT.db, "preset_agent_partage",
+                        lambda sub, org: valeur == "shared" and org == ORG)
 
 
 def test_le_preset_shared_partage_et_prete_a_la_naissance(creation, monkeypatch):
@@ -237,6 +237,14 @@ def test_le_preset_ne_prete_rien_hors_abonnement(creation, monkeypatch):
 def test_private_l_emporte_sur_le_preset(creation, monkeypatch):
     _preset(monkeypatch, "shared")
     _creer(monkeypatch, private=True)
+    assert creation["partages"] == {}
+
+
+def test_le_refus_de_l_admin_l_emporte_sur_le_preset(creation, monkeypatch):
+    """Le préréglage ignoré, l'agent suit le réglage de l'org — ici, privé."""
+    _preset(monkeypatch, "shared")
+    creation["reglage"] = {"preset_agent": "refuse"}
+    _creer(monkeypatch)
     assert creation["partages"] == {}
 
 

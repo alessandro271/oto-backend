@@ -707,6 +707,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `20261024_1101_default_sharing` : ordre indifférent entre elles.
     if _colonne_absente(conn, "orgs", runner_triggers.COLONNE_PARTAGE_PAR_DEFAUT):
         conn.execute(runner_triggers.DDL_COLONNE_PARTAGE_PAR_DEFAUT)
+    # Le préréglage d'une personne dans une org — la même que pose la révision
+    # `20261031_0040_agent_preset` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "org_members", runner_triggers.COLONNE_PRESET_PARTAGE):
+        conn.execute(runner_triggers.DDL_COLONNE_PRESET_PARTAGE)
     # Les surcharges du temps gagné d'une org — la même que pose la révision `0066` :
     # ordre indifférent entre elles.
     if _colonne_absente(conn, "orgs", runner_jobs.COLONNE_TEMPS_GAGNE):

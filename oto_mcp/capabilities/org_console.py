@@ -117,7 +117,8 @@ class OrgSettingsInput(BaseModel):
     # time_saved (set) : minutes par type de résultat — {"record": 2, …} ; une
     # valeur null rend le défaut à ce type, `{}` les rend tous.
     minutes: Optional[dict[str, Optional[float]]] = None
-    # partage_par_defaut (set) : par type d'objet neuf — {"agent": "aucun"|"lecture"}.
+    # partage_par_defaut (set) : par type d'objet neuf — {"agent": "aucun"|"lecture"} —
+    # et la porte des préréglages personnels — {"preset_agent": "permis"|"refuse"}.
     partage: Optional[dict[str, str]] = None
 
 
@@ -163,12 +164,17 @@ def _temps_gagne(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
 
 def _partage_par_defaut(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     """Ce qu'un objet NEUF de l'org reçoit d'office (`orgs/partage_par_defaut.py`)."""
+    from .. import db, roles
     ppd = orgs_partage_par_defaut
     if inp.op == "get":
-        return ppd.servi(inp.org_id, ppd.lire(inp.org_id))
-    if inp.op == "set":
-        return ppd.servi(inp.org_id, ppd.poser(inp.org_id, inp.partage))
-    raise AuthzDenied(400, "unsupported_op", "preview n'existe que pour field_filters.")
+        rep = ppd.servi(inp.org_id, ppd.lire(inp.org_id))
+    elif inp.op == "set":
+        rep = ppd.servi(inp.org_id, ppd.poser(inp.org_id, inp.partage))
+    else:
+        raise AuthzDenied(400, "unsupported_op", "preview n'existe que pour field_filters.")
+    if roles.is_org_admin(ctx.sub, inp.org_id):
+        rep["preset_agent_shared"] = db.membres_en_preset_partage(inp.org_id)
+    return rep
 
 
 def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
@@ -391,7 +397,10 @@ CAPABILITIES += [
             "default, per type: set takes `partage` {agent: aucun|lecture}; default "
             "`aucun` = born private; `lecture` = the whole org may see new agents, not "
             "edit them; their creator may still keep one private. `ecriture` is refused "
-            "for agents: a scheduled run runs as its owner). "
+            "for agents: a scheduled run runs as its owner; `preset_agent` permis|refuse "
+            "allows or refuses members' personal presets (`oto_trigger op=default_sharing`), "
+            "future agents only; an org admin's get also lists in `preset_agent_shared` "
+            "the members whose new agents are born shared). "
             "op=get is member, set is org admin."),
         mcp="oto_org_settings",
     ),

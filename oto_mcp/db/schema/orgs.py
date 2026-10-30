@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS org_members (
     org_role TEXT NOT NULL DEFAULT 'org_member',
     is_active BOOLEAN NOT NULL DEFAULT FALSE,
     joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Ses agents neufs naissent partagés à l'org (`capabilities/preset_agents.py`).
+    -- Base existante : révision `20261031_0040_agent_preset`.
+    agent_preset_shared BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (org_id, sub)
 );
 CREATE INDEX IF NOT EXISTS idx_org_members_sub ON org_members(sub);

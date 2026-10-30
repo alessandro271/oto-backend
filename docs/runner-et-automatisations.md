@@ -2129,7 +2129,20 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
     reposé par un admin, un partage perd le prêt — l'upsert réécrit `granted_by`), ceux
     de la révision 0035 et du réglage `partage_par_defaut` (marqués), ceux d'un ancien
     propriétaire.
-  - **Préréglage personnel** : `oto_trigger op=default_sharing` (`private`|`shared`), par personne et par org, lu à `op=create` depuis toute face ; `shared` fait les deux gestes du propriétaire à la naissance (`capabilities/preset_agents.py`). `private=true` l'emporte, rien de rétroactif, aucun admin ne le pose pour un autre.
+  - **Préréglage personnel** : `oto_trigger op=default_sharing` (`private`|`shared`), par
+    personne et par org (colonne `org_members.agent_preset_shared`, quitter l'org
+    l'efface), lu à `op=create` depuis toute face ; `shared` fait les deux gestes du
+    propriétaire à la naissance (`capabilities/preset_agents.py`) : c'est la seule
+    exception à « `op=lend` est le geste », un consentement donné d'avance par le
+    titulaire. `private=true` l'emporte, rien de rétroactif, aucun admin ne le pose pour
+    un autre. Une personne seule le pose (`agent_preset_human_only` sous un jeton de
+    délégation : un agent qui lit des données tierces se l'accorderait sur une injection
+    de prompt). Qui n'est pas membre de l'org reçoit `agent_preset_not_a_member`.
+  - **La porte de l'admin** : `oto_org_settings domain=partage_par_defaut` porte
+    `preset_agent` (`permis` par défaut | `refuse`). Sur `refuse`, poser `shared` rend
+    `403 agent_preset_refused`, `private` reste permis, et `create` ignore le préréglage
+    (l'agent suit le réglage de l'org). Ni agent né ni préréglage posé ne bougent : rouvrir
+    le rend effectif. L'admin lit dans `preset_agent_shared` qui l'a posé.
   - **Qui** : le propriétaire SEUL pose (`lend`) et retire (`unlend`) le prêt collectif —
     un admin d'org, un éditeur ou un admin de plateforme reçoit `403
     trigger_owner_required` ; qui ne voit pas l'agent, `404 trigger_not_found` ; un agent
@@ -2165,7 +2178,7 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
   `orgs.default_sharing`, défaut `aucun`, révision `20261024_1101_default_sharing`) ;
   en `lecture`, `create` pose un partage `viewer` à l'org entière
   (`_acces_agent.ouvrir_a_l_org`), sauf `private=true`. Le créateur ne peut pas ouvrir
-  au-delà. Le partage né du réglage est MARQUÉ (`granted_by = 'reglage:partage_par_defaut'`)
+  au-delà, hors son préréglage personnel (ci-dessus). Le partage né du réglage est MARQUÉ (`granted_by = 'reglage:partage_par_defaut'`)
   et se retire sans toucher aux partages faits à la main ; il ne prête pas un abonnement
   personnel (ci-dessus) — prêter reste le geste du titulaire. Une valeur stockée illisible
   lève `default_sharing_unreadable`, avant toute création.
