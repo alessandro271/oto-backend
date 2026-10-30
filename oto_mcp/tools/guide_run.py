@@ -197,7 +197,7 @@ def register(mcp: FastMCP) -> None:
             label: short human description of what this run does (always logged).
             guide: optional — the guide/skill slug being executed (as passed to
                 oto_procedure op=get). Omit for a one-shot/ad-hoc run.
-            doctrine: DEPRECATED alias of `guide`, removed on 29/10/2026 — pass
+            doctrine: DEPRECATED alias of `guide`, removed on 30/11/2026 — pass
                 `guide` instead.
         """
         guide = guide if guide is not None else doctrine

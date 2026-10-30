@@ -65,8 +65,12 @@ Trois raisons, dans l'ordre de ce qu'elles coûtent :
 
 ## La date
 
-**Retrait au premier tag `vX.Y.Z` posé à partir du 29/10/2026** — **deux mois**
-après la mise en production du préavis.
+**Retrait au premier tag `vX.Y.Z` posé à partir du 30/11/2026** — reporté le 30/10/2026
+depuis le 29/10/2026, qui tombait **deux mois** après la mise en production du préavis
+(le plancher dû, `deprecations.PREAVIS_DU`). Pourquoi le report : le dashboard lit
+encore les clés d'hier, et le journal `tool_calls` ne voit pas les anciens noms
+d'outils (`ToolAliasMiddleware` les traduit avant lui) — l'usage se mesure avant la
+traduction, puis le lot D part.
 
 D'où viennent ces deux mois : **l'Art 8.2 du contrat de service**, qui promet un
 préavis de deux mois avant toute rupture d'interface. Le mécanisme en a servi 30 jours
@@ -104,7 +108,7 @@ basculé) et la migration en base.
 
 Une ligne par surface. « Forme » dit comment les deux noms coexistent.
 
-| Surface | Ancien nom (part le 29/10/2026) | Nouveau nom | Forme | Lot |
+| Surface | Ancien nom (part le 30/11/2026) | Nouveau nom | Forme | Lot |
 | --- | --- | --- | --- | --- |
 | Outil MCP | `oto_admin_doctrine` | `oto_admin_guide` | les deux listés et appelables ; l'ancien porte l'avis en tête de sa description | B1 |
 | Chemin REST | `GET /api/me/doctrines/library` | `GET /api/me/guide-library` | 308 | B2 |

@@ -84,10 +84,14 @@ def _plus_de_mois(depart: datetime.date, mois: int) -> datetime.date:
     return datetime.date(annee, mois_cible, jour)
 
 
-# Premier tag `vX.Y.Z` posé à partir de cette date. DÉRIVÉE, pas écrite à la main :
-# décaler le retrait, c'est décider une date d'annonce ou une durée de préavis —
-# jamais poser un jour de calendrier au hasard.
-RETRAIT = _plus_de_mois(ANNONCE, PREAVIS_MOIS)
+# Premier tag `vX.Y.Z` posé à partir de cette date. Le préavis DÛ reste dérivé (un
+# test en fait le plancher) ; le retrait servi peut être plus TARD, jamais plus tôt.
+# Reporté du 29/10 au 30/11/2026, décidé le 30/10/2026 : le dashboard lit encore les
+# clés d'hier, et le journal `tool_calls` ne voit pas les anciens noms d'outils (le
+# bord du protocole les traduit avant lui) — l'usage reste à mesurer avant le lot D
+# (#526).
+PREAVIS_DU = _plus_de_mois(ANNONCE, PREAVIS_MOIS)
+RETRAIT = max(PREAVIS_DU, datetime.date(2026, 11, 30))
 
 
 # ── Outils MCP (lot B1) ─────────────────────────────────────────────────────

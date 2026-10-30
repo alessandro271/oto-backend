@@ -178,7 +178,7 @@ class MyConnectorRow(BaseModel):
     # Number of org procedures that cite a namespace of the connector — derived
     # from the guide bodies, best-effort (0 on a read incident, no error).
     guide_ref_count: int
-    doctrine_ref_count: int                # deprecated ALIAS (removal 29/10/2026, #519)
+    doctrine_ref_count: int                # deprecated ALIAS (removal 30/11/2026, #519)
     paid_option: Optional[str] = None       # required paid option (layer 3), None = none
     # `true` = the option is lifted OR none is required. Says NOTHING about the credential:
     # an `option_ok` connector remains unusable without a key set.
@@ -645,7 +645,7 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
             "state": state,
             "recommended": c["name"] in recommended,
             "guide_ref_count": len(refset),
-            "doctrine_ref_count": len(refset),   # deprecated ALIAS (removal 29/10/2026)
+            "doctrine_ref_count": len(refset),   # deprecated ALIAS (removal 30/11/2026)
             "paid_option": opt,
             "option_ok": _option_ok(c["name"]),
         }
