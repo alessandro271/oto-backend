@@ -298,16 +298,55 @@ def test_plafond_atteint_refuse_avant_le_flux(monde, modele, monkeypatch):
 
 
 def test_plafond_franchi_refuse_l_appel_suivant_dans_le_flux(monde, modele, monkeypatch):
-    """Measured on what the provider reported: a call of 1 M input tokens (4 $) crosses a
-    3 $ ceiling; the NEXT model call of the same leg is refused, named, never sent."""
+    """Measured on what the provider reported: a call of 2 M input tokens (4 $ on the
+    default model, Claude Sonnet 5.5 at 2 $/M — 8 $ on the stronger one) crosses a 3 $
+    ceiling; the NEXT model call of the same leg is refused, named, never sent."""
     from oto_mcp.db import copilot as store
     monkeypatch.setenv("OTO_COPILOT_DAILY_CAP_USD", str(store.depense_du_jour(C) / 1e6 + 3))
-    modele.usage = {"input_tokens": 1_000_000, "output_tokens": 0}
+    modele.usage = {"input_tokens": 2_000_000, "output_tokens": 0}
     modele.script = [_outil("tu_cap", "data_list_datastores", {}), _fin("never")]
     evs = _evs(_tour(monde, C, "list"))
     assert len(modele.requetes) == 1
     assert evs[-2]["type"] == "error" and "limit" in evs[-2]["message"]
     assert evs[-1]["type"] == "done"
+
+
+def test_le_passage_au_fort_est_garde_par_conversation(monde, modele):
+    """The move up is stored on the CONVERSATION (`copilot_threads.model`): the next
+    request of the same conversation goes to the stronger model, a new conversation of
+    the same person starts on the default again."""
+    from oto_mcp.capabilities.copilot import palier
+    from oto_mcp.db import copilot as store
+    modele.script = [_outil("tu_up", "oto_trigger", {"op": "list"}), _fin("ok")]
+    evs = _evs(_tour(monde, A, "why did my agent fail?"))
+    thread = evs[0]["thread_id"]
+    assert [c["model"] for c in modele.requetes[-2:]] == [palier.DEFAUT, palier.FORT]
+    assert store.lire(thread, A)["model"] == palier.FORT
+    modele.script = [_fin("still up")]
+    _evs(_tour(monde, A, "and now?", thread_id=thread))
+    assert modele.requetes[-1]["model"] == palier.FORT
+    modele.script = [_fin("fresh")]
+    autre = _evs(_tour(monde, A, "hello"))[0]["thread_id"]
+    assert modele.requetes[-1]["model"] == palier.DEFAUT
+    assert store.lire(autre, A)["model"] == palier.DEFAUT
+
+
+def test_une_conversation_d_avant_reste_sur_son_modele_et_ses_outils(monde, modele):
+    """A conversation stored before the column (`model` NULL) keeps the model of the
+    first version and every core tool up front, and never moves up."""
+    from oto_mcp.capabilities.copilot import palier
+    from oto_mcp.db import copilot as store
+    from oto_mcp.db._conn import _connect
+    modele.script = [_fin("first")]
+    thread = _evs(_tour(monde, A, "hello"))[0]["thread_id"]
+    with _connect() as c:
+        c.execute("UPDATE copilot_threads SET model = NULL WHERE id = %s", (thread,))
+    modele.script = [_outil("tu_old", "oto_trigger", {"op": "list"}), _fin("ok")]
+    _evs(_tour(monde, A, "why did my agent fail?", thread_id=thread))
+    for corps in modele.requetes[-2:]:
+        assert corps["model"] == palier.HERITE
+        assert not any(o.get("defer_loading") for o in corps["tools"])
+    assert store.lire(thread, A)["model"] is None
 
 
 def test_la_requete_suivante_relit_l_historique_au_cache(monde, modele):

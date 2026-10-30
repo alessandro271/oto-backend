@@ -74,8 +74,10 @@ demandant à un modèle de se juger lui-même :
 
 - elle change ce qui fait tourner ou se conduire d'autres choses plus tard (agent,
   planification, flotte, recette, fonction, procédure, guide, profil, réglages de l'org :
-  `classement.lourd`), ou lit simplement un agent, une planification, une flotte, une
-  recette, une fonction (`classement.automatisation`) ;
+  `classement.lourd`), ou appelle simplement un outil qui lit un agent, une planification,
+  une flotte, une recette, une fonction (`classement.automatisation`) — une recherche
+  d'outils qui ne fait que CHARGER l'un d'eux ne compte pas : elle rend plusieurs outils par
+  proximité de texte ;
 - le modèle a refusé (`refusal`) ;
 - deux lots d'outils de suite ont échoué ;
 - la personne a refusé une carte.
@@ -85,8 +87,9 @@ avoir encore rien dit**, son étape est jetée (jamais écrite dans l'historique
 reprend ; s'il a déjà parlé, ses mots restent à l'écran et le fort prend l'étape suivante.
 **Sans retour** : une conversation montée y reste, une nouvelle repart du défaut — un
 changement de modèle refroidit le cache du fournisseur, et le fort lit les blocs de réflexion
-du défaut, pas l'inverse. Un modèle sans prix connu (`depense.PRIX_PAR_MTOK`) est écarté
-pour le défaut, et le journal le dit. ⚠️ Sur une clé refacturée, **le barème du commerce
+du défaut, pas l'inverse. Un modèle sans prix connu (`depense.PRIX_PAR_MTOK`), vide compris,
+**refuse le démarrage** (`palier.verifier_reglages`, appelé par `server.main`) et lève à la
+lecture (`palier.ModeleInconnu`) — jamais le défaut en silence. ⚠️ Sur une clé refacturée, **le barème du commerce
 doit porter chaque modèle choisi** (`messages:<modèle>`), sinon chaque appel est refusé
 (`credits_unpriced`).
 
@@ -285,7 +288,9 @@ refusé `insufficient_credits`.
 
 Avant d'ouvrir l'agent sur une instance :
 
-1. **les quatre lignes `anthropic/messages:claude-opus-5-5`** (`input_tokens`,
+1. **les quatre lignes de CHAQUE modèle choisi** — `anthropic/messages:claude-sonnet-5-5`
+   (le défaut, `OTO_COPILOT_MODEL`), `anthropic/messages:claude-opus-5-5` (le fort et les
+   conversations d'avant) — (`input_tokens`,
    `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`) posées au
    barème par le commerce (`PUT /api/service/credits/scales/{version}`) : sans elles,
    l'agent intégré refuse chaque appel sur une clé refacturée (`credits_unpriced`), **en
@@ -294,8 +299,9 @@ Avant d'ouvrir l'agent sur une instance :
    ```sql
    SELECT unit, budget, per_n FROM credit_scale_lines
    WHERE version = (SELECT max(version) FROM credit_scales)
-     AND connector = 'anthropic' AND function = 'messages:claude-opus-5-5';
-   -- quatre lignes
+     AND connector = 'anthropic'
+     AND function IN ('messages:claude-sonnet-5-5', 'messages:claude-opus-5-5');
+   -- huit lignes
    ```
 
 2. **garder `OTO_CREDITS_MODE=report`** (le défaut) tant que le registre n'est pas

@@ -49,7 +49,7 @@ PRIX_PAR_MTOK: dict[str, dict[str, Decimal]] = {
         "input_tokens": Decimal("2"),
         "output_tokens": Decimal("10"),
         "cache_creation_input_tokens": Decimal("2.50"),
-        "cache_read_input_tokens": Decimal("0.10"),
+        "cache_read_input_tokens": Decimal("0.20"),
     },
 }
 

@@ -1106,6 +1106,11 @@ def main():
     # par défaut en silence. Cf. `links.verifier_reglages`.
     from . import links
     links.verifier_reglages()
+    # Modèles de l'agent intégré (`OTO_COPILOT_MODEL`, `OTO_COPILOT_MODEL_UP`) : un modèle
+    # sans prix connu refuse le démarrage ici, jamais le défaut en silence.
+    # Cf. `capabilities/copilot/palier.verifier_reglages`.
+    from .capabilities.copilot import palier as copilot_palier
+    copilot_palier.verifier_reglages()
 
     # Identité de l'instance (#968, décision du 28/09/2026) : adresses, email, marque,
     # contrats — tout ce qui pointerait chez quelqu'un d'autre sans déclaration. Un

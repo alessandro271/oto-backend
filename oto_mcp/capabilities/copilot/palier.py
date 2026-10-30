@@ -6,8 +6,9 @@ list of signs that the work is hard — never by asking a model to judge itself:
 
 - it changes what makes other things run or behave later — an agent, a schedule, a fleet,
   a recipe, a function, a process, a guide, a profile, the org's settings
-  (`classement.lourd`) — or so much as reads an agent, a schedule, a fleet, a recipe or a
-  function (`classement.automatisation`);
+  (`classement.lourd`) — or so much as calls a tool that reads an agent, a schedule, a
+  fleet, a recipe or a function (`classement.automatisation`; a tool search that only
+  loads one does not count);
 - the model refused the request (`refusal`);
 - two tool batches in a row failed;
 - the person declined a card.
@@ -38,18 +39,25 @@ HERITE = MODELE
 ECHECS_DE_SUITE = 2
 
 
+class ModeleInconnu(ValueError):
+    """`OTO_COPILOT_MODEL` or `OTO_COPILOT_MODEL_UP` names a model with no provider price
+    (`depense.PRIX_PAR_MTOK`)."""
+
+
 def _lu(env: str, defaut: str) -> str:
-    """A model the instance names, if it can price it — else the default, said once per
-    call in the journal (a typo must not stop every conversation)."""
+    """The model the instance names, or the default when unset. Set to a model with no
+    known price (empty included): `ModeleInconnu` — never the default in silence, a typo
+    would run every conversation on a model nobody chose. Checked at startup
+    (`verifier_reglages`) and on each read."""
     from .depense import PRIX_PAR_MTOK
-    brut = (os.environ.get(env) or "").strip()
-    if not brut:
+    brut = os.environ.get(env)
+    if brut is None:
         return defaut
-    if brut not in PRIX_PAR_MTOK:
-        logger.warning("copilot : %s=%r n'a pas de prix connu — %s à la place",
-                       env, brut, defaut)
-        return defaut
-    return brut
+    nom = brut.strip()
+    if nom not in PRIX_PAR_MTOK:
+        raise ModeleInconnu(f"{env}={brut!r}: no provider price for this model (one of "
+                            f"{', '.join(sorted(PRIX_PAR_MTOK))})")
+    return nom
 
 
 def defaut() -> str:
@@ -58,6 +66,13 @@ def defaut() -> str:
 
 def fort() -> str:
     return _lu("OTO_COPILOT_MODEL_UP", FORT)
+
+
+def verifier_reglages() -> None:
+    """The startup guard: an unknown model refuses to start, rather than failing the
+    first conversation (or its first move up) in front of a person."""
+    defaut()
+    fort()
 
 
 def modele_du_fil(fil: dict) -> str:
@@ -89,18 +104,6 @@ def _cibles(message: dict) -> list[tuple[str, dict]]:
             for b in message.get("content") or [] if b.get("type") == "tool_use"]
 
 
-def _decouverts(message: dict) -> set:
-    """The tools a tool search of this message loaded."""
-    noms = set()
-    for b in message.get("content") or []:
-        if b.get("type") != "tool_search_tool_result":
-            continue
-        contenu = b.get("content") or {}
-        for ref in contenu.get("tool_references") or []:
-            noms.add(ref.get("tool_name"))
-    return noms
-
-
 def ecrit_un_lourd(message: dict, annotations) -> bool:
     """The message calls a hard target to change it."""
     return any(classement.lourd(t) and
@@ -109,10 +112,10 @@ def ecrit_un_lourd(message: dict, annotations) -> bool:
 
 
 def touche_une_automatisation(message: dict) -> bool:
-    """The message reads, calls or loads an agent, a schedule, a fleet, a recipe or a
-    function."""
-    return any(classement.automatisation(t) for t, _ in _cibles(message)) or \
-        any(classement.automatisation(n) for n in _decouverts(message))
+    """The message CALLS an agent, a schedule, a fleet, a recipe or a function tool, to
+    read it or not. A tool search that merely LOADS one does not count: the search
+    returns several tools by text match, and a side hit is no sign of hard work."""
+    return any(classement.automatisation(t) for t, _ in _cibles(message))
 
 
 def a_parle(message: dict) -> bool:

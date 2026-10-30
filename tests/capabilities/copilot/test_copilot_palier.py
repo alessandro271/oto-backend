@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from oto_mcp.capabilities.copilot import boucle, cle, depense, modele, palier
 from oto_mcp.capabilities.copilot.outils import Boite, a_la_demande
 
@@ -65,12 +67,24 @@ def test_une_conversation_neuve_differe_ses_outils():
 
 # --- the model a conversation runs on ----------------------------------------------------
 
-def test_le_defaut_et_le_fort_se_reglent_et_un_modele_sans_prix_est_ecarte(monkeypatch):
+def test_le_defaut_et_le_fort_se_reglent(monkeypatch):
+    monkeypatch.delenv("OTO_COPILOT_MODEL", raising=False)
+    monkeypatch.delenv("OTO_COPILOT_MODEL_UP", raising=False)
     assert (palier.defaut(), palier.fort()) == ("claude-sonnet-5-5", "claude-opus-5-5")
     monkeypatch.setenv("OTO_COPILOT_MODEL", "claude-opus-5-5")
     assert palier.defaut() == "claude-opus-5-5"
-    monkeypatch.setenv("OTO_COPILOT_MODEL", "claude-inconnu")
-    assert palier.defaut() == palier.DEFAUT
+
+
+@pytest.mark.parametrize("env", ["OTO_COPILOT_MODEL", "OTO_COPILOT_MODEL_UP"])
+@pytest.mark.parametrize("valeur", ["claude-inconnu", "", "  "])
+def test_un_modele_sans_prix_leve_jamais_le_defaut_en_silence(monkeypatch, env, valeur):
+    """A typo never runs conversations on a model nobody chose: the read raises, and so
+    does the startup guard (`verifier_reglages`, called by `server.main`)."""
+    monkeypatch.setenv(env, valeur)
+    with pytest.raises(palier.ModeleInconnu, match=env):
+        palier.verifier_reglages()
+    with pytest.raises(palier.ModeleInconnu):
+        palier.defaut() if env == "OTO_COPILOT_MODEL" else palier.fort()
 
 
 def test_chaque_modele_choisi_a_un_prix_pour_le_plafond():
@@ -97,7 +111,8 @@ def test_signes_du_travail_difficile():
                            "content": {"type": "tool_search_tool_search_result",
                                        "tool_references": [{"type": "tool_reference",
                                                             "tool_name": "oto_fleet"}]}}]}
-    assert palier.touche_une_automatisation(charge)
+    # A tool search that only LOADS an agent tool is no sign: BM25 returns side hits.
+    assert not palier.touche_une_automatisation(charge)
     assert not palier.touche_une_automatisation(
         {"content": [_appel("oto_guide", op="read", slug="notice")]})
     assert palier.a_parle({"content": [{"type": "text", "text": "Je crée l'agent."}]})
@@ -165,6 +180,30 @@ def test_le_fort_reprend_une_etape_qui_cree_un_agent_sans_avoir_parle(monkeypatc
     assert fil["model"] == palier.FORT
     # The weaker model's step was dropped, not kept in the history.
     assert [m["role"] for m in fil["messages"]] == ["user", "assistant"]
+
+
+def test_une_etape_qui_a_deja_parle_reste_et_le_fort_prend_la_suivante(monkeypatch):
+    """Words already on screen are kept: the step goes into the history as it came,
+    and the conversation moves up for the next step."""
+    b = Boite(frozenset({"oto_trigger"}), {"oto_trigger": object()},
+              [{"name": "oto_trigger"}])
+    appels = _boucle(monkeypatch, [
+        {"content": [{"type": "text", "text": "Je regarde tes agents."},
+                     _appel("oto_trigger", op="list")], "stop_reason": "tool_use"},
+        {"content": [{"type": "text", "text": "Voilà."}], "stop_reason": "end_turn"},
+    ])
+
+    async def lancer(fil, b_, bloc):
+        fil["queue"].pop(0)
+        fil["results"].append({"type": "tool_result", "tool_use_id": bloc["id"],
+                               "content": "[]"})
+        return
+        yield
+    monkeypatch.setattr(boucle, "_lancer_outil", lancer)
+    fil = _fil(messages=[{"role": "user", "content": "Pourquoi mon agent échoue ?"}])
+    _jouer(fil, b)
+    assert appels == [palier.DEFAUT, palier.FORT]
+    assert [m["role"] for m in fil["messages"]] == ["user", "assistant", "user", "assistant"]
 
 
 def test_un_refus_est_repris_par_le_fort(monkeypatch):

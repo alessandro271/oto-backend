@@ -370,19 +370,20 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_COPILOT_MODEL", Classe.REGLAGE, "claude-sonnet-5-5",
              "L'agent intégré à l'application : le modèle sur lequel une conversation "
              "COMMENCE (`capabilities/copilot/palier.py`, docs/copilot.md §Quel modèle "
-             "répond). Un modèle sans prix connu (`copilot/depense.py::PRIX_PAR_MTOK`) est "
-             "écarté pour le défaut, et le journal le dit. Lu à chaque nouvelle "
-             "conversation ; une conversation garde le sien. ⚠️ Sur une clé refacturée, le "
+             "répond). Un modèle sans prix connu (`copilot/depense.py::PRIX_PAR_MTOK`), vide "
+             "compris, refuse le démarrage (`palier.verifier_reglages`) — jamais le défaut "
+             "en silence. Lu au démarrage puis à chaque nouvelle conversation ; une "
+             "conversation garde le sien. ⚠️ Sur une clé refacturée, le "
              "barème du commerce doit porter ce modèle, sinon chaque appel est refusé "
              "(`credits_unpriced`).",
-             ("oto_mcp/capabilities/copilot/palier.py:45",)),
+             ("oto_mcp/capabilities/copilot/palier.py:53",)),
     Variable("OTO_COPILOT_MODEL_UP", Classe.REGLAGE, "claude-opus-5-5",
              "L'agent intégré à l'application : le modèle sur lequel une conversation PASSE "
              "quand le travail est difficile (agents, processus, consignes, refus, échecs "
              "répétés, carte refusée — `capabilities/copilot/palier.py`). Sans retour : "
-             "elle y reste. Même garde de prix et même ⚠️ de barème que "
+             "elle y reste. Même refus au démarrage et même ⚠️ de barème que "
              "`OTO_COPILOT_MODEL`.",
-             ("oto_mcp/capabilities/copilot/palier.py:45",)),
+             ("oto_mcp/capabilities/copilot/palier.py:53",)),
     Variable("OTO_COPILOT_VOICE_ID", Classe.REGLAGE, "EXAVITQu4vr4xnSDxMaL",
              "L'agent intégré à l'application : la voix ElevenLabs qui lit ses réponses "
              "quand le panneau demande `speak` (`capabilities/copilot/voix.py`, modèle "
