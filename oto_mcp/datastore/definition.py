@@ -72,6 +72,7 @@ def validate_schema_def(schema: Optional[dict],
     # fréquente, et les refus suivants supposent les clés bien nommées.
     errors: list[str] = cles_inconnues.refus(schema, ancien)
     _validate_fields_def(_fields(schema), "fields", errors)
+    _cibles_posees(schema, ancien, errors)
     _conditions_sans_colonne(_fields(schema), _fields(ancien) if isinstance(ancien, dict)
                              else [], "fields", errors)
     errors.extend(_validate_formulas_def(_fields(schema)))
@@ -414,6 +415,26 @@ def _conditions_sans_colonne(fields: list, anciens: list, path: str,
                                      f"{path}.{key}", errors)
 
 
+def _cibles_posees(schema: dict, ancien: Optional[dict], errors: list[str]) -> None:
+    """`_valider_cible` à chaque niveau qui déclare un type (colonne, sous-champ,
+    élément de liste), sur ce que CE geste pose ou modifie seulement.
+
+    Même parti que les clés inconnues (`cles_inconnues`) : un `type`/`target` déjà
+    stocké au même endroit, inchangé, ne se rejuge pas. Avant `ref`, `target` était
+    une clé inconnue tolérée telle quelle ; la refuser ici sur un schéma que personne
+    ne touche ferait refuser le patch d'une AUTRE colonne. Une déclaration qu'on
+    modifie, elle, se juge — c'est un geste."""
+    for niveau, chemin, noeud in cles_inconnues.parcours(schema):
+        if niveau not in ("champ", "sous_champ", "element"):
+            continue
+        stocke = cles_inconnues.suivre(ancien, chemin)
+        if isinstance(stocke, dict) and all(
+                (k in stocke) == (k in noeud) and stocke.get(k) == noeud.get(k)
+                for k in ("type", "target")):
+            continue
+        _valider_cible(noeud, cles_inconnues.nom_du_chemin(chemin), errors)
+
+
 def _valider_cible(f: dict, fpath: str, errors: list[str]) -> None:
     """`ref` exige sa `target`, et `target` n'a de sens que sur un `ref` (`liens.py`).
 
@@ -492,7 +513,6 @@ def _validate_fields_def(fields: list, path: str, errors: list[str]) -> None:
                 f"que sous une colonne composite typée, et ceux-ci ne seraient jamais "
                 f"validés : leurs exigences resteraient inertes. Déclare "
                 f"{{\"key\": \"{key}\", {forme}}}.")
-        _valider_cible(f, fpath, errors)
         if ftype == "object":
             sub = f.get("fields")
             if not isinstance(sub, list) or not sub:
@@ -513,7 +533,6 @@ def _validate_fields_def(fields: list, path: str, errors: list[str]) -> None:
                 elif of.get("type") is not None and \
                         of["type"] not in SCALAR_TYPES + COMPOSITE_TYPES:
                     errors.append(f"{fpath}.of: type inconnu {of.get('type')!r}")
-                _valider_cible(of, f"{fpath}.of", errors)
             else:
                 errors.append(f"{fpath}: of doit être un objet field-def")
         rw = f.get("required_when")

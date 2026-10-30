@@ -1172,7 +1172,15 @@ d'existant à refuser), et jugé à toute profondeur par la validation complète
 liste, sous-champ). À la pose : `ref` exige `target`, `target` ailleurs que sur un `ref` est
 refusée (`definition._valider_cible`), et une cible que CE geste pose doit être un tableau
 que l'auteur lit (`schema_ops._cibles_lisibles` ; « n'existe pas » et « ne t'est pas
-visible » ont la même phrase, #193). ⚠️ **L'écriture juge la FORME, pas l'existence** :
+visible » ont la même phrase, #193). Elle se lit par `_trouver` — la résolution de
+`_resolve` sans ce qu'elle retient de l'appel (journal, avis, `dernier_tableau`) — et son
+NUMÉRO doit être celui du tableau trouvé : un tableau nommé par ces chiffres ne la rend
+pas lisible. Comme les clés inconnues, ce que le geste ne touche pas ne se rejuge pas :
+un `type`/`target` déjà stocké au même endroit et inchangé (une `target` d'avant `ref`,
+tolérée alors comme clé inconnue) ne fait pas refuser le patch d'une autre colonne
+(`definition._cibles_posees`). Le provisionnement d'un slot et la copie d'un projet
+posent un schéma sans `_cibles_lisibles` : une cible illisible y reste inerte (le
+validateur ne lit jamais la cible). ⚠️ **L'écriture juge la FORME, pas l'existence** :
 le validateur est pur, celui qui écrit ne lit pas forcément la cible, et la suppression
 d'une ligne cible laisse de toute façon des liens pendants. Reste à faire : résoudre un
 lien par la clé métier de la cible, indexer une colonne de liens sur un gros tableau

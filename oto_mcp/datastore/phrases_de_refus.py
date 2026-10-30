@@ -28,6 +28,7 @@ from __future__ import annotations
 from difflib import get_close_matches
 from typing import Any, Optional
 
+from . import liens
 from .declaration import max_length_of, pattern_of
 
 
@@ -47,8 +48,9 @@ def _forme_attendue(field: dict) -> str:
         bouts.append("free text")
     elif ftype == "ref":
         # La cible est dans la déclaration : la nommer dit où lire l'`_id`.
-        bouts.append(f"the `_id` of a row of table {field.get('target')} — never its "
-                     f"name")
+        cible = liens.cible_valide(field.get("target"))
+        bouts.append(f"the `_id` of a row of {f'table {cible}' if cible else 'the linked table'}"
+                     f" — never its name")
     elif ftype in _FORME_DU_TYPE:
         bouts.append(_FORME_DU_TYPE[ftype])
     else:
@@ -93,8 +95,8 @@ def gabarit(field: dict) -> Any:
             return requis
     options = [str(o) for o in (field.get("options") or [])]
     bouts = [" | ".join(options) if options else _MOT_DU_TYPE.get(ftype, str(ftype))]
-    if ftype == "ref" and not options and field.get("target") is not None:
-        bouts[0] = f"row _id of table {field.get('target')}"
+    if ftype == "ref" and not options and liens.cible_valide(field.get("target")):
+        bouts[0] = f"row _id of table {liens.cible_valide(field.get('target'))}"
     ml = max_length_of(field)
     if ml:
         bouts.append(f"≤ {ml} characters")

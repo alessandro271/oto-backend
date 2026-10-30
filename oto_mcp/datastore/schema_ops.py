@@ -105,12 +105,19 @@ class SchemaOpsMixin:
         clés inconnues : une cible déjà stockée, inchangée, ne doit pas faire refuser le
         patch d'une autre colonne le jour où son tableau a disparu. Le refus ne
         distingue pas « n'existe pas » de « ne t'est pas visible » : le dire
-        apprendrait l'existence d'un tableau à qui ne le voit pas (#193)."""
+        apprendrait l'existence d'un tableau à qui ne le voit pas (#193).
+
+        `_trouver`, pas `_resolve` : la cible n'est pas le tableau de l'appel — ni le
+        journal, ni la remise (`dernier_tableau`), ni un avis d'adresse par nom ne
+        doivent la prendre pour lui. Et la cible est un NUMÉRO : un tableau visible
+        qui porterait ces chiffres pour NOM ne la rend pas lisible."""
         neuves = liens.cibles(dsv2._fields(schema)) - liens.cibles(dsv2._fields(ancien))
         for cible in sorted(neuves):
             try:
-                self._resolve(str(cible))
+                lisible = int(self._trouver(str(cible))["id"]) == cible
             except DatastoreNotFound:
+                lisible = False
+            if not lisible:
                 raise SchemaDefinitionError(
                     f"invalid schema: target {cible} — no table you can read has this "
                     f"number; a link column points at a table of yours "

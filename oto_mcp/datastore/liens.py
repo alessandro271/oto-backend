@@ -32,13 +32,22 @@ from typing import Any, Iterable, Optional
 
 #: La forme d'un `_id` de ligne : un UUID en minuscules (`outils._new_id`, uuid7-like).
 _ID_DE_LIGNE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+#: Le numéro d'un tableau écrit en texte : des chiffres ASCII.
+_NUMERO = re.compile(r"[0-9]+")
+
+#: Le plus grand numéro possible (`user_datastores.id` est un BIGSERIAL) : au-delà, la
+#: lecture de la cible à la pose lèverait une erreur de base au lieu d'un refus.
+_NUMERO_MAX = 2 ** 63 - 1
 
 
 def est_un_id_de_ligne(valeur: Any) -> bool:
     """Vrai si la valeur a la forme d'un `_id` de ligne — jamais un nom, un domaine ou
     un numéro de tableau."""
-    return isinstance(valeur, str) and bool(_ID_DE_LIGNE.match(valeur.strip()))
+    # Sans `strip` : un `_id` entouré d'espaces serait STOCKÉ tel quel, et la puce
+    # qui le lit ne trouverait aucune ligne — le défaut même que ce type ferme.
+    return isinstance(valeur, str) and bool(_ID_DE_LIGNE.fullmatch(valeur))
 
 
 def cible_valide(target: Any) -> Optional[int]:
@@ -48,11 +57,13 @@ def cible_valide(target: Any) -> Optional[int]:
     if isinstance(target, bool):
         return None
     if isinstance(target, int):
-        return target if target > 0 else None
-    if isinstance(target, str) and target.strip().isdigit():
+        n = target
+    # `[0-9]`, pas `str.isdigit` : « ² » est un chiffre pour Python, et `int` le refuse.
+    elif isinstance(target, str) and _NUMERO.fullmatch(target.strip()):
         n = int(target.strip())
-        return n if n > 0 else None
-    return None
+    else:
+        return None
+    return n if 0 < n <= _NUMERO_MAX else None
 
 
 def ou_trouver(target: Any) -> str:

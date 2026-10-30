@@ -204,9 +204,10 @@ def test_un_tableau_NOMME_comme_l_identifiant_d_un_autre_ne_le_capte_pas(monde):
 _RESOLVEURS_PAR_NOM = {"get_datastore", "resolve_datastore_ns", "resolve_datastore_ids_by_name"}
 
 EXEMPTIONS = {
-    ("oto_mcp/datastore/core.py", "_resolve"):
-        "l'adressage du store lui-même : le nom (ou l'identifiant) que l'APPELANT a "
-        "tapé, résolu dans SA portée — c'est la règle, pas un pont",
+    ("oto_mcp/datastore/core.py", "_trouver"):
+        "l'adressage du store lui-même (`_resolve` le compose) : le nom (ou "
+        "l'identifiant) que l'APPELANT a tapé, résolu dans SA portée — c'est la règle, "
+        "pas un pont",
     ("oto_mcp/db/projects.py", "list_project_links_many"):
         "LE lieu où un lien de projet posé par nom se résout, dans la portée du "
         "propriétaire de SON projet (groupe par groupe quand plusieurs projets se lisent "

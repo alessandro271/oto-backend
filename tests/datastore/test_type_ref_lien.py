@@ -38,6 +38,8 @@ def test_un_id_neuf_a_la_forme_d_un_id():
 @pytest.mark.parametrize("valeur", [
     "Acme Robotics", "acme.example", "42", 42, "", None, {"valeur": _ID},
     "01a17e59-1234-7abc-8def-0123456789", _ID + " (voir fiche)",
+    # Entouré d'espaces, il serait stocké tel quel et la puce ne trouverait rien.
+    " " + _ID, _ID + "\n", _ID.upper(),
 ])
 def test_ce_qui_n_est_pas_un_id_n_en_est_pas_un(valeur):
     assert not liens.est_un_id_de_ligne(valeur)
@@ -46,6 +48,9 @@ def test_ce_qui_n_est_pas_un_id_n_en_est_pas_un(valeur):
 @pytest.mark.parametrize("target,attendu", [
     (42, 42), ("42", 42), (" 7 ", 7), (0, None), (-3, None), (True, None),
     ("acme", None), (None, None), (4.2, None),
+    # « ² » passe `str.isdigit` et casse `int` ; au-delà d'un BIGSERIAL, la lecture de
+    # la cible lèverait une erreur de base au lieu d'un refus.
+    ("²", None), (2 ** 63, None), (str(2 ** 64), None), (2 ** 63 - 1, 2 ** 63 - 1),
 ])
 def test_une_cible_est_un_numero_de_tableau(target, attendu):
     assert liens.cible_valide(target) == attendu
@@ -85,6 +90,40 @@ def test_ref_et_sa_cible_se_declarent():
 def test_une_cible_absente_mal_formee_ou_deplacee_est_refusee(champ, morceau):
     erreurs = S.validate_schema_def({"fields": [champ]})
     assert any(morceau in e for e in erreurs), erreurs
+
+
+# ── un schéma DÉJÀ stocké : ce qu'on ne touche pas ne se rejuge pas ─────────────
+
+@pytest.mark.parametrize("stocke", [
+    {"key": "c", "type": "text", "target": 42},       # `target` d'avant `ref`, tolérée
+    {"key": "c", "type": "ref"},                       # un lien sans cible
+    {"key": "c", "type": "ref", "target": "acme"},     # une cible par son nom
+    {"key": "c", "type": "list", "of": {"type": "text", "target": 4}},
+])
+def test_une_declaration_stockee_inchangee_ne_gele_pas_le_patch_d_une_autre(stocke):
+    """Même parti que les clés inconnues : patcher `autre` repasse le schéma fusionné,
+    et `c` — que ce geste ne touche pas — ne doit pas le faire refuser."""
+    ancien = {"fields": [stocke]}
+    patche = {"fields": [stocke, {"key": "autre", "type": "text"}]}
+    assert not any("target" in e for e in S.validate_schema_def(patche, ancien)), \
+        S.validate_schema_def(patche, ancien)
+
+
+def test_une_declaration_stockee_qu_on_MODIFIE_se_juge():
+    ancien = {"fields": [{"key": "c", "type": "text", "target": 42}]}
+    erreurs = S.validate_schema_def(
+        {"fields": [{"key": "c", "type": "text", "target": 43}]}, ancien)
+    assert any("target ne se lit que sur" in e for e in erreurs), erreurs
+    erreurs = S.validate_schema_def(
+        {"fields": [{"key": "c", "type": "ref", "target": 42},
+                    {"key": "d", "type": "ref"}]}, ancien)
+    assert any("fields.d: type=ref exige target" in e for e in erreurs), erreurs
+
+
+def test_une_cible_absente_dans_un_sous_champ_est_refusee():
+    erreurs = S.validate_schema_def({"fields": [{"key": "o", "type": "object", "fields": [
+        {"key": "d", "type": "ref"}]}]})
+    assert any("fields.o.fields.d: type=ref exige target" in e for e in erreurs), erreurs
 
 
 # ── l'écriture ────────────────────────────────────────────────────────────────
@@ -169,3 +208,50 @@ def test_pose_et_ecriture_sur_une_vraie_base(live):
     # Une cible déjà posée, inchangée, ne se revérifie pas : patcher une autre colonne
     # passe même si on ne relit pas la cible.
     store.patch_schema(contacts_ns, fields=[{"key": "note", "type": "text"}])
+
+
+def test_une_cible_qui_existe_chez_un_autre_a_la_meme_phrase(live):
+    """« n'existe pas » et « ne t'est pas visible » ont la même phrase (#193)."""
+    from oto_mcp import db
+    from oto_mcp.datastore.core import make_store
+    from oto_mcp.datastore.errors import SchemaDefinitionError
+
+    autre_id = db.create_datastore("user", "sub-ref-lien-autre",
+                                   "secret-" + uuid.uuid4().hex[:6])
+    contacts_ns, _ = _table("contacts")
+    phrases = []
+    for cible in (autre_id, 999_999_999):
+        with pytest.raises(SchemaDefinitionError) as e:
+            make_store(SUB).set_schema(contacts_ns, _contacts(cible=cible))
+        phrases.append(str(e.value).replace(str(cible), "<n>"))
+    assert phrases[0] == phrases[1]
+
+
+def test_un_tableau_NOMME_par_les_chiffres_de_la_cible_ne_la_rend_pas_lisible(live):
+    """La cible est un NUMÉRO : un tableau à moi qui porte ces chiffres pour nom n'ouvre
+    pas le tableau d'un autre."""
+    from oto_mcp import db
+    from oto_mcp.datastore.core import make_store
+    from oto_mcp.datastore.errors import SchemaDefinitionError
+
+    autre_id = db.create_datastore("user", "sub-ref-lien-autre",
+                                   "secret-" + uuid.uuid4().hex[:6])
+    leurre = db.create_datastore("user", SUB, str(autre_id))
+    contacts_ns, _ = _table("contacts")
+    try:
+        with pytest.raises(SchemaDefinitionError):
+            make_store(SUB).set_schema(contacts_ns, _contacts(cible=autre_id))
+    finally:
+        db.delete_datastore_by_id(leurre)
+
+
+def test_lire_la_cible_ne_change_pas_le_tableau_de_l_appel(live):
+    """La remise (`dernier_tableau`) et le journal nomment le tableau dont on pose le
+    schéma, jamais la cible que la pose a regardée."""
+    from oto_mcp.datastore.core import make_store
+
+    cible_ns, cible_id = _table("societes", {"fields": [{"key": "nom", "type": "text"}]})
+    contacts_ns, contacts_id = _table("contacts")
+    store = make_store(SUB)
+    store.set_schema(contacts_ns, _contacts(cible=cible_id))
+    assert store.dernier_tableau["ns_id"] == contacts_id
