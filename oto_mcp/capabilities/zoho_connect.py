@@ -90,6 +90,8 @@ def start_for(ctx: ResolvedCtx, connector: str, data_center: str,
             level=zoho_oauth.consent_level(connector, org, group))
     except zoho_oauth.ZohoRegionMissing as e:
         raise AuthzDenied(400, "zoho_region_missing", str(e))
+    except zoho_oauth.ZohoNoApp as e:
+        raise AuthzDenied(400, "zoho_no_app", str(e))
     except zoho_oauth.ZohoOAuthError as e:
         raise AuthzDenied(400, "zoho_oauth_unavailable", str(e))
     # The connector echo is SPECIFIC to Zoho (three connectors share this flow):

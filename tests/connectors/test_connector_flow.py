@@ -376,3 +376,13 @@ def test_le_proprietaire_et_les_valeurs_pretes_ne_sont_servis_que_declares(monke
     for nom in ("sans", "panne"):
         assert connector_flow.app_owner(nom, "u") is None
         assert connector_flow.ready_options(nom, "u") == {}
+
+
+def test_le_flux_zoho_declare_ses_cles_de_textes_sur_sa_source_anglaise():
+    from oto_mcp.connectors import flow as connector_flow
+    import oto_mcp.tools.zoho  # noqa: F401 — la déclaration vit au module
+    decrit = connector_flow.describe("zoho")
+    assert decrit["label"] == "Authorize oto with Zoho"
+    assert decrit["text_key"] == "zoho.consent"
+    p = decrit["params"][0]
+    assert (p["label"], p["text_key"]) == ("Region of your Zoho account", "zoho.data_center")

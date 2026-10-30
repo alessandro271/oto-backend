@@ -252,3 +252,14 @@ def test_le_client_se_construit_sur_la_region():
     c = Z._build({"client_id": "id", "client_secret": "s", "refresh_token": "r",
                   "data_center": "eu"})
     assert (c.api_domain, c.accounts_url) == ("https://sign.zoho.eu", "https://accounts.zoho.eu")
+
+
+@pytest.mark.parametrize("nom", ["zoho", "zohodesk", "zohoanalytics", "zohosign"])
+def test_les_textes_de_la_cle_se_traduisent_par_une_cle_declaree(nom):
+    """L'écran traduit par `text_key`, jamais par nom de connecteur ; la source reste anglaise."""
+    from oto_mcp.providers import REGISTRY
+    champs = {f.name: f for f in REGISTRY[nom].credential_fields}
+    for f in champs.values():
+        assert f.text_key.startswith("zoho."), f.name
+    assert champs["client_id"].label == "Client ID"
+    assert champs["data_center"].text_key == "zoho.data_center"

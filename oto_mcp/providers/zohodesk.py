@@ -14,15 +14,15 @@ CONNECTOR = _c(
     help="Zoho Desk support (tickets, threads, contacts, KB articles)",
     href="https://desk.zoho.com", credential_fields=(
         CredentialField("client_id", "Client ID", secret=True,
-                        help="1000.XXXXXXXX… (self-client)"),
+                        help="1000.XXXXXXXX… (self-client)", text_key="zoho.client_id"),
         CredentialField("client_secret", "Client Secret", secret=True,
-                        help="self-client secret"),
+                        help="self-client secret", text_key="zoho.client_secret"),
         # OPTIONAL: in "sign in with Zoho" mode (server-based) it is not
         # pasted — the consent flow fills it in. Required only when a self client
         # is set up by hand.
         CredentialField("refresh_token", "Refresh Token", secret=True,
                         required=False,
-                        help="1000.xxxxx.yyyyy — leave empty if you sign in via Zoho"),
+                        help="1000.xxxxx.yyyyy — leave empty if you sign in via Zoho", text_key="zoho.refresh_token"),
         # OPTIONAL: the KB endpoints (articles) resolve the portal from the
         # single-org token — verified empirically. And a credential scoped to
         # `Desk.articles.READ` alone CANNOT discover it (/organizations →
@@ -31,13 +31,13 @@ CONNECTOR = _c(
         # `orgId` header (tickets…), which will then demand it on the API side.
         CredentialField("org_id", "Org ID (optional)", secret=False,
                         required=False,
-                        help="e.g. 800123456 — not needed to read articles"),
+                        help="e.g. 800123456 — not needed to read articles", text_key="zoho.org_id"),
         # OPTIONAL, non-secret: the Zoho organization this app is meant for. Checked at
         # each consent (`auth/zoho.py::check_org`) — without it, any Zoho account can
         # consent to the app, and the consent goes through signaled.
         CredentialField("zoho_org_id", "Expected Zoho organization ID", secret=False,
                         required=False,
-                        help="the organization ID shown in Zoho Desk (Setup → Developer Space → API)"),
+                        help="the organization ID shown in Zoho Desk (Setup → Developer Space → API)", text_key="zoho.expected_org_desk"),
         data_center_field(),
     ),
 )

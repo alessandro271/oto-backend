@@ -114,7 +114,8 @@ def test_catalog_exposes_auth():
         "hosted_channel": None,
         "credential_of": None,
         "fields": [{"name": "key", "label": "API key", "secret": True,
-                    "required": True, "help": "", "when": [], "choices": [], "choice_labels": {}}],
+                    "required": True, "help": "", "when": [], "choices": [], "choice_labels": {},
+                    "text_key": ""}],
     }
     # Et le descripteur `credential_fields` du catalogue est LE MÊME objet que
     # `auth["fields"]` — les deux listes décrivaient la même chose à deux endroits.

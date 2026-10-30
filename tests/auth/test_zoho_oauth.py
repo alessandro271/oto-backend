@@ -962,3 +962,23 @@ def test_le_retour_verifie_ne_porte_aucun_avertissement(monkeypatch):
 def test_le_retour_illisible_ne_range_rien(monkeypatch):
     lieu, range_ = _retour(monkeypatch, z.ZohoOrgUnverifiable("x"))
     assert not range_ and "connect=error" in lieu
+
+
+def test_le_depart_sans_app_rend_zoho_no_app(monkeypatch):
+    """Le refus sans app porte son code : l'écran le dit dans sa langue. Le texte reste
+    l'anglais de `resolve_app`, pour les agents et l'interface anglaise."""
+    from oto_mcp.capabilities import zoho_connect
+    from oto_mcp.capabilities._types import AuthzDenied
+    from oto_mcp.connectors import activation_gate
+    monkeypatch.setattr(activation_gate, "exiger_connectable_capacite", lambda *a, **k: None)
+    monkeypatch.setattr(zoho_connect.access, "current_group", lambda sub: 4)
+    monkeypatch.setattr(z, "app_fields", lambda *a, **k: {})
+    monkeypatch.setattr(z, "consent_level", lambda *a, **k: "full")
+
+    class _Ctx:
+        sub, org_id = "u1", 7
+
+    with pytest.raises(AuthzDenied) as refus:
+        zoho_connect.start_for(_Ctx(), "zoho", "eu")
+    assert refus.value.code == "zoho_no_app"
+    assert "No Zoho application is available" in str(refus.value)

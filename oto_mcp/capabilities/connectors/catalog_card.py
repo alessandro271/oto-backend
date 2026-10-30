@@ -76,6 +76,9 @@ class CredentialField(BaseModel):
     choice_labels: dict[str, str] = Field(default={}, description=(
         "What the select shows for a value of `choices`. A value without a label shows "
         "as itself."))
+    text_key: str = Field(default="", description=(
+        "The key under which a screen holds this field's texts in another language. "
+        "`label`, `help` and `choice_labels` stay the English source. Empty = shown as served."))
 
 
 class AuthDescriptor(BaseModel):
@@ -143,6 +146,9 @@ class ConnectParam(BaseModel):
     # Non-empty ⟹ CLOSED list. Empty ⟹ free input. This is the single home of these
     # values (`connectors/flow.py::FlowParam`), never copied into a front.
     options: list[ConnectParamOption] = []
+    # The key under which a screen holds this parameter's texts in another language. `label`,
+    # `help` and the option labels stay the English source. Empty = shown as served.
+    text_key: str = ""
 
 
 class ConnectFlow(BaseModel):
@@ -155,6 +161,9 @@ class ConnectFlow(BaseModel):
     (`GET /api/me/connectors?verbose=true`) and never in the public catalog: they
     answer to whoever asks, which an anonymous catalog cannot do."""
     label: str
+    # The key under which a screen holds the gesture's texts in another language. `label`
+    # stays the English source. Empty = shown as served.
+    text_key: str = ""
     params: list[ConnectParam] = []
     # Can the gesture be undone generically — `DELETE /api/me/connectors/{name}/oauth`
     # (`me.connector_disconnect`)? `false` = no "Disconnect" button to show.

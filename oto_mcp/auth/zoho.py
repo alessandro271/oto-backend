@@ -168,6 +168,11 @@ class ZohoOrgUnverifiable(ZohoOAuthError):
     (and revoked) rather than stored unchecked — the check exists because it is set."""
 
 
+class ZohoNoApp(ZohoOAuthError):
+    """No app to consent with, in this region. Named (`zoho_no_app`) because the card has
+    its own wording for it in each language; the sibling refusals stay on the common code."""
+
+
 class ZohoRegionMissing(ZohoOAuthError):
     """No region for the consent: neither the app nor the request carries one. Named
     (`zoho_region_missing`) because the fix is a gesture — fill in the region —, never
@@ -301,7 +306,7 @@ def resolve_app(fields: Optional[dict]) -> tuple[str, str]:
     sec = (fields or {}).get("client_secret")
     if cid and sec:
         return cid, sec
-    raise ZohoOAuthError(
+    raise ZohoNoApp(
         "No Zoho application is available for this region. Add your own on this "
         "connector's card (its client ID and client secret), or ask an admin of your "
         "organization to share theirs, then start again.")

@@ -24,7 +24,8 @@ def data_center_field(*extra_regions: tuple[str, str]) -> CredentialField:
     return CredentialField(
         "data_center", "Data center (region of your Zoho account)", secret=False,
         choices=tuple(value for value, _ in regions), choice_labels=regions,
-        help="look at your Zoho address: zoho.eu is Europe, zoho.com is International")
+        help="look at your Zoho address: zoho.eu is Europe, zoho.com is International",
+        text_key="zoho.data_center")
 
 
 # zoho / zohodesk: OAuth2 self-client → multi-field credential (ADR 0011,
@@ -41,21 +42,21 @@ CONNECTOR = _c(
     help="Zoho CRM (module CRUD, notes)", href="https://crm.zoho.com",
     credential_fields=(
         CredentialField("client_id", "Client ID", secret=True,
-                        help="1000.XXXXXXXX… (self-client)"),
+                        help="1000.XXXXXXXX… (self-client)", text_key="zoho.client_id"),
         CredentialField("client_secret", "Client Secret", secret=True,
-                        help="self-client secret"),
+                        help="self-client secret", text_key="zoho.client_secret"),
         # OPTIONAL: in "connect with Zoho" mode (server-based) it is not
         # pasted — the consent flow fills it in. Required only when setting up
         # a self client by hand.
         CredentialField("refresh_token", "Refresh Token", secret=True,
                         required=False,
-                        help="1000.xxxxx.yyyyy — leave empty if you connect via Zoho"),
+                        help="1000.xxxxx.yyyyy — leave empty if you connect via Zoho", text_key="zoho.refresh_token"),
         # OPTIONAL, non-secret: the Zoho organization this app is meant for. Checked at
         # each consent (`auth/zoho.py::check_org`) — without it, any Zoho account can
         # consent to the app, and the consent goes through signaled.
         CredentialField("zoho_org_id", "Expected Zoho organization ID", secret=False,
                         required=False,
-                        help="the Org ID shown in Zoho CRM (Setup → Company Details)"),
+                        help="the Org ID shown in Zoho CRM (Setup → Company Details)", text_key="zoho.expected_org_crm"),
         data_center_field(),
     ),
 )

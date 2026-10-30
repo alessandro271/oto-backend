@@ -176,7 +176,7 @@ for _c in ("zoho", "zohodesk", "zohoanalytics", "zohosign"):
     connector_flow.declare(
         _c,
         start=lambda ctx, values, _c=_c: _start_flow(ctx, _c, values),
-        label="Authorize oto with Zoho",
+        label="Authorize oto with Zoho", text_key="zoho.consent",
         callback_path="/api/zoho/oauth/callback",
         # Without region: "an app exists somewhere" (their own, their org's,
         # or oto's for at least one region). The region is only chosen at click time,
@@ -194,7 +194,8 @@ for _c in ("zoho", "zohodesk", "zohoanalytics", "zohosign"):
             # No default: a preselected Europe was accepted unread by accounts on zoho.com.
             name="data_center", label="Region of your Zoho account",
             help="look at your Zoho address: zoho.eu is Europe, zoho.com is International",
-            options=tuple((dc, lbl) for dc, lbl in REGIONS if dc in _DC_DOMAINS)),
+            options=tuple((dc, lbl) for dc, lbl in REGIONS if dc in _DC_DOMAINS),
+            text_key="zoho.data_center"),
         ),
     )
 

@@ -45,11 +45,14 @@ class FlowParam:
     default: str = ""
     required: bool = True
     help: str = ""
+    # The key under which a screen holds these texts in another language. `label`, `help`
+    # and the option labels stay the English source. Empty = shown as served.
+    text_key: str = ""
 
     def describe(self) -> dict:
         return {
             "name": self.name, "label": self.label, "required": self.required,
-            "default": self.default, "help": self.help,
+            "default": self.default, "help": self.help, "text_key": self.text_key,
             "options": [{"value": v, "label": lbl} for v, lbl in self.options],
         }
 
@@ -88,6 +91,9 @@ class Flow:
     start: Callable[..., FlowStart]  # (ctx, values) -> FlowStart
     params: tuple[FlowParam, ...] = field(default_factory=tuple)
     label: str = "Connect"
+    # The key under which a screen holds the gesture's texts in another language. `label` stays
+    # the English source. Empty = shown as served.
+    text_key: str = ""
     # Path of the consent return. The FULL URL is derived from it on read
     # (`callback_url`), never hard-coded: it depends on the environment, and a prose
     # URL in a doc lies as soon as it is read from preprod.
@@ -126,7 +132,7 @@ _FLOWS: dict[str, Flow] = {}
 
 def declare(connector: str, *, start: Callable[..., FlowStart],
             params: tuple[FlowParam, ...] = (), label: str = "Connect",
-            callback_path: str = "",
+            text_key: str = "", callback_path: str = "",
             app_ready: Optional[Callable[[str], bool]] = None,
             app_ready_scopes: Optional[Callable[[str], list]] = None,
             fixed: Optional[Callable[[str], dict]] = None,
@@ -143,7 +149,7 @@ def declare(connector: str, *, start: Callable[..., FlowStart],
             raise ValueError(
                 f"{connector}.{p.name}: required parameter without options or default.")
     _FLOWS[connector] = Flow(connector=connector, start=start,
-                             params=tuple(params), label=label,
+                             params=tuple(params), label=label, text_key=text_key,
                              callback_path=callback_path, app_ready=app_ready,
                              app_ready_scopes=app_ready_scopes,
                              fixed=fixed, warnings=warnings, app_owner=app_owner,
@@ -167,7 +173,8 @@ def describe(connector: str) -> Optional[dict]:
     if f is None:
         return None
     from . import flow_status  # same package, no import-time side effect
-    return {"label": f.label, "params": [p.describe() for p in f.params],
+    return {"label": f.label, "text_key": f.text_key,
+            "params": [p.describe() for p in f.params],
             "disconnect": flow_status.supports(connector)}
 
 

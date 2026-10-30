@@ -19,14 +19,14 @@ CONNECTOR = _c(
     help="Zoho Sign e-signature (signature requests, templates, signed PDFs)",
     href="https://www.zoho.com/sign/", credential_fields=(
         CredentialField("client_id", "Client ID", secret=True,
-                        help="1000.XXXXXXXX… (self-client)"),
+                        help="1000.XXXXXXXX… (self-client)", text_key="zoho.client_id"),
         CredentialField("client_secret", "Client Secret", secret=True,
-                        help="self-client secret"),
+                        help="self-client secret", text_key="zoho.client_secret"),
         # OPTIONAL: in "sign in with Zoho" mode (server-based) it is not pasted — the
         # consent flow fills it in. Required only when a self client is set up by hand.
         CredentialField("refresh_token", "Refresh Token", secret=True,
                         required=False,
-                        help="1000.xxxxx.yyyyy — leave empty if you sign in via Zoho"),
+                        help="1000.xxxxx.yyyyy — leave empty if you sign in via Zoho", text_key="zoho.refresh_token"),
         data_center_field(),
     ),
 )
