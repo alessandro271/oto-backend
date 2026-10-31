@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from ... import org_store, roles
 from ...db import org_subscription_limits, org_subscription_pool, user_subscriptions
+from ...db import runner_triggers as db_runner_triggers
 from .. import _abonnement
 from .._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -62,6 +63,18 @@ class Preteur(BaseModel):
         description=("Org admins only (absent for members): the lender's effective cap "
                      "in % of their account's TOTAL usage — their own if they set one, "
                      "else the org's. A setting, never usage."))
+
+
+class AgentEteint(BaseModel):
+    """Un agent ÉTEINT parce que l'org a quitté le pool exclusif : son dernier
+    changement n'était pas de son propriétaire, et il tournerait désormais sur SON
+    forfait (`db.eteindre_les_retouches_d_autrui`)."""
+    id: int
+    owner: str
+    label: Optional[str] = None
+    last_changed_by: Optional[str] = Field(
+        default=None,
+        description="Who last changed it before it was switched off; null = not recorded.")
 
 
 class OrgPlafond(BaseModel):
@@ -100,6 +113,13 @@ class OrgPlafond(BaseModel):
                      "either mode: who (`sub`) and whether it is usable right now "
                      "(`usable_now`) — never their tier, state, reset time or usage. "
                      "An org admin also reads each one's effective cap (`limit_pct`)."))
+    disabled_agents: Optional[list[AgentEteint]] = Field(
+        default=None,
+        description=("`set_mode` leaving `pool` only: the org's agents on this family "
+                     "that were switched OFF because their last change was not made by "
+                     "their owner — they would now run on the owner's own subscription "
+                     "with someone else's instructions. Their owner reviews and "
+                     "re-enables them. `[]` = none."))
     api_fallback: bool = Field(
         default=False,
         description=("`true`: a job whose subscription (the requester's, or the whole "
@@ -209,10 +229,29 @@ def _set_mode(ctx: ResolvedCtx, inp: SetOrgModeInput) -> dict:
     """Le MODE de l'org. Il vaut pour le travail SUIVANT : un run en cours finit sur
     l'abonnement qui l'a pris. Passer en `pool` sans prêteur est permis (les membres
     prêtent ensuite) — `pool_size` le dit, et la pose d'un agent le refuse tant qu'il
-    est nul."""
+    est nul.
+
+    ⚠️ QUITTER le pool exclusif : en pool, un partage collectif du propriétaire suffit à
+    modifier son agent (`db._forfait_prete_par_le_pool`) ; hors pool, l'agent tourne de
+    nouveau sur SON forfait. Ceux qu'un autre a changés en dernier sont ÉTEINTS et
+    listés (`disabled_agents`) — jamais refusé : l'admin n'est pas bloqué, et un
+    propriétaire parti ne fait pas d'impasse. Deux passes : avant le changement de mode
+    (leurs travaux en attente sont périmés avant qu'un seul ne puisse partir sur le
+    forfait du propriétaire), puis après (ce qu'un éditeur aurait rallumé ou retouché
+    entre les deux — le mode posé, ses droits sont refermés)."""
     _exiger(inp.org_id, inp.family)
+    quitte_le_pool = (inp.mode != org_subscription_pool.POOL
+                      and org_subscription_pool.en_pool(inp.org_id, inp.family))
+    eteints = []
+    if quitte_le_pool:
+        eteints += db_runner_triggers.eteindre_les_retouches_d_autrui(
+            inp.org_id, inp.family, ctx.sub)
     org_subscription_pool.poser_mode(inp.org_id, inp.family, inp.mode, ctx.sub)
-    return _servi(inp.org_id, inp.family, True)
+    if not quitte_le_pool:
+        return _servi(inp.org_id, inp.family, True)
+    eteints += db_runner_triggers.eteindre_les_retouches_d_autrui(
+        inp.org_id, inp.family, ctx.sub)
+    return {**_servi(inp.org_id, inp.family, True), "disabled_agents": eteints}
 
 
 def _set_repli(ctx: ResolvedCtx, inp: SetOrgRepliInput) -> dict:
@@ -270,7 +309,11 @@ CAPABILITIES += [
                      "the least recently used free one first; with no lender available "
                      "they wait, none fail. Each lender's own cap applies to their "
                      "account (the lower of the org's cap and theirs). Applies from the "
-                     "next job; a running job is never cut. Org admin."),
+                     "next job; a running job is never cut. Leaving `pool` switches OFF "
+                     "the org's agents on that family whose last change was not made by "
+                     "their owner (they would run on the owner's plan with someone "
+                     "else's instructions) and lists them in `disabled_agents`; their "
+                     "owner re-enables them. Org admin."),
         rest=RestBinding("PUT", _PATH_MODE, _ID),
     ),
     Capability(

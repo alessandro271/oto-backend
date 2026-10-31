@@ -39,6 +39,22 @@ agent (`forfaits_pretes`) — c'est à lui seul de le prêter, agent par agent. 
 Ne prêtent jamais : un partage posé par un admin (`granted_by` ≠ propriétaire), ceux de
 la révision 0035 et du réglage `partage_par_defaut` (marqués), ceux d'un ancien
 propriétaire.
+⚠️ **Quand son org le sert par son POOL exclusif** (l'org a réglé `mode = pool` pour la
+famille où l'agent tourne, `org_subscription_pool`), ses travaux ne tournent que sur des
+abonnements PRÊTÉS à l'org, jamais sur celui du propriétaire : un partage en écriture
+que le PROPRIÉTAIRE a posé à une équipe ou à l'org le rend modifiable par leurs membres
+sans `op=lend` (`db._forfait_prete_par_le_pool`). Les mêmes partages qu'ailleurs ne
+comptent jamais (admin, 0035, `partage_par_defaut`, ancien propriétaire) : le pool retire
+le forfait du jeu, pas l'identité sous laquelle l'agent agit. Lié au modèle comme le prêt
+collectif (`collectif` dans `exiger_le_droit_de_modifier`). Le mode non réglé, où le pool
+ne fait que COMPLÉTER, garde la règle du prêt. Quitter le pool éteint et liste les
+agents qu'un autre que leur propriétaire a changés en dernier
+(`db.eteindre_les_retouches_d_autrui`).
+⚠️ **`give`** ne prête JAMAIS le forfait du destinataire : son préréglage
+(`preset_agents`, sauf refus de l'admin) pose au plus le partage `editor` à l'org, à son
+nom ; il prête lui-même (`op=lend`). `keep_previous_owner=true` (défaut false) garde
+l'ancien propriétaire en éditeur nommé, partage posé par lui-même (`granted_by` =
+ancien) : il ne prête rien. Un geste de personne (`give_human_only`).
 ⚠️ Le prêt ne change PAS l'identité d'exécution : l'agent tourne toujours sous son
 propriétaire, à l'horloge comme au webhook. POSER un agent sur un abonnement reste au
 propriétaire.

@@ -290,35 +290,93 @@ def _forfait_prete_nomme(alias_trigger: str) -> str:
             f"  AND {PARTAGE_VIVANT_G})")
 
 
-def _forfait_prete_collectif(alias_trigger: str) -> str:
-    """Le prêt COLLECTIF (29/10/2026) : un prêt VIVANT (`_pret_vivant`, le geste
-    `op=lend`, sous le modèle courant) ET un partage `write` vivant posé par le
-    propriétaire à une ÉQUIPE de l'org de l'agent dont `%s` est membre, ou à l'ORG
-    entière dont il est membre. L'appartenance se relit ici, au moment d'écrire. Ne
-    prêtent jamais : un partage d'admin, ceux de la révision 0035 et du réglage
-    `partage_par_defaut` (marqués), ceux d'un ancien propriétaire. UN paramètre."""
+def _atteint_par_equipe_ou_org(alias_trigger: str) -> str:
+    """Le partage `g` atteint `q.qui` par une ÉQUIPE de l'org de l'agent dont il est
+    membre, ou par l'ORG entière dont il est membre. L'appartenance se relit ici, au
+    moment d'écrire. Aucun paramètre : `q.qui` vient de la requête qui l'embarque."""
+    a = alias_trigger
+    return ("((g.principal_type = 'group' AND EXISTS (SELECT 1 "
+            "    FROM org_group_members m JOIN org_groups og ON og.id = m.group_id "
+            f"   WHERE m.group_id::text = g.principal_id AND og.org_id = {a}.org_id "
+            "      AND m.sub = q.qui)) "
+            f" OR (g.principal_type = 'org' AND g.principal_id = {a}.org_id::text "
+            "     AND EXISTS (SELECT 1 FROM org_members om "
+            f"                WHERE om.org_id = {a}.org_id AND om.sub = q.qui)))")
+
+
+def _partage_collectif_du_proprietaire(alias_trigger: str) -> str:
+    """Un partage `write` vivant posé par le PROPRIÉTAIRE (`granted_by = sub`) à une
+    ÉQUIPE de l'org de l'agent dont `%s` est membre, ou à l'ORG entière dont il est
+    membre (`_atteint_par_equipe_ou_org`). Ne comptent donc jamais : un partage d'admin
+    (reposé par un admin, un partage perd sa marque — l'upsert réécrit `granted_by`),
+    ceux de la révision 0035 (`migration:0035_…`) et du réglage `partage_par_defaut`
+    (`MARQUE_PARTAGE_PAR_DEFAUT`), ceux d'un ancien propriétaire. UN paramètre. Une
+    seule écriture, lue par le prêt collectif ET par le pool."""
     from ._partage_vivant import PARTAGE_VIVANT_G
     a = alias_trigger
-    return (f"({_pret_vivant(a)} AND EXISTS (SELECT 1 "
+    return ("EXISTS (SELECT 1 "
             "FROM (SELECT %s::text AS qui) q, resource_grants g "
             "WHERE g.resource_type = 'runner_trigger' "
             f"  AND g.resource_id = {a}.id::text "
             f"  AND g.permission = 'write' AND g.granted_by = {a}.sub "
             f"  AND {PARTAGE_VIVANT_G} "
-            "  AND ((g.principal_type = 'group' AND EXISTS (SELECT 1 "
-            "          FROM org_group_members m JOIN org_groups og ON og.id = m.group_id "
-            f"         WHERE m.group_id::text = g.principal_id AND og.org_id = {a}.org_id "
-            "            AND m.sub = q.qui)) "
-            f"    OR (g.principal_type = 'org' AND g.principal_id = {a}.org_id::text "
-            "        AND EXISTS (SELECT 1 FROM org_members om "
-            f"                   WHERE om.org_id = {a}.org_id AND om.sub = q.qui)))))")
+            f"  AND {_atteint_par_equipe_ou_org(a)})")
+
+
+def _forfait_prete_collectif(alias_trigger: str) -> str:
+    """Le prêt COLLECTIF (29/10/2026) : un prêt VIVANT (`_pret_vivant`, le geste
+    `op=lend`, sous le modèle courant) ET un partage collectif du propriétaire
+    (`_partage_collectif_du_proprietaire`). UN paramètre."""
+    a = alias_trigger
+    return f"({_pret_vivant(a)} AND {_partage_collectif_du_proprietaire(a)})"
+
+
+def _famille_du_modele(alias_trigger: str) -> str:
+    """La famille de `runner_triggers.model`, en SQL : la table ne stocke que le modèle,
+    la famille vit au catalogue (`runner_models.MODELES`). Écrite depuis lui, elle ne
+    dérive pas ; un modèle hors catalogue vaut NULL (aucune famille, aucun pool)."""
+    a = alias_trigger
+    branches = " ".join(f"WHEN '{m.id}' THEN '{m.family}'" for m in runner_models.MODELES
+                        if m.family in runner_models.FAMILLES_PERSONNELLES)
+    return f"(CASE {a}.model {branches} END)"
+
+
+def _servi_par_le_pool(alias_trigger: str) -> str:
+    """L'org de l'agent a CHOISI le pool exclusif (`mode = 'pool'`) pour la famille où il
+    tourne : ses travaux ne tournent alors QUE sur des abonnements prêtés à l'org, jamais
+    sur celui de son propriétaire (`org_subscription_pool.sql_par_le_pool`, branche
+    `'pool' THEN TRUE` — la même table, lue par la réservation). Le mode non réglé, où le
+    pool COMPLÈTE, n'y est PAS : le propriétaire y paie dès que son abonnement sert, et
+    un droit de modifier ne dépend pas de l'état de sa connexion au moment du claim."""
+    from .org_subscription_pool import POOL
+    a = alias_trigger
+    return ("EXISTS (SELECT 1 FROM org_model_subscription_modes pm "
+            f"WHERE pm.org_id = {a}.org_id AND pm.famille = {_famille_du_modele(a)} "
+            f"  AND pm.mode = '{POOL}')")
+
+
+def _forfait_prete_par_le_pool(alias_trigger: str) -> str:
+    """Le POOL (31/10/2026) : l'org sert l'agent par son pool exclusif
+    (`_servi_par_le_pool`), donc le forfait du propriétaire n'est pas en jeu, ET le
+    PROPRIÉTAIRE l'a partagé en écriture à une équipe ou à l'org dont `%s` est membre
+    (`_partage_collectif_du_proprietaire`) — sans `op=lend`, puisqu'il n'y a pas de
+    forfait à prêter. Le même filtre que le prêt collectif : ni un partage d'admin, ni
+    ceux de la révision 0035 ou de `partage_par_defaut`, ni ceux d'un ancien
+    propriétaire n'ouvrent l'écriture — le pool retire le forfait du jeu, pas
+    l'identité sous laquelle l'agent agit. Le partage NOMMÉ du propriétaire compte déjà
+    (`_forfait_prete_nomme`). UN paramètre."""
+    a = alias_trigger
+    return f"({_servi_par_le_pool(a)} AND {_partage_collectif_du_proprietaire(a)})"
 
 
 def _forfait_prete(alias_trigger: str) -> str:
-    """Le prédicat « le PROPRIÉTAIRE de cet agent prête son forfait à `%s` » : prêt
-    NOMMÉ OR prêt COLLECTIF. DEUX paramètres, le même sub deux fois. Une seule
-    écriture, lue par `forfaits_pretes` et par la garde de `update_trigger`."""
-    return f"({_forfait_prete_nomme(alias_trigger)} OR {_forfait_prete_collectif(alias_trigger)})"
+    """Le prédicat « le forfait du PROPRIÉTAIRE de cet agent n'empêche pas `%s` de le
+    modifier » : prêt NOMMÉ OR prêt COLLECTIF OR agent servi par le POOL exclusif de son
+    org. TROIS paramètres, le même sub trois fois. Une seule écriture, lue par
+    `forfaits_pretes` et par la garde de `update_trigger`."""
+    return (f"({_forfait_prete_nomme(alias_trigger)} "
+            f"OR {_forfait_prete_collectif(alias_trigger)} "
+            f"OR {_forfait_prete_par_le_pool(alias_trigger)})")
 
 
 def visibilites_d_agents(ids: list[int], org_id: int) -> dict[int, dict]:
@@ -349,16 +407,32 @@ def visibilites_d_agents(ids: list[int], org_id: int) -> dict[int, dict]:
 
 def forfaits_pretes(ids: list[int], sub: str, *, nomme: bool = False) -> set[int]:
     """Parmi les agents `ids`, ceux dont le propriétaire PRÊTE son abonnement personnel
-    à `sub` (`_forfait_prete` : nommé, ou collectif sous `op=lend`). `nomme=True` : le
-    seul prêt NOMMÉ — ce qui distingue l'éditeur nommé (droits d'avant) de qui emprunte
-    par le prêt collectif (lié au modèle). UNE requête pour toute une liste."""
+    à `sub` (`_forfait_prete` : nommé, collectif sous `op=lend`, ou l'org les sert par
+    son pool exclusif). `nomme=True` : le seul prêt NOMMÉ — ce qui distingue l'éditeur
+    nommé (droits d'avant) de qui emprunte par le prêt collectif ou par le pool (liés au
+    modèle). UNE requête pour toute une liste."""
     if not ids or not sub:
         return set()
     with _connect() as conn:
         rows = conn.execute(
             "SELECT t.id FROM runner_triggers t WHERE t.id = ANY(%s) AND "
             + (_forfait_prete_nomme("t") if nomme else _forfait_prete("t")),
-            ([int(i) for i in ids], sub, *(() if nomme else (sub,))),
+            ([int(i) for i in ids], sub, *(() if nomme else (sub, sub))),
+        ).fetchall()
+    return {int(r["id"]) for r in rows}
+
+
+def servis_par_le_pool(ids: list[int]) -> set[int]:
+    """Parmi les agents `ids`, ceux que leur org sert par son pool exclusif
+    (`_servi_par_le_pool`) — la MÊME écriture que la garde, pour qu'un texte servi
+    (`handover_note` du don) ne dise jamais autre chose que ce que l'écriture juge."""
+    if not ids:
+        return set()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT t.id FROM runner_triggers t WHERE t.id = ANY(%s) AND "
+            + _servi_par_le_pool("t"),
+            ([int(i) for i in ids],),
         ).fetchall()
     return {int(r["id"]) for r in rows}
 
@@ -372,7 +446,10 @@ def outils_plateforme_du_travail(job_id: int) -> list[str]:
     n'importe quel éditeur) et SANS prêt collectif vivant (`_pret_vivant`) : un admin de
     l'org et un partage à l'org entière ne peuvent alors que l'éteindre
     (`_acces_agent`). ⚠️ Le prêt collectif ferme la liste dès qu'il est posé, qu'un
-    partage atteigne déjà quelqu'un ou non : la liste se ferme du côté sûr. `[]` pour un travail enfilé à la main ou d'une flotte
+    partage atteigne déjà quelqu'un ou non : la liste se ferme du côté sûr. De même sur
+    un agent que son org sert par son pool exclusif (`_servi_par_le_pool`) dès qu'il
+    porte un partage en écriture vivant posé par son propriétaire, à qui que ce soit
+    (`_forfait_prete_par_le_pool`) : ce partage suffit alors à le modifier. `[]` pour un travail enfilé à la main ou d'une flotte
     (aucun agent), introuvable, dont l'agent a changé de main, ou qui ne remplit pas la
     condition — ce qui en dépend se ferme."""
     from ._partage_vivant import PARTAGE_VIVANT_G
@@ -386,7 +463,11 @@ def outils_plateforme_du_travail(job_id: int) -> list[str]:
             "    WHERE g.resource_type = 'runner_trigger' AND g.resource_id = t.id::text "
             "      AND g.principal_type = 'user' AND g.permission = 'write' "
             f"      AND g.granted_by = t.sub AND {PARTAGE_VIVANT_G}) "
-            f"  AND NOT {_pret_vivant('t')}",
+            f"  AND NOT {_pret_vivant('t')} "
+            f"  AND NOT ({_servi_par_le_pool('t')} AND EXISTS (SELECT 1 FROM resource_grants g "
+            "    WHERE g.resource_type = 'runner_trigger' AND g.resource_id = t.id::text "
+            "      AND g.permission = 'write' AND g.granted_by = t.sub "
+            f"      AND {PARTAGE_VIVANT_G}))",
             (job_id, list(runner_models.MODELES_PERSONNELS)),
         ).fetchone()
     outils = (row or {}).get("outils_plateforme") if row else None
@@ -532,7 +613,8 @@ def update_trigger(trigger_id: int, org_id: int, champs: dict[str, Any], *,
             (*vals, trigger_id, org_id,
              *(() if hors_abonnement_d_autrui is None else
                (list(runner_models.MODELES_PERSONNELS), hors_abonnement_d_autrui,
-                hors_abonnement_d_autrui, hors_abonnement_d_autrui))),
+                hors_abonnement_d_autrui, hors_abonnement_d_autrui,
+                hors_abonnement_d_autrui))),
         ).fetchone()
     # ⚠️ ÉTEINDRE, c'est aussi cesser de tiquer — donc cesser de périmer. Un
     # déclencheur désactivé laissait ses occurrences en attente pour toujours,
@@ -560,6 +642,48 @@ def update_trigger(trigger_id: int, org_id: int, champs: dict[str, Any], *,
         from .runner_hooks import reprendre_la_file
         reprendre_la_file(trigger_id, org_id)
     return dict(row) if row else None
+
+
+def _retouche_par_un_autre(alias_trigger: str) -> str:
+    """Le dernier changement de l'agent n'est pas attribué à son PROPRIÉTAIRE : une
+    retouche d'un autre (`updated_by` ≠ `sub`), ou un changement sans auteur enregistré
+    (`updated_by` NULL avec une date — une écriture de la porte du webhook, un
+    transfert : `_DATE_DU_CHANGEMENT` efface l'auteur, et une consigne écrite avant par
+    un autre resterait sinon invisible). Jamais changé depuis sa création
+    (`updated_at` NULL) = écrit par son propriétaire. Aucun paramètre."""
+    a = alias_trigger
+    return (f"({a}.{COLONNE_UPDATED_AT} IS NOT NULL "
+            f"AND {a}.{COLONNE_UPDATED_BY} IS DISTINCT FROM {a}.sub)")
+
+
+def eteindre_les_retouches_d_autrui(org_id: int, famille: str, par: str) -> list[dict]:
+    """L'org QUITTE le pool exclusif de `famille` (`org.model_subscriptions.set_mode`) :
+    ses agents de cette famille tourneront de nouveau sur le forfait de leur
+    propriétaire. Ceux qui sont ALLUMÉS et dont le dernier changement n'est pas le sien
+    (`_retouche_par_un_autre`) — une consigne qu'un éditeur a pu poser pendant le pool,
+    sans prêt — sont ÉTEINTS, par `update_trigger` (la même écriture qu'une pause : file
+    périmée ou gelée, auteur `par`), et rendus. Le propriétaire les rallume : sa
+    retouche le remet auteur. Rien n'est refusé à l'admin : un propriétaire parti ne
+    laisse aucune impasse (`take_over`)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT t.id, t.sub, t.label, t.procedure, t.updated_by "
+            "FROM runner_triggers t WHERE t.org_id = %s AND t.enabled "
+            "  AND t.model = ANY(%s) "
+            f"  AND {_famille_du_modele('t')} = %s "
+            f"  AND {_retouche_par_un_autre('t')} ORDER BY t.id",
+            (org_id, list(runner_models.MODELES_PERSONNELS), famille),
+        ).fetchall()
+    eteints = []
+    for r in rows:
+        if update_trigger(int(r["id"]), org_id, {"enabled": False}, par=par) is None:
+            # Supprimé entre la lecture et l'écriture : il ne tournera plus, sur aucun
+            # forfait — rien à éteindre, rien à lister.
+            continue
+        eteints.append({"id": int(r["id"]), "owner": r["sub"],
+                        "label": r["label"] or r["procedure"],
+                        "last_changed_by": r["updated_by"]})
+    return eteints
 
 
 def trigger_par_secret(trigger_id: int, secret_hash: str,

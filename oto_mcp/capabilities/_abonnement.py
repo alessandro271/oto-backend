@@ -227,7 +227,10 @@ def exiger_le_droit_de_modifier(sub: str, agent: dict, famille: Optional[str],
         f"cet agent tourne sur l'abonnement `{famille}` de quelqu'un d'autre : ce que "
         "tu y changerais s'exécuterait sur SON forfait. Tu peux l'éteindre ; pour le "
         "modifier, il faut que son propriétaire te nomme éditeur de cet agent, ou qu'il "
-        "prête son forfait (`op=lend`) à l'équipe ou à l'org avec qui il l'a partagé.")
+        "prête son forfait (`op=lend`) à l'équipe ou à l'org avec qui il l'a partagé. "
+        "Dans une org qui sert cette famille par son pool (`mode=pool`), un partage en "
+        "écriture que le PROPRIÉTAIRE a posé à ton équipe ou à l'org suffit, sans "
+        "changer de modèle d'abonnement ; un partage posé par un admin ne suffit pas.")
 
 
 def servable(sub: Optional[str], famille: str) -> tuple[bool, Optional[str], Optional[str]]:
@@ -306,7 +309,13 @@ def exiger_a_la_pose(sub: str, proprietaire: Optional[str], famille: Optional[st
 
     ⚠️ La propriété de l'agent se juge dans les DEUX modes (`peut_agir_pour`) :
     l'org peut repasser en personnel, et l'agent d'un autre retouché pendant le pool
-    tournerait alors sur SON forfait avec les consignes d'un autre."""
+    tournerait alors sur SON forfait avec les consignes d'un autre. ⚠️ Un partage
+    collectif posé par le PROPRIÉTAIRE rend modifiable son agent que l'org sert par son
+    pool exclusif (`db._forfait_prete_par_le_pool`) : l'appelant pose alors POUR le
+    propriétaire (`runner_triggers._pose_pour`), comme un éditeur à qui le forfait est
+    prêté. Ce risque de retour au personnel est paré au changement de mode : les agents
+    changés en dernier par un autre sont éteints et listés
+    (`db.eteindre_les_retouches_d_autrui`)."""
     if not est_abonnement(famille):
         return
     exiger_ouvert(sub, famille)
