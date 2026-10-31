@@ -791,7 +791,9 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
     les agents historiques des organisations qui n'ont pas déposé de clé.
 
     Marque d'abord `failed` les épaves (bail mort + tentatives épuisées) : elles
-    deviennent VISIBLES au lieu d'être re-servies pour rien.
+    deviennent VISIBLES au lieu d'être re-servies pour rien. Sur une file vide, ce
+    ménage ne passe qu'une fois par `OTO_RUNNER_MENAGE_S` (30 s) : le sondage à vide ne
+    coûte qu'une lecture.
 
     ⚠️ `org_id=None` = **worker de PLATEFORME** : il sert toutes les
     organisations, selon la part équitable ci-dessous. Ce n'est pas
@@ -823,7 +825,8 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
     essayer un moteur sur une organisation avant de le donner au parc. `None` = toutes,
     comme avant. Il RESTREINT, il n'élargit jamais : un appelant scopé à son org
     (`org_id`) ne voit que l'intersection. Seule la PRISE est filtrée ; les épaves et les
-    périmés de toutes les orgs se constatent toujours au sondage, comme avant.
+    périmés de toutes les orgs se constatent toujours au sondage (à vide, au plus une fois
+    par `OTO_RUNNER_MENAGE_S`).
 
     `ferme` (29/09/2026) : le worker est un exécutant de la FERME Claude Code. Un
     travail de la famille `FAMILLE_FERME` d'une org routée vers la ferme
