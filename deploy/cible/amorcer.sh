@@ -49,7 +49,7 @@ rendre() {
   sed -e "s|@UNITE@|${UNITE}|g" -e "s|@UTILISATEUR@|${UTILISATEUR}|g" \
       -e "s|@ARBRE@|${BG_TREE}|g" -e "s|@ETC@|${ETC_ROLE}|g" \
       -e "s|@CLE_SCW@|${CLE_SCW}|g" -e "s|@ARBRE_ACTIF@|${arbre_actif}|g" \
-      -e "s|@DRAIN_MAX@|${BG_DRAIN_MAX}|g" \
+      -e "s|@ARRET_MAX@|$((BG_DRAIN_MAX + 30))|g" \
       "$gabarit" > "$tmp"
   if grep -q '@[A-Z_]*@' "$tmp"; then
     rm -f "$tmp"; refus "gabarit $gabarit : clé non rendue"

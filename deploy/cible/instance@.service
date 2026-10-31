@@ -38,7 +38,9 @@ Restart=on-failure
 RestartSec=5
 # L'arrêt direct (machine éteinte, `systemctl stop`) laisse finir le travail en vol autant
 # que la vidange d'une bascule : le défaut de systemd (90 s) tuerait avant son plafond.
-TimeoutStopSec=@DRAIN_MAX@
+# Le rendu y ajoute une marge : à égalité, le travail fini au plafond n'aurait plus le temps
+# de fermer proprement le processus.
+TimeoutStopSec=@ARRET_MAX@
 SyslogIdentifier=@UNITE@-%i
 NoNewPrivileges=yes
 ProtectSystem=full
