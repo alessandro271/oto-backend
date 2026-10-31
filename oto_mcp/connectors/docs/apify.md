@@ -29,5 +29,6 @@ apify is a catalog of ready-to-use scrapers — Google Maps, LinkedIn, Instagram
 - an actor is written `username/actor-name` (what the Store shows) or by its id — both work, the conversion to the URL form is done for you
 - `run_input` is **specific to each actor**: its fields are not invented, they are read on the Store page (e.g. `{"searchStringsArray": [...], "maxCrawledPlaces": 20}` for the Google Maps scraper)
 - a run is billed by usage: setting `max_items` (and if needed `max_total_charge_usd`, `timeout_secs`) at LAUNCH is the only protection — afterwards it is consumed
+- `apify_run_sync` / `apify_run` without `max_total_charge_usd`: the ceiling is derived from `max_items` and the actor's event prices, or $5 when it cannot be — `max_items` alone does not stop an actor billed per event; a run that reaches its ceiling ends with a partial output
 - `apify_run_sync` waits at most 300 s; a run still going then is not stopped — the error names its run id, continue with `apify_run_status` and `apify_dataset_items` (or start a known-long scrape with `apify_run`)
 - an actor's items are often very wide: `fields` / `omit` avoid bringing back huge objects

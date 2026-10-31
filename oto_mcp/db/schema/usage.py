@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     -- cadence de re-handshake par client (`client_id`) et le churn de `session_id`,
     -- dont dépendent la visibilité des tools et l'injection des blocs A/C.
     -- `tool` porte alors l'identifiant d'événement (route REST, nom de provider,
-    -- méthode protocolaire…).
+    -- méthode protocolaire…) ; 'settlement' = ligne de coût posée par un RELEVÉ serveur
+    -- sous qui a lancé un job (`journal_jour.KIND_RELEVE`) : facturée
+    -- (`journal_jour.KINDS_FACTURES`), l'activité de personne.
     -- Les lectures du monitoring d'outils filtrent kind='mcp' pour rester iso.
     kind TEXT NOT NULL DEFAULT 'mcp',
     sub TEXT,
@@ -303,8 +305,8 @@ CREATE TABLE IF NOT EXISTS journal_jours_consolides (
     consolide_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 -- Les TOTAUX, une ligne par combinaison des dimensions que lisent les écrans. Les
--- natures agrégées sont `mcp` et `connector` (`journal_jour.KINDS`) : REST, protocole
--- et transport restent au journal. `durees` et `tailles` portent les VALEURS non
+-- natures agrégées sont `mcp`, `connector` et `settlement` (`journal_jour.KINDS`) :
+-- REST, protocole et transport restent au journal. `durees` et `tailles` portent les VALEURS non
 -- nulles (4 octets par valeur) : un p95 se recalcule exactement sur leur union
 -- (`percentile_cont`), là où un histogramme à seaux l'aurait approché.
 CREATE TABLE IF NOT EXISTS journal_totaux_jour (
@@ -394,4 +396,34 @@ CREATE TABLE IF NOT EXISTS limite_refus_jour (
     dernier_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (jour, env, limiteur, classe, cle)
 );
+"""
+
+
+# Les runs Apify lancés sur la clé plateforme — fragment séparé (révision
+# `20261031_1000_apify_runs`, `db/apify_runs.py`).
+APIFY_RUNS = """
+-- Un run Apify vit hors de l'appel qui l'a lancé : à 300 s, `apify_run_sync` rend la
+-- main et le run continue. Seul un `apify_run_status` lisant le run TERMINÉ le trace,
+-- donc un run que personne ne relit coûte à la plateforme sans jamais être facturé
+-- (30/10/2026 : cinq runs, 25,43 $, aucune ligne). Cette table le note AU LANCEMENT :
+-- `oto-mcp maintenance apify-runs` relève ce qui n'a pas de coût, et le trace sous
+-- l'org qui a lancé. PAS un `job_id` sur la trace : le facturant garde le premier
+-- chiffre d'un job, et un run en cours n'en a qu'un partiel.
+CREATE TABLE IF NOT EXISTS apify_runs (
+    apify_run_id TEXT PRIMARY KEY,
+    org_id BIGINT,
+    sub TEXT,
+    outil TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    run_id TEXT,                     -- le run de l'appel, NULL hors run
+    plafond_usd NUMERIC,             -- `max_total_charge_usd` passé à Apify
+    lance_le TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    releve_le TIMESTAMPTZ,           -- NULL = pas encore de coût final
+    statut TEXT,                     -- le statut Apify final, ou `introuvable`
+    cout_usd NUMERIC                 -- NULL tant que non relevé, ou run introuvable
+);
+CREATE INDEX IF NOT EXISTS idx_apify_runs_a_relever
+    ON apify_runs(lance_le) WHERE releve_le IS NULL;
+CREATE INDEX IF NOT EXISTS idx_apify_runs_lance_le ON apify_runs(lance_le);
+CREATE INDEX IF NOT EXISTS idx_apify_runs_sub ON apify_runs(sub);
 """

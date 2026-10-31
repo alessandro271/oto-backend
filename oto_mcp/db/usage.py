@@ -65,8 +65,9 @@ def insert_tool_call(row: dict) -> None:
     """Sink calllog (middleware inliné oto_mcp/calllog.py) : insère un row canonique (server, sub, email, tool,
     args, ok, error, duration_ms) + corrélation OTO-LOCALE (session_id, run_id ;
     ADR 0017, absents du contrat canonique → enrichis par le sink). `kind` discrimine
-    l'événement ('mcp' défaut / 'rest' / 'connector', ADR 0017 « un seul flux »).
-    Best-effort côté middleware — jamais bloquant.
+    l'événement ('mcp' défaut / 'rest' / 'connector', ADR 0017 « un seul flux » ;
+    'settlement' = ligne de coût d'un relevé serveur, facturée mais hors des lentilles
+    d'usage, `journal_jour.KIND_RELEVE`). Best-effort côté middleware — jamais bloquant.
 
     `error` passe par `journal_secrets.masquer_urls` ICI, au seul point d'écriture
     commun à tous les écrivains (middleware MCP, gestes REST, worker…) : un texte
@@ -1342,13 +1343,16 @@ _AUDIT_KEYSET_AT = f"to_char(l.created_at AT TIME ZONE 'UTC', {_ISO_US})"
 
 
 def _audit_window_clauses(
-    org_id: int, since: Optional[str], until: str,
+    org_id: int, since: Optional[str], until: str, *, facturation: bool = False,
 ) -> tuple[list[str], list[Any]]:
     """Les clauses de la FENÊTRE d'un export d'audit, alias `l` — sans le curseur.
 
     La page y ajoute sa position, le total non : c'est exactement ce qui les sépare,
-    et tout le reste leur est commun par construction."""
-    clauses = ["l.kind = 'mcp'", "l.org_id = %s", "l.created_at <= %s::timestamptz"]
+    et tout le reste leur est commun par construction. `facturation` : les natures de
+    la lentille de facturation (`journal_jour.KINDS_FACTURES`, les relevés serveur en
+    plus des appels) — l'audit, lui, ne montre que ce qu'un agent a appelé."""
+    nature = journal_jour.predicat_factures() if facturation else "l.kind = 'mcp'"
+    clauses = [nature, "l.org_id = %s", "l.created_at <= %s::timestamptz"]
     params: list[Any] = [int(org_id), until]
     if since:
         clauses.append("l.created_at >= %s::timestamptz")
@@ -1566,7 +1570,7 @@ def list_billable_calls_for_org(
     with _agregat("relevé des appels d'une org",
                   isolation="REPEATABLE READ") as conn:
         since, until = _fenetre_du_releve(conn, since, until)
-        clauses, params = _audit_window_clauses(org_id, since, until)
+        clauses, params = _audit_window_clauses(org_id, since, until, facturation=True)
         clauses.append("l.ok = TRUE")
         if tool:
             clauses.append("l.tool = %s")
@@ -1629,8 +1633,8 @@ def billable_usage_by_tool_for_org(
     nombre de jobs distincts. Remplace N lectures `list_billable_calls_for_org`, une par
     outil, qu'un consommateur rejouait à chaque rafraîchissement.
 
-    Mêmes appels que la lentille par appel — `kind='mcp'`, sous `org_id`, `ok`, dans la
-    fenêtre — donc la somme des `calls` d'un outil égale le `total` de sa lentille sur
+    Mêmes appels que la lentille par appel — `journal_jour.KINDS_FACTURES` (les
+    appels d'outils et les relevés serveur), sous `org_id`, `ok`, dans la fenêtre — donc la somme des `calls` d'un outil égale le `total` de sa lentille sur
     la même fenêtre. `tools` restreint aux outils nommés (servi par
     `idx_tool_calls_org_tool_ok`) ; absent, tous les outils de l'org.
 
@@ -1658,7 +1662,7 @@ def billable_usage_by_tool_for_org(
         since, until = _fenetre_du_releve(conn, since, until)
         fenetre = {"depuis": since, "jusqu_a": until, "haute_incluse": True}
         src, params = journal_jour.source(
-            conn, objet, kinds=("mcp",),
+            conn, objet, kinds=journal_jour.KINDS_FACTURES,
             mesures=("appels", "quantite", "credits_fournisseur"),
             filtres={"org_id": int(org_id), "ok": True,
                      "tools": list(tools) if tools else None}, **fenetre)
