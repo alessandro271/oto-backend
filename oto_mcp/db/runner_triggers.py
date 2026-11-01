@@ -594,9 +594,12 @@ def trigger_par_secret(trigger_id: int, secret_hash: str,
     return dict(row) if row else None
 
 
-def trigger_signe(trigger_id: int) -> Optional[dict]:
+def trigger_signe(trigger_id: int,
+                  hook_auth: str = "standard_webhooks") -> Optional[dict]:
     """Le déclencheur webhook en mode SIGNATURE d'un id, avec son secret CHIFFRÉ —
-    pour la route, et pour elle seule.
+    pour la route, et pour elle seule. `hook_auth` : le préréglage SIGNÉ dont la
+    route tient une signature (`standard_webhooks`, ou un `hmac_body` comme
+    `linear`) — une signature d'un autre préréglage ne trouve pas l'agent.
 
     ⚠️ Trouvé par son SEUL id, et c'est la différence de nature avec le porteur :
     une signature se vérifie AVEC le secret, donc il faut lire la ligne avant de
@@ -610,8 +613,8 @@ def trigger_signe(trigger_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             f"SELECT {_COLS}, hook_signing_secret_enc FROM runner_triggers "
-            f"WHERE id = %s AND kind = 'webhook' AND hook_auth = 'standard_webhooks'",
-            (trigger_id,),
+            f"WHERE id = %s AND kind = 'webhook' AND hook_auth = %s",
+            (trigger_id, hook_auth),
         ).fetchone()
     return dict(row) if row else None
 

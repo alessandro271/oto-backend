@@ -296,27 +296,37 @@ class TriggerInput(BaseModel):
         "clear its queue; `viewer` only reads it. Neither may delete it, share it "
         "or change its webhook door — owner and org admins only."))
     # connect_source —
-    source: Optional[Literal["lemlist", "allo"]] = Field(default=None, description=(
+    source: Optional[Literal["lemlist", "allo", "linear"]] = Field(default=None, description=(
         "op=connect_source: the sender to wire to this webhook agent. oto registers "
         "the webhook AT the sender itself, with the sender's key that resolves for "
         "you in this org (yours, your team's or the org's — never a shared platform "
         "key), and gives the agent a private address if it has none. `lemlist`: oto "
         "mints the agent's token and hands it to Lemlist as the hook's secret "
         "(`hook_auth=body_secret`). `allo`: Allo SIGNS each delivery with its own "
-        "secret, which oto stores encrypted (`hook_auth=standard_webhooks`). Either "
-        "way the secret is never returned, logged or passed to anyone."))
+        "secret, which oto stores encrypted (`hook_auth=standard_webhooks`). "
+        "`linear`: oto mints a signing secret, gives it to Linear with the webhook and "
+        "stores it encrypted; Linear signs each delivery with it (`hook_auth=linear`, "
+        "`Linear-Signature` HMAC of the raw body, deliveries older than 60 s "
+        "refused). Needs `team_id` and a workspace ADMIN's Linear key. Either way "
+        "the secret is never returned, logged or passed to anyone."))
     events: Optional[list[str]] = Field(default=None, description=(
         "op=connect_source: the sender's event names (Lemlist: one webhook each, "
         "`emailsReplied`, `linkedinReplied`, `linkedinInviteAccepted`…; Allo: one "
         "endpoint for all, topics `call.completed`, `summary.updated`, "
-        "`sms.received`…). Required: no default, subscribing to everything would "
-        "start the agent on every email open or every call. At most 10."))
+        "`sms.received`…; Linear: one webhook for all, resource types `Issue`, "
+        "`Comment`, `IssueLabel`, `Project`, `ProjectUpdate`, `Cycle`, `Reaction`… "
+        "— checked by Linear). Required: no default, subscribing to everything would "
+        "start the agent on every email open, call or edit. At most 10."))
     campaign_id: Optional[str] = Field(default=None, description=(
         "op=connect_source, Lemlist only: only this campaign's events (`cam_…`). "
         "Omitted = every campaign."))
     is_first: Optional[bool] = Field(default=None, description=(
         "op=connect_source, Lemlist only: only the first occurrence of each event "
         "per lead."))
+    team_id: Optional[str] = Field(default=None, description=(
+        "op=connect_source, Linear only (required there): the team whose changes "
+        "start the agent — its id, or its key (`ENG`). One team per wiring: all "
+        "public teams at once is not offered."))
     #: `deliveries` : combien de livraisons rendre.
     limit: Optional[int] = None
     with_input: Optional[bool] = Field(
@@ -1686,7 +1696,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         if inp.op == "connect_source":
             rendu = _source_du_hook.connecter(
                 ctx, t, source=inp.source, events=inp.events,
-                campaign_id=inp.campaign_id, is_first=inp.is_first)
+                campaign_id=inp.campaign_id, is_first=inp.is_first,
+                team_id=inp.team_id)
         else:
             rendu = _source_du_hook.deconnecter(ctx, t)
         return {"trigger": _avec_hook(ctx.org_id,
@@ -2271,7 +2282,7 @@ class HookAuthInput(BaseModel):
     # `lemlist` : l'ANCIEN nom de `body_secret`, admis par le schéma pour être
     # REFUSÉ en le nommant (`hook_auth_renamed`), jamais traduit en silence.
     hook_auth: Literal["bearer", "standard_webhooks", "body_secret", "lemlist",
-                       "none", "slack"] = Field(
+                       "none", "slack", "linear"] = Field(
         description=(
         "How the sender proves who it is. `bearer`: the sender posts "
         "`Authorization: Bearer otoh_…`, a secret the platform generates. "
@@ -2294,7 +2305,10 @@ class HookAuthInput(BaseModel):
         "org, set by an org admin, with an ORG procedure, and only an org admin "
         "changes what it runs; each run carries the identity of the member who "
         "asked (matched by confirmed email), and the agent's address no longer "
-        "opens."))
+        "opens. `linear`: Linear signs the raw body (`Linear-Signature`) with a "
+        "secret oto made — set only by `oto_trigger op=connect_source "
+        "source=linear`, REFUSED here (`hook_auth_needs_connect_source`): there is "
+        "nothing to paste."))
     signing_secret: Optional[str] = Field(default=None, description=(
         "`standard_webhooks` only: the signing secret the SENDER generated "
         "(starts with `whsec_`). Required when switching to `standard_webhooks`; "
@@ -2348,6 +2362,16 @@ def _valide_l_authentification(inp: HookAuthInput, actuel: Optional[dict]) -> No
     if not actuel or (actuel.get("kind") or "schedule") != "webhook":
         # Même 404 qu'un agent inconnu : un agent programmé n'a pas de porte.
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+    if runner_hook.prereglage(inp.hook_auth).schema == runner_hook.HMAC_CORPS:
+        # Le secret d'un `hmac_body` est fabriqué par le serveur et donné à la source
+        # par `connect_source` : il n'y a rien à coller ici. Accepté, le mode
+        # tomberait dans la branche du porteur (`_hook_auth_sync`) et poserait un
+        # agent signé sans secret, qui refuserait tout.
+        raise AuthzDenied(
+            400, "hook_auth_needs_connect_source",
+            f"`{inp.hook_auth}` se pose par `oto_trigger op=connect_source "
+            f"source={inp.hook_auth}` : le serveur fabrique le secret et l'inscrit chez "
+            "la source lui-même — rien à coller.")
     secret = inp.signing_secret
     if secret is not None and runner_hook.cle_de_signature(secret) is None:
         raise AuthzDenied(
@@ -2372,7 +2396,11 @@ def _valide_l_authentification(inp: HookAuthInput, actuel: Optional[dict]) -> No
             "`signing_secret` n'est lu qu'en `hook_auth=standard_webhooks` — posé "
             "avec le porteur, il serait inerte.")
     if (inp.hook_auth == runner_hook.STANDARD_WEBHOOKS and not secret
-            and not actuel.get("signing_secret_set")):
+            and (not actuel.get("signing_secret_set")
+                 # Le secret posé est celui d'un AUTRE schéma (un agent `linear`
+                 # débranché) : il n'a pas la forme `whsec_`, rien ne se vérifierait.
+                 or runner_hook.prereglage(actuel.get("hook_auth")).schema
+                 != runner_hook.STANDARD_WEBHOOKS)):
         raise AuthzDenied(
             400, "missing_signing_secret",
             "`standard_webhooks` exige `signing_secret` — le secret `whsec_…` que la "
@@ -2754,7 +2782,9 @@ CAPABILITIES += [
                           "`connect_source` with an event the sender does not publish"),
             DeclaredError(400, "option_not_supported",
                           "`connect_source`: `campaign_id` / `is_first` for a sender "
-                          "other than Lemlist"),
+                          "other than Lemlist, or `team_id` for one other than Linear"),
+            DeclaredError(400, "team_required",
+                          "`connect_source source=linear` without `team_id`"),
             DeclaredError(400, "credential_unavailable",
                           "`connect_source`: no key of the sender resolves for the caller "
                           "in this org"),
@@ -2858,12 +2888,13 @@ CAPABILITIES += [
             "org becomes the owner — the agent then acts as THEM, and its queued jobs "
             "move with it; an agent switched ON on your personal subscription is "
             "refused unless they can run it — disable it first, they re-enable it). "
-            "op=connect_source (webhook agent, owner or org admin; `source=lemlist` or "
-            "`allo`, `events=[…]`, Lemlist only: optional `campaign_id`, `is_first`): "
+            "op=connect_source (webhook agent, owner or org admin; `source=lemlist`, "
+            "`allo` or `linear`, `events=[…]`, Lemlist only: optional `campaign_id`, "
+            "`is_first`; Linear only, required: `team_id`): "
             "oto registers the webhook AT the sender — with a fresh token it never "
-            "returns (Lemlist), or keeping, encrypted, the signing secret the sender "
-            "makes (Allo) — the agent is wired end to end in one call, no secret "
-            "pasted anywhere. Calling it again re-wires (new secret, new "
+            "returns (Lemlist), keeping, encrypted, the signing secret the sender "
+            "makes (Allo), or one oto makes and gives the sender (Linear) — the agent "
+            "is wired end to end in one call, no secret pasted anywhere. Calling it again re-wires (new secret, new "
             "registrations, old ones removed): that is how a wired agent rotates. "
             "While wired, `rotate_secret`, "
             "`rotate_address` and an auth-mode change are REFUSED "
@@ -2942,6 +2973,9 @@ CAPABILITIES += [
             DeclaredError(400, "hook_auth_renamed",
                           "`lemlist`, l'ancien nom de `body_secret` : refusé, poser "
                           "`body_secret`"),
+            DeclaredError(400, "hook_auth_needs_connect_source",
+                          "un préréglage `hmac_body` (`linear`) : son secret est fabriqué "
+                          "par `oto_trigger op=connect_source`, il ne se pose pas ici"),
             DeclaredError(400, "invalid_signing_secret",
                           "le secret n'a pas la forme `whsec_` + base64"),
             DeclaredError(400, "not_signature_mode",

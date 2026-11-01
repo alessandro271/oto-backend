@@ -1274,6 +1274,7 @@ donc son mode, `runner_triggers.hook_auth` :
 |---|---|---|
 | `bearer` (**défaut**) | `Authorization: Bearer otoh_…`, généré par nous | accepté |
 | `standard_webhooks` | `webhook-id`, `webhook-timestamp`, `webhook-signature: v1,<b64>` — HMAC-SHA256 de `{id}.{ts}.{corps brut}`, clé = le `whsec_…` sans préfixe, décodé de base64 | **refusé** |
+| `linear` (schéma `hmac_body`, 01/11/2026) | `Linear-Signature: <hex>` — HMAC-SHA256 du **corps brut**, clé = les octets UTF-8 du secret ; `webhookTimestamp` (ms) **dans le corps** à 60 s près ; `Linear-Delivery` = identifiant de livraison | **refusé** |
 
 - **Le mode signature ÉTEINT le porteur** — c'est tout le sens de « désactiver le
   porteur » : un `otoh_` fuité ne rouvre pas une porte que son propriétaire croit
@@ -1339,6 +1340,38 @@ change** et aucune colonne n'est ajoutée.
 | `standard_webhooks` | `standard_webhooks` | signature `webhook-*` (ci-dessus) | `webhook-id`, signé |
 | `body_secret` (ex-`lemlist`) | `body_secret` | le **même** `otoh_`, renvoyé par la source dans le champ `secret` de son corps JSON | `_id` du corps, s'il y en a un |
 | `none` | `none` | **aucune** — choix explicite du propriétaire | — |
+| `linear` | `hmac_body` | en-tête `Linear-Signature`, HMAC-SHA256 hexadécimal du corps brut ; `webhookTimestamp` du corps à 60 s près | en-tête `Linear-Delivery` (non signé, voir ci-dessous) |
+
+- **`hmac_body`, le schéma « HMAC du corps brut » (01/11/2026).** Beaucoup de sources
+  signent les octets reçus avec un secret partagé, chacune dans SON en-tête. Le
+  schéma est générique ; le préréglage en porte les paramètres
+  (`runner_hook.Prereglage`) : `entete_signature`, `encodage` (`hex` | `base64`),
+  `entete_id` (déduplication), `chemin_horodatage` + `horodatage_ms` + `tolerance_s`
+  (fraîcheur, lue **dans le corps signé** — l'en-tête `Linear-Timestamp` porte la
+  même valeur mais n'est pas signé), `statut_accepte`. La route relève la signature
+  de chaque préréglage `hmac_body` dont l'en-tête est présent
+  (`signatures_du_corps`) ; c'est l'AGENT qui choisit la sienne :
+  `trigger_signe(id, hook_auth)` filtre le préréglage dans le WHERE, un calcul leurre
+  est fait quand rien ne correspond (pas d'oracle par la durée), le même 404 pour une
+  signature fausse, `400 hook_stale_timestamp` nommé seulement pour une signature
+  VALIDE. Un préréglage qui déclare `chemin_horodatage` l'**exige** : un corps signé
+  sans horodatage se rejouerait indéfiniment. Le secret est stocké chiffré, comme
+  celui de `standard_webhooks` (`hook_signing_secret_enc`, AAD liée à la ligne).
+  Prouvé contre un vecteur calculé hors de notre code (`openssl dgst -sha256 -hmac`,
+  `tests/test_webhook_linear.py`).
+- **`linear`** (https://linear.app/developers/webhooks) : `Linear-Signature` = HMAC-SHA256
+  hexadécimal du corps brut ; « verify it's within a minute » → `tolerance_s=60`.
+  ⚠️ **Linear compte tout statut autre que 200 comme un échec** (« responds with a
+  non-200 HTTP status code ») : retenté à 1 min, 1 h, 6 h, puis le webhook peut être
+  désactivé chez Linear. Le préréglage déclare donc `statut_accepte=200` (la route
+  rend `getattr(rendu, "statut_http", 202)`, `runner_hook.Acceptee`) ; tous les autres
+  gardent 202. `Linear-Delivery` n'est **pas signé** : il n'est retenu qu'avec un
+  corps dont la signature ET la fraîcheur viennent d'être prouvées — rejouer ce corps
+  sous un autre identifiant n'est possible que dans la minute. **Ne se pose pas à la
+  main** (`400 hook_auth_needs_connect_source`) : le secret est fabriqué par
+  `connect_source`, il n'y a rien à coller ; accepté, le mode serait tombé dans la
+  branche du porteur. D'un agent `linear` débranché, passer en `standard_webhooks`
+  exige un `whsec_` neuf (le secret posé n'a pas cette forme).
 
 - **`body_secret`, pour une source qui ne sait ni poser un en-tête ni signer.**
   **Le nom est générique** (20/10/2026) : le préréglage s'appelait `lemlist`, la
@@ -1413,8 +1446,10 @@ change** et aucune colonne n'est ajoutée.
 - **Ajouter une source** qui suit un schéma existant = une entrée dans
   `PREREGLAGES` + son banc (le vecteur publié par la source quand elle en a un).
   `test_l_API_de_pose_sert_EXACTEMENT_le_registre` garde la pose et le registre
-  alignés. Un **nouveau schéma** (HMAC d'en-tête à la Stripe/GitHub/Slack, poignée
-  de main de vérification) reste du code — une fois par schéma, pas par source.
+  alignés. Une source qui signe le corps brut dans UN en-tête, sans préfixe, est un
+  préréglage `hmac_body` de plus (paramètres, pas de code). Un **nouveau schéma**
+  (horodatage signé avec le corps à la Stripe/Slack, préfixe `sha256=` à la GitHub,
+  poignée de main de vérification) reste du code — une fois par schéma, pas par source.
 - ⚠️ **Base partagée, fenêtre de déploiement** : l'ancien code ne connaît pas
   `lemlist` ni `none` (ni, au renommage du 20/10, `body_secret`). Il les traite en **fermé** — son porteur filtre `bearer`, sa
   signature filtre `standard_webhooks` : 404, rien n'enfile. Une ligne posée
@@ -1446,6 +1481,7 @@ jamais par `str(e)`, qui peut recopier la requête.
 |---|---|---|
 | `lemlist` | `events=[…]`, **exigé** (un webhook par événement, ≤ 10) | `POST /hooks` : `targetUrl` = l'adresse privée, `secret` = le porteur, `campaignId`/`isFirst` facultatifs (`LemlistClient.add_webhook`/`delete_webhook`, oto-core) |
 | `allo` | `events=[…]`, **exigé** (≤ 10 topics, vérifiés contre `WEBHOOK_TOPICS` d'oto-core ; `campaign_id`/`is_first` refusés, `400 option_not_supported`) | `POST /v2/api/webhooks` : UN endpoint, `url` = l'adresse privée, `topics` = les événements ; Allo rend son secret `whsec_…`, chiffré pour la ligne et posé avec le mode **`standard_webhooks`** (`AlloClient._request` : les méthodes du client retirent ce secret de leurs réponses) ; retrait par `AlloClient.delete_webhook` |
+| `linear` (01/11/2026) | `events=[…]` = les `resourceTypes` (`Issue`, `Comment`, `IssueLabel`, `Project`…), **exigé**, ≤ 10, vérifiés par Linear ; `team_id` **exigé** (`400 team_required` ; l'id ou la clé de l'équipe, `teamId` de `WebhookCreateInput`) ; `campaign_id`/`is_first` refusés | `webhookCreate` (`LinearClient.create_webhook`) : UN webhook, `url` = l'adresse privée, `secret` = un secret de 256 bits **fabriqué par oto** (`WebhookCreateInput.secret`), `fields="id secret"` ; si Linear rend un secret, c'est lui qui signe et il est retenu ; chiffré pour la ligne et posé avec le mode **`linear`**. Clé d'**admin** de l'espace Linear (seuls les admins gèrent les webhooks). Retrait par `LinearClient.delete_webhook` (un `success: false` reste à retirer). `hook_sources` retient `team` |
 
 **Une source qui SIGNE (Allo, 28/10/2026).** Le même geste, l'autre porte : la source
 fabrique son secret et signe chaque livraison (en-têtes `webhook-*`, HMAC-SHA256

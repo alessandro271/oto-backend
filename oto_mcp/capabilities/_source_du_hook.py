@@ -45,11 +45,23 @@ il est chiffré pour SA ligne et posé avec le mode `standard_webhooks`, dans la
 transaction que le reste. Le secret va de la réponse d'Allo à la base, chiffré —
 jamais dans une réponse, un journal ou un transcript. Le client d'oto-core le retire
 de ses réponses (lu dans Allo) : l'inscription passe donc par son transport, ici seul.
+
+## Linear : la source signe avec NOTRE secret (01/11/2026)
+
+Linear signe le corps BRUT (`Linear-Signature`, HMAC-SHA256 hexadécimal — préréglage
+`linear`, schéma `hmac_body`), avec le secret du webhook. `webhookCreate` accepte ce
+secret en entrée (`WebhookCreateInput.secret`) : le SERVEUR le fabrique, l'inscrit, et
+le chiffre pour la ligne — le patron de Lemlist (rien ne vient du tiers qu'on n'ait
+donné), la porte d'Allo (une signature, pas un porteur). UN webhook pour tous les
+`resourceTypes`, sur UNE équipe (`team_id`, exigé : `allPublicTeams` n'est pas
+offert). Si Linear rend un secret dans sa réponse, c'est CELUI-LÀ qui signe : il est
+retenu à la place du nôtre.
 """
 from __future__ import annotations
 
 import logging
 import os
+import secrets
 from typing import Any, Callable, Optional
 
 from .. import db, runner_hook
@@ -59,11 +71,20 @@ logger = logging.getLogger(__name__)
 
 #: Les sources qu'oto sait brancher. Une source de plus = un client qui sait
 #: inscrire et retirer un webhook, et le préréglage par lequel elle prouve.
-SOURCES = ("lemlist", "allo")
+SOURCES = ("lemlist", "allo", "linear")
 
-#: Les sources qui SIGNENT (préréglage `standard_webhooks`) : leur secret est le
-#: leur, rendu à la création de l'endpoint. Les autres reçoivent notre porteur.
-SOURCES_QUI_SIGNENT = ("allo",)
+#: Les sources qui SIGNENT : un secret de signature chiffré pour la ligne (celui
+#: qu'Allo rend, celui qu'on donne à Linear). Les autres reçoivent notre porteur.
+SOURCES_QUI_SIGNENT = ("allo", "linear")
+
+#: Le préréglage (`runner_hook.PREREGLAGES`) qu'un branchement pose, par source.
+#: En toutes lettres : `runner_hook` importe ce paquet, ses constantes ne sont pas
+#: encore là au chargement. Un banc vérifie que chacun est un préréglage connu.
+PREREGLAGE_DE_LA_SOURCE = {
+    "lemlist": "body_secret",
+    "allo": "standard_webhooks",
+    "linear": "linear",
+}
 
 #: Combien d'événements un branchement inscrit, au plus : un webhook par
 #: événement chez Lemlist, et chaque inscription est un appel au tiers.
@@ -107,6 +128,9 @@ def _client(ctx: ResolvedCtx, source: str) -> Any:
     if source == "allo":
         from oto.tools.allo import AlloClient
         return AlloClient(api_key=rc.key)
+    if source == "linear":
+        from oto.tools.linear import LinearClient
+        return LinearClient(api_key=rc.key)
     from oto.tools.lemlist import LemlistClient
     return LemlistClient(api_key=rc.key)
 
@@ -136,11 +160,20 @@ def _retirer(client: Any, inscrites: list) -> list:
     restees = []
     for ins in inscrites:
         try:
-            client.delete_webhook(ins["remote_id"])
+            r = client.delete_webhook(ins["remote_id"])
         except Exception as e:  # noqa: SILENT — journalisé, et rendu à l'appelant
             logger.warning("webhook %s chez %s : retrait impossible (%s)",
                            ins.get("remote_id"), ins.get("source"), _motif(e))
             restees.append({**ins, "error": _motif(e)})
+            continue
+        if (ins.get("source") == "linear" and isinstance(r, dict)
+                and r.get("success") is False):
+            # Linear répond `webhookDelete { success }` : un `false` sans erreur
+            # n'a rien retiré. Lu pour Linear SEUL : la réponse des autres sources
+            # n'a pas ce sens, et leur retrait se juge comme avant.
+            logger.warning("webhook %s chez %s : retrait refusé (success=false)",
+                           ins.get("remote_id"), ins.get("source"))
+            restees.append({**ins, "error": "not removed"})
     return restees
 
 
@@ -176,8 +209,9 @@ def _evenements(source: str, events: Optional[list]) -> list:
         raise AuthzDenied(
             400, "events_required",
             "`events`: at least one of the sender's events (Lemlist: "
-            "`emailsReplied`, `linkedinReplied`…). No default: subscribing to "
-            "EVERYTHING would start the agent on every email open.")
+            "`emailsReplied`, `linkedinReplied`…; Linear: `Issue`, `Comment`…). No "
+            "default: subscribing to EVERYTHING would start the agent on every email "
+            "open or every edit.")
     if len(vus) > EVENEMENTS_MAX:
         raise AuthzDenied(400, "too_many_events",
                           f"`events`: at most {EVENEMENTS_MAX} per wiring.")
@@ -268,9 +302,49 @@ def _inscrire_allo(ctx: ResolvedCtx, t: dict, client: Any, url: str,
     return [inscrite], secret
 
 
+def _inscrire_linear(ctx: ResolvedCtx, t: dict, client: Any, url: str,
+                     evenements: list, equipe: str) -> tuple[list, str]:
+    """UN webhook Linear pour tous les `resourceTypes` d'UNE équipe ; rend
+    l'inscription et le secret qui signera (voir l'en-tête du module).
+
+    Le secret est fabriqué ICI et donné à `webhookCreate` ; `secret` est demandé
+    dans la réponse : si Linear en rend un, c'est lui qui signe, et il est retenu.
+    Une réponse sans identifiant est un échec (rien à retirer : refusé par son nom).
+    ⚠️ Un refus de Linear se décrit par son type et son statut (`_motif`), jamais par
+    `str(e)` : le message recopierait la requête, donc le secret."""
+    propre = secrets.token_hex(32)
+    try:
+        r = client.create_webhook(url, team_id=equipe, resource_types=evenements,
+                                  secret=propre, fields="id secret")
+    except Exception as e:  # noqa: SILENT — journalisé, et refusé par son nom
+        motif = _motif(e)
+        logger.warning("webhook %s : inscription chez linear refusée (%s)", t["id"], motif)
+        raise AuthzDenied(
+            502, "source_registration_failed",
+            f"linear refused to register the webhook ({motif}): nothing changed on "
+            "the agent. Check `team_id` (the team's id or key), the resource types "
+            "in `events`, and that the key is a workspace ADMIN's — only admins can "
+            "manage webhooks.") from None
+    webhook = (r or {}).get("webhook") if isinstance(r, dict) else None
+    webhook = webhook if isinstance(webhook, dict) else {}
+    remote_id = webhook.get("id")
+    if not remote_id:
+        logger.error("webhook %s : linear a répondu SANS identifiant de webhook — un "
+                     "webhook peut rester chez linear, à vérifier à la main", t["id"])
+        raise AuthzDenied(
+            502, "source_registration_failed",
+            "linear answered without a webhook id: nothing changed on the agent. Check "
+            "Linear's API settings for a webhook to this agent's address.")
+    rendu = webhook.get("secret")
+    secret = rendu if isinstance(rendu, str) and rendu else propre
+    return [{"source": "linear", "remote_id": remote_id,
+             "event": ", ".join(evenements), "campaign_id": None,
+             "team": equipe}], secret
+
+
 def connecter(ctx: ResolvedCtx, t: dict, *, source: Optional[str],
               events: Optional[list], campaign_id: Optional[str],
-              is_first: Optional[bool]) -> dict:
+              is_first: Optional[bool], team_id: Optional[str] = None) -> dict:
     """Branche `source` sur l'agent `t` (porte DÉJÀ vérifiée par l'appelant).
 
     Rend `{"connected": [...], "remote_cleanup_failed": [...]}` — sans porteur."""
@@ -282,6 +356,16 @@ def connecter(ctx: ResolvedCtx, t: dict, *, source: Optional[str],
         raise AuthzDenied(400, "option_not_supported",
                           f"`campaign_id` and `is_first` are Lemlist's; {source} "
                           "subscribes to whole event topics.")
+    equipe = (team_id or "").strip() or None
+    if equipe and source != "linear":
+        raise AuthzDenied(400, "option_not_supported",
+                          f"`team_id` is Linear's; {source} has no teams.")
+    if source == "linear" and not equipe:
+        # Pas de défaut `allPublicTeams` : toutes les équipes publiques, c'est
+        # l'agent lancé sur chaque ticket de l'espace.
+        raise AuthzDenied(400, "team_required",
+                          "`team_id`: the Linear team to listen to (its id, or its "
+                          "key such as `ENG`). One team per wiring.")
     evenements = _evenements(source, events)
     # L'adresse privée AVANT l'inscription, mais en MÉMOIRE : la source garde l'URL
     # qu'on lui donne, et une adresse numérique se parcourt. Posée en base avec le
@@ -295,7 +379,11 @@ def connecter(ctx: ResolvedCtx, t: dict, *, source: Optional[str],
     porteur, hache = runner_hook.nouveau_secret()
     secret_enc = None
     if signe:
-        inscrites, secret = _inscrire_allo(ctx, t, client, url, evenements)
+        if source == "linear":
+            inscrites, secret = _inscrire_linear(ctx, t, client, url, evenements,
+                                                 equipe)
+        else:
+            inscrites, secret = _inscrire_allo(ctx, t, client, url, evenements)
         try:
             secret_enc = runner_hook.chiffrer_secret_de_signature(t["id"], secret)
         except Exception as e:
@@ -312,7 +400,7 @@ def connecter(ctx: ResolvedCtx, t: dict, *, source: Optional[str],
     try:
         ecrit = db.brancher_la_source(
             t["id"], ctx.org_id,
-            hook_auth=runner_hook.STANDARD_WEBHOOKS if signe else runner_hook.BODY_SECRET,
+            hook_auth=PREREGLAGE_DE_LA_SOURCE[source],
             secret_hash=hache, signing_secret_enc=secret_enc,
             hook_slug=slug, sources=inscrites, sources_avant=anciennes or None)
     except Exception as e:

@@ -92,11 +92,18 @@ def test_chaque_preregle_nomme_un_schema_CONNU():
     # `slack` : jugé par la route des événements Slack (`slack_events.py`), jamais
     # par `/api/hooks/{id}`.
     connus = {runner_hook.BEARER, runner_hook.STANDARD_WEBHOOKS,
-              runner_hook.BODY_SECRET, runner_hook.NONE, runner_hook.SLACK}
+              runner_hook.BODY_SECRET, runner_hook.NONE, runner_hook.SLACK,
+              runner_hook.HMAC_CORPS}
     for p in runner_hook.PREREGLAGES.values():
         assert p.schema in connus, p
         if p.schema == runner_hook.BODY_SECRET:
             assert p.champ_secret, f"{p.nom} : un body_secret sans champ n'ouvre rien"
+        if p.schema == runner_hook.HMAC_CORPS:
+            # Sans en-tête, rien ne se relève ; sans horodatage, un corps capturé se
+            # rejouerait indéfiniment.
+            assert p.entete_signature and p.chemin_horodatage and p.tolerance_s, p
+        else:
+            assert p.statut_accepte == 202, f"{p.nom} : rien d'autre ne change de statut"
 
 
 def test_l_API_de_pose_sert_EXACTEMENT_le_registre():

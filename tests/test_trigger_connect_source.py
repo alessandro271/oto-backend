@@ -18,6 +18,9 @@ prouve en SQL dans `test_declencheur_webhook_db.py`) :
 7. **Allo SIGNE** : un endpoint pour tous les topics, son secret `whsec_` chiffré
    pour la ligne en mode `standard_webhooks` — ni rendu, ni journalisé ; une réponse
    sans secret utilisable retire l'endpoint et n'écrit rien.
+8. **Linear signe avec le secret qu'oto lui DONNE** : un webhook par équipe (`team_id`
+   exigé), secret fabriqué côté serveur (ou celui que Linear rend), chiffré pour la
+   ligne en mode `linear` — ni rendu, ni journalisé.
 """
 from __future__ import annotations
 
@@ -547,3 +550,203 @@ def test_allo_DEBRANCHER_retire_l_endpoint(allo):
     assert allo["client"].retraits == ["ep_1"]
     assert out["disconnected"][0]["remote_id"] == "ep_1"
     assert not allo["ligne"]["hook_sources"]
+
+
+# ── 8. Linear : la source signe avec le secret qu'oto lui DONNE ───────────────
+
+class _Linear:
+    """Le client Linear (oto-core) : `create_webhook` / `delete_webhook`."""
+
+    def __init__(self, rend_le_secret=None, sans_id=False, refuse=False):
+        self.creations, self.retraits = [], []
+        self.rend_le_secret, self.sans_id, self.refuse = rend_le_secret, sans_id, refuse
+        self.refuse_retrait: set = set()
+        self.retrait_sans_succes: set = set()
+
+    def create_webhook(self, url, *, team_id=None, resource_types=None, secret=None,
+                       enabled=None, all_public_teams=False, fields=None):
+        if self.refuse:
+            # Le message d'une erreur amont peut recopier la requête — secret compris.
+            raise RuntimeError(f"upstream 400 for {url} secret={secret}")
+        self.creations.append({"url": url, "team_id": team_id,
+                               "resource_types": resource_types, "secret": secret,
+                               "all_public_teams": all_public_teams, "fields": fields})
+        webhook = {} if self.sans_id else {"id": f"wh_{len(self.creations)}"}
+        if self.rend_le_secret is not None:
+            webhook["secret"] = self.rend_le_secret
+        return {"success": True, "webhook": webhook}
+
+    def delete_webhook(self, webhook_id):
+        if webhook_id in self.refuse_retrait:
+            raise RuntimeError("upstream 500")
+        if webhook_id in self.retrait_sans_succes:
+            return {"success": False}
+        self.retraits.append(webhook_id)
+        return {"success": True}
+
+
+@pytest.fixture
+def linear(base, monkeypatch):
+    base["client"] = _Linear()
+    monkeypatch.setattr(runner_hook, "chiffrer_secret_de_signature",
+                        lambda tid, secret: f"enc[{tid}]:{secret}")
+    return base
+
+
+def _brancher_linear(**kw):
+    kw.setdefault("events", ["Issue", "Comment", "IssueLabel"])
+    kw.setdefault("team_id", "ENG")
+    return _appel(op="connect_source", source="linear", **kw)
+
+
+def test_les_preregages_des_sources_sont_CONNUS():
+    """Écrits en toutes lettres (import circulaire) : un nom faux fermerait la porte."""
+    assert set(S.PREREGLAGE_DE_LA_SOURCE) == set(S.SOURCES)
+    for nom in S.PREREGLAGE_DE_LA_SOURCE.values():
+        assert nom in runner_hook.PREREGLAGES
+    assert S.PREREGLAGE_DE_LA_SOURCE["linear"] == runner_hook.LINEAR
+
+
+def test_linear_UN_webhook_une_equipe_et_le_mode_linear(linear, monkeypatch):
+    monkeypatch.setattr(RT.db, "poser_auth_de_hook", linear["interdit"])
+    out = _brancher_linear()
+    c = linear["client"]
+    assert len(c.creations) == 1
+    cree = c.creations[0]
+    assert cree["url"] == "https://mcp.example/api/hooks/h_privee"
+    assert cree["team_id"] == "ENG" and not cree["all_public_teams"]
+    assert cree["resource_types"] == ["Issue", "Comment", "IssueLabel"]
+    assert "secret" in cree["fields"].split(), "on demande le secret qui signera"
+    assert linear["ligne"]["hook_auth"] == runner_hook.LINEAR
+    assert out["connected"] == [{"source": "linear", "remote_id": "wh_1",
+                                 "event": "Issue, Comment, IssueLabel",
+                                 "campaign_id": None, "team": "ENG"}]
+    assert out["trigger"]["signing_secret_set"] is True
+
+
+def test_linear_le_secret_est_FABRIQUE_par_oto_et_chiffre_pour_la_ligne(linear):
+    _brancher_linear()
+    donne = linear["client"].creations[0]["secret"]
+    assert donne and len(donne) >= 64, "256 bits, fabriqués côté serveur"
+    assert linear["secret_enc"] == f"enc[5]:{donne}"
+
+
+def test_linear_si_Linear_REND_un_secret_c_est_lui_qui_signe(linear):
+    linear["client"].rend_le_secret = "lin_wh_choisi_par_linear"
+    _brancher_linear()
+    assert linear["secret_enc"] == "enc[5]:lin_wh_choisi_par_linear"
+
+
+def test_linear_le_secret_n_est_NI_rendu_NI_journalise(linear, caplog):
+    caplog.set_level(logging.DEBUG)
+    linear["client"].rend_le_secret = "lin_wh_rendu_par_linear"
+    out = _brancher_linear()
+    donne = linear["client"].creations[0]["secret"]
+    for s in (donne, "lin_wh_rendu_par_linear"):
+        assert s not in repr(out) and s not in caplog.text
+    assert not out.get("hook_secret")
+
+
+@pytest.mark.parametrize("kw, code", [
+    ({"team_id": None}, "team_required"),
+    ({"team_id": "  "}, "team_required"),
+    ({"campaign_id": "cam_1"}, "option_not_supported"),
+    ({"is_first": True}, "option_not_supported"),
+    ({"events": []}, "events_required"),
+])
+def test_linear_refuse_avant_tout_appel(linear, kw, code):
+    with pytest.raises(AuthzDenied) as e:
+        _brancher_linear(**kw)
+    assert e.value.code == code and not linear["client"].creations
+    _porte_intacte(linear)
+
+
+def test_team_id_n_est_que_pour_Linear(base):
+    with pytest.raises(AuthzDenied) as e:
+        _brancher(team_id="ENG")
+    assert e.value.code == "option_not_supported" and not base["client"].ajouts
+
+
+def test_linear_qui_REFUSE_n_ecrit_rien_et_ne_recopie_pas_la_requete(linear, caplog):
+    caplog.set_level(logging.DEBUG)
+    linear["client"].refuse = True
+    with pytest.raises(AuthzDenied) as e:
+        _brancher_linear()
+    assert e.value.code == "source_registration_failed"
+    assert "ADMIN" in str(e.value)
+    for fuite in ("mcp.example", "secret="):
+        assert fuite not in str(e.value) and fuite not in caplog.text
+    _porte_intacte(linear)
+
+
+def test_linear_SANS_identifiant_est_refuse(linear):
+    linear["client"].sans_id = True
+    with pytest.raises(AuthzDenied) as e:
+        _brancher_linear()
+    assert e.value.code == "source_registration_failed"
+    _porte_intacte(linear)
+
+
+def test_linear_la_base_qui_CASSE_retire_le_webhook(linear):
+    linear["panne"] = RuntimeError("db down")
+    with pytest.raises(RuntimeError):
+        _brancher_linear()
+    assert linear["client"].retraits == ["wh_1"]
+
+
+def test_linear_REBRANCHER_cree_un_webhook_neuf_et_retire_l_ancien(linear):
+    _brancher_linear()
+    premier = linear["client"].creations[0]["secret"]
+    _brancher_linear()
+    assert [x["remote_id"] for x in linear["ligne"]["hook_sources"]] == ["wh_2"]
+    assert linear["client"].retraits == ["wh_1"]
+    assert linear["client"].creations[1]["secret"] != premier, "un secret NEUF"
+
+
+def test_linear_DEBRANCHER_retire_le_webhook_et_garde_le_mode(linear):
+    _brancher_linear()
+    out = _appel(op="disconnect_source")
+    assert linear["client"].retraits == ["wh_1"]
+    assert out["disconnected"][0]["remote_id"] == "wh_1"
+    assert not linear["ligne"]["hook_sources"]
+    assert linear["ligne"]["hook_auth"] == runner_hook.LINEAR
+
+
+def test_linear_un_retrait_SANS_SUCCES_reste_a_retirer(linear):
+    """`webhookDelete { success: false }` sans erreur n'a rien retiré."""
+    _brancher_linear()
+    linear["client"].retrait_sans_succes.add("wh_1")
+    out = _appel(op="disconnect_source")
+    assert [x["remote_id"] for x in out["remote_cleanup_failed"]] == ["wh_1"]
+    assert [x["remote_id"] for x in linear["ligne"]["hook_sources"]] == ["wh_1"]
+
+
+@pytest.mark.parametrize("op", ["rotate_secret", "rotate_address"])
+def test_un_agent_linear_BRANCHE_refuse_les_rotations(linear, op):
+    _brancher_linear()
+    with pytest.raises(AuthzDenied) as e:
+        _appel(op=op)
+    assert e.value.code == "source_connected"
+
+
+def test_un_agent_linear_BRANCHE_refuse_le_changement_de_mode(linear):
+    _brancher_linear()
+    with pytest.raises(AuthzDenied) as e:
+        asyncio.run(RT._hook_auth(_ctx(), RT.HookAuthInput(trigger_id=5,
+                                                           hook_auth="bearer")))
+    assert e.value.code == "source_connected"
+
+
+def test_linear_la_cle_est_celle_de_l_APPELANT(monkeypatch):
+    from oto_mcp import access
+    vu = {}
+
+    def _resoudre(provider, want="auto", sub=None, **kw):
+        vu.update(provider=provider, want=want, sub=sub, **kw)
+        return SimpleNamespace(key="cle-de-test")
+
+    monkeypatch.setattr(access, "resolve_credential", _resoudre)
+    client = S._client(_ctx(), "linear")
+    assert vu == {"provider": "linear", "want": "byo", "sub": "owner-sub",
+                  "check_usage": False}
+    assert type(client).__name__ == "LinearClient"

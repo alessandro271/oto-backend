@@ -166,6 +166,12 @@ def secret_du_porteur(entete: Optional[str]) -> Optional[str]:
 
 BEARER, STANDARD_WEBHOOKS = "bearer", "standard_webhooks"
 BODY_SECRET, NONE = "body_secret", "none"
+#: Le schéma « HMAC du corps brut » (01/11/2026) : la source signe les OCTETS reçus
+#: avec un secret partagé, et pose la signature dans UN en-tête qui lui est propre.
+#: L'en-tête, l'encodage, l'horodatage et la fenêtre sont des paramètres du
+#: préréglage (`Prereglage`), pas du code : Linear en est le premier.
+HMAC_CORPS = "hmac_body"
+LINEAR = "linear"
 #: L'agent qui répond aux mentions de l'app dans Slack (`slack_events.py`). Sa preuve est la
 #: signature de l'app publiée de l'INSTANCE, vérifiée par la route des événements
 #: Slack — `/api/hooks/{id}` ne l'ouvre jamais : aucune preuve de `_sans_signature`
@@ -196,13 +202,31 @@ class Prereglage:
         `champ_secret` (pas un chemin : c'est elle qui est retirée du corps) ;
       - `none` : AUCUNE preuve, choix explicite du propriétaire. L'adresse privée
         (`h_`, 128 bits) est alors le seul secret — voir `_sans_signature`.
+      - `hmac_body` : la source SIGNE le corps brut — HMAC-SHA256, clé = les octets
+        UTF-8 du secret partagé (stocké chiffré, comme `standard_webhooks`), dans
+        l'en-tête `entete_signature`, encodé `encodage` (`hex` | `base64`).
     `chemin_id` : le CHEMIN (`a.b`) du corps qui identifie la livraison, pour ne pas
     rejouer une retentative (NON signé : seul qui détient le secret peut le poser).
+
+    Paramètres du seul `hmac_body` :
+      - `entete_id` : l'en-tête qui identifie la livraison (déduplication) ;
+      - `chemin_horodatage` : le chemin, DANS le corps signé, de l'horodatage d'envoi
+        (`horodatage_ms` : en millisecondes) — exigé, et jugé à `tolerance_s` près ;
+      - `statut_accepte` : le statut d'une livraison acceptée. 202 partout, sauf
+        pour une source qui compte tout autre statut comme un ÉCHEC (Linear : « a
+        non-200 HTTP status code » → retentée, puis le webhook désactivé).
     """
     nom: str
     schema: str
     champ_secret: Optional[str] = None
     chemin_id: Optional[str] = None
+    entete_signature: Optional[str] = None
+    encodage: Literal["hex", "base64"] = "hex"
+    entete_id: Optional[str] = None
+    chemin_horodatage: Optional[str] = None
+    horodatage_ms: bool = False
+    tolerance_s: Optional[int] = None
+    statut_accepte: int = 202
 
     @property
     def porte_le_porteur(self) -> bool:
@@ -221,6 +245,17 @@ PREREGLAGES: dict[str, Prereglage] = {p.nom: p for p in (
     Prereglage(BODY_SECRET, BODY_SECRET, champ_secret="secret", chemin_id="_id"),
     Prereglage(NONE, NONE),
     Prereglage(SLACK, SLACK),
+    # Linear signe le corps BRUT : `Linear-Signature` = HMAC-SHA256 hexadécimal, clé =
+    # le secret du webhook ; `webhookTimestamp` (ms) est DANS le corps signé, et
+    # Linear recommande de refuser au-delà d'une minute. ⚠️ L'en-tête
+    # `Linear-Timestamp` porte la même valeur mais n'est PAS signé : on lit le corps.
+    # `Linear-Delivery` (UUID v4) identifie la livraison. Posé par `connect_source`
+    # seulement : le secret est fabriqué par le serveur, il n'y a rien à coller.
+    # https://linear.app/developers/webhooks
+    Prereglage(LINEAR, HMAC_CORPS, entete_signature="linear-signature",
+               encodage="hex", entete_id="linear-delivery",
+               chemin_horodatage="webhookTimestamp", horodatage_ms=True,
+               tolerance_s=60, statut_accepte=200),
 )}
 HOOK_AUTHS = tuple(PREREGLAGES)
 
@@ -360,6 +395,90 @@ def verifier_signature(secret: str, recue: SignatureRecue,
         return "invalid"
     maintenant = time.time() if maintenant is None else maintenant
     if abs(maintenant - horodatage) > tolerance_s:
+        return "stale"
+    return "ok"
+
+
+# ── Le schéma `hmac_body` : HMAC du corps BRUT, un en-tête par source ──────────
+
+@dataclass(frozen=True)
+class SignatureDuCorps:
+    """Ce qu'une source `hmac_body` envoie : sa signature (l'en-tête de SON
+    préréglage), l'identifiant de livraison s'il y en a un, et le corps TEL QU'IL A
+    ÉTÉ REÇU — la signature porte sur ces octets-là (voir `SignatureRecue`)."""
+    prereglage: str
+    signature: str
+    msg_id: Optional[str]
+    brut: bytes
+
+
+def signatures_du_corps(entetes, brut: bytes) -> dict[str, SignatureDuCorps]:
+    """Pour chaque préréglage `hmac_body` dont l'en-tête de signature est présent, la
+    signature reçue — `{nom du préréglage: SignatureDuCorps}`, vide sinon.
+
+    La route ne sait pas encore quel agent elle sert : elle relève toutes les
+    signatures possibles, et c'est l'AGENT (`hook_auth`) qui choisit la sienne
+    (`_authentifier`). Une signature d'un préréglage que l'agent n'a pas choisi
+    n'ouvre rien."""
+    trouvees: dict[str, SignatureDuCorps] = {}
+    for p in PREREGLAGES.values():
+        if p.schema != HMAC_CORPS or not p.entete_signature:
+            continue
+        sig = (entetes.get(p.entete_signature) or "").strip()
+        if not sig:
+            continue
+        msg_id = (entetes.get(p.entete_id) or "").strip() if p.entete_id else ""
+        trouvees[p.nom] = SignatureDuCorps(p.nom, sig, msg_id or None, brut)
+    return trouvees
+
+
+def _horodatage_du_corps(p: Prereglage, corps: Any) -> Optional[float]:
+    """L'horodatage d'envoi lu DANS le corps signé, en secondes ; None s'il manque."""
+    brut = _extraire(corps, p.chemin_horodatage) if p.chemin_horodatage else None
+    if brut is None:
+        return None
+    try:
+        valeur = float(brut)
+    except ValueError:
+        return None
+    return valeur / 1000 if p.horodatage_ms else valeur
+
+
+def verifier_signature_du_corps(secret: str, p: Prereglage, recue: SignatureDuCorps,
+                                corps: Any, maintenant: Optional[float] = None
+                                ) -> Literal["ok", "invalid", "stale"]:
+    """`ok`, `invalid` ou `stale` — la signature `hmac_body` d'une livraison.
+
+    Signé : le corps BRUT, HMAC-SHA256, clé = les octets UTF-8 du secret (pas de
+    préfixe ni de base64 : c'est la forme de Linear, `createHmac("sha256", secret)`).
+    L'en-tête porte le condensé, encodé `p.encodage`. Un en-tête qui ne se décode pas
+    est une signature fausse, pas une erreur.
+
+    ⚠️ Comparaison à TEMPS CONSTANT, et le HMAC est calculé AVANT de décoder
+    l'en-tête : un en-tête mal formé coûte le même calcul qu'un bon.
+
+    ⚠️ L'horodatage n'est jugé que pour une signature VALIDE (même règle que
+    `verifier_signature`) ; il est lu dans le CORPS, qui est signé. Un préréglage qui
+    déclare `chemin_horodatage` l'EXIGE : un corps signé sans horodatage ne prouve
+    pas sa fraîcheur, et se rejouerait indéfiniment.
+    """
+    attendue = hmac.new((secret or "").encode(), recue.brut, hashlib.sha256).digest()
+    try:
+        if p.encodage == "base64":
+            recu = base64.b64decode(recue.signature, validate=True)
+        else:
+            recu = bytes.fromhex(recue.signature)
+    except (binascii.Error, ValueError):
+        recu = b""
+    if not secret or not hmac.compare_digest(recu, attendue):
+        return "invalid"
+    if not p.chemin_horodatage:
+        return "ok"
+    horodatage = _horodatage_du_corps(p, corps)
+    if horodatage is None:
+        return "stale"
+    maintenant = time.time() if maintenant is None else maintenant
+    if abs(maintenant - horodatage) > (p.tolerance_s or TOLERANCE_HORODATAGE_S):
         return "stale"
     return "ok"
 
@@ -528,7 +647,9 @@ def _authentifier(trigger_id: int, secret: Optional[str],
                   signature: Optional[SignatureRecue],
                   source: Optional[str],
                   par_adresse_privee: bool = False,
-                  corps: Any = None) -> tuple[dict, Optional[str], Any]:
+                  corps: Any = None,
+                  signatures_corps: Optional[dict] = None
+                  ) -> tuple[dict, Optional[str], Any]:
     """Le déclencheur que CETTE preuve ouvre, ou un refus. Rend
     `(déclencheur, identifiant de livraison ou None, corps à transmettre)`.
 
@@ -548,6 +669,10 @@ def _authentifier(trigger_id: int, secret: Optional[str],
     Tous les échecs d'identité rendent LE MÊME 404 (`HOOK_INCONNU`) : id inconnu,
     mauvais mode, secret faux, signature fausse. Un seul refus parle : `stale`,
     rendu seulement quand la signature est VALIDE (cf. `verifier_signature`).
+
+    `signatures_corps` : les signatures `hmac_body` relevées par la route
+    (`signatures_du_corps`), jugées APRÈS Standard Webhooks et AVANT les preuves non
+    signées — chacune ne trouve que les agents de SON préréglage (garde SQL).
     """
     if signature is not None:
         t = db.trigger_signe(trigger_id)
@@ -560,7 +685,9 @@ def _authentifier(trigger_id: int, secret: Optional[str],
             verifier_signature(_SECRET_LEURRE, signature)
             # Pas un agent en mode signature : la signature ne le concerne pas,
             # les autres preuves décident — et rien de la signature n'est retenu.
-            return _sans_signature(trigger_id, secret, corps, par_adresse_privee)
+            return _par_signature_du_corps(trigger_id, secret, corps,
+                                           par_adresse_privee, source,
+                                           signatures_corps)
         try:
             cle = _dechiffrer_secret_de_signature(trigger_id, enveloppe)
         except Exception:  # noqa: BLE001 — journalisé, et c'est une panne de NOTRE côté
@@ -591,6 +718,58 @@ def _authentifier(trigger_id: int, secret: Optional[str],
         # L'identifiant est SIGNÉ : un tiers ne peut pas le forger pour faire
         # passer une livraison pour le doublon d'une autre.
         return t, signature.msg_id[:_ID_MAX], corps
+    return _par_signature_du_corps(trigger_id, secret, corps, par_adresse_privee,
+                                   source, signatures_corps)
+
+
+def _par_signature_du_corps(trigger_id: int, secret: Optional[str], corps: Any,
+                            par_adresse_privee: bool, source: Optional[str],
+                            signatures_corps: Optional[dict]
+                            ) -> tuple[dict, Optional[str], Any]:
+    """Les signatures `hmac_body` (Linear…), puis — aucune n'ouvrant l'agent — les
+    preuves non signées (`_sans_signature`).
+
+    Même discipline que Standard Webhooks : trouvé par l'id ET le préréglage (garde
+    SQL `hook_auth = <nom>`), un calcul leurre quand rien ne correspond (la durée ne
+    dit pas quels agents existent), le même 404 pour une signature fausse, et un
+    `stale` nommé seulement pour une signature VALIDE."""
+    for nom, recue in (signatures_corps or {}).items():
+        p = PREREGLAGES.get(nom)
+        if p is None or p.schema != HMAC_CORPS:
+            continue
+        t = db.trigger_signe(trigger_id, p.nom)
+        enveloppe = (t or {}).get("hook_signing_secret_enc")
+        if not t or not enveloppe:
+            verifier_signature_du_corps(_SECRET_LEURRE, p, recue, corps)
+            continue
+        try:
+            cle = _dechiffrer_secret_de_signature(trigger_id, enveloppe)
+        except Exception:  # noqa: BLE001 — journalisé, et c'est une panne de NOTRE côté
+            logger.exception("webhook %s : secret de signature indéchiffrable",
+                             trigger_id)
+            raise
+        verdict = verifier_signature_du_corps(cle, p, recue, corps)
+        del cle
+        externe = recue.msg_id[:_ID_MAX] if recue.msg_id else None
+        if verdict == "invalid":
+            raise HookRefus(404, "hook_not_found", HOOK_INCONNU)
+        if verdict == "stale":
+            with db._connect() as conn:
+                db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_STALE,
+                               source=source,
+                               **({"external_id": externe} if externe else {}))
+            raise HookRefus(
+                400, "hook_stale_timestamp",
+                f"The signed `{p.chemin_horodatage}` is missing or more than "
+                f"{p.tolerance_s or TOLERANCE_HORODATAGE_S} s away from our clock. A "
+                "delivery is only accepted within that window: it cannot be "
+                "replayed later.")
+        _exiger_l_adresse(t, par_adresse_privee)
+        # L'identifiant de livraison (`Linear-Delivery`) n'est PAS signé, mais il
+        # n'est retenu qu'avec un corps dont la signature ET la fraîcheur viennent
+        # d'être prouvées : rejouer ce corps sous un autre identifiant n'est
+        # possible que dans la fenêtre (`tolerance_s`), comme un porteur fuité.
+        return t, externe, corps
     return _sans_signature(trigger_id, secret, corps, par_adresse_privee)
 
 
@@ -632,10 +811,18 @@ def _sans_signature(trigger_id: int, secret: Optional[str], corps: Any,
     raise HookRefus(404, "hook_not_found", HOOK_INCONNU)
 
 
+class Acceptee(dict):
+    """Ce que la route sérialise, plus le STATUT qu'elle rend (`statut_http`) : 202
+    partout, celui du préréglage pour une source qui n'accepte que lui (Linear : 200).
+    Un `dict` pour tout le reste — sérialisé et comparé comme avant."""
+    statut_http: int = 202
+
+
 def declencher(trigger_id: int, secret: Optional[str], corps: Any,
                source: Optional[str] = None, *,
                signature: Optional[SignatureRecue] = None,
-               par_adresse_privee: bool = False) -> dict:
+               par_adresse_privee: bool = False,
+               signatures_corps: Optional[dict] = None) -> dict:
     """LE geste : vérifier, lisser, enfiler. Rend ce que la route sérialise.
 
     Synchrone À DESSEIN — la route l'appelle dans un fil séparé (`run_in_threadpool`).
@@ -652,8 +839,11 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
     # d'une source qui a prouvé détenir le secret), et le corps AMPUTÉ du secret
     # qu'il portait éventuellement.
     t, externe, corps = _authentifier(trigger_id, secret, signature, source,
-                                      par_adresse_privee, corps=corps)
-    return enfiler(t, externe, source, corps=corps)
+                                      par_adresse_privee, corps=corps,
+                                      signatures_corps=signatures_corps)
+    rendu = Acceptee(enfiler(t, externe, source, corps=corps))
+    rendu.statut_http = prereglage(t.get("hook_auth")).statut_accepte
+    return rendu
 
 
 def _sans_projet_dit(projet: "_projet_de_l_agent.ProjetDuRun", t: dict,

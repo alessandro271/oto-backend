@@ -65,11 +65,14 @@ async def fire(request: Request) -> JSONResponse:
     """Un tiers POSTe, un agent part.
 
     Réponses :
-      202 le travail est enfilé (`delayed_seconds` s'il a été lissé)
-      202 `duplicate: true` — cette livraison (même `webhook-id` signé) a déjà
-          été acceptée : aucun second travail
+      202 le travail est enfilé (`delayed_seconds` s'il a été lissé) — 200 pour un
+          préréglage qui compte tout autre statut comme un échec (`linear`,
+          `Prereglage.statut_accepte`)
+      202 `duplicate: true` — cette livraison (même `webhook-id` signé, ou même
+          identifiant de livraison du préréglage) a déjà été acceptée : aucun
+          second travail
       400 le corps n'est pas du JSON — ou (`hook_stale_timestamp`) une signature
-          VALIDE dont l'horodatage sort de la fenêtre de 5 min
+          VALIDE dont l'horodatage sort de la fenêtre (5 min, 60 s pour `linear`)
       404 identifiant inconnu, OU secret faux, OU signature fausse, OU preuve
           de l'autre mode — délibérément indistinguables
       409 l'agent est en pause
@@ -118,13 +121,21 @@ async def fire(request: Request) -> JSONResponse:
     # jamais sur le JSON re-sérialisé : un espace ou un ordre de clés différent
     # suffirait à refuser une livraison légitime.
     signature = runner_hook.signature_des_entetes(request.headers, brut)
+    # Les signatures `hmac_body` (Linear…), sur les mêmes octets : relevées pour
+    # chaque préréglage dont l'en-tête est là — c'est l'AGENT qui choisit la sienne.
+    # Passées seulement s'il y en a : l'appel reste celui d'avant pour tout le reste.
+    en_plus = {}
+    signatures_corps = runner_hook.signatures_du_corps(request.headers, brut)
+    if signatures_corps:
+        en_plus["signatures_corps"] = signatures_corps
 
     try:
         rendu = await run_in_threadpool(
             functools.partial(
                 runner_hook.declencher, trigger_id, secret, corps,
                 (request.headers.get("user-agent") or "")[:200],
-                signature=signature, par_adresse_privee=par_adresse_privee))
+                signature=signature, par_adresse_privee=par_adresse_privee,
+                **en_plus))
     except runner_hook.HookRefus as refus:
         entetes = ({"Retry-After": str(refus.retry_after)}
                    if refus.retry_after else None)
@@ -142,7 +153,7 @@ async def fire(request: Request) -> JSONResponse:
                       "The trigger failed on our side. Retry: no job was "
                       "queued.")
 
-    return JSONResponse(rendu, status_code=202)
+    return JSONResponse(rendu, status_code=getattr(rendu, "statut_http", 202))
 
 
 def make_routes(options_handler) -> list[Route]:
