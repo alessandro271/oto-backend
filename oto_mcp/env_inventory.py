@@ -894,6 +894,15 @@ _REGLAGES: tuple[Variable, ...] = (
              "SHA git du deploy en cours.", ("oto_mcp/version.py:62",)),
     Variable("OTO_DEPLOY_AT", Classe.REGLAGE, None,
              "Horodatage du deploy en cours.", ("oto_mcp/version.py:63",)),
+    Variable("MALLOC_ARENA_MAX", Classe.REGLAGE, "",
+             "Nombre maximal d'arènes de malloc de glibc. Lue par glibc au démarrage du "
+             "processus, jamais par le code : elle borne la mémoire que les threads "
+             "réservent chacun de leur côté (fil d'exécution des appels synchrones), "
+             "qui fait croître la mémoire résidente sans fuite. Vide : le défaut de "
+             "glibc (8 arènes par cœur). Déclarée ici pour qu'une instance puisse la "
+             "poser dans sa déclaration ; elle rejoint le processus par l'`EnvironmentFile` "
+             "de l'unité.",
+             ("deploy/cible/instance@.service:22",)),
 )
 
 
