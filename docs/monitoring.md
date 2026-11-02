@@ -1026,3 +1026,20 @@ TERMINÉ trace son coût. Trois garde-fous (`tools/apify.py`, `apify_releve.py`)
   cible `apify_cost_gap`. Il ne se compare qu'une fois la table couvrant tout le cycle.
   Une comparaison en échec se journalise à part (`comparaison.echec`) : le bilan du relevé
   reste, et le travail ne passe pas en échec.
+
+## Le prix des travaux Higgsfield de la clé plateforme
+
+Higgsfield ne débite un travail (une image, un clip) que s'il ABOUTIT — échoué, nsfw ou
+annulé : gratuit — et son statut ne porte aucun prix. Sur la clé plateforme
+(`tools/higgsfield.py`, `higgsfield_releve.py`) :
+
+- **La soumission** vérifie le quota du jour de l'octroi pour le PRIX du travail (en
+  micro-dollars, l'unité de `grant_quota_unit`), le note en `units`, et note le travail avec
+  ce prix (table `higgsfield_jobs`). Aucune `quantity` : rien n'est encore facturé.
+- **La lecture d'un travail abouti** (`higgsfield` op=get_request) par l'org qui l'a soumis
+  trace son prix en `quantity`, le travail pour job (`higgsfield_request_id`). Une lecture
+  depuis une autre org, ou dont la fiche est illisible, trace 0 sans le job.
+- **`oto-mcp maintenance higgsfield-jobs`** relève chaque nuit les travaux sans issue : un
+  travail abouti reçoit une ligne `higgsfield` de nature `kind='settlement'` sous l'org et
+  la personne qui l'ont soumis ; les autres se closent sans coût. Une seule clé plateforme
+  servie, comme Apify. Pas de comparaison : Higgsfield n'expose ni solde ni compteur.

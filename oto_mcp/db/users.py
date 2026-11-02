@@ -443,6 +443,7 @@ _SUB_COLUMNS = [
     # et `datastore_shares` : colonnes mortes, plus rien ne les lit, DROP en B2).
     # données de l'user
     ("apify_runs", "sub"),
+    ("higgsfield_jobs", "sub"),
     ("usage", "sub"), ("tool_calls", "sub"), ("usage_signals", "sub"),
     # Les totaux du journal par jour (#1147) suivent le journal : sans unicité (un
     # total en double s'additionne juste), UPDATE nu — sinon le compte fusionné

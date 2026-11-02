@@ -496,6 +496,11 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # de CI…), et que la lentille servirait alors comme un job. Elle facture : même règle
 # que `found_*`, gardée sur la ligne CIBLE par `tools/meta._BILLING_TRACE_KEYS`.
 #
+# `higgsfield_request_id` (02/11/2026, facturation du partenaire) — le travail
+# Higgsfield dont la lecture ABOUTIE trace le prix (`tools/higgsfield.py`), même rôle et
+# même raison que `apify_run_id` : l'argument s'appelle `request_id`, un nom trop commun
+# pour que la lentille le serve comme un job.
+#
 # `guide_scope` (#1156, 14/10/2026) — le PALIER de la procédure qu'exécute un run
 # (`user`|`org`|`group`), posé par `run_start` à côté de sa version. Deux paliers
 # portent le même slug : sans lui, la version ne disait pas de quelle copie elle était,
@@ -508,7 +513,8 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # la procédure passait pour « jamais déroulée ». Même clé que la face REST.
 _TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced",
                 "readonly_forced_bilan", "found_work_emails", "found_personal_emails", "found_phones",
-                "apify_run_id", "guide_scope", db.usage._ARG_PROCEDURE)
+                "apify_run_id", "higgsfield_request_id", "guide_scope",
+                db.usage._ARG_PROCEDURE)
 
 
 _PREPARED = False

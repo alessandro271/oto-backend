@@ -3,7 +3,8 @@
 in the Higgsfield console ([console.higgsfield.ai](https://console.higgsfield.ai)), create an API key: it comes as a **key id** and a **secret**. Paste them into oto as ONE value joined by a colon: `KEY_ID:KEY_SECRET`. Reference: [Higgsfield authentication](https://docs.higgsfield.ai/docs/authentication.md).
 - ⚠️ the secret is shown only once, when the key is created
 - the API spends a **prepaid balance in dollars**, added in the console (it expires one year after it is added); a Higgsfield web plan's credits are a different thing and are not used here
-- byo-only: every generation spends **your** balance; each organization or person sets its own key
+- your own key: every generation spends **your** balance; each organization or person sets its own key
+- or the **shared key**, when the instance grants it to your organization: no key to set; a job is billed to the organization only once it **completes** (failed, nsfw and canceled jobs cost nothing), at the price checked before it was sent, and each day's spend is capped by the grant's quota (in micro-dollars of job price). A job that would go over what is left today is refused before it is sent
 
 ## usage — a still, a clip
 

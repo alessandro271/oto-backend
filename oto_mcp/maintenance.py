@@ -43,6 +43,9 @@ Ils sont ici, chacun nommé, chacun jouable seul :
     oto-mcp maintenance apify-runs    relève le coût des runs Apify de la clé plateforme
                                           que personne n'a relus, sous l'org qui les a
                                           lancés, et compare le mois à ce qu'Apify compte
+    oto-mcp maintenance higgsfield-jobs facture les travaux Higgsfield de la clé plateforme
+                                          aboutis que personne n'a relus, sous l'org qui
+                                          les a soumis
     oto-mcp maintenance all           ceux du timer quotidien, dans l'ordre
 
     oto-mcp maintenance index-concurrents <révision>
@@ -679,6 +682,13 @@ def apify_runs(*, dry_run: bool = False) -> dict:
     return apify_releve.maintenance(dry_run=dry_run)
 
 
+def higgsfield_jobs(*, dry_run: bool = False) -> dict:
+    """Le prix des travaux Higgsfield soumis sur la clé plateforme, aboutis et que
+    personne n'a relus (`higgsfield_releve.py`)."""
+    from . import higgsfield_releve
+    return higgsfield_releve.maintenance(dry_run=dry_run)
+
+
 def journal_jour(*, dry_run: bool = False) -> dict:
     """Les totaux du journal par jour UTC (oto-backend#1147) : la veille, et les jours
     clos manqués depuis le dernier consolidé (`db/journal_jour.maintenance`).
@@ -713,6 +723,7 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "app-files": app_files,
     "slack-agent-posts": slack_agent_posts,
     "apify-runs": apify_runs,
+    "higgsfield-jobs": higgsfield_jobs,
 }
 # Travaux dont l'écriture est un ACTE, pas une routine : à blanc par défaut, et
 # c'est `--apply` qui écrit. Ils ne sont dans aucun timer et jamais dans `all`.
@@ -735,7 +746,7 @@ _ACTES = ("journal-tokens", "residu-projete", "cles-plateforme-au-format")
 # qu'un travail plus long (re-projection, index) ne consomme la fenêtre du timer.
 _ALL = ("journal-jour", "retention", "revisions", "blocks", "key-indexes", "alertes-credential",
         "instagram-tokens", "unipile-fin-de-droit", "apollo-phones", "activation", "digest-lecteurs", "copilot",
-        "app-files", "slack-agent-posts", "apify-runs")
+        "app-files", "slack-agent-posts", "apify-runs", "higgsfield-jobs")
 
 
 def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:

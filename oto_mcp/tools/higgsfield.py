@@ -3,7 +3,7 @@ before it runs.
 
 Wraps `oto.tools.higgsfield.HiggsfieldClient` (`Authorization: Key <id>:<secret>`),
 key resolved per call via `access.resolve_api_key("higgsfield")`: the customer's own
-(user or org), never a platform key.
+(user or org), or the platform key when the org is granted it.
 
 **Surface** (the `<ns>` / `<ns>_act` pair):
 - `higgsfield` (read-only) — the models the key can call, the price of a job
@@ -19,6 +19,21 @@ called (`max_usd_above_cap`). Higgsfield answers some
 estimates with a sentence of per-second prices instead of an amount: the amount read
 from it is flagged `approximate`.
 
+**The shared key** (closed, on grant, with a daily quota in micro-dollars of job price).
+Higgsfield charges a job only once it COMPLETES — failed, nsfw and canceled jobs are free —
+and a job's status carries no price. So on the platform key:
+- `create_generation` checks the grant's quota for the job's price (`units`, in
+  micro-dollars), submits, notes those `units`, and records the job with that price
+  (`db/higgsfield_jobs.py`). It never traces a `quantity`: nothing is billed yet.
+- `get_request` on a COMPLETED job, read by the org that submitted it, traces the recorded
+  price as `quantity` (micro-dollars, rounded up) with the job (`higgsfield_request_id`,
+  served as `job_id` by the billing lens): read N times, the biller counts it once. A
+  failed, nsfw or canceled job closes its record at no cost. Read from another org, or
+  when the record cannot be read, it traces 0 without the job, and the settlement
+  (`higgsfield_releve.py`) bills the org that submitted it — never two lines for a job.
+- Every other read traces `quantity` 0: the ledger reads a NULL quantity as 1.
+A customer's own key pays Higgsfield directly: nothing is recorded, nothing billed.
+
 **No waiting.** A submission answers at once with a `request_id`; the job runs for
 seconds (a still) to minutes (a clip). Polling is `higgsfield op='get_request'`.
 
@@ -32,20 +47,26 @@ what makes them verifiable by the version-skew probe
 """
 from __future__ import annotations
 
+import logging
+import math
 import os
 from typing import Any, Literal, Optional
 
 from fastmcp import FastMCP
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, session_org
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from .lecture import ACTE, LECTURE
 
+logger = logging.getLogger(__name__)
+
 _NAME = "higgsfield"
 
 _READ_OPS = ("list_models", "estimate", "get_request")
+# The end states of a job. Only `completed` is charged by Higgsfield.
+TERMINAL = frozenset({"completed", "failed", "nsfw", "canceled"})
 _ACT_OPS = ("create_generation", "cancel", "delete", "create_upload")
 
 # Keys removed from the model list by default: routing internals, a schema that is
@@ -88,6 +109,81 @@ def max_usd_cap() -> float:
     if not cap > 0 or cap == float("inf"):
         raise RuntimeError(f"higgsfield: {ENV_MAX_USD}={raw!r} must be a positive amount")
     return cap
+
+
+def microdollars(usd: float) -> int:
+    """A dollar price in micro-dollars, rounded UP — the unit and the rounding of Jev and
+    Apify (`tools/apify.py::_microdollars`: the `round` before `ceil` keeps float noise
+    from billing one micro-dollar too many)."""
+    return math.ceil(round(float(usd) * 1e6, 6))
+
+
+def _sur_cle_plateforme() -> bool:
+    return (session_org.current_call_trace() or {}).get("key_mode") == "platform"
+
+
+def _gratuit() -> None:
+    """Trace the call as FREE (`quantity=0`). A read never leaves its quantity NULL: the
+    ledger reads NULL as 1, and 1 µ$ per read would be billed with the jobs."""
+    session_org.note_call_trace(quantity=0)
+
+
+def _noter_soumission(request_id: Any, model: str, usd: float, approximate: bool) -> None:
+    """Record a job submitted on the platform key, with the price checked before it left,
+    so its completion bills that price (`get_request`, `higgsfield_releve.py`). A
+    customer's own key pays Higgsfield directly. Never fails the submission: the job is
+    already on its way, and a miss is logged."""
+    if not isinstance(request_id, str) or not request_id:
+        logger.warning("higgsfield: a platform-key job came back without a request_id, "
+                       "not recorded")
+        return
+    from ..auth.hooks import current_user_sub_from_token
+    from ..db import higgsfield_jobs
+    try:
+        sub = current_user_sub_from_token()
+        higgsfield_jobs.noter(request_id, org_id=access.current_org(sub), sub=sub,
+                              run_id=session_org.current_call_run(), model=model,
+                              prix_microdollars=microdollars(usd), approximatif=approximate)
+    except Exception:
+        logger.warning("higgsfield %s: submission not recorded", request_id, exc_info=True)
+
+
+def _releve(status: Any, request_id: str) -> None:
+    """What a read of a job traces (see the module docstring, **The shared key**)."""
+    if not _sur_cle_plateforme():
+        _gratuit()
+        return
+    statut = status.get("status") if isinstance(status, dict) else None
+    if statut not in TERMINAL:
+        _gratuit()
+        return
+    import psycopg
+
+    from ..db import higgsfield_jobs
+    try:
+        ligne = higgsfield_jobs.lire(request_id)
+    except psycopg.Error:
+        logger.warning("higgsfield %s: submission record unreadable, traced 0 without the "
+                       "job (the settlement bills the submitter)", request_id, exc_info=True)
+        _gratuit()
+        return
+    if ligne is None:
+        # Submitted before the table, or its record was lost: no price to bill.
+        _gratuit()
+        return
+    from ..auth.hooks import current_user_sub_from_token
+    if ligne["org_id"] != access.current_org(current_user_sub_from_token()):
+        _gratuit()
+        return
+    try:
+        higgsfield_jobs.marquer(request_id, statut=statut)
+    except psycopg.Error:
+        logger.warning("higgsfield %s: state not recorded", request_id, exc_info=True)
+    if statut != "completed":
+        _gratuit()
+        return
+    session_org.note_call_trace(quantity=int(ligne["prix_microdollars"]),
+                                higgsfield_request_id=request_id)
 
 
 def _detail(e) -> str:
@@ -205,8 +301,13 @@ def register(mcp: FastMCP) -> None:
 
     connector_verify.register(_NAME, _verify)
 
-    def _client() -> HiggsfieldClient:
-        key, _is_platform = access.resolve_api_key(_NAME)
+    def _client(units: int = 1) -> HiggsfieldClient:
+        """The cascade runs whole (own key > platform grant); on the platform key, the
+        grant's quota is checked for `units` micro-dollars."""
+        key, is_platform = access.resolve_api_key(_NAME, units=units)
+        if is_platform:
+            # The quota axis: a read spends none of it, a submission notes its price.
+            session_org.note_call_trace(units=0)
         return HiggsfieldClient(api_key=key)
 
     def _run(fn, *, spends: bool = False):
@@ -269,16 +370,19 @@ def register(mcp: FastMCP) -> None:
             raise _bad(f"Unknown op {op!r}: expected one of {', '.join(_READ_OPS)}.")
         if op == "list_models":
             _refuse_ignored(op, model=model, params=params, request_id=request_id)
+            _gratuit()
             return _models_view(_run(lambda: _client().list_models()), full,
                                 output_type, operation_type, search)
         _refuse_ignored(op, output_type=output_type, operation_type=operation_type,
                         search=search, full=full)
         if op == "estimate":
             _refuse_ignored(op, request_id=request_id)
+            _gratuit()
             return _priced(_need(model, "model", op), _need(params, "params", op))
         _refuse_ignored(op, model=model, params=params)
         rid = _need(request_id, "request_id", op)
         status = _run(lambda: _client().get_request(rid))
+        _releve(status, rid)
         if isinstance(status, dict) and status.get("status") == "completed":
             status["outputs"] = outputs_of(status)
         return status
@@ -357,8 +461,17 @@ def register(mcp: FastMCP) -> None:
                 raise _bad(f"Higgsfield: this job costs about ${usd:.3f} ({price['basis']}), above "
                            f"max_usd ${cap:.2f}. Nothing was sent; raise max_usd only once that "
                            "price is agreed.")
-            answer = _run(lambda: _client().generate(m, p, idempotency_key=idempotency_key,
-                                                     expires_after=expires_after), spends=True)
+            # Resolved again for the job's price: on the platform key, the grant's quota is
+            # checked for it BEFORE anything is sent.
+            units = microdollars(usd)
+            client = _client(units=units)
+            platform = _sur_cle_plateforme()
+            answer = _run(lambda: client.generate(m, p, idempotency_key=idempotency_key,
+                                                  expires_after=expires_after), spends=True)
+            if platform:
+                session_org.note_call_trace(units=units)
+                _noter_soumission(answer.get("request_id") if isinstance(answer, dict)
+                                  else None, m, usd, bool(price["approximate"]))
             if isinstance(answer, dict):
                 answer["price"] = {k: price[k] for k in ("usd", "approximate", "basis")}
             return answer
