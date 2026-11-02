@@ -427,3 +427,31 @@ CREATE INDEX IF NOT EXISTS idx_apify_runs_a_relever
 CREATE INDEX IF NOT EXISTS idx_apify_runs_lance_le ON apify_runs(lance_le);
 CREATE INDEX IF NOT EXISTS idx_apify_runs_sub ON apify_runs(sub);
 """
+
+
+# Les travaux Higgsfield soumis sur la clé plateforme — fragment séparé (révision
+# `20261102_1000_higgsfield_jobs`, `db/higgsfield_jobs.py`).
+HIGGSFIELD_JOBS = """
+-- Un travail Higgsfield (une image, un clip) vit hors de l'appel qui l'a soumis : la
+-- soumission rend la main à la file, le travail finit des secondes ou des minutes plus
+-- tard, et Higgsfield ne débite que celui qui ABOUTIT (échoué, nsfw, annulé : gratuits).
+-- Son statut ne porte ni prix, ni modèle, ni paramètres : le prix vérifié à la
+-- soumission est noté ICI, et la lecture du travail abouti (`higgsfield` op=get_request)
+-- le trace sous l'org qui l'a soumis. `oto-mcp maintenance higgsfield-jobs` relève ceux
+-- que personne n'a relus.
+CREATE TABLE IF NOT EXISTS higgsfield_jobs (
+    request_id TEXT PRIMARY KEY,
+    org_id BIGINT,
+    sub TEXT,
+    run_id TEXT,                     -- le run de l'appel, NULL hors run
+    model TEXT NOT NULL,
+    prix_microdollars BIGINT NOT NULL, -- le prix vérifié à la soumission, arrondi au-dessus
+    approximatif BOOLEAN NOT NULL DEFAULT FALSE, -- lu d'une phrase de prix à la seconde
+    soumis_le TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    releve_le TIMESTAMPTZ,           -- NULL = pas encore d'issue
+    statut TEXT                      -- completed, failed, nsfw, canceled, ou `introuvable`
+);
+CREATE INDEX IF NOT EXISTS idx_higgsfield_jobs_a_relever
+    ON higgsfield_jobs(soumis_le) WHERE releve_le IS NULL;
+CREATE INDEX IF NOT EXISTS idx_higgsfield_jobs_sub ON higgsfield_jobs(sub);
+"""

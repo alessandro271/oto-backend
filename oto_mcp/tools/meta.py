@@ -100,7 +100,7 @@ async def resoudre_outil(fastmcp, name: str):
 # `provider_credits` (what the provider deducted, in its unit) BILLS like `quantity`.
 _BILLING_TRACE_KEYS = ("quantity", "provider_credits", "key_mode",
                        "found_work_emails", "found_personal_emails", "found_phones",
-                       "apify_run_id")
+                       "apify_run_id", "higgsfield_request_id")
 _UNSET = object()
 
 

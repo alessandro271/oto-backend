@@ -93,11 +93,14 @@ def test_surface_is_the_pair(client):
     assert tools["higgsfield_act"].annotations.readOnlyHint is False
 
 
-def test_registry_declares_one_secret_key_byok_only():
+def test_registry_declares_one_secret_key_and_a_closed_platform_key():
     from oto_mcp import providers
     c = providers.REGISTRY["higgsfield"]
     assert c.kind == "tools" and c.secret_kind == "api_key"
-    assert c.auth_modes == frozenset({"byo_user", "byo_org"})
+    assert c.auth_modes == frozenset({"byo_user", "byo_org", "platform"})
+    # Closed, on grant only, and never a grant without a daily quota (micro-dollars).
+    assert c.platform_key_open is False and c.default_quota == 0
+    assert "micro-dollars" in c.grant_quota_unit
     assert [(f.name, f.secret) for f in c.credential_fields] == [("key", True)]
 
 

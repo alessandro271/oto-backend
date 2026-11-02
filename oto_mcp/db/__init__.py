@@ -99,6 +99,8 @@ from . import (
     slack_agent_posts,
     # NON aplati : `noter`/`lire`/`marquer` sont trop communs — `db.apify_runs.<fn>`.
     apify_runs,
+    # NON aplati, même raison — `db.higgsfield_jobs.<fn>`.
+    higgsfield_jobs,
 )
 
 # Ré-export plat (publics + privés à un underscore). Les noms dunder restent au
