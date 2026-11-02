@@ -25,8 +25,9 @@ autrement et EXACTEMENT :
   tableau (`durees`, `tailles`, 4 octets par valeur) — `percentile_cont` sur leur union
   rend la même valeur qu'au journal, là où un histogramme à seaux l'aurait approchée.
 
-Natures agrégées : `mcp` (les appels d'outils) et `connector` (les échecs de
-résolution de connecteur) — `KINDS`. Le REST, le protocole et le transport restent au
+Natures agrégées : `mcp` (les appels d'outils), `connector` (les échecs de
+résolution de connecteur) et `settlement` (les lignes de coût qu'un relevé serveur pose
+sous qui a lancé un job, `KIND_RELEVE`) — `KINDS`. Le REST, le protocole et le transport restent au
 journal : leurs lecteurs sont des vues de la plateforme, appelées à partir vers Grafana
 (épic #1147), et le REST est le flux le plus volumineux.
 
@@ -45,8 +46,17 @@ from ._conn import _connect
 
 logger = logging.getLogger(__name__)
 
+#: La nature d'une ligne de coût posée par un RELEVÉ serveur, sans appel derrière (le
+#: coût d'un run Apify que personne n'a relu, `apify_releve.py`) : sous l'org et la
+#: personne qui ont lancé le job, facturée comme un appel, mais l'activité de personne —
+#: les lentilles d'usage lisent `kind='mcp'` et ne la voient pas.
+KIND_RELEVE = "settlement"
+
+#: Les natures que la lentille de FACTURATION lit : les appels d'outils et les relevés.
+KINDS_FACTURES: tuple[str, ...] = ("mcp", KIND_RELEVE)
+
 #: Les natures d'événement agrégées. Le reste du journal ne l'est pas (cf. docstring).
-KINDS: tuple[str, ...] = ("mcp", "connector")
+KINDS: tuple[str, ...] = ("mcp", "connector", KIND_RELEVE)
 
 #: Les DIMENSIONS d'une ligne de totaux, et leur expression sur une ligne du journal
 #: (alias `l`). Ordre = ordre des colonnes de `journal_totaux_jour`.
@@ -131,11 +141,17 @@ def _expr_job() -> str:
     return _BILLABLE_JOB_ID_SQL
 
 
+def predicat_factures(alias: str = "l") -> str:
+    """La nature d'une ligne de la lentille de facturation (`KINDS_FACTURES`, liste
+    FERMÉE de littéraux de ce module, jamais fournie par un appelant)."""
+    return f"{alias}.kind IN ({', '.join(repr(k) for k in KINDS_FACTURES)})"
+
+
 def predicat_jobs(alias_ok: str = "l") -> str:
     """Ce qui fait d'une ligne du journal un job facturable relevé : la ligne de la
-    lentille de facturation (`kind='mcp'`, `ok`, sous une org) qui nomme un job."""
-    return (f"{alias_ok}.kind = 'mcp' AND {alias_ok}.ok AND {alias_ok}.org_id IS NOT NULL "
-            f"AND {_expr_job()} IS NOT NULL")
+    lentille de facturation (`KINDS_FACTURES`, `ok`, sous une org) qui nomme un job."""
+    return (f"{predicat_factures(alias_ok)} AND {alias_ok}.ok "
+            f"AND {alias_ok}.org_id IS NOT NULL AND {_expr_job()} IS NOT NULL")
 
 
 def consolider_jour(jour: str, *, duree_max_ms: int = DUREE_MAX_MS) -> dict:

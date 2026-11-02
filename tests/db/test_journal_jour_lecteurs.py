@@ -79,7 +79,10 @@ def jeu(live):
             lignes.append(minuit - timedelta(days=j))                 # minuit pile
             lignes.append(minuit - timedelta(days=j, microseconds=1))  # la veille, au bout
         for created_at in lignes:
-            kind = rnd.choices(("mcp", "connector", "rest", "protocol"), (80, 8, 10, 2))[0]
+            # `settlement` : la ligne d'un relevé serveur — comptée par la facturation,
+            # absente des lentilles d'usage (leurs références lisent `kind='mcp'`).
+            kind = rnd.choices(("mcp", "connector", "rest", "protocol", "settlement"),
+                               (78, 8, 10, 2, 2))[0]
             outil = rnd.choice(OUTILS)
             args = {}
             if rnd.random() < 0.3:
@@ -194,7 +197,8 @@ def _ref_tool_call_stats(since_days, org_id=None, sub=None):
 def _ref_billable(org_id, tools=None, since=None, until=None):
     with _connect() as conn:
         since, until = usage._fenetre_du_releve(conn, since, until)
-        clauses, params = usage._audit_window_clauses(org_id, since, until)
+        clauses, params = usage._audit_window_clauses(org_id, since, until,
+                                                      facturation=True)
         clauses.append("l.ok = TRUE")
         if tools:
             clauses.append("l.tool = ANY(%s)"); params.append(list(tools))

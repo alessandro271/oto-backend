@@ -48,7 +48,10 @@ def _bad(msg: str) -> McpError:
 def _upstream_message(e) -> str:
     status = e.status_code
     if status in (401, 403):
-        return (f"Apify rejected the token (HTTP {status}) — check the key configured "
+        # Apify's own words: a 403 is not always a bad key, and the agent that reads
+        # "check the key" alone has nothing to report but its retries.
+        return (f"Apify refused the request (HTTP {status}): {str(e.body)[:300]} — do "
+                "not retry: report it. If it names the token, check the key configured "
                 "on this connector (Apify: Settings → API & Integrations).")
     if status == 402:
         return ("Apify: insufficient credits/plan (402) — top up the account, or "
@@ -68,6 +71,23 @@ def _upstream_message(e) -> str:
 
 # The states a run never leaves. Its cost is not final there yet: see `_cout`.
 _TERMINAL = frozenset({"SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"})
+
+# The ceiling of a run launched without one. `max_items` is not a ceiling: a
+# pay-per-event actor can charge far beyond it (measured 30/10/2026: `maxItems` 2, about
+# 17,000 events). Left unset, Apify's own limit is whatever remains of the account.
+#
+# `_PLAFOND_DEFAUT_USD` serves when the price or the volume is unknown; the
+# `connector_settings` key `CLE_PLAFOND_DEFAUT` (platform scope) replaces it without a
+# deploy, read at most once per `_REGLAGE_TTL_S` per process (`_reglage_plafond`).
+# `_PLANCHER_USD` keeps a derived ceiling from cutting a small run short, and `_MARGE`
+# from cutting one whose items charge more than once.
+_PLAFOND_DEFAUT_USD = 5.0
+_PLANCHER_USD = 0.05
+_MARGE = 2
+CLE_PLAFOND_DEFAUT = "default_max_charge_usd"
+_REGLAGE_TTL_S = 60.0
+# Share of the ceiling from which a finished run is said to have reached it.
+_SEUIL_ATTEINT = 0.95
 
 # `apify_run_sync` waits this long in all, by slices of at most `_WAIT_SLICE_S` —
 # Apify's own cap on `waitForFinish`, and the 300 s the synchronous endpoint used to hold.
@@ -153,6 +173,186 @@ def _cout(run: dict, run_id: str, outil: str) -> Optional[float]:
     return total
 
 
+def _prix_evenement(evenement: Any) -> Optional[float]:
+    """An event's price: its flat price, or its highest tier — the tier of the account
+    is not on the actor's card, and a ceiling errs on the high side."""
+    if not isinstance(evenement, dict):
+        return None
+    prix = _usd(evenement.get("eventPriceUsd"))
+    if prix is not None:
+        return prix
+    paliers = evenement.get("eventTieredPricingUsd")
+    lus = [_usd(p.get("tieredEventPriceUsd")) for p in paliers.values()
+           if isinstance(p, dict)] if isinstance(paliers, dict) else []
+    lus = [p for p in lus if p is not None]
+    return max(lus) if lus else None
+
+
+def _plafond_derive(carte: Any, max_items: int) -> Optional[float]:
+    """The ceiling a pay-per-event actor's card gives for `max_items` results, or None
+    when the actor is not priced per event or its card cannot be read. An item may
+    charge several events, so every repeating event counts."""
+    data = carte.get("data") if isinstance(carte, dict) else None
+    infos = data.get("pricingInfos") if isinstance(data, dict) else None
+    tarif = infos[-1] if isinstance(infos, list) and infos else None
+    if not isinstance(tarif, dict) or tarif.get("pricingModel") != "PAY_PER_EVENT":
+        return None
+    evenements = (tarif.get("pricingPerEvent") or {}).get("actorChargeEvents")
+    if not isinstance(evenements, dict) or not evenements:
+        return None
+    par_item = unique = 0.0
+    for evenement in evenements.values():
+        prix = _prix_evenement(evenement)
+        if prix is None:
+            return None
+        if evenement.get("isOneTimeEvent"):
+            unique += prix
+        else:
+            par_item += prix
+    if par_item <= 0:
+        return None
+    minimum = _usd(tarif.get("minimalMaxTotalChargeUsd")) or 0.0
+    return round(max(max_items * par_item * _MARGE + unique, minimum, _PLANCHER_USD), 6)
+
+
+# `(read at, value)` of the default-ceiling setting in this process — see
+# `_reglage_plafond`. Replaced whole (atomic under CPython): no lock on reads.
+_reglage_lu: Optional[tuple[float, Optional[str]]] = None
+
+
+def _reglage_plafond() -> Optional[str]:
+    """The `CLE_PLAFOND_DEFAUT` setting, platform scope, or None when it is not set.
+
+    `connector_settings` is not read on the hot path of a call (its module header):
+    a launch reads it at most once per `_REGLAGE_TTL_S` in a process, a write reaches
+    every deployed color within that delay, without a reload. A failed read is not
+    kept: the next launch reads again."""
+    global _reglage_lu
+    from ..db import connector_settings
+    lu, maintenant = _reglage_lu, time.monotonic()
+    if lu is not None and maintenant - lu[0] < _REGLAGE_TTL_S:
+        return lu[1]
+    valeur = connector_settings.get_connector_setting(
+        "platform", connector_settings.PLATFORM_SCOPE_ID, "apify", CLE_PLAFOND_DEFAUT)
+    _reglage_lu = (maintenant, valeur)
+    return valeur
+
+
+def _plafond_par_defaut() -> float:
+    """The ceiling when nothing better is known. The setting is a platform decision,
+    but a launch never fails on it: unreadable or not a positive amount, the constant
+    serves, and the log says so."""
+    import psycopg
+    try:
+        pose = _reglage_plafond()
+    except psycopg.Error:
+        logger.warning("apify: default ceiling setting unreadable, using $%g",
+                       _PLAFOND_DEFAUT_USD, exc_info=True)
+        return _PLAFOND_DEFAUT_USD
+    if not pose:
+        return _PLAFOND_DEFAUT_USD
+    try:
+        valeur = float(pose)
+    except ValueError:
+        valeur = 0.0
+    if not 0 < valeur < math.inf:
+        logger.warning("apify: setting %s (%r) is not a positive amount, using $%g",
+                       CLE_PLAFOND_DEFAUT, pose, _PLAFOND_DEFAUT_USD)
+        return _PLAFOND_DEFAUT_USD
+    return valeur
+
+
+def _plafond_du_lancement(client: "ApifyClient", actor_id: str, max_items: Optional[int],
+                          demande: Optional[float]) -> float:
+    """The `max_total_charge_usd` a run starts with: the caller's, or the derived one,
+    or the default. Never None: an unset ceiling is the whole account's balance.
+
+    Reading the actor's card never fails a launch: an Apify refusal (`McpError`, from
+    `_upstream`) or a network failure (`requests.RequestException`: connection,
+    timeout) falls back to the default ceiling, and the log says why."""
+    import requests
+    if demande is not None:
+        return demande
+    if max_items and max_items > 0:
+        try:
+            with _upstream():
+                derive = _plafond_derive(client.actor(actor_id), max_items)
+        except (McpError, requests.RequestException) as e:
+            logger.warning("apify: card of %s unreadable (%s: %s), default ceiling",
+                           actor_id, type(e).__name__, e)
+            derive = None
+        if derive is not None:
+            return derive
+    return _plafond_par_defaut()
+
+
+def _noter_lancement(run_id: str, actor_id: str, outil: str,
+                     plafond: Optional[float]) -> None:
+    """Record a run started on the platform key, so that a run nobody reads back is
+    still billed (`apify_releve.py`). A customer's own key pays Apify directly. Never
+    blocks the run: a miss is logged, and the monthly comparison shows it."""
+    releve = session_org.current_call_trace() or {}
+    if releve.get("key_mode") != "platform":
+        return
+    from ..auth.hooks import current_user_sub_from_token
+    from ..db import apify_runs
+    try:
+        sub = current_user_sub_from_token()
+        apify_runs.noter(run_id, org_id=access.current_org(sub), sub=sub, outil=outil,
+                         actor_id=actor_id, run_id=session_org.current_call_run(),
+                         plafond_usd=plafond)
+    except Exception:
+        logger.warning("%s %s: launch not recorded", outil, run_id, exc_info=True)
+
+
+def _hors_du_lanceur(run_id: str, statut: str, cout: float) -> bool:
+    """Whether this read must trace 0 WITHOUT the job, the launch record being the
+    one that bills (`apify_releve.py`). Only a platform-key read looks the table up:
+    a customer's own key pays Apify directly, and its runs are never recorded.
+
+    - read by the org that launched it: billed here, and the record is settled, so
+      the nightly settlement does not bill it again;
+    - read from another org (a platform operator looking at it): billed to nobody
+      here, the settlement bills the launcher;
+    - not recorded (launched before the table): billed where it is read, as always;
+    - the record cannot be read: billed to nobody here, and said. Billing the reader
+      would bill the run twice when it was recorded — the reader now, the launcher at
+      the settlement. A run older than the table whose record lookup fails is lost
+      instead: the log names it, and the monthly comparison sees the gap."""
+    if (session_org.current_call_trace() or {}).get("key_mode") != "platform":
+        return False
+    import psycopg
+
+    from ..db import apify_runs
+    try:
+        ligne = apify_runs.lire(run_id)
+    except psycopg.Error:
+        logger.warning("apify %s: launch record unreadable, cost traced 0 without the "
+                       "job (the settlement bills the launcher)", run_id, exc_info=True)
+        return True
+    if ligne is None:
+        return False
+    from ..auth.hooks import current_user_sub_from_token
+    if ligne["org_id"] != access.current_org(current_user_sub_from_token()):
+        return True
+    try:
+        apify_runs.marquer(run_id, statut=statut, cout_usd=cout)
+    except psycopg.Error:
+        logger.warning("apify %s: cost not recorded on the launch", run_id, exc_info=True)
+    return False
+
+
+def _dire_plafond_atteint(run: dict, run_id: str, cout: float) -> None:
+    """A run stopped by its ceiling ends SUCCEEDED, with a partial output: say it."""
+    options = run.get("options")
+    plafond = _usd(options.get("maxTotalChargeUsd")) if isinstance(options, dict) else None
+    if plafond and cout >= plafond * _SEUIL_ATTEINT:
+        session_org.noter_avis(
+            f"Apify run {run_id} cost ${cout:.4f} of its ${plafond:g} ceiling: it may "
+            "have stopped early and its output may be partial. To get more, launch it "
+            "again with a higher `max_total_charge_usd`.")
+
+
 def _releve(out: Any, run_id: str, outil: str = "apify_run_status") -> None:
     """Record a FINISHED run's real cost on the current call's trace: `quantity` in
     micro-dollars, and the run as the JOB of the line (`apify_run_id`, served as
@@ -165,7 +365,12 @@ def _releve(out: Any, run_id: str, outil: str = "apify_run_status") -> None:
     whose state or cost cannot be read traces 0 without the job too, and SAYS so in
     the log (run id and type only): an absent figure is not a zero, a guessed one would
     be billed, and a silent one would be lost. A terminal run at 0 traces 0 with its
-    job — measured, nothing to bill."""
+    job — measured, nothing to bill.
+
+    ⚠️ A platform-key run belongs to the org that LAUNCHED it: read from another org
+    (a platform operator looking at it), or when its launch record cannot be read, it
+    traces 0 without the job, and the settlement bills the launcher
+    (`_hors_du_lanceur`, `apify_releve.py`)."""
     run = _run_of(out)
     if run is None:
         logger.warning("%s %s: unreadable response (%s), cost not recorded",
@@ -189,6 +394,10 @@ def _releve(out: Any, run_id: str, outil: str = "apify_run_status") -> None:
         _gratuit()
         return
     rid = run.get("id")
+    _dire_plafond_atteint(run, run_id, cout)
+    if _hors_du_lanceur(run_id, status, cout):
+        _gratuit()
+        return
     session_org.note_call_trace(
         quantity=_microdollars(cout),
         apify_run_id=rid if isinstance(rid, str) and rid else run_id)
@@ -287,17 +496,19 @@ def lancer_acteur(
     # for it by slices, then read its dataset: the finished run carries its cost.
     debut = _maintenant()
     client = _client()
+    plafond = _plafond_du_lancement(client, actor_id, max_items, max_total_charge_usd)
     with _upstream():
         out = client.run(
             actor_id, run_input=run_input, max_items=max_items,
             timeout_secs=timeout_secs, memory_mbytes=memory_mbytes,
-            max_total_charge_usd=max_total_charge_usd,
+            max_total_charge_usd=plafond,
             wait_for_finish=_WAIT_SLICE_S)
     run = _run_of(out)
     run_id = run.get("id") if run else None
     if not isinstance(run_id, str) or not run_id:
         raise _bad(f"Apify started {actor_id} without a readable run id — "
                    "find the run with `apify_actors` / the Apify console.")
+    _noter_lancement(run_id, actor_id, outil, plafond)
     # From here the run EXISTS: every refusal names it, so the agent can pick it
     # up with `apify_run_status` instead of launching (and paying for) it again.
     with _upstream_du_run(run_id):
@@ -425,11 +636,15 @@ def register(mcp: FastMCP) -> None:
                 actor (e.g. `{"searchStringsArray": ["bakery Marseille"],
                 "maxCrawledPlaces": 20}` for the Google Maps scraper). See the
                 actor's Store page.
-            max_items: cap on BILLED items (pay-per-result actors) — set it.
+            max_items: results wanted — set it. It caps billed items on
+                pay-per-result actors ONLY: a pay-per-event actor can charge far beyond
+                it, `max_total_charge_usd` is what stops it.
             limit / fields: paginate and project the returned items (some actors
                 return very wide objects).
             timeout_secs / memory_mbytes: run budget on Apify's side.
-            max_total_charge_usd: hard cost ceiling for this run.
+            max_total_charge_usd: hard cost ceiling for this run. Omitted, it is
+                derived from `max_items` and the actor's event prices, or $5 by
+                default. A run that reaches it stops, with a partial output.
         """
         return lancer_acteur(
             actor_id, run_input, outil="apify_run_sync", max_items=max_items,
@@ -452,16 +667,22 @@ def register(mcp: FastMCP) -> None:
             `apify_run_status` and `defaultDatasetId` for `apify_dataset_items`.
 
         Args:
+            max_items / max_total_charge_usd: as in `apify_run_sync`.
             wait_for_finish: seconds to wait before returning (max 60) — enough to
                 catch a short run without polling.
         """
+        client = _client()
+        plafond = _plafond_du_lancement(client, actor_id, max_items, max_total_charge_usd)
         with _upstream():
-            out = _client().run(
+            out = client.run(
                 actor_id, run_input=run_input, max_items=max_items,
                 timeout_secs=timeout_secs, memory_mbytes=memory_mbytes,
-                max_total_charge_usd=max_total_charge_usd,
+                max_total_charge_usd=plafond,
                 wait_for_finish=wait_for_finish)
-        # Launching is free; the run's cost is recorded by `apify_run_status`.
+        run = _run_of(out)
+        if run and isinstance(run.get("id"), str) and run["id"]:
+            _noter_lancement(run["id"], actor_id, "apify_run", plafond)
+        # Launching is free; the cost comes from `apify_run_status`, or the settlement.
         _gratuit()
         return out
 

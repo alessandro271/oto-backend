@@ -999,3 +999,30 @@ n'est jamais rendu en bloc.
 
 ⚠️ **`client_id` n'identifie PAS le front d'où vient l'utilisateur** : énumérer avant d'en
 tirer une population.
+
+## Le coût des runs Apify de la clé plateforme
+
+Un run Apify survit à l'appel qui l'a lancé, et seul un `apify_run_status` lisant le run
+TERMINÉ trace son coût. Trois garde-fous (`tools/apify.py`, `apify_releve.py`) :
+
+- **Un plafond part toujours.** `apify_run_sync`/`apify_run` sans `max_total_charge_usd` :
+  dérivé de `max_items` et des prix d'événements de la carte de l'acteur, sinon 5 $
+  (réglage plateforme `default_max_charge_usd` du connecteur `apify`, sans déploiement :
+  chaque processus le relit au plus une fois par minute). Une carte illisible (refus
+  d'Apify, réseau) ou un réglage illisible n'empêchent jamais un lancement : le défaut
+  sert, et le journal le dit. ⚠️ `max_items` ne borne pas un acteur facturé à
+  l'événement. Les outils dédiés gardent leur plafond à 5 $ par défaut, refusé au-delà de
+  25 $. Un run arrivé à son plafond finit `SUCCEEDED` avec une sortie partielle : la
+  réponse le dit.
+- **Un run se note au lancement** (table `apify_runs`, clé plateforme seulement) et
+  `oto-mcp maintenance apify-runs` relève chaque nuit ceux que personne n'a relus : une
+  ligne `apify_run_status` sous l'org et la personne qui l'ont LANCÉ, de nature
+  `kind='settlement'` — comptée par la facturation (`journal_jour.KINDS_FACTURES`), hors
+  des lentilles d'usage (`kind='mcp'`) : personne n'a rien appelé. Une lecture depuis une
+  autre org ne facture personne ; une lecture dont la fiche de lancement est illisible non
+  plus (le relevé facture le lanceur). Le relevé sert UNE clé plateforme : s'il en trouve
+  plusieurs, il échoue en les nommant.
+- **Le mois se compare à ce qu'Apify compte** : au-delà de 5 $ d'écart, un signal `gap` de
+  cible `apify_cost_gap`. Il ne se compare qu'une fois la table couvrant tout le cycle.
+  Une comparaison en échec se journalise à part (`comparaison.echec`) : le bilan du relevé
+  reste, et le travail ne passe pas en échec.
