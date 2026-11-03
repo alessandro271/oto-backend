@@ -494,10 +494,10 @@ PUT /api/groups/{id}/connectors/{name}/oauth-app -> _handler
 OPTIONS /api/groups/{id}/connectors/{name}/oauth-app -> options_handler
 DELETE /api/groups/{id}/connectors/{name}/oauth-app -> _handler
 OPTIONS /api/groups/{id}/connectors/{name}/oauth-app -> options_handler
-GET,HEAD /api/orgs/{id}/connectors/apify/charge-cap -> _handler
-OPTIONS /api/orgs/{id}/connectors/apify/charge-cap -> options_handler
-PUT /api/orgs/{id}/connectors/apify/charge-cap -> _handler
-OPTIONS /api/orgs/{id}/connectors/apify/charge-cap -> options_handler
+GET,HEAD /api/orgs/{id}/connectors/{name}/charge-cap -> _handler
+OPTIONS /api/orgs/{id}/connectors/{name}/charge-cap -> options_handler
+PUT /api/orgs/{id}/connectors/{name}/charge-cap -> _handler
+OPTIONS /api/orgs/{id}/connectors/{name}/charge-cap -> options_handler
 GET,HEAD /api/admin/connectors/activation -> _handler
 OPTIONS /api/admin/connectors/activation -> options_handler
 POST /api/admin/connectors/activation -> _handler

@@ -1033,7 +1033,8 @@ TERMINÉ trace son coût. Quatre garde-fous (`tools/apify.py`, `apify_releve.py`
   comme le maximum. Le refus `max_charge_above_cap` nomme la borne qui s'applique (celle
   de l'org, le défaut, le maximum plateforme ou la borne de sécurité) et, à un admin de
   l'org, le geste qui la change. **Pose** : capacité `connectors.apify.charge_cap.set_org`
-  (`ORG_ADMIN_OF`, `PUT /api/orgs/{id}/connectors/apify/charge-cap` `{usd}`, face MCP
+  (`ORG_ADMIN_OF`, `PUT /api/orgs/{id}/connectors/{name}/charge-cap` `{usd}`, seul
+  `name=apify` y répond, face MCP
   `oto_org_settings domain=apify_charge_cap op=set usd=…`) ; montant positif fini, refusé
   au-delà du maximum plateforme si l'org n'a pas de clé Apify à elle
   (`409 charge_cap_above_platform_max`), au-delà de la borne de sécurité si elle en a une

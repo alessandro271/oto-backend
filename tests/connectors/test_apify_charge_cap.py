@@ -129,6 +129,22 @@ def test_une_valeur_illisible_en_base_leve(base):
         cap._get(CTX, cap.OrgChargeCapInput(org_id=ORG))
 
 
+@pytest.mark.parametrize("verbe", ["get", "set"])
+def test_un_autre_connecteur_est_refuse_par_son_nom(base, verbe):
+    with pytest.raises(AuthzDenied) as e:
+        if verbe == "get":
+            cap._get(CTX, cap.OrgChargeCapInput(org_id=ORG, name="serper"))
+        else:
+            cap._set(CTX, cap.OrgChargeCapSetInput(org_id=ORG, name="serper", usd=10))
+    assert (e.value.status, e.value.code) == (404, "no_charge_cap")
+    assert "serper" in e.value.message and not base
+
+
+def test_la_face_rest_ne_nomme_aucun_connecteur():
+    for cle in ("connectors.apify.charge_cap.org_get", "connectors.apify.charge_cap.set_org"):
+        assert _cap(cle).rest.path == "/api/orgs/{id}/connectors/{name}/charge-cap"
+
+
 def test_une_org_inconnue_est_refusee():
     with pytest.raises(AuthzDenied) as e:
         cap._get(CTX, cap.OrgChargeCapInput(org_id=99))

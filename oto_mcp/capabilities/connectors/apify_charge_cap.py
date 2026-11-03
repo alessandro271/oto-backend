@@ -11,7 +11,9 @@ Here, the two verbs: read (any member: whoever meets the refusal may read the bo
 set (`ORG_ADMIN_OF`). A setting is refused above the bound the org can reach: the
 platform maximum when the org has no Apify key of its own (it runs on the platform's),
 the safety bound when it has one. Who set it and when = the row's `set_by`/`set_at`,
-like the access level. REST `/api/orgs/{id}/connectors/apify/charge-cap`; MCP face =
+like the access level. REST `/api/orgs/{id}/connectors/{name}/charge-cap` — a generic
+path like the access level's (no REST face names a connector); a `name` other than
+`apify` is refused (404 `no_charge_cap`). MCP face =
 `oto_org_settings` domain `apify_charge_cap` (`org_console.py`).
 """
 from __future__ import annotations
@@ -32,6 +34,7 @@ CONNECTOR = "apify"
 
 class OrgChargeCapInput(BaseModel):
     org_id: int
+    name: str = CONNECTOR      # connector (placeholder {name}, auto-mapped)
 
 
 class OrgChargeCapSetInput(OrgChargeCapInput):
@@ -56,6 +59,13 @@ class ChargeCapState(BaseModel):
     own_key_usd: float
     set_by: Optional[str] = None
     set_at: Optional[str] = None
+
+
+def _exiger_apify(name: str) -> None:
+    """Only `apify` has a ceiling per run: another connector is refused by name."""
+    if name != CONNECTOR:
+        raise AuthzDenied(404, "no_charge_cap",
+                          f"Connector `{name}` has no ceiling per run: only `apify` does.")
 
 
 def _exiger_org(org_id: int) -> None:
@@ -91,6 +101,7 @@ def _state(org_id: int) -> dict:
 
 
 def _get(ctx: ResolvedCtx, inp: OrgChargeCapInput) -> dict:
+    _exiger_apify(inp.name)
     _exiger_org(inp.org_id)
     return _state(inp.org_id)
 
@@ -98,6 +109,7 @@ def _get(ctx: ResolvedCtx, inp: OrgChargeCapInput) -> dict:
 def _set(ctx: ResolvedCtx, inp: OrgChargeCapSetInput) -> dict:
     from ...db import connector_settings
     from ...tools import apify
+    _exiger_apify(inp.name)
     _exiger_org(inp.org_id)
     usd = inp.usd
     if not (math.isfinite(usd) and usd > 0):
@@ -126,8 +138,10 @@ def _set(ctx: ResolvedCtx, inp: OrgChargeCapSetInput) -> dict:
     return _state(inp.org_id)
 
 
-_PATH = "/api/orgs/{id}/connectors/apify/charge-cap"
-_ORG_ERR = (DeclaredError(404, "unknown_org", "l'org n'existe pas"),)
+_PATH = "/api/orgs/{id}/connectors/{name}/charge-cap"
+_ORG_ERR = (DeclaredError(404, "no_charge_cap",
+                          "seul le connecteur apify a un plafond par lancement"),
+            DeclaredError(404, "unknown_org", "l'org n'existe pas"))
 
 CAPABILITIES += [
     Capability(

@@ -406,7 +406,7 @@ def _qui_la_regle(borne: _Borne) -> str:
         return (f"{texte} — as an admin of organization #{borne.org_id}, you change it "
                 f"with `oto_org_settings(op=\"set\", domain=\"apify_charge_cap\", "
                 f"org_id={borne.org_id}, usd=…)` (or PUT /api/orgs/{borne.org_id}/"
-                "connectors/apify/charge-cap)")
+                "connectors/apify/charge-cap, `{\"usd\": …}`)")
     return f"{texte}, set by the admins of organization #{borne.org_id}"
 
 
