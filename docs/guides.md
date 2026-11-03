@@ -607,6 +607,10 @@ la version d'avant. Désormais **ce qu'une écriture remplace est gardé** :
   guide supprimé, qui est alors recréé), même refus de famille ; et ce qu'elle remplace est
   gardé à son tour (`reason='restore'`). `oto_guide_v2` exige `expected_rev` sur
   `op=restore` comme sur `op=write`.
+- **Effets déclarés** (`tools/effets.py`) : `op=write`, `op=patch` et `op=restore`
+  ÉCRIVENT (la version remplacée est gardée), `op=revisions` lit, `op=delete` reste
+  DESTRUCTIF — le guide quitte le catalogue de tous ses lecteurs, même si sa dernière
+  version se restaure.
 - **Un `rev` inconnu** (jamais gardé, ou sorti de la rétention) rend **`404
   unknown_revision`**, déclaré : aucune autre version n'est servie ni restaurée à sa
   place.
