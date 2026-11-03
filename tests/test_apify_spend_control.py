@@ -26,7 +26,10 @@ REGLAGES: dict = {}
 # Ceux de l'org de l'appel (`ORG_ID`), et le mode de clé de l'appel.
 REGLAGES_ORG: dict = {}
 ORG_ID = 7
-APPEL = {"plateforme": False, "admin": False}
+# Ceux de l'org qui prête sa clé à l'appel, quand elle en prête une.
+REGLAGES_PRETEUSE: dict = {}
+PRETEUSE_ID = 9
+APPEL = {"plateforme": False, "admin": False, "preteuse": None}
 
 
 @pytest.fixture(autouse=True)
@@ -40,16 +43,18 @@ def _reglage_non_lu(monkeypatch):
     monkeypatch.setattr(apify, "_reglages_lus", {})
     REGLAGES.clear()
     REGLAGES_ORG.clear()
-    APPEL.update(plateforme=False, admin=False)
+    REGLAGES_PRETEUSE.clear()
+    APPEL.update(plateforme=False, admin=False, preteuse=None)
     monkeypatch.setattr(connector_settings, "get_connector_setting",
                         lambda _t, _i, _c, cle: REGLAGES.get(cle))
 
     def _org(org_id, cle):
-        assert org_id == str(ORG_ID)
-        return {"apify": REGLAGES_ORG[cle]} if cle in REGLAGES_ORG else {}
+        reglages = {str(ORG_ID): REGLAGES_ORG, str(PRETEUSE_ID): REGLAGES_PRETEUSE}[org_id]
+        return {"apify": reglages[cle]} if cle in reglages else {}
     monkeypatch.setattr(connector_settings, "org_settings_for_key", _org)
     monkeypatch.setattr(apify, "_org_de_l_appel", lambda: ORG_ID)
     monkeypatch.setattr(apify, "_sur_cle_plateforme", lambda: APPEL["plateforme"])
+    monkeypatch.setattr(apify, "_org_qui_prete", lambda _o: APPEL["preteuse"])
     monkeypatch.setattr(apify, "_admin_de", lambda _o: APPEL["admin"])
 
 
@@ -247,6 +252,101 @@ def test_sans_org_le_defaut_sert_sans_lire_la_base():
             patch("oto_mcp.db.connector_settings.org_settings_for_key") as lu:
         assert apify._borne_du_lancement() == (25.0, "default", None)
     lu.assert_not_called()
+
+
+# --- la clé prêtée par une autre org (arbitrage du 03/11/2026) ------------------------
+# C'est le prêteur qui paie : sur sa clé, le plus strict des deux plafonds s'applique ;
+# la plateforme qui prête la sienne borne par son maximum.
+
+def test_un_preteur_plus_strict_impose_son_plafond_et_le_refus_le_nomme():
+    from oto_mcp.mcp_errors import McpError
+    APPEL["preteuse"] = PRETEUSE_ID
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
+    REGLAGES_PRETEUSE[apify.CLE_PLAFOND_ORG] = "10"
+    assert apify._borne_du_lancement() == (10.0, "lender", PRETEUSE_ID)
+    with pytest.raises(McpError) as e:
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 12)
+    msg = str(e.value)
+    assert "ceiling of organization #9, which lends this Apify key" in msg
+    assert "set by the admins of organization #9" in msg
+
+
+def test_un_preteur_sans_reglage_impose_le_defaut():
+    APPEL["preteuse"] = PRETEUSE_ID
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
+    assert apify._borne_du_lancement() == (25.0, "lender", PRETEUSE_ID)
+
+
+def test_une_appelante_plus_stricte_garde_son_plafond():
+    APPEL["preteuse"] = PRETEUSE_ID
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "10"
+    REGLAGES_PRETEUSE[apify.CLE_PLAFOND_ORG] = "40"
+    assert apify._borne_du_lancement() == (10.0, "org", ORG_ID)
+    assert apify._plafond_du_lancement(MagicMock(), "a/b", None, 10) == 10
+
+
+def test_deux_plafonds_au_dela_de_la_borne_byok_y_restent():
+    APPEL["preteuse"] = PRETEUSE_ID
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "2000"
+    REGLAGES_PRETEUSE[apify.CLE_PLAFOND_ORG] = "1500"
+    assert apify._borne_du_lancement() == (1000.0, "byok", ORG_ID)
+
+
+def test_la_plateforme_qui_prete_borne_par_son_maximum_sans_chercher_de_preteuse():
+    APPEL["plateforme"] = True
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
+    with patch.object(apify, "_org_qui_prete") as preteuse:
+        assert apify._borne_du_lancement() == (25.0, "platform", ORG_ID)
+    preteuse.assert_not_called()
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "10"
+    assert apify._borne_du_lancement() == (10.0, "org", ORG_ID)
+
+
+# L'original, avant que la fixture ne le remplace.
+_ORG_QUI_PRETE = apify._org_qui_prete
+
+
+def _sous(trace):
+    return patch.object(apify.session_org, "current_call_trace", return_value=trace)
+
+
+@pytest.mark.parametrize("ligne,attendu", [
+    (("org", "9", "apify", ""), PRETEUSE_ID),
+    (("org", "7", "apify", ""), None),
+    (("member", "9:sub-x", "apify", ""), PRETEUSE_ID),
+    (("member", "7:sub-x", "apify", ""), None),
+])
+def test_la_preteuse_se_lit_sur_la_ligne_qui_a_servi(ligne, attendu):
+    with _sous({"key_mode": ligne[0], "credential_row": ligne}):
+        assert _ORG_QUI_PRETE(ORG_ID) == attendu
+
+
+def test_la_cle_d_une_equipe_est_pretee_par_l_org_de_l_equipe():
+    with _sous({"key_mode": "group", "credential_row": ("group", "3", "apify", "")}), \
+            patch("oto_mcp.group_store.get_group", return_value={"org_id": PRETEUSE_ID}):
+        assert _ORG_QUI_PRETE(ORG_ID) == PRETEUSE_ID
+
+
+@pytest.mark.parametrize("mode", ["platform", "tenant"])
+def test_ni_la_plateforme_ni_un_tenant_ne_sont_une_org_preteuse(mode):
+    with _sous({"key_mode": mode}):
+        assert _ORG_QUI_PRETE(ORG_ID) is None
+
+
+@pytest.mark.parametrize("trace", [
+    None, {}, {"key_mode": "org"},
+    {"key_mode": "user", "credential_row": ("user", "sub-x", "apify", "")},
+])
+def test_un_preteur_inconnaissable_fait_echouer_le_lancement(trace):
+    with _sous(trace), pytest.raises(RuntimeError, match="lender of the key"):
+        _ORG_QUI_PRETE(ORG_ID)
+
+
+def test_une_equipe_sans_org_fait_echouer_le_lancement():
+    with _sous({"key_mode": "group", "credential_row": ("group", "3", "apify", "")}), \
+            patch("oto_mcp.group_store.get_group", return_value=None), \
+            pytest.raises(RuntimeError, match="lender of the key"):
+        _ORG_QUI_PRETE(ORG_ID)
 
 
 # L'original, avant que la fixture ne le remplace.

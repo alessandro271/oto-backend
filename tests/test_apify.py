@@ -96,7 +96,8 @@ def _sans_base():
             patch("oto_mcp.tools.apify._plafond_par_defaut", return_value=5.0), \
             patch("oto_mcp.tools.apify._plafond_max", return_value=25.0), \
             patch("oto_mcp.tools.apify._borne_byok", return_value=1000.0), \
-            patch("oto_mcp.tools.apify._org_de_l_appel", return_value=None):
+            patch("oto_mcp.tools.apify._org_de_l_appel", return_value=None), \
+            patch("oto_mcp.tools.apify._org_qui_prete", return_value=None):
         yield
 
 

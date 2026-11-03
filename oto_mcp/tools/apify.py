@@ -17,8 +17,10 @@ A running actor costs money: setting `max_items` / `timeout_secs` /
 Every launch — `apify_run_sync`, `apify_run`, the dedicated actor tools; a direct call,
 `oto_call` or a recipe alike — goes through `_plafond_du_lancement`: its ceiling is
 refused above the bound of the call (`_borne_du_lancement`): the org's ceiling ($25 by
-default), never above the platform maximum on the platform's key, nor above the
-platform's safety bound on the org's or the person's own key — with no way around it.
+default), never above the platform maximum on the platform's key, nor above the ceiling
+of the org that lends the key when it is another org's (the stricter of the two: the
+lender pays), nor above the platform's safety bound on any org's or person's key — with
+no way around it.
 
 Calls to the client are written out in plain (`_client().run(…)`) and not dispatched
 by name: that is what makes them verifiable by the version-skew probe.
@@ -107,11 +109,13 @@ MAX_CHARGE_ABOVE_CAP = "max_charge_above_cap"
 # The ceiling per run of an ORG (decision of 03/11/2026): `connector_settings` key
 # `CLE_PLAFOND_ORG`, scope `org` (no team scope), set by an org admin
 # (`connectors.apify.charge_cap.set_org`); `_PLAFOND_ORG_DEFAUT_USD` when the org has
-# not set it. On the platform's key it is bounded by the platform maximum above; on the
-# org's or the person's own key (BYOK) by the platform's safety bound
-# `CLE_BORNE_BYOK` (platform scope, `_BORNE_BYOK_USD` when not set). Read once per
-# launch, out of any loop, remembered for the call (`org_settings_for_key`), like the
-# access level. Unreadable, either one FAILS the launch, as the maximum does.
+# not set it. On the platform's key it is bounded by the platform maximum above; on a
+# key LENT by another org (`_org_qui_prete`), by that org's own ceiling too — the lender
+# pays, the stricter of the two applies; on any org's or person's key (BYOK) by the
+# platform's safety bound `CLE_BORNE_BYOK` (platform scope, `_BORNE_BYOK_USD` when not
+# set). Read once per launch and per org, out of any loop, remembered for the call
+# (`org_settings_for_key`), like the access level. Unreadable, either one FAILS the
+# launch, as the maximum does.
 CLE_PLAFOND_ORG = "charge_cap_usd"
 _PLAFOND_ORG_DEFAUT_USD = 25.0
 CLE_BORNE_BYOK = "byok_charge_cap_usd"
@@ -359,25 +363,80 @@ def _sur_cle_plateforme() -> bool:
     return (session_org.current_call_trace() or {}).get("key_mode") == "platform"
 
 
+def _org_de_la_ligne(entity_type: str, entity_id: str) -> int:
+    """The org a vault row of a keyed connector belongs to: an org's, a team's (its
+    org), a member's (the org it is set in, `credentials_store.member_id`). Any other
+    row (a person's org-agnostic `user` key, an unknown level) names no org: it RAISES —
+    the payer of the run would be a guess."""
+    from .. import credentials_store, group_store
+    if entity_type == credentials_store.ORG:
+        return int(entity_id)
+    if entity_type == "group":
+        groupe = group_store.get_group(int(entity_id)) or {}
+        if groupe.get("org_id") is None:
+            raise RuntimeError(f"apify: team #{entity_id}, whose key serves this call, "
+                               "belongs to no org — the lender of the key is unknown")
+        return int(groupe["org_id"])
+    if entity_type == credentials_store.MEMBER:
+        return int(entity_id.split(":", 1)[0])
+    raise RuntimeError(f"apify: a `{entity_type}` key serves this call — no org owns "
+                       "it, the lender of the key is unknown")
+
+
+def _org_qui_prete(org_id: Optional[int]) -> Optional[int]:
+    """The OTHER org whose key serves this call (it lends it: it pays the run), or None
+    when the key is the platform's, a tenant's, or belongs to the org of the call itself.
+
+    Read on the row that actually served (`credential_row`, noted by the single resolver
+    `access.resolve` with `key_mode`; for a named loan, the lender's row,
+    `prets.ligne_servie`). A call whose key is not known RAISES: no launch goes out
+    under a guessed payer."""
+    from .. import credentials_store
+    trace = session_org.current_call_trace() or {}
+    mode, ligne = trace.get("key_mode"), trace.get("credential_row")
+    if mode in ("platform", credentials_store.TENANT):
+        return None
+    if not ligne or not ligne[0] or not ligne[1]:
+        raise RuntimeError("apify: the key that serves this call is not known (no "
+                           "`credential_row` in the call's trace) — the lender of the "
+                           "key cannot be told, nothing is launched")
+    preteuse = _org_de_la_ligne(ligne[0], ligne[1])
+    return None if preteuse == org_id else preteuse
+
+
 class _Borne(NamedTuple):
     """The highest ceiling of a launch, and who sets it: `org` (the org's ceiling),
-    `default` (the org set none), `platform` (the platform maximum, platform's key) or
-    `byok` (the platform's safety bound, own key)."""
+    `default` (the org set none), `lender` (the ceiling, or the default, of the org that
+    lends the key, `org_id` then names it), `platform` (the platform maximum, platform's
+    key) or `byok` (the platform's safety bound, an org's or a person's key)."""
     usd: float
     source: str
     org_id: Optional[int]
 
 
+def _borne_de_l_org(org_id: Optional[int], source: str) -> _Borne:
+    """The ceiling `org_id` set, or the default ($25) when it set none."""
+    de_l_org = _plafond_de_l_org(org_id)
+    return (_Borne(de_l_org, source, org_id) if de_l_org is not None
+            else _Borne(_PLAFOND_ORG_DEFAUT_USD, "default" if source == "org" else source,
+                        org_id))
+
+
 def _borne_du_lancement() -> _Borne:
     """The org's ceiling (or the default), bounded by the platform maximum on the
-    platform's key, by the safety bound on an own key."""
+    platform's key; on a key lent by another org, by that org's ceiling too (the stricter
+    of the two: the lender pays); on any org's or person's key, by the safety bound."""
     org_id = _org_de_l_appel()
-    de_l_org = _plafond_de_l_org(org_id)
-    usd, source = ((de_l_org, "org") if de_l_org is not None
-                   else (_PLAFOND_ORG_DEFAUT_USD, "default"))
-    borne, nom = ((_plafond_max(), "platform") if _sur_cle_plateforme()
-                  else (_borne_byok(), "byok"))
-    return _Borne(borne, nom, org_id) if borne < usd else _Borne(usd, source, org_id)
+    borne = _borne_de_l_org(org_id, "org")
+    if _sur_cle_plateforme():
+        maximum = _plafond_max()
+        return _Borne(maximum, "platform", org_id) if maximum < borne.usd else borne
+    preteuse = _org_qui_prete(org_id)
+    if preteuse is not None:
+        d_elle = _borne_de_l_org(preteuse, "lender")
+        borne = d_elle if d_elle.usd < borne.usd else borne
+    byok = _borne_byok()
+    return _Borne(byok, "byok", org_id) if byok < borne.usd else borne
 
 
 def _nom_de_la_borne(borne: _Borne) -> str:
@@ -388,6 +447,9 @@ def _nom_de_la_borne(borne: _Borne) -> str:
     if borne.source == "byok":
         return (f"this platform's safety bound of ${borne.usd:g} per run, even on your "
                 "own Apify key")
+    if borne.source == "lender":
+        return (f"the ceiling of organization #{borne.org_id}, which lends this Apify "
+                f"key and pays its runs, of ${borne.usd:g} per run")
     quoi = ("your organization's ceiling" if borne.source == "org"
             else "the default ceiling")
     return f"{quoi} of ${borne.usd:g} per run"
@@ -828,8 +890,9 @@ def register(mcp: FastMCP) -> None:
             timeout_secs / memory_mbytes: run budget on Apify's side.
             max_total_charge_usd: hard cost ceiling for this run, at most your
                 organization's ceiling per run ($25 unless its admins set another;
-                on the platform's key, never above the platform maximum; above it
-                the run is refused, `max_charge_above_cap`). Omitted, it is derived from
+                on the platform's key, never above the platform maximum; on a key
+                another organization lends, never above that organization's ceiling;
+                above it the run is refused, `max_charge_above_cap`). Omitted, it is derived from
                 `max_items` and the actor's event prices, or $5 by default. A run
                 that reaches it stops, with a partial output.
         """

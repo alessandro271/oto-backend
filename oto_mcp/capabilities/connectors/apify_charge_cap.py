@@ -4,8 +4,9 @@ platform's bounds.
 Decision of 03/11/2026: the ceiling of every Apify launch (`tools/apify.py`,
 `_borne_du_lancement`) is a setting of the ORG (`connector_settings`, scope `org`, key
 `apify.CLE_PLAFOND_ORG`; no team scope), $25 when the org set none. On the platform's
-key it never exceeds the platform maximum (`max_charge_cap_usd`); on the org's or a
-person's own key, the platform's safety bound (`byok_charge_cap_usd`, $1,000).
+key it never exceeds the platform maximum (`max_charge_cap_usd`); on a key another org
+lends, that org's ceiling too (the stricter of the two: the lender pays); on any org's or
+person's key, the platform's safety bound (`byok_charge_cap_usd`, $1,000).
 
 Here, the two verbs: read (any member: whoever meets the refusal may read the bound) and
 set (`ORG_ADMIN_OF`). A setting is refused above the bound the org can reach: the

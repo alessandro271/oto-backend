@@ -1027,12 +1027,20 @@ TERMINÉ trace son coût. Quatre garde-fous (`tools/apify.py`, `apify_releve.py`
   connecteur `apify`, 25 $ quand l'org ne l'a pas posé — lu une fois par lancement, hors
   boucle, mémorisé pour l'appel (`org_settings_for_key`), comme le niveau d'accès. Le
   plafond en vigueur dépend de la clé de l'appel (`key_mode`) : sur la clé **plateforme**,
-  min(org, maximum plateforme `max_charge_cap_usd`) ; sur une clé **propre** (de l'org ou
-  de la personne), min(org, borne de sécurité plateforme `byok_charge_cap_usd`, 1 000 $
-  par défaut). ⚠️ Un réglage d'org ou une borne illisibles font échouer le lancement,
-  comme le maximum. Le refus `max_charge_above_cap` nomme la borne qui s'applique (celle
-  de l'org, le défaut, le maximum plateforme ou la borne de sécurité) et, à un admin de
-  l'org, le geste qui la change. **Pose** : capacité `connectors.apify.charge_cap.set_org`
+  min(org, maximum plateforme `max_charge_cap_usd`) ; sur une clé **prêtée par une autre
+  org** (arbitrage du 03/11/2026 : c'est le prêteur qui paie), le plus strict des deux,
+  min(org appelante, org qui prête) ; sur toute clé d'org ou de personne, borné en plus
+  par la borne de sécurité plateforme `byok_charge_cap_usd` (1 000 $ par défaut).
+  L'org qui prête se lit sur la ligne du coffre qui a SERVI (`credential_row` du relevé
+  de l'appel, posé par le résolveur unique avec `key_mode` ; pour un prêt nommé, la ligne
+  du prêteur) : org → elle-même, équipe → son org, membre → l'org où la clé est posée ;
+  une clé de tenant n'est pas une org qui prête (borne de sécurité seule). ⚠️ Une ligne
+  absente, ou qui ne nomme aucune org (clé `user`, équipe sans org), fait échouer le
+  lancement (`_org_qui_prete`) : jamais un payeur deviné. Un réglage d'org ou une borne
+  illisibles font échouer le lancement, comme le maximum. Le refus `max_charge_above_cap`
+  nomme la borne qui s'applique (celle de l'org, de l'org qui prête, le défaut, le
+  maximum plateforme ou la borne de sécurité) et, à un admin de l'org en cause, le geste
+  qui la change. **Pose** : capacité `connectors.apify.charge_cap.set_org`
   (`ORG_ADMIN_OF`, `PUT /api/orgs/{id}/connectors/{name}/charge-cap` `{usd}`, seul
   `name=apify` y répond, face MCP
   `oto_org_settings domain=apify_charge_cap op=set usd=…`) ; montant positif fini, refusé

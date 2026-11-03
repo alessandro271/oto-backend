@@ -111,6 +111,7 @@ def _reglages(monkeypatch):
                         else {})
     monkeypatch.setattr(apify, "_org_de_l_appel", lambda: 7)
     monkeypatch.setattr(apify, "_admin_de", lambda _o: False)
+    monkeypatch.setattr(apify, "_org_qui_prete", lambda _o: None)
 
 
 def _lancer(name, kwargs):
