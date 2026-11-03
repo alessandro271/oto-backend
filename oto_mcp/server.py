@@ -1089,6 +1089,9 @@ def main():
     # Tours simultanés de l'agent intégré dans Slack : un réglage illisible refuse ici.
     from . import slack_copilot_places
     slack_copilot_places.verifier_configuration()
+    # Exécutions simultanées du bac à sable (`functions/places.py`) : illisible, refus ici.
+    from .functions import places
+    places.verifier_configuration()
     # Le journal d'accès d'uvicorn n'écrit en clair ni un jeton porté DANS le chemin
     # (`{token}`, `{code}` des routes servies : leur masque), ni la valeur d'une clé de
     # query secrète (`code`/`state` d'un retour OAuth, `*token*`, `key`… : `***`), sur
