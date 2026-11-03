@@ -312,8 +312,9 @@ def _plafond_du_lancement(client: "ApifyClient", actor_id: str, max_items: Optio
                           demande: Optional[float]) -> float:
     """The `max_total_charge_usd` a run starts with: the caller's (refused above the
     platform maximum, `_plafond`), or the derived one, or the default — those two
-    brought down to the maximum. Never None: an unset ceiling is the whole account's
-    balance.
+    brought down to the maximum, and the response SAYS so (`_dire_plafond_ramene`): the
+    run may stop early with a partial output. Never None: an unset ceiling is the whole
+    account's balance.
 
     Reading the actor's card never fails a launch: an Apify refusal (`McpError`, from
     `_upstream`) or a network failure (`requests.RequestException`: connection,
@@ -331,8 +332,26 @@ def _plafond_du_lancement(client: "ApifyClient", actor_id: str, max_items: Optio
                            actor_id, type(e).__name__, e)
             derive = None
         if derive is not None:
-            return min(derive, maximum)
-    return min(_plafond_par_defaut(), maximum)
+            return _ramener(derive, maximum)
+    return _ramener(_plafond_par_defaut(), maximum)
+
+
+def _ramener(usd: float, maximum: float) -> float:
+    """`usd` brought down to the platform maximum — never in silence."""
+    if usd <= maximum:
+        return usd
+    _dire_plafond_ramene(usd, maximum)
+    return maximum
+
+
+def _dire_plafond_ramene(usd: float, maximum: float) -> None:
+    """A ceiling derived from the run's size (or the default) above the platform
+    maximum: the run starts at the maximum, and may stop before its end."""
+    session_org.noter_avis(
+        f"Apify: this run needs a ceiling of about ${usd:.2f}, above this platform's "
+        f"maximum of ${maximum:g} per run: it starts at ${maximum:g} and may stop "
+        "early, with a partial output. To get everything, split the work into smaller "
+        "runs (a lower `max_items` each).")
 
 
 def _noter_lancement(run_id: str, actor_id: str, outil: str,
@@ -399,7 +418,8 @@ def _dire_plafond_atteint(run: dict, run_id: str, cout: float) -> None:
         session_org.noter_avis(
             f"Apify run {run_id} cost ${cout:.4f} of its ${plafond:g} ceiling: it may "
             "have stopped early and its output may be partial. To get more, launch it "
-            "again with a higher `max_total_charge_usd`.")
+            "again with a higher `max_total_charge_usd` (at most this platform's maximum "
+            "per run), or split the work into smaller runs.")
 
 
 def _releve(out: Any, run_id: str, outil: str = "apify_run_status") -> None:

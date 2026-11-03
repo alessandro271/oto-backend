@@ -310,6 +310,32 @@ def test_un_marquage_rate_n_empeche_pas_la_trace():
     assert trace.call_args.kwargs == {"quantity": 500000, "apify_run_id": "r1"}
 
 
+def test_un_plafond_derive_au_dela_du_maximum_est_ramene_et_le_dit():
+    """Ramené au maximum, jamais en silence : la réponse dit la sortie partielle."""
+    with patch.object(apify, "_plafond_max", return_value=25.0), \
+            patch.object(apify, "_plafond_derive", return_value=80.0), \
+            patch.object(apify.session_org, "noter_avis") as avis:
+        assert apify._plafond_du_lancement(MagicMock(), "a/b", 10_000, None) == 25.0
+    texte = avis.call_args.args[0]
+    assert "partial" in texte and "$25" in texte
+
+
+def test_un_plafond_derive_sous_le_maximum_passe_sans_avis():
+    with patch.object(apify, "_plafond_max", return_value=25.0), \
+            patch.object(apify, "_plafond_derive", return_value=3.0), \
+            patch.object(apify.session_org, "noter_avis") as avis:
+        assert apify._plafond_du_lancement(MagicMock(), "a/b", 100, None) == 3.0
+    avis.assert_not_called()
+
+
+def test_un_defaut_au_dela_du_maximum_est_ramene_et_le_dit():
+    with patch.object(apify, "_plafond_max", return_value=4.0), \
+            patch.object(apify, "_plafond_par_defaut", return_value=5.0), \
+            patch.object(apify.session_org, "noter_avis") as avis:
+        assert apify._plafond_du_lancement(MagicMock(), "a/b", None, None) == 4.0
+    assert "partial" in avis.call_args.args[0]
+
+
 def test_un_run_arrive_a_son_plafond_le_dit():
     _, _, avis, _ = _releve(None, org_courante=1)
     assert "partial" in avis.call_args.args[0]
