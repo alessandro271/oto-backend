@@ -143,6 +143,7 @@ chemins = [
   "oto_mcp/auth/decouverte.py",
   "oto_mcp/auth/flow.py",
   "oto_mcp/auth/hooks.py",
+  "oto_mcp/auth/inscription_dynamique.py",
   "oto_mcp/auth/pkce.py",
   "oto_mcp/auth/platform_worker.py",
   "oto_mcp/auth/service_identity.py",

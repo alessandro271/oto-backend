@@ -1179,6 +1179,12 @@ def main():
         from .auth import decouverte
         for route in reversed(decouverte.make_routes(require_env("OTO_MCP_PUBLIC_URL"))):
             app.router.routes.insert(0, route)
+        # Inscription dynamique (RFC 7591) des clients sans CIMD : la description de Logto
+        # + `registration_endpoint`, et `/oauth/register`. Servies sous le domaine de
+        # l'émetteur, dont le proxy mène ces trois chemins ici (`auth.inscription_dynamique`).
+        from .auth import inscription_dynamique
+        for route in reversed(inscription_dynamique.make_routes()):
+            app.router.routes.insert(0, route)
 
         # Le 401 de `/mcp` dit ce qu'est oto et comment s'y connecter (#1071) : corps
         # seulement, statut et `WWW-Authenticate` intacts, hôte principal d'oto

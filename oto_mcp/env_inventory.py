@@ -106,7 +106,7 @@ _REQUISES: tuple[Variable, ...] = (
              "Émetteur Logto qui SIGNE (vérification JWT ES384), et que la découverte "
              "ANNONCE comme serveur d'autorisation (+ `/oidc`) : une seule adresse, "
              "celle de l'`issuer`. Le Logto doit avoir CIMD activé.",
-             ("oto_mcp/server.py:243", "oto_mcp/auth/decouverte.py:35",
+             ("oto_mcp/server.py:243", "oto_mcp/auth/decouverte.py:37",
               "oto_mcp/auth/annuaire.py:70")),
     Variable("MCP_AUDIENCE", Classe.REQUISE, None,
              "Audience RFC 9728 canonique vérifiée sur chaque jeton.",
