@@ -14,6 +14,9 @@ JSON, described on its Store page. Hence the path:
 
 A running actor costs money: setting `max_items` / `timeout_secs` /
 `max_total_charge_usd` AT LAUNCH is the only protection — afterwards, it is billed.
+Every launch — `apify_run_sync`, `apify_run`, the dedicated actor tools; a direct call,
+`oto_call` or a recipe alike — goes through `_plafond_du_lancement`: its ceiling is
+refused above the platform maximum (`_plafond`, $25 by default), with no way around it.
 
 Calls to the client are written out in plain (`_client().run(…)`) and not dispatched
 by name: that is what makes them verifiable by the version-skew probe.
@@ -86,6 +89,16 @@ _PLANCHER_USD = 0.05
 _MARGE = 2
 CLE_PLAFOND_DEFAUT = "default_max_charge_usd"
 _REGLAGE_TTL_S = 60.0
+
+# The highest ceiling ANY launch takes, whoever asks: a ceiling asked above it is
+# refused (`MAX_CHARGE_ABOVE_CAP`), a derived or default one is brought down to it. The
+# `connector_settings` key `CLE_PLAFOND_MAX` (platform scope) replaces `_PLAFOND_MAX_USD`
+# without a deploy, read like `CLE_PLAFOND_DEFAUT`. Unlike the default, an unreadable
+# maximum FAILS the launch: it is the spending guard, and a guard that falls back in
+# silence guards nothing.
+_PLAFOND_MAX_USD = 25.0
+CLE_PLAFOND_MAX = "max_charge_cap_usd"
+MAX_CHARGE_ABOVE_CAP = "max_charge_above_cap"
 # Share of the ceiling from which a finished run is said to have reached it.
 _SEUIL_ATTEINT = 0.95
 
@@ -215,27 +228,35 @@ def _plafond_derive(carte: Any, max_items: int) -> Optional[float]:
     return round(max(max_items * par_item * _MARGE + unique, minimum, _PLANCHER_USD), 6)
 
 
-# `(read at, value)` of the default-ceiling setting in this process — see
-# `_reglage_plafond`. Replaced whole (atomic under CPython): no lock on reads.
-_reglage_lu: Optional[tuple[float, Optional[str]]] = None
+# `{key: (read at, value)}` of the ceiling settings in this process — see `_reglage`.
+# Each entry is replaced whole (atomic under CPython): no lock on reads.
+_reglages_lus: dict[str, tuple[float, Optional[str]]] = {}
 
 
-def _reglage_plafond() -> Optional[str]:
-    """The `CLE_PLAFOND_DEFAUT` setting, platform scope, or None when it is not set.
+def _reglage(cle: str) -> Optional[str]:
+    """The `apify` setting `cle`, platform scope, or None when it is not set.
 
     `connector_settings` is not read on the hot path of a call (its module header):
     a launch reads it at most once per `_REGLAGE_TTL_S` in a process, a write reaches
     every deployed color within that delay, without a reload. A failed read is not
     kept: the next launch reads again."""
-    global _reglage_lu
     from ..db import connector_settings
-    lu, maintenant = _reglage_lu, time.monotonic()
+    lu, maintenant = _reglages_lus.get(cle), time.monotonic()
     if lu is not None and maintenant - lu[0] < _REGLAGE_TTL_S:
         return lu[1]
     valeur = connector_settings.get_connector_setting(
-        "platform", connector_settings.PLATFORM_SCOPE_ID, "apify", CLE_PLAFOND_DEFAUT)
-    _reglage_lu = (maintenant, valeur)
+        "platform", connector_settings.PLATFORM_SCOPE_ID, "apify", cle)
+    _reglages_lus[cle] = (maintenant, valeur)
     return valeur
+
+
+def _montant(pose: str) -> Optional[float]:
+    """A setting's text as a positive, finite dollar amount, or None."""
+    try:
+        valeur = float(pose)
+    except ValueError:
+        return None
+    return valeur if 0 < valeur < math.inf else None
 
 
 def _plafond_par_defaut() -> float:
@@ -244,35 +265,63 @@ def _plafond_par_defaut() -> float:
     serves, and the log says so."""
     import psycopg
     try:
-        pose = _reglage_plafond()
+        pose = _reglage(CLE_PLAFOND_DEFAUT)
     except psycopg.Error:
         logger.warning("apify: default ceiling setting unreadable, using $%g",
                        _PLAFOND_DEFAUT_USD, exc_info=True)
         return _PLAFOND_DEFAUT_USD
     if not pose:
         return _PLAFOND_DEFAUT_USD
-    try:
-        valeur = float(pose)
-    except ValueError:
-        valeur = 0.0
-    if not 0 < valeur < math.inf:
+    valeur = _montant(pose)
+    if valeur is None:
         logger.warning("apify: setting %s (%r) is not a positive amount, using $%g",
                        CLE_PLAFOND_DEFAUT, pose, _PLAFOND_DEFAUT_USD)
         return _PLAFOND_DEFAUT_USD
     return valeur
 
 
+def _plafond_max() -> float:
+    """The highest ceiling a launch takes: the `CLE_PLAFOND_MAX` setting, or
+    `_PLAFOND_MAX_USD` when it is not set. A setting that cannot be read (the base) or
+    is not a positive amount RAISES — no launch goes out under a guess."""
+    pose = _reglage(CLE_PLAFOND_MAX)
+    if pose is None:
+        return _PLAFOND_MAX_USD
+    valeur = _montant(pose)
+    if valeur is None:
+        raise RuntimeError(f"apify: platform setting {CLE_PLAFOND_MAX}={pose!r} is not a "
+                           "positive amount of dollars — fix or delete it")
+    return valeur
+
+
+def _plafond(usd: float) -> float:
+    """A ceiling asked by the caller, refused out of (0, platform maximum] — never
+    clamped in silence. The one check of every launch, whoever calls."""
+    maximum = _plafond_max()
+    if not 0 < usd <= maximum:
+        if usd > maximum:
+            raise _bad(f"{MAX_CHARGE_ABOVE_CAP}: `max_total_charge_usd` ${usd:g} is above "
+                       f"this platform's ceiling of ${maximum:g} per run. Nothing was "
+                       "launched; split the work into smaller runs, or ask the "
+                       "platform's operator.")
+        raise _bad(f"`max_total_charge_usd` must be above 0 (got {usd:g}).")
+    return usd
+
+
 def _plafond_du_lancement(client: "ApifyClient", actor_id: str, max_items: Optional[int],
                           demande: Optional[float]) -> float:
-    """The `max_total_charge_usd` a run starts with: the caller's, or the derived one,
-    or the default. Never None: an unset ceiling is the whole account's balance.
+    """The `max_total_charge_usd` a run starts with: the caller's (refused above the
+    platform maximum, `_plafond`), or the derived one, or the default — those two
+    brought down to the maximum. Never None: an unset ceiling is the whole account's
+    balance.
 
     Reading the actor's card never fails a launch: an Apify refusal (`McpError`, from
     `_upstream`) or a network failure (`requests.RequestException`: connection,
     timeout) falls back to the default ceiling, and the log says why."""
     import requests
     if demande is not None:
-        return demande
+        return _plafond(demande)
+    maximum = _plafond_max()
     if max_items and max_items > 0:
         try:
             with _upstream():
@@ -282,8 +331,8 @@ def _plafond_du_lancement(client: "ApifyClient", actor_id: str, max_items: Optio
                            actor_id, type(e).__name__, e)
             derive = None
         if derive is not None:
-            return derive
-    return _plafond_par_defaut()
+            return min(derive, maximum)
+    return min(_plafond_par_defaut(), maximum)
 
 
 def _noter_lancement(run_id: str, actor_id: str, outil: str,
@@ -642,9 +691,11 @@ def register(mcp: FastMCP) -> None:
             limit / fields: paginate and project the returned items (some actors
                 return very wide objects).
             timeout_secs / memory_mbytes: run budget on Apify's side.
-            max_total_charge_usd: hard cost ceiling for this run. Omitted, it is
-                derived from `max_items` and the actor's event prices, or $5 by
-                default. A run that reaches it stops, with a partial output.
+            max_total_charge_usd: hard cost ceiling for this run, at most the
+                platform maximum ($25 unless set otherwise; above it the run is
+                refused, `max_charge_above_cap`). Omitted, it is derived from
+                `max_items` and the actor's event prices, or $5 by default. A run
+                that reaches it stops, with a partial output.
         """
         return lancer_acteur(
             actor_id, run_input, outil="apify_run_sync", max_items=max_items,

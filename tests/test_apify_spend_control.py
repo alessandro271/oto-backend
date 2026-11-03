@@ -21,11 +21,20 @@ from oto_mcp.db import journal_jour, usage
 from oto_mcp.tools import apify
 
 
+# Les réglages plateforme du connecteur `apify` que voit un test : vide = aucun posé.
+REGLAGES: dict = {}
+
+
 @pytest.fixture(autouse=True)
 def _reglage_non_lu(monkeypatch):
-    """Le réglage du plafond par défaut est gardé par processus : chaque test part
-    d'un processus qui ne l'a pas encore lu."""
-    monkeypatch.setattr(apify, "_reglage_lu", None)
+    """Les réglages de plafond sont gardés par processus : chaque test part d'un
+    processus qui ne les a pas encore lus, et d'une base où aucun n'est posé (un test
+    qui en pose un le met dans `REGLAGES`, ou remplace la lecture)."""
+    from oto_mcp.db import connector_settings
+    monkeypatch.setattr(apify, "_reglages_lus", {})
+    REGLAGES.clear()
+    monkeypatch.setattr(connector_settings, "get_connector_setting",
+                        lambda _t, _i, _c, cle: REGLAGES.get(cle))
 
 
 def _carte(evenements, modele="PAY_PER_EVENT", minimum=None):
@@ -65,10 +74,100 @@ def test_une_carte_sans_prix_lisible_ne_derive_rien(carte):
     assert apify._plafond_derive(carte, 10) is None
 
 
-def test_un_plafond_demande_passe_tel_quel_sans_lire_la_carte():
+def test_un_plafond_demande_sous_le_maximum_passe_tel_quel_sans_lire_la_carte():
     client = MagicMock()
     assert apify._plafond_du_lancement(client, "a/b", 5, 12.5) == 12.5
     client.actor.assert_not_called()
+
+
+# --- le maximum par lancement, pour tous les appelants -------------------------------
+# Avant le 03/11/2026, un plafond DEMANDÉ passait tel quel (`if demande is not None:
+# return demande`) : au-delà des 25 $ des outils dédiés, `apify_run_sync` servait
+# d'échappatoire. Fermée : la même vérification vaut pour tout lancement.
+
+def test_le_maximum_par_defaut_est_de_vingt_cinq_dollars():
+    assert apify._PLAFOND_MAX_USD == 25.0
+    assert apify._plafond_max() == 25.0
+
+
+def test_un_plafond_demande_au_maximum_passe():
+    assert apify._plafond_du_lancement(MagicMock(), "a/b", None, 25) == 25
+
+
+@pytest.mark.parametrize("usd", [25.01, 30, 1000])
+def test_un_plafond_demande_au_dela_du_maximum_est_refuse_sans_echappatoire(usd):
+    from oto_mcp.mcp_errors import McpError
+    client = MagicMock()
+    with pytest.raises(McpError) as e:
+        apify._plafond_du_lancement(client, "a/b", 5, usd)
+    msg = str(e.value)
+    assert msg.startswith(apify.MAX_CHARGE_ABOVE_CAP) and "$25" in msg
+    assert "apify_run_sync" not in msg
+    client.actor.assert_not_called()
+
+
+@pytest.mark.parametrize("usd", [0, -1])
+def test_un_plafond_demande_nul_ou_negatif_est_refuse(usd):
+    from oto_mcp.mcp_errors import McpError
+    with pytest.raises(McpError, match="above 0"):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, usd)
+
+
+def test_le_maximum_se_regle_par_la_plateforme():
+    REGLAGES[apify.CLE_PLAFOND_MAX] = "50"
+    assert apify._plafond_du_lancement(MagicMock(), "a/b", None, 40) == 40
+
+
+@pytest.mark.parametrize("pose", ["", "abc", "0", "-1", "inf", "nan"])
+def test_un_maximum_illisible_fait_echouer_le_lancement(pose):
+    REGLAGES[apify.CLE_PLAFOND_MAX] = pose
+    with pytest.raises(RuntimeError, match=apify.CLE_PLAFOND_MAX):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 5)
+    with pytest.raises(RuntimeError, match=apify.CLE_PLAFOND_MAX):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, None)
+
+
+def test_une_base_illisible_pour_le_maximum_fait_echouer_le_lancement():
+    with patch("oto_mcp.db.connector_settings.get_connector_setting",
+               side_effect=psycopg.OperationalError("base")), \
+            pytest.raises(psycopg.OperationalError):
+        apify._plafond_du_lancement(MagicMock(), "a/b", None, 5)
+
+
+def test_un_plafond_derive_ou_par_defaut_est_ramene_au_maximum():
+    REGLAGES[apify.CLE_PLAFOND_MAX] = "3"
+    client = MagicMock()
+    client.actor.return_value = _carte(EVENEMENTS)
+    # 1 000 000 items : dérivé ≈ 1 200 $, ramené à 3 $
+    assert apify._plafond_du_lancement(client, "a/b", 1_000_000, None) == 3.0
+    assert apify._plafond_du_lancement(client, "a/b", None, None) == 3.0
+
+
+def _lance(nom, **kwargs):
+    with patch("oto_mcp.access.resolve_api_key", return_value=("k", False)), \
+            patch("oto.tools.apify.client.ApifyClient") as cls, \
+            patch.object(apify.session_org, "current_call_trace", return_value={}):
+        cls.return_value.run.return_value = {"data": {"id": "r1", "status": "RUNNING"}}
+        _tool(nom).fn(actor_id="a/b", **kwargs)
+    return cls.return_value.run
+
+
+@pytest.mark.parametrize("nom", ["apify_run", "apify_run_sync"])
+def test_les_outils_de_lancement_refusent_au_dela_du_maximum(nom):
+    from oto_mcp.mcp_errors import McpError
+    with pytest.raises(McpError, match=apify.MAX_CHARGE_ABOVE_CAP):
+        _lance(nom, max_total_charge_usd=30)
+
+
+def test_apify_run_accepte_le_maximum_et_sans_plafond_part_a_cinq_dollars():
+    assert _lance("apify_run", max_total_charge_usd=25).call_args.kwargs[
+        "max_total_charge_usd"] == 25
+    assert _lance("apify_run").call_args.kwargs["max_total_charge_usd"] == 5.0
+
+
+def test_la_description_servie_dit_le_refus():
+    prop = _tool("apify_run_sync").parameters["properties"]["max_total_charge_usd"]
+    assert "max_charge_above_cap" in prop["description"]
 
 
 def test_le_plafond_par_defaut_est_de_cinq_dollars():
@@ -126,7 +225,8 @@ def test_le_reglage_se_lit_une_fois_par_fenetre_et_par_processus():
         assert apify._plafond_par_defaut() == 2.5
         assert apify._plafond_par_defaut() == 2.5
         assert lire.call_count == 1
-        apify._reglage_lu = (time.monotonic() - apify._REGLAGE_TTL_S - 1, "2.5")
+        apify._reglages_lus[apify.CLE_PLAFOND_DEFAUT] = (
+            time.monotonic() - apify._REGLAGE_TTL_S - 1, "2.5")
         assert apify._plafond_par_defaut() == 2.5
         assert lire.call_count == 2
 

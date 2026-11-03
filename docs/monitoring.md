@@ -1003,7 +1003,7 @@ tirer une population.
 ## Le coût des runs Apify de la clé plateforme
 
 Un run Apify survit à l'appel qui l'a lancé, et seul un `apify_run_status` lisant le run
-TERMINÉ trace son coût. Trois garde-fous (`tools/apify.py`, `apify_releve.py`) :
+TERMINÉ trace son coût. Quatre garde-fous (`tools/apify.py`, `apify_releve.py`) :
 
 - **Un plafond part toujours.** `apify_run_sync`/`apify_run` sans `max_total_charge_usd` :
   dérivé de `max_items` et des prix d'événements de la carte de l'acteur, sinon 5 $
@@ -1011,9 +1011,17 @@ TERMINÉ trace son coût. Trois garde-fous (`tools/apify.py`, `apify_releve.py`)
   chaque processus le relit au plus une fois par minute). Une carte illisible (refus
   d'Apify, réseau) ou un réglage illisible n'empêchent jamais un lancement : le défaut
   sert, et le journal le dit. ⚠️ `max_items` ne borne pas un acteur facturé à
-  l'événement. Les outils dédiés gardent leur plafond à 5 $ par défaut, refusé au-delà de
-  25 $. Un run arrivé à son plafond finit `SUCCEEDED` avec une sortie partielle : la
-  réponse le dit.
+  l'événement. Les outils dédiés gardent leur plafond à 5 $ par défaut. Un run arrivé à
+  son plafond finit `SUCCEEDED` avec une sortie partielle : la réponse le dit.
+- **Un maximum par lancement, pour tous les appelants** (03/11/2026) : appel MCP direct,
+  `oto_call`, recette, cascade ; `apify_run_sync`, `apify_run` et les outils dédiés
+  passent tous par `_plafond_du_lancement`. Un `max_total_charge_usd` demandé au-delà est
+  refusé (`max_charge_above_cap`, rien n'est lancé) ; un plafond dérivé ou par défaut y
+  est ramené. 25 $ par défaut, réglage plateforme `max_charge_cap_usd` du connecteur
+  `apify` (relu comme le défaut). ⚠️ Contrairement au défaut, un maximum illisible (base
+  indisponible, valeur qui n'est pas un montant positif) fait ÉCHOUER le lancement : c'est
+  la garde de dépense. Avant, un plafond demandé à `apify_run_sync`/`apify_run` passait
+  tel quel — l'échappatoire au-delà de 25 $ est fermée.
 - **Un run se note au lancement** (table `apify_runs`, clé plateforme seulement) et
   `oto-mcp maintenance apify-runs` relève chaque nuit ceux que personne n'a relus : une
   ligne `apify_run_status` sous l'org et la personne qui l'ont LANCÉ, de nature
