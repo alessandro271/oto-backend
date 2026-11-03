@@ -332,9 +332,19 @@ garde son chemin d'avant pour ses DM, inchangé.
 
 - **Qui** : l'e-mail CONFIRMÉ de l'utilisateur Slack désigne exactement UN membre réel de l'org
   qui a installé l'app (`slack_events.membre`, `org_members` seul). Invité, autre société,
-  e-mail inconnu : la raison est dite (en privé dans un canal), rien ne tourne. L'agent doit
+  e-mail inconnu : la raison est dite (en privé dans un canal), rien ne tourne. « Du même
+  espace » (`slack_events.meme_espace`) : le `team_id` de l'utilisateur est celui de
+  l'événement ; en Enterprise Grid, un autre espace de la MÊME entreprise
+  (`enterprise_user.enterprise_id` égal à l'`enterprise_id` de l'événement, aucun des deux
+  vide). Un `team_id` absent est un refus. L'agent doit
   être ouvert à ce compte (`OTO_COPILOT_SUBS`) et sous le plafond du jour. Une réponse
   d'un inconnu sous un fil à nous n'est pas répondue du tout.
+- **Combien à la fois** : un tour tient un fil du pool du serveur pendant toute sa durée.
+  Au plus `OTO_SLACK_COPILOT_MAX_SIMULTANES` tours (défaut 8) dans le processus, et un seul
+  par compte (`slack_copilot_places.py`) ; au-delà, la personne lit « déjà occupé,
+  réessaie dans un instant » et rien ne tourne, sans attente ni nouvel essai. Un appui sur
+  Approuver/Annuler reprend un tour : même règle. Le plafond est PAR PROCESSUS (il double
+  pendant une bascule bleu/vert).
 - **Une fois** : une mention arrive DEUX fois (`app_mention` et `message`) et Slack
   réessaie ; `(channel, ts)` est pris dans `copilot_slack_events`, le premier événement gagne.
   La prise vient APRÈS la décision « c'est une demande » : un événement ignoré ne prive pas

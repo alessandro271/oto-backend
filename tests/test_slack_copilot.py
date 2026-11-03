@@ -298,6 +298,74 @@ def test_un_invite_qui_mentionne_est_refuse_aussi(mur):
     assert "guests" in mur["client"].ephemeres[0][2] and mur["tours"] == []
 
 
+def test_un_utilisateur_sans_team_id_qui_mentionne_est_refuse(mur):
+    mur["user"].pop("team_id")
+    assert _traiter(mur, _d())["ignored"] == "unknown_member"
+    assert mur["tours"] == []
+
+
+def test_en_Grid_la_mention_d_un_espace_frere_de_la_meme_entreprise_part(mur):
+    mur["user"].update(team_id="T0FRERE", enterprise_user={"enterprise_id": "E0GRID"})
+    assert _traiter(mur, _d(enterprise_id="E0GRID"))["answered"] is True
+
+
+def test_l_appui_garde_l_entreprise_de_Grid_pour_reconnaitre_le_membre(mur):
+    mur["user"].update(team_id="T0FRERE", enterprise_user={"enterprise_id": "E0GRID"})
+    mur["base"].fils[(TEAM, "C0CHAN", "1700.01", "ada-sub")] = {"thread_id": "thr_a"}
+    assert slack_copilot.traiter_action(_action(mur, enterprise_id="E0GRID"))["answered"]
+    assert slack_copilot.traiter_action(
+        _action(mur, action_ts="1800.6"))["ignored"] == "unknown_member"
+
+
+# ── places : un tour de trop est refusé, pas mis en attente ───────────────────
+
+@pytest.fixture
+def places(monkeypatch):
+    from oto_mcp import slack_copilot_places as p
+    monkeypatch.setattr(p, "_par_compte", {})
+    monkeypatch.setattr(p, "_total", 0)
+    p.plafond.cache_clear()
+    yield p
+    p.plafond.cache_clear()
+
+
+def test_un_second_tour_du_meme_compte_pendant_le_premier_est_dit_occupe(mur, places):
+    with places.place("ada-sub"):
+        out = _traiter(mur, _d())
+        assert places.en_cours() == 1, "le refus ne prend ni ne rend aucune place"
+    assert out == {"ok": True, "refused": "busy"} and mur["tours"] == []
+    (canal, user, texte), = mur["client"].ephemeres
+    assert texte == places.MESSAGE and "try again in a moment" in texte
+    assert mur["client"].reactions == [], "pas de 👀 sur ce qui ne tourne pas"
+    assert places.en_cours() == 0
+
+
+def test_le_plafond_du_processus_refuse_le_tour_de_trop(mur, places, monkeypatch):
+    monkeypatch.setenv(places.ENV_MAX, "1")
+    places.plafond.cache_clear()
+    with places.place("quelqu-un-d-autre"):
+        assert _traiter(mur, _d())["refused"] == "busy"
+    assert _traiter(mur, _d(ts="1700.02", thread_ts="1700.02"))["answered"] is True
+    assert places.en_cours() == 0, "la place est rendue après le tour"
+
+
+def test_la_place_est_rendue_meme_si_le_tour_leve(mur, places, monkeypatch):
+    def _panne(fn, *args):
+        raise RuntimeError("boum")
+    monkeypatch.setattr(slack_copilot, "_executer", _panne)
+    with pytest.raises(RuntimeError):
+        _traiter(mur, _d())
+    assert places.en_cours() == 0
+
+
+def test_un_appui_pendant_un_tour_du_meme_compte_est_dit_occupe(mur, places):
+    mur["base"].fils[(TEAM, "C0CHAN", "1700.01", "ada-sub")] = {"thread_id": "thr_a"}
+    with places.place("ada-sub"):
+        out = slack_copilot.traiter_action(_action(mur))
+    assert out["refused"] == "busy" and mur["tours"] == []
+    assert mur["client"].ephemeres[-1][2] == places.MESSAGE
+
+
 def test_l_agent_ferme_a_cette_personne_le_lui_dit(mur, monkeypatch):
     monkeypatch.setenv("OTO_COPILOT_SUBS", "someone-else")
     assert _traiter(mur, _d())["refused"] == "copilot_not_enabled"

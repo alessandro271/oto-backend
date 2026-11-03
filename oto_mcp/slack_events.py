@@ -212,6 +212,9 @@ class Demande:
     mention: bool = False
     #: The app's own user id, for removing its mention from the text ('' = not told).
     bot_user: str = ""
+    #: The Enterprise Grid the event's workspace belongs to ('' = not a Grid), as the
+    #: signed body names it — what a member from a sibling workspace must share.
+    enterprise_id: str = ""
 
     @property
     def reponse(self) -> bool:
@@ -225,6 +228,10 @@ def _bot_de(corps: dict) -> str:
         if isinstance(a, dict) and a.get("is_bot") and isinstance(a.get("user_id"), str):
             return a["user_id"]
     return ""
+
+
+def _chaine(v: Any) -> str:
+    return v if isinstance(v, str) else ""
 
 
 def demande_de(corps: dict) -> Optional[Demande]:
@@ -261,7 +268,8 @@ def demande_de(corps: dict) -> Optional[Demande]:
     return Demande(event_id=event_id, team_id=team_id, app_id=app_id, user=user,
                    channel=channel, ts=ts, thread_ts=str(ev.get("thread_ts") or ts),
                    texte=texte, dm=dm, mention=mention,
-                   bot_user=_bot_de(corps) if mention else "")
+                   bot_user=_bot_de(corps) if mention else "",
+                   enterprise_id=_chaine(corps.get("enterprise_id")))
 
 
 # --- the org, its bot, the member -------------------------------------------
@@ -313,6 +321,23 @@ class Membre:
     email: str
 
 
+def meme_espace(u: dict, d: Demande) -> bool:
+    """Is this Slack user one of the workspace the request came from?
+
+    Their `team_id` must be the event's — or, in an Enterprise Grid, another workspace of
+    the SAME enterprise (`enterprise_user.enterprise_id` equal to the event's, neither
+    empty). ⚠️ An absent `team_id` is a NO: a user Slack does not place is nobody's member
+    (someone from a Slack Connect channel, a guest, would otherwise pass as a member who
+    carries the same email)."""
+    equipe = u.get("team_id")
+    if not isinstance(equipe, str) or not equipe:
+        return False
+    if equipe == d.team_id:
+        return True
+    grille = (u.get("enterprise_user") or {}).get("enterprise_id")
+    return bool(d.enterprise_id) and grille == d.enterprise_id
+
+
 def membre(client: Any, org_id: int, d: Demande) -> tuple[Optional[Membre], Optional[str]]:
     """`(member, None)` or `(None, the message to show the person)`.
 
@@ -330,8 +355,7 @@ def membre(client: Any, org_id: int, d: Demande) -> tuple[Optional[Membre], Opti
         return None, "I couldn't check who you are in Slack. Try again in a minute."
     if u.get("is_bot") or u.get("deleted"):
         return None, None
-    if u.get("is_restricted") or u.get("is_ultra_restricted") \
-            or (u.get("team_id") and u.get("team_id") != d.team_id):
+    if u.get("is_restricted") or u.get("is_ultra_restricted") or not meme_espace(u, d):
         return None, _ETRANGER
     profil = u.get("profile") or {}
     email = (profil.get("email") or "").strip().lower()

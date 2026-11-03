@@ -247,6 +247,32 @@ def test_un_INVITE_ou_un_membre_d_un_AUTRE_espace_ne_lance_rien(slack, champ):
     assert "guests" in slack["client"]["c"].dit[0][3]
 
 
+def test_un_utilisateur_SANS_team_id_ne_lance_rien(slack):
+    """Slack ne le place dans aucun espace : ce n'est le membre de personne."""
+    slack["user"].pop("team_id")
+    assert _recevoir(_mention())["ignored"] == "unknown_member"
+    assert slack["enfile"] is None
+    assert "guests" in slack["client"]["c"].dit[0][3]
+
+
+def test_en_Enterprise_Grid_un_membre_d_un_espace_FRERE_est_accepte(slack):
+    slack["user"].update(team_id="T0FRERE", enterprise_user={"enterprise_id": "E0GRID"})
+    assert _recevoir({**_mention(), "enterprise_id": "E0GRID"})["job_id"] == 900
+
+
+@pytest.mark.parametrize("grille_user, grille_evt", [("E0AUTRE", "E0GRID"), ("", ""),
+                                                      (None, None), ("E0GRID", "")])
+def test_en_Grid_une_AUTRE_entreprise_ou_une_entreprise_vide_ne_lance_rien(
+        slack, grille_user, grille_evt):
+    slack["user"].update(team_id="T0FRERE",
+                         enterprise_user={"enterprise_id": grille_user})
+    corps = _mention()
+    if grille_evt is not None:
+        corps["enterprise_id"] = grille_evt
+    assert _recevoir(corps)["ignored"] == "unknown_member"
+    assert slack["enfile"] is None
+
+
 def test_un_email_sans_membre_dans_l_org_ne_lance_rien(slack):
     slack["membres"] = set()
     assert _recevoir(_mention())["ignored"] == "unknown_member"

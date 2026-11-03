@@ -47,6 +47,7 @@ off): everything planned is told to the person in Slack.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -58,7 +59,7 @@ from urllib.parse import parse_qs
 import anyio
 from starlette.concurrency import run_in_threadpool
 
-from . import geste, slack_events
+from . import geste, slack_copilot_places as places, slack_events
 from .auth import slack as slack_auth
 from .capabilities._types import AuthzDenied, ResolvedCtx
 from .db import copilot as store
@@ -417,11 +418,17 @@ def traiter(client: Any, inst: slack_events.Installation, d: slack_events.Demand
     thread_id = None
     if existant and not (_dm_sans_fil(d) and existant["inactif_min"] > routes.INACTIVITE_MIN):
         thread_id = existant["thread_id"]
-    slack_events._reaction_prise(client, d)
-    try:
-        _executer(_repondre, inst, client, d, m, texte, thread_id, cle)
-    finally:
-        _retirer_reaction(client, d)
+    with contextlib.ExitStack() as pile:
+        try:
+            pile.enter_context(places.place(m.sub))
+        except places.Occupe:
+            slack_events._dire(client, d, places.MESSAGE)
+            return {"ok": True, "refused": "busy"}
+        slack_events._reaction_prise(client, d)
+        try:
+            _executer(_repondre, inst, client, d, m, texte, thread_id, cle)
+        finally:
+            _retirer_reaction(client, d)
     return {"ok": True, "answered": True}
 
 
@@ -477,9 +484,20 @@ class Action:
     channel: str
     message_ts: str
     blocs: tuple = ()
+    #: The Enterprise Grid of the workspace the press came from ('' = not a Grid).
+    enterprise_id: str = ""
 
 
 _GENRES = (("approve", ACTION_OUI), ("reject", ACTION_NON), ("undo", ACTION_ANNULER))
+
+
+def _grille_de(payload: dict) -> str:
+    """The press's Enterprise Grid: `enterprise.id`, else `team.enterprise_id` ('')."""
+    for v in ((payload.get("enterprise") or {}).get("id"),
+              (payload.get("team") or {}).get("enterprise_id")):
+        if isinstance(v, str) and v:
+            return v
+    return ""
 
 
 def action_de(payload: dict) -> Optional[Action]:
@@ -504,7 +522,8 @@ def action_de(payload: dict) -> Optional[Action]:
     valeur, action_ts, user, team_id, app_id, channel, message_ts = champs
     return Action(kind=kind, valeur=valeur, action_id=action_id, action_ts=action_ts,
                   user=user, team_id=team_id, app_id=app_id, channel=channel,
-                  message_ts=message_ts, blocs=tuple(message.get("blocks") or ()))
+                  message_ts=message_ts, blocs=tuple(message.get("blocks") or ()),
+                  enterprise_id=_grille_de(payload))
 
 
 def recevoir_interaction(brut: bytes, entetes: Any) -> Optional[Action]:
@@ -547,7 +566,8 @@ def traiter_action(a: Action) -> dict:
     client = SlackClient(bot_token=inst.bot_token)
     d = slack_events.Demande(event_id=a.action_ts, team_id=a.team_id, app_id=a.app_id,
                              user=a.user, channel=a.channel, ts=a.message_ts,
-                             thread_ts=a.message_ts, texte="", dm=False)
+                             thread_ts=a.message_ts, texte="", dm=False,
+                             enterprise_id=a.enterprise_id)
     m, refus = slack_events.membre(client, inst.org_id, d)
     if m is None:
         _ephemere(client, a, refus or "I can't match you to an account, so I can't act "
@@ -570,7 +590,13 @@ def traiter_action(a: Action) -> dict:
         _ephemere(client, a, f"The {slack_events._marque()} agent isn't switched on for "
                              "your account.")
         return {"ok": True, "refused": "copilot_not_enabled"}
-    _executer(_reprendre, inst, client, a, m, thread_id, approval_id)
+    with contextlib.ExitStack() as pile:
+        try:
+            pile.enter_context(places.place(m.sub))
+        except places.Occupe:
+            _ephemere(client, a, places.MESSAGE)
+            return {"ok": True, "refused": "busy"}
+        _executer(_reprendre, inst, client, a, m, thread_id, approval_id)
     return {"ok": True, "answered": True}
 
 
