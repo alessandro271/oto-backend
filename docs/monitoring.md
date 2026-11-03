@@ -1022,6 +1022,24 @@ TERMINÉ trace son coût. Quatre garde-fous (`tools/apify.py`, `apify_releve.py`
   indisponible, valeur qui n'est pas un montant positif) fait ÉCHOUER le lancement : c'est
   la garde de dépense. Avant, un plafond demandé à `apify_run_sync`/`apify_run` passait
   tel quel — l'échappatoire au-delà de 25 $ est fermée.
+- **Ce maximum est celui de l'org** (décision du 03/11/2026, `_borne_du_lancement`) :
+  réglage `connector_settings` portée `org` (pas d'équipe), clé `charge_cap_usd` du
+  connecteur `apify`, 25 $ quand l'org ne l'a pas posé — lu une fois par lancement, hors
+  boucle, mémorisé pour l'appel (`org_settings_for_key`), comme le niveau d'accès. Le
+  plafond en vigueur dépend de la clé de l'appel (`key_mode`) : sur la clé **plateforme**,
+  min(org, maximum plateforme `max_charge_cap_usd`) ; sur une clé **propre** (de l'org ou
+  de la personne), min(org, borne de sécurité plateforme `byok_charge_cap_usd`, 1 000 $
+  par défaut). ⚠️ Un réglage d'org ou une borne illisibles font échouer le lancement,
+  comme le maximum. Le refus `max_charge_above_cap` nomme la borne qui s'applique (celle
+  de l'org, le défaut, le maximum plateforme ou la borne de sécurité) et, à un admin de
+  l'org, le geste qui la change. **Pose** : capacité `connectors.apify.charge_cap.set_org`
+  (`ORG_ADMIN_OF`, `PUT /api/orgs/{id}/connectors/apify/charge-cap` `{usd}`, face MCP
+  `oto_org_settings domain=apify_charge_cap op=set usd=…`) ; montant positif fini, refusé
+  au-delà du maximum plateforme si l'org n'a pas de clé Apify à elle
+  (`409 charge_cap_above_platform_max`), au-delà de la borne de sécurité si elle en a une
+  (`409 charge_cap_above_byok_bound`) ; `set_by`/`set_at` de la ligne disent qui et quand.
+  **Lecture** : `connectors.apify.charge_cap.org_get` (membre, `GET` même chemin, `op=get`)
+  rend la valeur posée, la borne atteignable et le plafond en vigueur sur chaque clé.
 - **Un run se note au lancement** (table `apify_runs`, clé plateforme seulement) et
   `oto-mcp maintenance apify-runs` relève chaque nuit ceux que personne n'a relus : une
   ligne `apify_run_status` sous l'org et la personne qui l'ont LANCÉ, de nature

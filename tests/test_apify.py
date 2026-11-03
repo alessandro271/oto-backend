@@ -94,7 +94,9 @@ def _sans_base():
     (`test_apify_spend_control.py`), et son repli journalise."""
     with patch("oto_mcp.tools.apify._hors_du_lanceur", return_value=False), \
             patch("oto_mcp.tools.apify._plafond_par_defaut", return_value=5.0), \
-            patch("oto_mcp.tools.apify._plafond_max", return_value=25.0):
+            patch("oto_mcp.tools.apify._plafond_max", return_value=25.0), \
+            patch("oto_mcp.tools.apify._borne_byok", return_value=1000.0), \
+            patch("oto_mcp.tools.apify._org_de_l_appel", return_value=None):
         yield
 
 

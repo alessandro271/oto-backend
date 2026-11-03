@@ -16,7 +16,9 @@ A running actor costs money: setting `max_items` / `timeout_secs` /
 `max_total_charge_usd` AT LAUNCH is the only protection — afterwards, it is billed.
 Every launch — `apify_run_sync`, `apify_run`, the dedicated actor tools; a direct call,
 `oto_call` or a recipe alike — goes through `_plafond_du_lancement`: its ceiling is
-refused above the platform maximum (`_plafond`, $25 by default), with no way around it.
+refused above the bound of the call (`_borne_du_lancement`): the org's ceiling ($25 by
+default), never above the platform maximum on the platform's key, nor above the
+platform's safety bound on the org's or the person's own key — with no way around it.
 
 Calls to the client are written out in plain (`_client().run(…)`) and not dispatched
 by name: that is what makes them verifiable by the version-skew probe.
@@ -27,7 +29,7 @@ import logging
 import math
 import time
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
@@ -90,8 +92,10 @@ _MARGE = 2
 CLE_PLAFOND_DEFAUT = "default_max_charge_usd"
 _REGLAGE_TTL_S = 60.0
 
-# The highest ceiling ANY launch takes, whoever asks: a ceiling asked above it is
-# refused (`MAX_CHARGE_ABOVE_CAP`), a derived or default one is brought down to it. The
+# The highest ceiling a launch on the PLATFORM'S key takes, whoever asks: the bound of
+# the launch (`_borne_du_lancement`) never exceeds it there. A ceiling asked above the
+# bound is refused (`MAX_CHARGE_ABOVE_CAP`), a derived or default one is brought down to
+# it. The
 # `connector_settings` key `CLE_PLAFOND_MAX` (platform scope) replaces `_PLAFOND_MAX_USD`
 # without a deploy, read like `CLE_PLAFOND_DEFAUT`. Unlike the default, an unreadable
 # maximum FAILS the launch: it is the spending guard, and a guard that falls back in
@@ -99,6 +103,19 @@ _REGLAGE_TTL_S = 60.0
 _PLAFOND_MAX_USD = 25.0
 CLE_PLAFOND_MAX = "max_charge_cap_usd"
 MAX_CHARGE_ABOVE_CAP = "max_charge_above_cap"
+
+# The ceiling per run of an ORG (decision of 03/11/2026): `connector_settings` key
+# `CLE_PLAFOND_ORG`, scope `org` (no team scope), set by an org admin
+# (`connectors.apify.charge_cap.set_org`); `_PLAFOND_ORG_DEFAUT_USD` when the org has
+# not set it. On the platform's key it is bounded by the platform maximum above; on the
+# org's or the person's own key (BYOK) by the platform's safety bound
+# `CLE_BORNE_BYOK` (platform scope, `_BORNE_BYOK_USD` when not set). Read once per
+# launch, out of any loop, remembered for the call (`org_settings_for_key`), like the
+# access level. Unreadable, either one FAILS the launch, as the maximum does.
+CLE_PLAFOND_ORG = "charge_cap_usd"
+_PLAFOND_ORG_DEFAUT_USD = 25.0
+CLE_BORNE_BYOK = "byok_charge_cap_usd"
+_BORNE_BYOK_USD = 1000.0
 # Share of the ceiling from which a finished run is said to have reached it.
 _SEUIL_ATTEINT = 0.95
 
@@ -280,30 +297,128 @@ def _plafond_par_defaut() -> float:
     return valeur
 
 
-def _plafond_max() -> float:
-    """The highest ceiling a launch takes: the `CLE_PLAFOND_MAX` setting, or
-    `_PLAFOND_MAX_USD` when it is not set. A setting that cannot be read (the base) or
-    is not a positive amount RAISES — no launch goes out under a guess."""
-    pose = _reglage(CLE_PLAFOND_MAX)
+def _montant_reglage(cle: str, defaut: float) -> float:
+    """The platform setting `cle` as a dollar amount, or `defaut` when it is not set. A
+    setting that cannot be read (the base) or is not a positive amount RAISES — no
+    launch goes out under a guess."""
+    pose = _reglage(cle)
     if pose is None:
-        return _PLAFOND_MAX_USD
+        return defaut
     valeur = _montant(pose)
     if valeur is None:
-        raise RuntimeError(f"apify: platform setting {CLE_PLAFOND_MAX}={pose!r} is not a "
+        raise RuntimeError(f"apify: platform setting {cle}={pose!r} is not a "
                            "positive amount of dollars — fix or delete it")
     return valeur
 
 
-def _plafond(usd: float) -> float:
-    """A ceiling asked by the caller, refused out of (0, platform maximum] — never
+def _plafond_max() -> float:
+    """The highest ceiling a launch on the PLATFORM'S key takes: the `CLE_PLAFOND_MAX`
+    setting, or `_PLAFOND_MAX_USD`. Unreadable, it raises (`_montant_reglage`)."""
+    return _montant_reglage(CLE_PLAFOND_MAX, _PLAFOND_MAX_USD)
+
+
+def _borne_byok() -> float:
+    """The highest ceiling a launch on an org's or a person's OWN key takes: the
+    `CLE_BORNE_BYOK` setting, or `_BORNE_BYOK_USD`. Unreadable, it raises."""
+    return _montant_reglage(CLE_BORNE_BYOK, _BORNE_BYOK_USD)
+
+
+def _plafond_de_l_org(org_id: Optional[int]) -> Optional[float]:
+    """The ceiling per run the org `org_id` set, or None when it set none. One read per
+    call, remembered for it (`org_settings_for_key`). A value that is not a positive
+    amount RAISES: interpreting it would be deciding in place of whoever set it."""
+    if org_id is None:
+        return None
+    from ..db import connector_settings
+    pose = connector_settings.org_settings_for_key(str(org_id), CLE_PLAFOND_ORG).get("apify")
+    if pose is None:
+        return None
+    valeur = _montant(pose)
+    if valeur is None:
+        raise RuntimeError(f"apify: setting {CLE_PLAFOND_ORG}={pose!r} of org #{org_id} "
+                           "is not a positive amount of dollars — fix or set it again")
+    return valeur
+
+
+def _org_de_l_appel() -> Optional[int]:
+    from ..auth.hooks import current_user_sub_from_token
+    return access.current_org(current_user_sub_from_token())
+
+
+def _admin_de(org_id: int) -> bool:
+    """Whether the caller is an admin of `org_id` — read on a refusal only."""
+    from ..auth.hooks import current_user_sub_from_token
+    from .. import roles
+    sub = current_user_sub_from_token()
+    return bool(sub) and roles.is_org_admin(sub, org_id)
+
+
+def _sur_cle_plateforme() -> bool:
+    """Whether this call resolved the platform's Apify key (`key_mode`, set by the
+    key resolution before any launch)."""
+    return (session_org.current_call_trace() or {}).get("key_mode") == "platform"
+
+
+class _Borne(NamedTuple):
+    """The highest ceiling of a launch, and who sets it: `org` (the org's ceiling),
+    `default` (the org set none), `platform` (the platform maximum, platform's key) or
+    `byok` (the platform's safety bound, own key)."""
+    usd: float
+    source: str
+    org_id: Optional[int]
+
+
+def _borne_du_lancement() -> _Borne:
+    """The org's ceiling (or the default), bounded by the platform maximum on the
+    platform's key, by the safety bound on an own key."""
+    org_id = _org_de_l_appel()
+    de_l_org = _plafond_de_l_org(org_id)
+    usd, source = ((de_l_org, "org") if de_l_org is not None
+                   else (_PLAFOND_ORG_DEFAUT_USD, "default"))
+    borne, nom = ((_plafond_max(), "platform") if _sur_cle_plateforme()
+                  else (_borne_byok(), "byok"))
+    return _Borne(borne, nom, org_id) if borne < usd else _Borne(usd, source, org_id)
+
+
+def _nom_de_la_borne(borne: _Borne) -> str:
+    """Which bound applies, in words."""
+    if borne.source == "platform":
+        return (f"this platform's maximum of ${borne.usd:g} per run on the platform's "
+                "Apify key")
+    if borne.source == "byok":
+        return (f"this platform's safety bound of ${borne.usd:g} per run, even on your "
+                "own Apify key")
+    quoi = ("your organization's ceiling" if borne.source == "org"
+            else "the default ceiling")
+    return f"{quoi} of ${borne.usd:g} per run"
+
+
+def _qui_la_regle(borne: _Borne) -> str:
+    """The bound, who sets it and — for an admin of the org — how to change it. Read
+    only on a refusal: the admin check costs nothing to a launch that goes out."""
+    texte = _nom_de_la_borne(borne)
+    if borne.source == "platform":
+        return (f"{texte} — an organization goes beyond it only on its own Apify key, "
+                "and its admins set its ceiling")
+    if borne.source == "byok" or borne.org_id is None:
+        return texte
+    if _admin_de(borne.org_id):
+        return (f"{texte} — as an admin of organization #{borne.org_id}, you change it "
+                f"with `oto_org_settings(op=\"set\", domain=\"apify_charge_cap\", "
+                f"org_id={borne.org_id}, usd=…)` (or PUT /api/orgs/{borne.org_id}/"
+                "connectors/apify/charge-cap)")
+    return f"{texte}, set by the admins of organization #{borne.org_id}"
+
+
+def _plafond(usd: float, borne: Optional[_Borne] = None) -> float:
+    """A ceiling asked by the caller, refused out of (0, bound of the launch] — never
     clamped in silence. The one check of every launch, whoever calls."""
-    maximum = _plafond_max()
-    if not 0 < usd <= maximum:
-        if usd > maximum:
+    borne = borne or _borne_du_lancement()
+    if not 0 < usd <= borne.usd:
+        if usd > borne.usd:
             raise _bad(f"{MAX_CHARGE_ABOVE_CAP}: `max_total_charge_usd` ${usd:g} is above "
-                       f"this platform's ceiling of ${maximum:g} per run. Nothing was "
-                       "launched; split the work into smaller runs, or ask the "
-                       "platform's operator.")
+                       f"{_qui_la_regle(borne)}. Nothing was launched; split the work "
+                       "into smaller runs.")
         raise _bad(f"`max_total_charge_usd` must be above 0 (got {usd:g}).")
     return usd
 
@@ -311,8 +426,8 @@ def _plafond(usd: float) -> float:
 def _plafond_du_lancement(client: "ApifyClient", actor_id: str, max_items: Optional[int],
                           demande: Optional[float]) -> float:
     """The `max_total_charge_usd` a run starts with: the caller's (refused above the
-    platform maximum, `_plafond`), or the derived one, or the default — those two
-    brought down to the maximum, and the response SAYS so (`_dire_plafond_ramene`): the
+    bound of the launch, `_plafond`), or the derived one, or the default — those two
+    brought down to the bound, and the response SAYS so (`_dire_plafond_ramene`): the
     run may stop early with a partial output. Never None: an unset ceiling is the whole
     account's balance.
 
@@ -320,9 +435,9 @@ def _plafond_du_lancement(client: "ApifyClient", actor_id: str, max_items: Optio
     `_upstream`) or a network failure (`requests.RequestException`: connection,
     timeout) falls back to the default ceiling, and the log says why."""
     import requests
+    borne = _borne_du_lancement()
     if demande is not None:
-        return _plafond(demande)
-    maximum = _plafond_max()
+        return _plafond(demande, borne)
     if max_items and max_items > 0:
         try:
             with _upstream():
@@ -332,24 +447,24 @@ def _plafond_du_lancement(client: "ApifyClient", actor_id: str, max_items: Optio
                            actor_id, type(e).__name__, e)
             derive = None
         if derive is not None:
-            return _ramener(derive, maximum)
-    return _ramener(_plafond_par_defaut(), maximum)
+            return _ramener(derive, borne)
+    return _ramener(_plafond_par_defaut(), borne)
 
 
-def _ramener(usd: float, maximum: float) -> float:
-    """`usd` brought down to the platform maximum — never in silence."""
-    if usd <= maximum:
+def _ramener(usd: float, borne: _Borne) -> float:
+    """`usd` brought down to the bound of the launch — never in silence."""
+    if usd <= borne.usd:
         return usd
-    _dire_plafond_ramene(usd, maximum)
-    return maximum
+    _dire_plafond_ramene(usd, borne)
+    return borne.usd
 
 
-def _dire_plafond_ramene(usd: float, maximum: float) -> None:
-    """A ceiling derived from the run's size (or the default) above the platform
-    maximum: the run starts at the maximum, and may stop before its end."""
+def _dire_plafond_ramene(usd: float, borne: _Borne) -> None:
+    """A ceiling derived from the run's size (or the default) above the bound of the
+    launch: the run starts at the bound, and may stop before its end."""
     session_org.noter_avis(
-        f"Apify: this run needs a ceiling of about ${usd:.2f}, above this platform's "
-        f"maximum of ${maximum:g} per run: it starts at ${maximum:g} and may stop "
+        f"Apify: this run needs a ceiling of about ${usd:.2f}, above "
+        f"{_nom_de_la_borne(borne)}: it starts at ${borne.usd:g} and may stop "
         "early, with a partial output. To get everything, split the work into smaller "
         "runs (a lower `max_items` each).")
 
@@ -418,8 +533,8 @@ def _dire_plafond_atteint(run: dict, run_id: str, cout: float) -> None:
         session_org.noter_avis(
             f"Apify run {run_id} cost ${cout:.4f} of its ${plafond:g} ceiling: it may "
             "have stopped early and its output may be partial. To get more, launch it "
-            "again with a higher `max_total_charge_usd` (at most this platform's maximum "
-            "per run), or split the work into smaller runs.")
+            "again with a higher `max_total_charge_usd` (at most your organization's "
+            "ceiling per run), or split the work into smaller runs.")
 
 
 def _releve(out: Any, run_id: str, outil: str = "apify_run_status") -> None:
@@ -711,9 +826,10 @@ def register(mcp: FastMCP) -> None:
             limit / fields: paginate and project the returned items (some actors
                 return very wide objects).
             timeout_secs / memory_mbytes: run budget on Apify's side.
-            max_total_charge_usd: hard cost ceiling for this run, at most the
-                platform maximum ($25 unless set otherwise; above it the run is
-                refused, `max_charge_above_cap`). Omitted, it is derived from
+            max_total_charge_usd: hard cost ceiling for this run, at most your
+                organization's ceiling per run ($25 unless its admins set another;
+                on the platform's key, never above the platform maximum; above it
+                the run is refused, `max_charge_above_cap`). Omitted, it is derived from
                 `max_items` and the actor's event prices, or $5 by default. A run
                 that reaches it stops, with a partial output.
         """

@@ -10,7 +10,7 @@ says what it does, typed arguments, and the actor's input built for you.
 Every tool runs through `apify.lancer_acteur` — the same start → wait → bill → read
 path as `apify_run_sync`, so the run's real cost is traced the same way, once per run.
 Every tool also caps the run: `max_items` (billed results) and `max_total_charge_usd`
-(hard ceiling, $5 by default, refused above the platform maximum — `apify._plafond`,
+(hard ceiling, $5 by default, refused above the bound of the launch — `apify._plafond`,
 the one check of every launch, `apify_run_sync` included) — raise them for a big batch,
 never drop them.
 
@@ -42,8 +42,8 @@ GOOGLE_MAPS_PLACES = "compass/crawler-google-places"
 GOOGLE_MAPS_REVIEWS = "compass/Google-Maps-Reviews-Scraper"
 
 # The default hard ceiling of one run, in US dollars: the actors' list prices put a
-# normal batch far below it, $5 only stops a run gone wrong. Its maximum is the
-# platform's, checked by `lancer_acteur` for every launch.
+# normal batch far below it, $5 only stops a run gone wrong. Its bound is the org's
+# ceiling (within the platform's), checked by `lancer_acteur` for every launch.
 _PLAFOND_USD = 5.0
 
 # `profileScraperMode` takes the actor's display labels, prices included — the
@@ -98,7 +98,7 @@ def register(mcp: FastMCP) -> None:
             fields: keep only these keys of each profile (they are wide), e.g.
                 `["firstName", "lastName", "headline", "currentPosition", "linkedinUrl"]`.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         if not urls:
             raise _bad("Give at least one profile URL in `urls`.")
@@ -145,7 +145,7 @@ def register(mcp: FastMCP) -> None:
             max_items: profiles to return in all — a big company has thousands.
             fields: keep only these keys of each profile.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         if not companies:
             raise _bad("Give at least one LinkedIn company URL in `companies`.")
@@ -180,7 +180,7 @@ def register(mcp: FastMCP) -> None:
                 `"Acme Deutschland GmbH"`).
             fields: keep only these keys of each company.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         _au_moins_un(urls=urls, names=names)
         return lancer_acteur(
@@ -221,7 +221,7 @@ def register(mcp: FastMCP) -> None:
                 (more items, more cost).
             fields: keep only these keys of each post.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         _au_moins_un(queries=queries, author_urls=author_urls)
         sources = len(queries or []) + len(author_urls or [])
@@ -274,7 +274,7 @@ def register(mcp: FastMCP) -> None:
             max_items: jobs per search.
             fields: keep only these keys of each job.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         if not (keywords or search_urls or company_ids):
             raise _bad("Give `keywords`, `search_urls` or `company_ids`.")
@@ -311,7 +311,7 @@ def register(mcp: FastMCP) -> None:
             max_items: jobs to return.
             fields: keep only these keys of each job.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         return lancer_acteur(
             INDEED_JOBS,
@@ -352,7 +352,7 @@ def register(mcp: FastMCP) -> None:
             max_items: jobs to return.
             fields: keep only these keys of each job.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         if not (query or company_slugs):
             raise _bad("Give `query` or `company_slugs`.")
@@ -394,7 +394,7 @@ def register(mcp: FastMCP) -> None:
             max_pages_per_site: pages read per site at most.
             fields: keep only these keys, e.g. `["domain", "emails", "linkedIns"]`.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         if not urls:
             raise _bad("Give at least one website URL in `urls`.")
@@ -433,7 +433,7 @@ def register(mcp: FastMCP) -> None:
                 (`["https://example.com/blog/**"]`).
             fields: keep only these keys, e.g. `["url", "markdown"]`.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         if not urls:
             raise _bad("Give at least one start URL in `urls`.")
@@ -477,7 +477,7 @@ def register(mcp: FastMCP) -> None:
                 links (paid add-on).
             fields: keep only these keys, e.g. `["title", "phone", "website", "address"]`.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         if not search_terms:
             raise _bad("Give at least one search term in `search_terms`.")
@@ -518,7 +518,7 @@ def register(mcp: FastMCP) -> None:
             language: language of the reviews' UI text.
             fields: keep only these keys, e.g. `["stars", "text", "publishedAtDate"]`.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
-                the platform maximum ($25 unless set otherwise).
+                your organization's ceiling per run ($25 unless set otherwise).
         """
         _au_moins_un(place_urls=place_urls, place_ids=place_ids)
         places = len(place_urls or []) + len(place_ids or [])

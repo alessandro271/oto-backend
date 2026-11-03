@@ -92,17 +92,25 @@ def _tool(name):
 
 # The platform settings of the `apify` connector a test sees: empty = none set.
 REGLAGES: dict = {}
+REGLAGES_ORG: dict = {}
 
 
 @pytest.fixture(autouse=True)
 def _reglages(monkeypatch):
-    """Every launch reads the platform maximum (`apify._plafond_max`): each test starts
-    from a process that has not read it, and a base where it is not set."""
+    """Every launch reads the bound of the launch (`apify._borne_du_lancement`): each
+    test starts from a process that has not read the platform's settings, a base where
+    none is set, and a call under org 7 whose ceiling is in `REGLAGES_ORG`."""
     from oto_mcp.db import connector_settings
     monkeypatch.setattr(apify, "_reglages_lus", {})
     REGLAGES.clear()
+    REGLAGES_ORG.clear()
     monkeypatch.setattr(connector_settings, "get_connector_setting",
                         lambda _t, _i, _c, cle: REGLAGES.get(cle))
+    monkeypatch.setattr(connector_settings, "org_settings_for_key",
+                        lambda _o, cle: {"apify": REGLAGES_ORG[cle]} if cle in REGLAGES_ORG
+                        else {})
+    monkeypatch.setattr(apify, "_org_de_l_appel", lambda: 7)
+    monkeypatch.setattr(apify, "_admin_de", lambda _o: False)
 
 
 def _lancer(name, kwargs):
@@ -251,8 +259,9 @@ def test_a_ceiling_out_of_bounds_is_refused_by_name_before_the_run(name, usd):
 
 
 @pytest.mark.parametrize("name", sorted(CAS))
-def test_the_platform_maximum_is_a_setting(name):
+def test_the_org_ceiling_is_a_setting(name):
     REGLAGES[apify.CLE_PLAFOND_MAX] = "50"
+    REGLAGES_ORG[apify.CLE_PLAFOND_ORG] = "40"
     _, inst, _ = _lancer(name, {**CAS[name][0], "max_total_charge_usd": 40})
     assert inst.run.call_args.kwargs["max_total_charge_usd"] == 40
 
@@ -260,7 +269,7 @@ def test_the_platform_maximum_is_a_setting(name):
 @pytest.mark.parametrize("name", sorted(CAS))
 def test_the_ceiling_and_its_bound_are_declared_in_the_served_text(name):
     prop = _tool(name).parameters["properties"]["max_total_charge_usd"]
-    assert prop["default"] == 5.0 and "the platform maximum ($25" in prop["description"], name
+    assert prop["default"] == 5.0 and "your organization's ceiling per run ($25" in prop["description"], name
 
 
 def test_no_platform_usage_figure_is_written_in_the_module_or_served():
