@@ -5,11 +5,11 @@ from oto_mcp.capabilities.copilot import consigne
 
 def test_la_consigne_dit_ou_vit_ce_qui_dure():
     texte = consigne.consigne()
-    assert "About you" in texte
+    assert "their personal note" in texte
     assert "`oto_guide scope=user delivery=init`" in texte
     assert "`oto_guide scope=user`" in texte
     assert "Never tell someone" in texte
 
 
 def test_remember_va_dans_about_you():
-    assert 'When they say "remember …", add it to their About you.' in consigne.consigne()
+    assert 'When they say "remember …", add it to their personal note.' in consigne.consigne()
