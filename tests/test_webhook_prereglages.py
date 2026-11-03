@@ -100,8 +100,12 @@ def test_chaque_preregle_nomme_un_schema_CONNU():
             assert p.champ_secret, f"{p.nom} : un body_secret sans champ n'ouvre rien"
         if p.schema == runner_hook.HMAC_CORPS:
             # Sans en-tête, rien ne se relève ; sans horodatage, un corps capturé se
-            # rejouerait indéfiniment.
-            assert p.entete_signature and p.chemin_horodatage and p.tolerance_s, p
+            # rejouerait indéfiniment — sauf à dédupliquer par un identifiant lu DANS
+            # le corps signé (Minari, qui n'envoie pas d'horodatage) : le rejeu d'un
+            # corps déjà accepté ne refait alors rien.
+            assert p.entete_signature, p
+            assert (p.chemin_horodatage and p.tolerance_s) or (
+                p.chemin_id and not p.entete_id), p
         else:
             assert p.statut_accepte == 202, f"{p.nom} : rien d'autre ne change de statut"
 
