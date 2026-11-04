@@ -3334,12 +3334,21 @@ personne. Sous un jeton de délégation, `oto_trigger op=run_now` enfile un agen
 outillé que le travail appelant, et `oto_fleet op=launch` arme une campagne même plus
 outillée : c'est le relais vers un agent spécialisé, sans créer de tâche planifiée sur le
 second. La liste du travail appelant borne SES appels (`outils_du_travail`), pas ce qu'il
-lance. De même, `oto_fleet op=update` retouche `tools` d'une campagne sans borne de
-délégation. Décision transitoire, le temps de refaire les droits en profondeur (#1499) :
-le refus d'un lancement plus outillé (#1501) et la borne d'une campagne retouchée (#1506) sont
-retirés. Restent refusés sous un jeton de délégation : créer un agent plus outillé que soi
-ou élargir la liste d'un agent (`tools_human_only`, ci-dessus), prêter le rôle plateforme
-(ci-dessous) et toucher la porte d'un webhook (`hook_door_human_only`).
+lance ; la liste de l'agent ou de la campagne lancés, elle, reste posée par une personne.
+Décision transitoire, le temps de refaire les droits en profondeur (#1499) : le refus d'un
+lancement plus outillé (#1501) est retiré. Restent refusés sous un jeton de délégation :
+créer un agent plus outillé que soi ou élargir la liste d'un agent (`tools_human_only`,
+ci-dessus), élargir la liste d'une campagne (ci-dessous), prêter le rôle plateforme et
+toucher la porte d'un webhook (`hook_door_human_only`).
+
+**Ni par une campagne retouchée (`tools_human_only`, #1499).** Chaque passage d'une
+campagne relit SA liste (`campagne_a_servir`) : un travail qui retouchait `tools` d'une
+campagne qu'une personne avait armée l'élargissait au passage suivant, sans repasser par
+`launch` — et composait lui-même la liste qu'un lancement relaie. Sous un jeton de
+délégation, `oto_fleet op=update` applique la règle d'un agent
+(`_outils_plateforme.exiger_aucun_ajout_d_agent`) : réduire ou reposer la même liste
+passe, ajouter un outil est refusé. `procedure` d'une campagne est figée
+(`field_not_settable`), et `input` n'ouvre aucun outil : rien d'autre à borner.
 
 **Ni avec un rôle plateforme (`chain_widens_platform_tools`, #1499).** L'enfant d'un
 `run_now` tourne sous le MÊME porteur, donc avec les `oto_admin_*` que son agent exerce au

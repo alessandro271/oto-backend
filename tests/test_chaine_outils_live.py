@@ -5,7 +5,8 @@ La liste d'outils d'un travail est tenue par le serveur sur chacun de SES appels
 (`outils_du_travail`). Lancer un AUTRE agent (`oto_trigger op=run_now`) ou armer une
 campagne (`oto_fleet op=launch`) n'est pas borné par cette liste : l'enfant tourne avec la
 sienne, posée par une personne — c'est le relais vers un agent spécialisé, en attendant la
-refonte des droits de #1499. Ce qui reste refusé : lancer un agent dont le travail
+refonte des droits de #1499. Ce qui reste refusé : élargir la liste d'une campagne
+(`oto_fleet op=update`, `tools_human_only`) ; lancer un agent dont le travail
 exercerait des `oto_admin_*` avec le rôle plateforme du porteur que le parent n'exerce pas
 (`chain_widens_platform_tools`) ; créer un agent plus outillé que soi (`tools_human_only`,
 banc `test_runner_triggers.py`).
@@ -168,16 +169,26 @@ def _retoucher(org: int, fleet_id: int, outils: list) -> dict:
                       RF.FleetInput(op="update", fleet_id=fleet_id, tools=outils))
 
 
-def test_un_travail_retouche_la_liste_d_une_campagne(org, depuis_le_travail):
-    """La liste d'une campagne n'est plus bornée par celle du travail qui la retouche
-    (relais, en attendant #1499) : réduire, reposer ou élargir passe."""
+def test_un_travail_n_elargit_pas_une_campagne_armee(org, depuis_le_travail):
+    """Chaque passage d'une campagne relit SA liste (`campagne_a_servir`) : une campagne
+    armée par une personne s'élargissait au passage suivant par un simple `update`."""
+    from oto_mcp import db
+    from oto_mcp.capabilities._types import AuthzDenied
+    f = _campagne(org, ["acme_people"])
+    assert db.armer(f, org)["status"] == "armed"   # armée par une personne
+    with pytest.raises(AuthzDenied) as e:
+        _retoucher(org, f, ["acme_people", "acme_siret"])
+    assert (e.value.status, e.value.code) == (403, "tools_human_only")
+    assert "acme_siret" in e.value.message
+    assert db.get_fleet(f, org)["tools"] == ["acme_people"], "rien n'est écrit"
+
+
+def test_un_travail_reduit_ou_repose_la_liste_d_une_campagne(org, depuis_le_travail):
     from oto_mcp import db
     f = _campagne(org, ["acme_people", "acme_siret"])
     db.armer(f, org)
     assert _retoucher(org, f, ["acme_siret", "acme_people"])["fleet"]["tools"]
     assert _retoucher(org, f, ["acme_people"])["fleet"]["tools"] == ["acme_people"]
-    assert _retoucher(org, f, ["acme_people", "acme_mail"])["fleet"]["tools"] == \
-        ["acme_people", "acme_mail"]
 
 
 def test_une_personne_elargit_une_campagne(org):

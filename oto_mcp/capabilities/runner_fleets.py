@@ -62,7 +62,7 @@ from pydantic import BaseModel, Field
 
 from . import (_abonnement, _cle_exigee, _descriptions_outils, _instruction,
                _limites_du_run, _lignes_de_campagne, _lignes_reservables, _modele,
-               _ordonnanceur_de_campagne, _outils_manquants)
+               _ordonnanceur_de_campagne, _outils_manquants, _outils_plateforme)
 from .. import (db, deprecations, output_projection, runner_models, session_org,
                tool_alias, verrou_org)
 
@@ -750,6 +750,15 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
     # outil que le réglage nomme le rendrait inerte sans un mot (oto#241).
     if inp.tools is not None:
         actuelle = db.get_fleet(inp.fleet_id, ctx.org_id)
+        # Depuis un agent hébergé, la liste d'une campagne ne s'élargit pas (#1499) :
+        # chaque passage relit SA liste (`campagne_a_servir`), donc une campagne armée
+        # par une personne s'élargissait au passage suivant. Même règle qu'un agent ;
+        # réduire, ou reposer la même liste, passe. `procedure` est figée (`update` ne
+        # la pose pas) : la liste servie ne bouge que par `tools`. Lancer ou armer une
+        # campagne plus outillée que le travail appelant reste permis (relais) : sa
+        # liste, elle, est posée par une personne.
+        if actuelle:
+            _outils_plateforme.exiger_aucun_ajout_d_agent(actuelle, inp.tools)
         retires = _descriptions_outils.outils_nommes_retires(
             (actuelle or {}).get("descriptions_outils"), inp.tools)
         if retires:
