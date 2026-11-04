@@ -277,6 +277,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "amplitude",
     "snitcher",
     "waalaxy",
+    # Neighbour of `waalaxy` by trade (LinkedIn outreach automation), with the inbox,
+    # statistics and webhooks its API serves — wired 2026-11-04.
+    "heyreach",
     "airtable",
     "tally",
     # Neighbour of `tally` by trade (online forms); read-only.
