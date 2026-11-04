@@ -520,6 +520,10 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "instagram_meta_get_media_insights": "lire",
     "instagram_meta_get_profile": "lire",
     "instagram_meta_get_recent_media": "lire",
+    # leads added, created or moved into an active campaign are emailed; an interest status
+    # may start a subsequence; a reply leaves at once; a webhook posts lead data out;
+    # move acts in bulk and may remove leads from their source
+    "instantly_act": {"ecrire": "update_lead create_lead_list add_blocklist_entry set_campaign_paused set_thread_read", "envoyer": "add_leads create_lead update_interest_status activate_campaign reply_email create_webhook", "detruire": "move_leads delete_webhook"},
     "jev_ask": "lire",
     "jev_items": "lire",
     "jev_job": {"lire": "status", "detruire": "cancel"},
@@ -1315,6 +1319,17 @@ LOTS: dict[str, Lot] = {
     "amplemarket_act:review_phone_number": Lot("leads"),
     "amplemarket_act:create_call_log": Lot("leads"),
     "amplemarket_act:add_sequence_leads": Lot("leads"),
+    "instantly_act:update_lead": Lot("leads"),
+    "instantly_act:create_lead_list": Lot("leads"),
+    "instantly_act:add_blocklist_entry": Lot("leads"),
+    "instantly_act:set_campaign_paused": Lot("leads"),
+    "instantly_act:set_thread_read": Lot("leads"),
+    "instantly_act:add_leads": Lot("leads"),
+    "instantly_act:create_lead": Lot("leads"),
+    "instantly_act:update_interest_status": Lot("leads"),
+    "instantly_act:activate_campaign": Lot("leads"),
+    "instantly_act:reply_email": Lot("leads"),
+    "instantly_act:create_webhook": Lot("leads"),
     "apollo_bulk_match": Lot("people", max=10),
     "apollo_email:draft": Lot("recipients"),
     "apollo_sequence_contacts:add": Lot("contact_ids"),
@@ -1547,6 +1562,8 @@ PAS_UN_LOT: dict[str, str] = {
     "hubspot_list": "remove_record_ids properties processing_types",
     "hubspot_object": "properties associations filters sorts merge_ids",
     "hubspot_property": "names",
+    # move_leads filters by them (a bulk move is detruire); no op that writes takes them
+    "instantly_act": "ids contacts",
     "jev_rows": "state_fields filters",
     "kaspr_enrich_linkedin": "data_to_get",
     "klaviyo_consent": "channels",
