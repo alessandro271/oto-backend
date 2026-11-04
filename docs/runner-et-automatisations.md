@@ -3329,29 +3329,21 @@ que soi. La liste jugée est celle qui sera écrite — `tools` fourni, ou, s'il
 liste par défaut, c'est-à-dire les outils que la procédure cite (`<tool:…>`,
 `_outils_de_la_procedure`). Un sous-ensemble passe.
 
-**Lancer n'élargit pas non plus (`chain_widens_tools`, #1499).** Un agent lancé tourne
-avec SA liste : un travail qui a `oto_trigger` sortait de la sienne en une marche, par
-`run_now` vers un agent plus outillé. Sous un jeton de délégation, `run_now` n'enfile que
-si la liste SERVIE de l'enfant (`outils_du_travail.outils_servis` de la charge qui sera
-enfilée, au canonique) tient dans celle du travail appelant ; les outils de l'hôte sont
-hors du calcul, un parent introuvable ne permet que l'hôte. Sinon `403
-chain_widens_tools`, qui nomme les outils en trop, rien n'est enfilé. Même borne à
-l'armement d'une campagne depuis un travail (`oto_fleet op=launch`, chaque travail de la
-campagne tournant avec la liste de la campagne). Seul `outils_du_travail.en_trop` calcule,
-`_outils_plateforme.exiger_un_lancement_sans_elargissement` refuse. Une personne lance
-comme avant.
-
-**Ni par une campagne retouchée (`tools_human_only`, #1499).** Chaque passage d'une
-campagne relit SA liste (`campagne_a_servir`) : un travail qui retouchait `tools` d'une
-campagne qu'une personne avait armée l'élargissait au passage suivant, sans repasser par
-`launch`. Sous un jeton de délégation, `oto_fleet op=update` applique la règle d'un
-agent (`_outils_plateforme.exiger_aucun_ajout_d_agent`) : réduire ou reposer la même
-liste passe, ajouter un outil est refusé. `procedure` d'une campagne est figée
-(`field_not_settable`), et `input` n'ouvre aucun outil : rien d'autre à borner.
+**Lancer passe le relais (#1499).** Un agent lancé tourne avec SA liste, posée par une
+personne. Sous un jeton de délégation, `oto_trigger op=run_now` enfile un agent même plus
+outillé que le travail appelant, et `oto_fleet op=launch` arme une campagne même plus
+outillée : c'est le relais vers un agent spécialisé, sans créer de tâche planifiée sur le
+second. La liste du travail appelant borne SES appels (`outils_du_travail`), pas ce qu'il
+lance. De même, `oto_fleet op=update` retouche `tools` d'une campagne sans borne de
+délégation. Décision transitoire, le temps de refaire les droits en profondeur (#1499) :
+le refus d'un lancement plus outillé (#1501) et la borne d'une campagne retouchée (#1506) sont
+retirés. Restent refusés sous un jeton de délégation : créer un agent plus outillé que soi
+ou élargir la liste d'un agent (`tools_human_only`, ci-dessus), prêter le rôle plateforme
+(ci-dessous) et toucher la porte d'un webhook (`hook_door_human_only`).
 
 **Ni avec un rôle plateforme (`chain_widens_platform_tools`, #1499).** L'enfant d'un
 `run_now` tourne sous le MÊME porteur, donc avec les `oto_admin_*` que son agent exerce au
-rôle plateforme (`db.outils_plateforme_du_travail`) — `en_trop` ne compare que `tools`.
+rôle plateforme (`db.outils_plateforme_du_travail`) — même quand sa liste `tools` est ouverte.
 Sous un jeton de délégation, `run_now` refuse quand la liste que le serveur TIENDRA pour
 l'enfant (`db.outils_plateforme_d_un_lancement`, même condition SQL que le travail en
 cours, filtrée par `verrou_org.outils_d_admin`) n'est pas incluse dans celle que le

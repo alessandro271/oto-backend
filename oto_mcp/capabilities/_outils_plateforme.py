@@ -65,29 +65,16 @@ def exiger_aucun_outil_hors_du_travail(outils: list[str]) -> None:
     _refuser_l_elargissement(outils, outils_du_travail.permis_du_travail(verrou.job_id))
 
 
-def exiger_un_lancement_sans_elargissement(charge: dict) -> None:
-    """`run_now`, armement d'une campagne : refuse `chain_widens_tools` quand un agent
-    hébergé LANCE un travail dont la liste servie (`charge`, celle qui sera enfilée)
-    déborde de la sienne (`outils_du_travail.en_trop`, #1499). L'enfant tourne avec ses
-    propres outils : sans cette borne, un agent qui a `oto_trigger` lancerait un agent
-    qui a ce qui lui manque. Hors jeton de délégation, rien ne change."""
-    trop = outils_du_travail.en_trop(charge)
-    if trop:
-        raise AuthzDenied(403, "chain_widens_tools",
-                          f"a hosted agent only starts work whose tools fit in its own list: "
-                          f"{', '.join(trop)} are not in it. A person widens an agent's "
-                          "tools, from their own account.")
-
-
 def exiger_un_lancement_sans_role_plateforme(org_id: int, trigger_id: int,
                                             sub: str) -> None:
     """`run_now` : refuse `chain_widens_platform_tools` quand un agent hébergé LANCE un
     agent dont le travail exercerait des `oto_admin_*` avec le rôle plateforme du
     porteur (`db.outils_plateforme_d_un_lancement`, la liste que le serveur TIENDRA pour
     l'enfant, filtrée comme `verrou_org.outils_permis`) que le sien n'exerce pas
-    (#1499). L'enfant tourne sous le MÊME porteur : `en_trop` ne compare que `tools`,
-    et le parent prêtait ainsi un rôle qu'on ne lui avait pas donné. Hors jeton de
-    délégation, rien ne change."""
+    (#1499). L'enfant tourne sous le MÊME porteur : le parent prêterait ainsi un rôle
+    qu'on ne lui avait pas donné. Lancer un agent ou armer une campagne qui a plus de
+    `tools` que soi reste permis (relais, en attendant la refonte des droits de #1499) ;
+    le rôle plateforme, lui, ne se prête pas. Hors jeton de délégation, rien ne change."""
     if not _depuis_un_agent_heberge():
         return
     from .. import db

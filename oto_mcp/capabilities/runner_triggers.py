@@ -48,7 +48,6 @@ from ._authz import ORG_MEMBER
 from ._dossier import FOLDER_MAX, dossier_valide
 from ._outils_plateforme import (PLATFORM_TOOLS_MAX, exiger_aucun_ajout_d_agent,
                                  exiger_aucun_outil_hors_du_travail,
-                                 exiger_un_lancement_sans_elargissement,
                                  exiger_un_lancement_sans_role_plateforme,
                                  outils_plateforme_valides)
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -1832,11 +1831,10 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         charge = runner_jobs.charge_et_modele(ctx, runner_jobs.JobsInput(
             op="enqueue", kind="start",
             payload={k: v for k, v in charge.items() if v is not None}))
-        # Depuis un agent hébergé, l'enfant ne tourne qu'avec des outils que le parent a
-        # (#1499) : jugé sur la charge qui SERA enfilée, au canonique.
-        exiger_un_lancement_sans_elargissement(charge)
-        # Ni avec un rôle plateforme qu'il n'exerce pas : l'enfant tourne sous le même
-        # porteur, avec les `oto_admin_*` de SON agent (#1499).
+        # Depuis un agent hébergé, l'enfant tourne avec SA liste, même plus fournie que
+        # celle du parent (relais, en attendant #1499) — mais pas avec un rôle plateforme
+        # que le parent n'exerce pas : l'enfant tourne sous le même porteur, avec les
+        # `oto_admin_*` de SON agent (#1499).
         exiger_un_lancement_sans_role_plateforme(ctx.org_id, t["id"], ctx.sub)
         res = db.enqueue_job(ctx.org_id, "start", payload=charge, sub=ctx.sub,
                              chaine=chaine)
@@ -2960,9 +2958,6 @@ CAPABILITIES += [
             DeclaredError(400, "handoff_run_now_only", "`handoff` hors d'`op=run_now`"),
             DeclaredError(400, "chain_self",
                           "`run_now` d'un agent hébergé sur son propre agent"),
-            DeclaredError(403, "chain_widens_tools",
-                          "`run_now` d'un agent hébergé vers un agent dont la liste "
-                          "d'outils servie déborde de la sienne (#1499)"),
             DeclaredError(403, "chain_widens_platform_tools",
                           "`run_now` d'un agent hébergé vers un agent qui exercerait des "
                           "`oto_admin_*` avec le rôle plateforme du porteur que le sien "
