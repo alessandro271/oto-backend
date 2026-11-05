@@ -116,3 +116,35 @@ def test_refus_avant_tout_appel(classeur, nom, args, motif):
         _tool(nom)(**args)
     classeur.get_range.assert_not_called()
     classeur.update_range.assert_not_called()
+
+
+# --- le refus WAC : l'API Excel refuse sa session, pas le fichier ---------------------
+
+def _wac():
+    from oto.tools.common.errors import UpstreamHTTPError
+    return UpstreamHTTPError(403, {"error": {"code": "accessDenied", "message": (
+        "Could not obtain a WAC access token.")}}, service="microsoft")
+
+
+def test_un_refus_wac_en_lecture_renvoie_au_telechargement(classeur):
+    classeur.list_worksheets.side_effect = _wac()
+    with pytest.raises(McpError) as exc:
+        _tool("sharepoint_excel")(op="sheets", user="collegue@exemple.fr", item_id="it-1")
+    msg = str(exc.value)
+    assert "Excel for the web" in msg and 'sharepoint_file(op="download")' in msg
+    assert "does not have rights" not in msg
+
+
+def test_un_refus_wac_en_ecriture_dit_comment_faire(classeur):
+    classeur.update_range.side_effect = _wac()
+    with pytest.raises(McpError, match='conflict="replace"'):
+        _tool("sharepoint_excel_act")(op="update_range", item_id="it-1", sheet="S",
+                                      address="A1", values=[[1]])
+
+
+def test_un_autre_403_reste_un_refus_de_droits(classeur):
+    from oto.tools.common.errors import UpstreamHTTPError
+    classeur.get_range.side_effect = UpstreamHTTPError(
+        403, {"error": {"message": "Access denied"}}, service="microsoft")
+    with pytest.raises(McpError, match="does not have rights"):
+        _tool("sharepoint_excel")(op="range", item_id="it-1", sheet="S")

@@ -23,6 +23,7 @@ on the "SharePoint & OneDrive" card, click **Authorize SharePoint & OneDrive** a
 ## note — what is misleading
 
 - ⚠️ **a 403 does not mean the file doesn't exist**: your account has no access to it, or your organization blocks oto
+- ⚠️ **`sharepoint_excel` opens the workbook in Excel for the web**, which Microsoft can refuse while the file itself is readable (a workbook in a colleague's OneDrive, an account without Excel for the web): the refusal says so, and `sharepoint_file(op="download")` reads the same workbook as CSV
 - ⚠️ **search goes through SharePoint's index**: a file that was just dropped may not be there yet. To find it right away, list it by its folder
 - ⚠️ **a name already taken is refused** on upload (`conflict="fail"`, the default): `conflict="rename"` keeps both, `conflict="replace"` overwrites
 - site search (`op="search"`) does not find personal OneDrives: for a colleague's, use `user=`

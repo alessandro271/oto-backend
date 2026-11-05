@@ -39,7 +39,7 @@ from fastmcp import FastMCP
 from .. import access, file_source
 from ._microsoft_graph import bad as _bad, need as _need, raw as _brut
 from ._microsoft_graph import refuse_ignored as _refuse_ignored
-from ._microsoft_graph import run, token
+from ._microsoft_graph import raise_refusal, run, token
 from .lecture import ACTE, LECTURE
 
 # Read as PDF by default: Graph converts them, and it is the PDF's text that the agent
@@ -57,6 +57,18 @@ _UPLOAD_MAX = 25 * 1024 * 1024
 #: Rows of a range returned inline by default — a sheet of a few thousand rows would
 #: fill the agent's context.
 _EXCEL_ROWS = 200
+_WAC = ("Excel for the web could not open this workbook for this Microsoft account "
+        "(Microsoft refused its WAC session — common on a workbook in a colleague's "
+        "OneDrive, or for an account without Excel for the web). Your rights on the FILE "
+        "are not in question. ")
+_WAC_REFUS_LECTURE = _WAC + (
+    "Read it with sharepoint_file(op=\"download\") on the same file (same `drive_id` or "
+    "`user`, same `item_id` or `path`): a workbook comes back as CSV, sheet by sheet "
+    "(`sheet`, `max_rows`).")
+_WAC_REFUS_ECRITURE = _WAC + (
+    "Its cells cannot be written in place: download it with sharepoint_file(op=\"download\"), "
+    "change it, and upload it back with sharepoint_file(op=\"upload\", conflict=\"replace\") "
+    "— or ask its owner for edit rights.")
 
 
 def _site(s: dict) -> dict:
@@ -135,6 +147,22 @@ def register(mcp: FastMCP) -> None:
 
     def _run(fn):
         return run(fn, _LABEL, _CONFLIT)
+
+    def _run_excel(fn, ecrire: bool):
+        """`_run` for the workbook API, which opens the file in Excel for the web (WAC):
+        Microsoft can refuse that session while the account reads the FILE fine (a
+        workbook in a colleague's OneDrive, an account without Excel for the web). That
+        403 is not a missing right: it is said as such, with the path that works."""
+        from oto.tools.common.errors import UpstreamHTTPError
+
+        try:
+            return fn()
+        except UpstreamHTTPError as e:
+            if e.status_code == 403 and "WAC" in str(e.body):
+                raise _bad(_WAC_REFUS_ECRITURE if ecrire else _WAC_REFUS_LECTURE) from e
+            raise_refusal(e, _LABEL, _CONFLIT)
+        except ValueError as e:
+            raise _bad(str(e))
 
     def _drive_id(client: FilesClient, drive_id: Optional[str], user: Optional[str]) -> str:
         """The target drive: a library (`drive_id`), a colleague's OneDrive
@@ -426,13 +454,15 @@ def register(mcp: FastMCP) -> None:
             if displayed:
                 raise _bad("`displayed` only applies to op='range'.")
             w, drive = _classeur(drive_id, user, item_id, path)
-            feuilles = _run(lambda: w.list_worksheets(drive, item_id=item_id, path=path))
+            feuilles = _run_excel(lambda: w.list_worksheets(drive, item_id=item_id,
+                                                           path=path), ecrire=False)
             return {"sheets": [{k: f.get(k) for k in ("id", "name", "position",
                                                       "visibility")} for f in feuilles],
                     "count": len(feuilles)}
         nom = _need(sheet, "sheet", op)
         w, drive = _classeur(drive_id, user, item_id, path)
-        r = _run(lambda: w.get_range(drive, nom, address, item_id=item_id, path=path))
+        r = _run_excel(lambda: w.get_range(drive, nom, address, item_id=item_id, path=path),
+                       ecrire=False)
         return _plage(r, max_rows, displayed)
 
     @mcp.tool(annotations=ACTE)
@@ -473,7 +503,7 @@ def register(mcp: FastMCP) -> None:
         if op != "update_range":
             raise _bad("op must be 'update_range'.")
         w, drive = _classeur(drive_id, user, item_id, path)
-        r = _run(lambda: w.update_range(drive, _need(sheet, "sheet", op),
-                                        _need(address, "address", op), values,
-                                        item_id=item_id, path=path))
+        r = _run_excel(lambda: w.update_range(drive, _need(sheet, "sheet", op),
+                                              _need(address, "address", op), values,
+                                              item_id=item_id, path=path), ecrire=True)
         return _plage(r, len(values), False)
