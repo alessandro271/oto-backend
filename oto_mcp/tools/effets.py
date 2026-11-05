@@ -1033,6 +1033,10 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "teamtailor_jobs": "lire",
     "telegram_act": {"envoyer": "send"},
     "threecx_call": {"lire": "list export"},
+    # Live on the PBX: an update REPLACES the routing a public number or queue had (the
+    # preview shows it, nothing keeps it), a navigation list is replaced whole, and an
+    # action may act in bulk. `dry_run=True`, the default, only previews.
+    "threecx_act": {"ecrire": "create", "detruire": "update delete call"},
     "threecx_recording": "lire",
     "topograph_company": "lire",
     "topograph_search": "lire",

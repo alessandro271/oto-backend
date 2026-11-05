@@ -1,4 +1,5 @@
-"""3CX — phone system, READ-ONLY: call log, recordings.
+"""3CX — phone system: call log, recordings (this module) and configuration
+(`threecx_config` reads, `threecx_act` writes).
 
 Credential = the address of the phone system (`base_url`) + ONE access: API client
 (`client_id`/`client_secret`) or user account (`username`/`password`),
@@ -142,29 +143,36 @@ def _verify(fields: dict, config: dict | None = None) -> None:
         raise RuntimeError(f"3CX HTTP {e.status_code}: {e.body}")
 
 
-def register(mcp: FastMCP) -> None:
-    from oto.tools.common.errors import UpstreamHTTPError
+def client():
+    """The client of the caller's credential, its `base_url` checked by the egress
+    guard — shared by every `threecx*` tool module."""
     from oto.tools.threecx import ThreeCXClient
 
+    try:
+        champs = _champs(access.resolve_credential_fields(_NAME))
+    except ValueError as e:
+        raise _bad(str(e))
+    egress.check_url(champs["base_url"], connector="threecx")
+    return ThreeCXClient(**champs)
+
+
+def run(fn):
+    """`fn()`, an upstream refusal or a bad argument turned into a named refusal."""
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    try:
+        return fn()
+    except UpstreamHTTPError as e:
+        raise _bad(_upstream_message(e))
+    except ValueError as e:
+        raise _bad(str(e))
+
+
+def register(mcp: FastMCP) -> None:
     from .. import file_content
 
     connector_verify.register(_NAME, _verify)
-
-    def _client() -> ThreeCXClient:
-        try:
-            champs = _champs(access.resolve_credential_fields(_NAME))
-        except ValueError as e:
-            raise _bad(str(e))
-        egress.check_url(champs["base_url"], connector="threecx")
-        return ThreeCXClient(**champs)
-
-    def _run(fn):
-        try:
-            return fn()
-        except UpstreamHTTPError as e:
-            raise _bad(_upstream_message(e))
-        except ValueError as e:
-            raise _bad(str(e))
+    _client, _run = client, run
 
     def _periode_entiere(date_from: str, date_to: str, recorded_only: bool) -> list[dict]:
         """The whole log of the period, page after page, up to the incomplete
