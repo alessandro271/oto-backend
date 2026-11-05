@@ -248,7 +248,10 @@ def test_l_annuaire_hors_du_lien_d_approbation_par_defaut(monkeypatch):
     assert "entra" not in defaut["services"] and "sharepoint" in defaut["services"]
     depuis_sa_carte = ms.admin_approval("sub-1", connector="entra")
     assert "entra" in depuis_sa_carte["services"]
-    assert set(depuis_sa_carte["services"]) == set(ms.SERVICES)
+    # Un service d'une AUTRE ressource Entra (Power BI) n'entre que par sa propre carte.
+    assert set(depuis_sa_carte["services"]) == set(ms.SERVICES) - set(ms.SERVICE_RESOURCE)
+    assert "powerbi" not in defaut["services"]
+    assert "powerbi" in ms.admin_approval("sub-1", connector="powerbi")["services"]
     assert ms.admin_approval("sub-1", services=["entra"])["services"] == ["entra"]
 
 
