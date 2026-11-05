@@ -301,6 +301,18 @@ def test_non_employee_403_is_read_on_status_code_and_error_code(client):
         _tool("nextmotion_practitioner")(clinic_id=C)
 
 
+def test_a_plain_403_says_the_clinic_is_outside_the_key_user_rights(client):
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    client.list_doctors.side_effect = UpstreamHTTPError(
+        403, {"errors": [{"code": "permission_denied", "message": "x"}]}, service="nextmotion")
+    with pytest.raises(McpError) as exc:
+        _tool("nextmotion_practitioner")(clinic_id=C)
+    msg = str(exc.value)
+    assert "the API key is valid" in msg and "`clinic_id`" in msg
+    assert "Nextmotion code: permission_denied." in msg
+
+
 def test_client_value_error_becomes_invalid_params(client):
     client.get_doctor.side_effect = ValueError("doctor_id must be a UUID")
     with pytest.raises(McpError, match="UUID"):

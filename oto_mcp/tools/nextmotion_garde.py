@@ -90,7 +90,15 @@ def _upstream_message(e: Any) -> str:
         if "non_employee_access_denied" in _error_codes(e.body):
             return ("Nextmotion: access denied (HTTP 403) — the key's user "
                     "is not an employee of this clinic.")
-        return "Nextmotion: access denied (HTTP 403)."
+        # A refused KEY answers 401: a 403 is the key's USER lacking rights on what was
+        # asked — most often a clinic outside that user's access, which only a
+        # Nextmotion administrator grants. Said, so the agent stops retrying.
+        codes = sorted(c for c in _error_codes(e.body) if c)
+        return ("Nextmotion: access denied (HTTP 403) — the API key is valid (a refused "
+                "key answers 401), but its user has no rights on what was asked: most "
+                "often the clinic (`clinic_id`) is not among that user's clinics in "
+                "Nextmotion. A Nextmotion administrator grants it; retrying will not help."
+                + (f" Nextmotion code: {', '.join(codes)}." if codes else ""))
     if status == 404:
         return "Nextmotion: resource not found (HTTP 404)."
     if status == 429:
