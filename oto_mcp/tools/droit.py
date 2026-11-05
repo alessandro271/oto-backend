@@ -145,6 +145,8 @@ def register(mcp: FastMCP) -> None:
         jours_non_comptes_anciennete: int = 0,
         date_depot: Optional[str] = None,
         alsace_moselle: bool = False,
+        categorie: Optional[Literal["cadre", "non_cadre"]] = None,
+        anciennete_cadre_mois: Optional[int] = None,
     ) -> dict:
         """Checks before an act, deterministic, nothing stored, nothing filed.
 
@@ -185,13 +187,20 @@ def register(mcp: FastMCP) -> None:
             date_depot: Planned filing date, YYYY-MM-DD (default: earliest).
             alsace_moselle: True for an establishment in Alsace-Moselle (Good
                 Friday and 26 December are public holidays there).
+            categorie: "cadre" or "non_cadre", from the employment contract or
+                payroll — required when the agreement's floor depends on it
+                (IDCC 2264); without it that floor comes back `non_couvert`.
+            anciennete_cadre_mois: Months of service as a cadre (IDCC 2264);
+                only a whole career as cadre is computed, otherwise
+                `non_couvert`.
         """
         from ..fod import rupture as fod_rupture
         dossier = {"date_entree": date_entree, "date_signature": date_signature,
                    "date_rupture_envisagee": date_rupture_envisagee,
                    "indemnite_convenue": indemnite_convenue, "mois": mois, "idcc": idcc,
                    "jours_non_comptes_anciennete": jours_non_comptes_anciennete,
-                   "date_depot": date_depot, "alsace_moselle": alsace_moselle}
+                   "date_depot": date_depot, "alsace_moselle": alsace_moselle,
+                   "categorie": categorie, "anciennete_cadre_mois": anciennete_cadre_mois}
         return fod_rupture.controler({k: v for k, v in dossier.items() if v is not None})
 
     # --- Consolidated codes (LEGI, via FOD service) ---
