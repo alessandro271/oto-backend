@@ -186,6 +186,26 @@ def _adresse_du_tableau_de_bord(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTO_APP_URL", "https://manage.oto.cx")
 
 
+# ── La résolution DNS du garde de sortie, simulée (`egress.resolved_addresses`). Une
+# épreuve qui pose une URL fictive passe par le garde, qui résout l'hôte : sans
+# simulation, elle dépend du DNS de la machine qui la joue. Vécu le 06/11/2026 : un
+# nom fictif sous le joker `*.my.salesforce.com` a cessé de résoudre, et toute PR est
+# passée au rouge. La table se remplit par l'épreuve ; un hôte absent lève.
+@pytest.fixture
+def dns_simule(monkeypatch: pytest.MonkeyPatch) -> dict[str, set[str]]:
+    from oto_mcp import egress
+
+    table: dict[str, set[str]] = {}
+
+    def _resoudre(hote: str, port: int) -> set[str]:
+        if hote not in table:
+            raise AssertionError(f"résolution non simulée : {hote}")
+        return set(table[hote])
+
+    monkeypatch.setattr(egress, "resolved_addresses", _resoudre)
+    return table
+
+
 # ── Les défauts des droits déclarés (`access.entitlements`, #1066) — REQUISE : sans
 # déclaration, la lecture d'un droit lève. La valeur gréée est celle de l'instance
 # historique (`scripts/defauts_des_droits.py`) pour les clés fixes, et `0` pour toute

@@ -51,7 +51,7 @@ def _only_write(client, method: str) -> None:
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, dns_simule):
     """Faux `SalesforceClient` + credential résolu.
 
     `register()` importe la classe DANS son corps (`from oto.tools.salesforce.client
@@ -64,6 +64,7 @@ def client(monkeypatch):
 
     inst = MagicMock()
     monkeypatch.setattr(sf_client, "SalesforceClient", lambda **kw: inst)
+    dns_simule["x.my.salesforce.com"] = {"93.184.216.34"}   # le garde résout `login_url`
 
     class _RC:
         # `entity_type=None` = pas de ligne de coffre à réécrire : le writer de
