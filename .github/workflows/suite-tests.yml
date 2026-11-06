@@ -159,8 +159,16 @@ jobs:
           CODENAME=$(lsb_release -cs)
 
           echo "── dépôt PGDG (${CODENAME}-pgdg), clé vérifiée par empreinte"
-          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-            | gpg --dearmor | sudo tee /usr/share/keyrings/postgresql.gpg >/dev/null
+          # La clé se télécharge dans un FICHIER, avec réessai, puis se lit : un flux
+          # coupé (`curl: (56)`, vécu trois fois le 06/11/2026, runs 42249781279,
+          # 42252771522, 42255737454) ne nourrit plus `gpg` d'un morceau de clé
+          # (« no valid OpenPGP data found »), et un réessai repart d'un fichier vide.
+          # L'empreinte reste vérifiée juste après : un réessai ne fait rien croire.
+          CLE=$(mktemp)
+          curl -fsSL --retry 4 --retry-all-errors --retry-delay 3 --max-time 60 \
+            -o "$CLE" https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          gpg --dearmor < "$CLE" | sudo tee /usr/share/keyrings/postgresql.gpg >/dev/null
+          rm -f "$CLE"
           EMPREINTE=$(gpg --show-keys --with-colons /usr/share/keyrings/postgresql.gpg | awk -F: '$1=="fpr"{print $10; exit}')
           if [ "$EMPREINTE" != "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8" ]; then
             echo "::error title=Clé PGDG inattendue::empreinte lue $EMPREINTE — rien n'est installé."
@@ -170,9 +178,11 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
 
           echo "── paquets postgresql-17 et postgresql-17-pgvector"
-          sudo apt-get update -qq
+          # Même flux, même réseau : apt réessaie lui aussi (la signature du dépôt reste
+          # vérifiée par la clé ci-dessus).
+          sudo apt-get update -qq -o Acquire::Retries=4
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            postgresql-17 postgresql-17-pgvector
+            -o Acquire::Retries=4 postgresql-17 postgresql-17-pgvector
 
           echo "── le cluster 17/main, créé s'il manque"
           # Sur les images runner, postgresql-common ne crée AUCUN cluster à l'installation
