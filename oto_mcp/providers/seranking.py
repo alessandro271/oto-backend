@@ -29,7 +29,7 @@ CONNECTOR = _decrit(
              "opens both the Data API and the Project API",
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "SE Ranking"
 LOGO_DOMAIN = "seranking.com"
 
