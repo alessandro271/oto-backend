@@ -9,7 +9,7 @@ each user sets their own pennylane key — your books are visible only to you.
 
 query invoices, transactions and the trial balance, and settle unmatched payments.
 - `pennylane_trial_balance` the trial balance over a period, `pennylane_ref(kind="ledger_accounts")` the chart of accounts
-- `pennylane_invoice(op="list")` / `pennylane_supplier_invoice(op="list")` the invoices, `pennylane_transactions` the bank movements
+- `pennylane_invoice(op="list")` / `pennylane_supplier_invoice(op="list")` the invoices, `pennylane_transactions` the bank movements, `pennylane_bank_accounts` the bank accounts and their current balance
 - `pennylane_match` matches a transaction to its invoice (reversible) so a paid invoice isn't left as `late`
 - quotes: `pennylane_quote(op="create")` (no draft: it is born `pending`) → `op="pdf"` for the PDF link to attach to an email (the link expires, re-read it just before sending) → `op="set_status"` (`accepted` on signature) → `op="to_invoice"` creates the invoice as a **draft**, which `pennylane_invoice(op="finalize")` then `pennylane_act(op="send_invoice")` issue **after human validation**
 - supplier invoices: `pennylane_upload_file` (the PDF) → `pennylane_supplier_invoice(op="import")` (with `import_as_incomplete=true`, it stays in `validation_needed`) → `op="lines"` (the line `id`s and `vat_rate`s) → `op="update"` (label, dates, amounts, and `invoice_lines={"update": [{"id": …, "vat_rate": …}]}`) → `op="validate"` moves it to `complete`: a **binding** accounting entry, only on the user's explicit request, never right after an import

@@ -800,6 +800,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "pennylane_supplier": {"lire": "list", "ecrire": "create"},
     # update may delete lines (invoice_lines.delete); categorize replaces.
     "pennylane_supplier_invoice": {"lire": "list get lines categories", "ecrire": "import validate", "detruire": "update categorize"},
+    "pennylane_bank_accounts": "lire",
     "pennylane_transactions": "lire",
     "pennylane_trial_balance": "lire",
     "pennylane_upload_file": "ecrire",

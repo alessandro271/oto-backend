@@ -12,6 +12,7 @@ in `pennylane_achats.py`, `pennylane_supplier_invoice`), plus a single
 `pennylane_ref` for read-only reference data (company, fiscal years,
 chart of accounts, analytical axes and categories, invoice templates, products). The heterogeneous verbs that
 merging would not factor out stay named: `pennylane_transactions`,
+`pennylane_bank_accounts`,
 `pennylane_trial_balance`, `pennylane_match`, `pennylane_upload_file`.
 
 Committing writes are **draft-first**: creating an invoice or a
@@ -29,6 +30,7 @@ fields supplied by the agent that read the PDF).
 """
 from __future__ import annotations
 
+import json
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
@@ -468,6 +470,67 @@ def register(mcp: FastMCP) -> None:
         return _client().get_transactions(
             max_pages=max_pages, period_start=period_start, period_end=period_end,
             only_outstanding=only_outstanding, per_page=per_page)
+
+    @mcp.tool()
+    def pennylane_bank_accounts() -> dict:
+        """The company's bank accounts with their CURRENT balance, read-only.
+
+        One call = one Pennylane company (one key). For several companies, call
+        once per key (`_instance`) and add up on your side.
+
+        Returns `{"bank_accounts": [...]}`, each account:
+        - `id`, `name`, `currency` (ISO code);
+        - `balance`: the balance Pennylane holds for the account, a decimal STRING
+          as Pennylane sends it (e.g. "12345.67") — parse it with a decimal type,
+          not a float, before adding up;
+        - `bank`: `{"id", "name"}` — the bank establishment;
+        - `updated_at`: when Pennylane last changed the account record. Pennylane's
+          API exposes NO bank-sync date: this is the closest timestamp, not a
+          guarantee that the bank feed ran then.
+
+        Not available through Pennylane's API: the IBAN (not exposed on the
+        account), the sync date (see `updated_at`).
+
+        An account Pennylane returns without a balance raises an error: a
+        missing balance is never read as zero.
+        """
+        from oto.tools.common.errors import UpstreamHTTPError
+
+        c = _client()
+        comptes = c.fetch_all_pages("bank_accounts")
+        sans_solde = [a.get("id") for a in comptes if a.get("balance") in (None, "")]
+        if sans_solde:
+            raise _bad(
+                "Pennylane returned bank account(s) WITHOUT a balance (ids "
+                f"{sans_solde}): the balance cannot be read for them, and is not "
+                "reported as zero. Check the account's bank feed in Pennylane.")
+        ids = sorted({(a.get("bank_establishment") or {}).get("id")
+                      for a in comptes} - {None})
+        noms: dict = {}
+        if ids:
+            try:
+                etablissements = c.fetch_all_pages(
+                    "bank_establishments",
+                    {"filter": json.dumps([{"field": "id", "operator": "in",
+                                            "value": ids}])})
+            except UpstreamHTTPError as e:
+                if e.status_code != 403:
+                    raise
+                raise _bad(
+                    "Pennylane refused to name the banks (HTTP 403): the key lacks "
+                    "the `bank_establishments:readonly` scope. Add it to the key "
+                    "at Pennylane (balances need `bank_accounts:readonly`, "
+                    "already granted).") from e
+            noms = {b.get("id"): b.get("name") for b in etablissements}
+        return {"bank_accounts": [{
+            "id": a.get("id"),
+            "name": a.get("name"),
+            "currency": a.get("currency"),
+            "balance": a["balance"],
+            "bank": {"id": (a.get("bank_establishment") or {}).get("id"),
+                     "name": noms.get((a.get("bank_establishment") or {}).get("id"))},
+            "updated_at": a.get("updated_at"),
+        } for a in comptes]}
 
     @mcp.tool()
     def pennylane_trial_balance(start_date: str, end_date: str) -> list:
