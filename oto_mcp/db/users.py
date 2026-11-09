@@ -644,6 +644,9 @@ _SUB_COLUMNS = [
     ("app_consents", "sub"),
     # qui a rangé une app dans un projet : attribution, hors PK, UPDATE nu.
     ("app_projects", "filed_by"),
+    # qui a réglé les alertes d'agents d'une org (Réglages ▸ Alertes, ou la connexion de
+    # Slack qui les allume) : attribution, hors PK (`org_id`), UPDATE nu.
+    ("agent_alert_settings", "updated_by"),
     # qui a déposé un fichier dans une app : c'est aussi qui le LIT (lui seul, et ses
     # runs) — il suit la personne, sinon ses fichiers lui deviendraient illisibles.
     ("app_files", "sub"),

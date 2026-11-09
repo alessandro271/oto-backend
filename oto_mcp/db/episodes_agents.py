@@ -28,7 +28,7 @@ VIVANTS = ("ouvert", "en_soin", "escalade")
 
 _COLONNES = ("id, org_id, trigger_id, classe, cote, statut, motif, dernier_job_id, "
              "travaux_morts, reparations, diagnostic, classe_manuelle, ouvert_at, vu_at, "
-             "clos_at, resolution")
+             "clos_at, resolution, message_client, slack_alerte_at")
 
 
 def pannes_en_cours() -> list[dict[str, Any]]:

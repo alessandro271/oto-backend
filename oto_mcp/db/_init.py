@@ -717,6 +717,16 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # L'issue que l'agent a conclue de son travail, et sa note (`issues_des_travaux`) —
     # les mêmes que pose la révision `20261109_1500_alertes_agents` : ordre indifférent.
     from . import issues_des_travaux
+    # La réparation dite au client (`runner_triggers.noter_reparation_pour_le_client`),
+    # même révision.
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_REPARATION):
+        conn.execute(runner_triggers.DDL_COLONNE_REPARATION)
+    # Le message au client et les messages Slack partis, sur l'épisode
+    # (`alertes_slack`), même révision.
+    from . import alertes_slack
+    for _col, _ddl in zip(alertes_slack.COLONNES_EPISODES, alertes_slack.DDL_EPISODES):
+        if _colonne_absente(conn, "agent_episodes", _col):
+            conn.execute(_ddl)
     if _colonne_absente(conn, "runner_jobs", issues_des_travaux.COLONNE_ISSUE):
         conn.execute(issues_des_travaux.DDL_COLONNE_ISSUE)
     if _colonne_absente(conn, "runner_jobs", issues_des_travaux.COLONNE_NOTE):
