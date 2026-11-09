@@ -307,15 +307,16 @@ adresse que le lecteur a vue en entier et choisi d'ouvrir (ci-dessous).
 
 #### Liens vers l'extérieur (`oto.open`, 9/11/2026)
 
-Le cadre ne quitte toujours pas l'app : `window.open`, `target="_blank"` et
-`location.href = …` y restent sans effet. Un site hors de Tulina s'ouvre par Tulina,
+Le cadre ne quitte toujours pas l'app : `window.open` et `location.href = …` y
+restent sans effet (un `target="_blank"` sur un lien `https://` est ignoré, le lien
+passe par la question ci-dessous). Un site hors de Tulina s'ouvre par Tulina,
 après l'accord du lecteur :
 
 - **Un lien `<a href="https://…">`** (de préférence) : le pont intercepte le clic, le
   remet à l'hôte, qui demande « Ouvrir un site hors de Tulina ? » en montrant l'adresse
   entière, puis l'ouvre dans un nouvel onglet (`noopener,noreferrer`) si le lecteur
-  confirme. Un `target` sur le lien est ignoré. `mailto:` et `tel:` ne sont pas pris :
-  un tel lien fait quitter la page, Tulina l'arrête et l'app se ferme — n'en pas mettre.
+  confirme. Un `target` sur le lien est ignoré. Un lien ni `http(s)` ni `#` (`mailto:`…)
+  n'est pas pris : il fait quitter la page, Tulina l'arrête et l'app se ferme — n'en pas mettre.
 - **`oto.open(url)`**, depuis le gestionnaire d'un clic (un bouton) : la même question.
 - **Règles** : `http(s)` seul ; une adresse avec une partie utilisateur
   (`https://site@autre.site/`) est refusée — le site y est `autre.site`, que le lecteur
