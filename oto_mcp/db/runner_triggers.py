@@ -500,6 +500,11 @@ def _liste_plateforme_tenue(t: str) -> str:
             f"      AND g.resource_id = {t}.id::text "
             "      AND g.principal_type = 'user' AND g.permission = 'write' "
             f"      AND g.granted_by IN ({t}.sub, '{MARQUE_GARDE_AU_DON}') "
+            # Un éditeur nommé qui est LUI-MÊME opérateur plateforme n'a rien à
+            # emprunter : il exerce déjà ces outils depuis son compte. Lu à chaque
+            # travail : qu'il perde ce rôle, et la liste se referme d'elle-même.
+            "      AND NOT EXISTS (SELECT 1 FROM users u WHERE u.sub = g.principal_id "
+            "        AND u.role IN ('admin', 'super_admin')) "
             f"      AND {PARTAGE_VIVANT_G}) "
             f"  AND NOT {_pret_vivant(t)} "
             f"  AND NOT ({_servi_par_le_pool(t)} AND EXISTS (SELECT 1 FROM resource_grants g "
@@ -521,7 +526,8 @@ def outils_plateforme_du_travail(job_id: int) -> list[str]:
     (`payload->>'trigger_id'`) — SEULEMENT si cet agent ne peut être changé que par celui
     sous qui le travail tourne. Même org, même porteur, posé sur l'abonnement PERSONNEL
     de ce porteur, prêté à aucun éditeur NOMMÉ (`_forfait_prete_nomme`, ici pour
-    n'importe quel éditeur), sans l'éditeur que le don a gardé (`MARQUE_GARDE_AU_DON`)
+    n'importe quel éditeur — sauf un éditeur qui est lui-même opérateur plateforme, qui
+    n'a rien à emprunter : les deux fondateurs peuvent ainsi changer l'agent médecin), sans l'éditeur que le don a gardé (`MARQUE_GARDE_AU_DON`)
     et SANS prêt collectif vivant (`_pret_vivant`) : un admin de
     l'org et un partage à l'org entière ne peuvent alors que l'éteindre
     (`_acces_agent`). ⚠️ Le prêt collectif ferme la liste dès qu'il est posé, qu'un
