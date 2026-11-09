@@ -81,8 +81,16 @@ def test_solde_absent_leve_au_lieu_de_zero(client, solde):
 def test_droit_banques_manquant_le_dit(client):
     client.fetch_all_pages.side_effect = _pages(
         [_compte(1, "5.00")], UpstreamHTTPError(403, {"error": "scope"}, service="pennylane"))
-    with pytest.raises(McpError, match="bank_establishments:readonly"):
+    with pytest.raises(McpError, match="bank_establishments:readonly.*bank_names=False"):
         _outil()()
+
+
+def test_sans_noms_de_banque_ne_lit_que_les_comptes(client):
+    client.fetch_all_pages.side_effect = _pages([_compte(1, "5.00")], [])
+    res = _outil()(bank_names=False)
+    assert res["bank_accounts"][0]["bank"] == {"id": 9, "name": None}
+    assert res["bank_accounts"][0]["balance"] == "5.00"
+    client.fetch_all_pages.assert_called_once_with("bank_accounts")
 
 
 def test_autre_refus_remonte_tel_quel(client):

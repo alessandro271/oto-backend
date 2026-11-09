@@ -686,7 +686,7 @@ payfit_payroll	accounting accounting_export gross_by_contract payment_file statu
 payfit_payslip	download list overtime	68946ff7d9ba68cd
 payfit_worked_time	-	9c76b7fe8c251ffc
 pennylane_act	send_invoice	f3d35e44cf6ac888
-pennylane_bank_accounts	-	99334726611ccf58
+pennylane_bank_accounts	-	9d4b36579cf375f3
 pennylane_customer	create find list update	fba54f52a5e41ebb
 pennylane_firm_companies	-	1c4a387e960cc792
 pennylane_firm_create_folder	-	d6db13cbe52ee25c

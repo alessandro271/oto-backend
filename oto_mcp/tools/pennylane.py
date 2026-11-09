@@ -472,7 +472,7 @@ def register(mcp: FastMCP) -> None:
             only_outstanding=only_outstanding, per_page=per_page)
 
     @mcp.tool()
-    def pennylane_bank_accounts() -> dict:
+    def pennylane_bank_accounts(bank_names: bool = True) -> dict:
         """The company's bank accounts with their CURRENT balance, read-only.
 
         One call = one Pennylane company (one key). For several companies, call
@@ -493,6 +493,12 @@ def register(mcp: FastMCP) -> None:
 
         An account Pennylane returns without a balance raises an error: a
         missing balance is never read as zero.
+
+        Args:
+            bank_names: True (default) names each bank, which needs the key's
+                `bank_establishments:readonly` scope — without it the call
+                fails and says so. False skips that read: `bank.name` is then
+                null, by request, and only `bank_accounts:readonly` is needed.
         """
         from oto.tools.common.errors import UpstreamHTTPError
 
@@ -507,7 +513,7 @@ def register(mcp: FastMCP) -> None:
         ids = sorted({(a.get("bank_establishment") or {}).get("id")
                       for a in comptes} - {None})
         noms: dict = {}
-        if ids:
+        if bank_names and ids:
             try:
                 etablissements = c.fetch_all_pages(
                     "bank_establishments",
@@ -519,8 +525,8 @@ def register(mcp: FastMCP) -> None:
                 raise _bad(
                     "Pennylane refused to name the banks (HTTP 403): the key lacks "
                     "the `bank_establishments:readonly` scope. Add it to the key "
-                    "at Pennylane (balances need `bank_accounts:readonly`, "
-                    "already granted).") from e
+                    "at Pennylane, or call again with bank_names=False to get the "
+                    "balances without the bank names.") from e
             noms = {b.get("id"): b.get("name") for b in etablissements}
         return {"bank_accounts": [{
             "id": a.get("id"),
