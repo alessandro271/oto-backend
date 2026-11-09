@@ -93,8 +93,7 @@ def _dire(ep):
 
 def _allumer():
     from oto_mcp.db import alertes_slack
-    alertes_slack.activer_a_la_connexion(ORG, dm_user="U0MATHILDE", dm_name="Mathilde",
-                                         par="mathilde")
+    alertes_slack.activer_a_la_connexion(ORG, dm_user="U0MATHILDE", dm_name="Mathilde")
 
 
 def test_la_connexion_allume_en_prive_sans_defaire_un_admin(live):
@@ -102,8 +101,8 @@ def test_la_connexion_allume_en_prive_sans_defaire_un_admin(live):
     _allumer()
     r = alertes_slack.reglage(ORG)
     assert (r["enabled"], r["channel_id"], r["dm_user"]) == (True, None, "U0MATHILDE")
-    alertes_slack.poser(ORG, enabled=False, channel_id="C1", channel_name="x", par="admin")
-    alertes_slack.activer_a_la_connexion(ORG, dm_user="U0AUTRE", dm_name="Autre", par="b")
+    alertes_slack.poser(ORG, enabled=False, channel_id="C1", channel_name="x")
+    alertes_slack.activer_a_la_connexion(ORG, dm_user="U0AUTRE", dm_name="Autre")
     r = alertes_slack.reglage(ORG)
     assert (r["enabled"], r["channel_id"], r["dm_user"]) == (False, "C1", "U0MATHILDE")
 

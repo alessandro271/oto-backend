@@ -828,7 +828,6 @@ CREATE TABLE IF NOT EXISTS agent_alert_settings (
     channel_name TEXT,
     dm_user TEXT,
     dm_name TEXT,
-    updated_by TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """

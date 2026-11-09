@@ -317,7 +317,7 @@ def _allumer_les_alertes(org_id: int, body: dict, sub: str) -> None:
     try:
         qui = (body.get("authed_user") or {}).get("id") or None
         nom = (db_users.get_user(sub) or {}).get("name") or None
-        alertes_slack.activer_a_la_connexion(org_id, dm_user=qui, dm_name=nom, par=sub)
+        alertes_slack.activer_a_la_connexion(org_id, dm_user=qui, dm_name=nom)
     # noqa: SILENT — dit au journal ; Slack est connecté, les alertes se règlent à la main.
     except Exception:  # noqa: BLE001
         logger.warning("slack: alertes d'agents non allumées pour l'org %s", org_id,

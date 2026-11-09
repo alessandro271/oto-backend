@@ -5,6 +5,5 @@ channel_id TEXT,
 channel_name TEXT,
 dm_user TEXT,
 dm_name TEXT,
-updated_by TEXT,
 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

@@ -93,7 +93,7 @@ def _poser(ctx: ResolvedCtx, inp: AgentAlertsSaveInput) -> dict:
                               "Ce canal n'est pas un canal public que l'app Slack voit.")
         nom = connus[inp.channel_id]
     alertes_slack.poser(inp.org_id, enabled=inp.enabled, channel_id=inp.channel_id,
-                        channel_name=nom, par=ctx.sub)
+                        channel_name=nom)
     return _vue(inp.org_id)
 
 

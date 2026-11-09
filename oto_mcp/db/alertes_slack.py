@@ -30,8 +30,7 @@ DDL_EPISODES = (
 COLONNES_EPISODES = ("message_client", "slack_alerte_at", "slack_repare_at",
                      "slack_retour_at")
 
-_REGLAGE = ("org_id, enabled, channel_id, channel_name, dm_user, dm_name, updated_by, "
-            "updated_at")
+_REGLAGE = "org_id, enabled, channel_id, channel_name, dm_user, dm_name, updated_at"
 
 #: Les gestes du client qu'un message peut proposer (le bouton de la carte de l'agent).
 ACTIONS = ("credits", "connectors")
@@ -45,42 +44,39 @@ def reglage(org_id: int) -> Optional[dict[str, Any]]:
 
 
 def poser(org_id: int, *, enabled: bool, channel_id: Optional[str],
-          channel_name: Optional[str], par: Optional[str]) -> dict[str, Any]:
+          channel_name: Optional[str]) -> dict[str, Any]:
     """Le geste d'un admin : allumé ou non, et le canal (None = message privé à la
     personne qui a connecté Slack — gardée telle quelle)."""
     with _connect() as conn:
         return dict(conn.execute(
             f"""
-            INSERT INTO agent_alert_settings (org_id, enabled, channel_id, channel_name,
-                                              updated_by)
-            VALUES (%(org)s, %(on)s, %(cid)s, %(cname)s, %(par)s)
+            INSERT INTO agent_alert_settings (org_id, enabled, channel_id, channel_name)
+            VALUES (%(org)s, %(on)s, %(cid)s, %(cname)s)
             ON CONFLICT (org_id) DO UPDATE
                SET enabled = EXCLUDED.enabled, channel_id = EXCLUDED.channel_id,
-                   channel_name = EXCLUDED.channel_name, updated_by = EXCLUDED.updated_by,
-                   updated_at = NOW()
+                   channel_name = EXCLUDED.channel_name, updated_at = NOW()
             RETURNING {_REGLAGE}
             """,
             {"org": int(org_id), "on": bool(enabled), "cid": channel_id or None,
-             "cname": channel_name or None, "par": par}).fetchone())
+             "cname": channel_name or None}).fetchone())
 
 
 def activer_a_la_connexion(org_id: int, *, dm_user: Optional[str],
-                           dm_name: Optional[str], par: Optional[str]) -> dict[str, Any]:
+                           dm_name: Optional[str]) -> dict[str, Any]:
     """Slack vient d'être connecté pour l'org : les alertes s'allument, en message privé à
     cette personne — SAUF si un réglage existe déjà (un admin a choisi, on ne le défait
     pas) ; on y complète seulement la personne du message privé si elle manquait."""
     with _connect() as conn:
         return dict(conn.execute(
             f"""
-            INSERT INTO agent_alert_settings (org_id, enabled, dm_user, dm_name, updated_by)
-            VALUES (%(org)s, TRUE, %(dm)s, %(nom)s, %(par)s)
+            INSERT INTO agent_alert_settings (org_id, enabled, dm_user, dm_name)
+            VALUES (%(org)s, TRUE, %(dm)s, %(nom)s)
             ON CONFLICT (org_id) DO UPDATE
                SET dm_user = COALESCE(agent_alert_settings.dm_user, EXCLUDED.dm_user),
                    dm_name = COALESCE(agent_alert_settings.dm_name, EXCLUDED.dm_name)
             RETURNING {_REGLAGE}
             """,
-            {"org": int(org_id), "dm": dm_user or None, "nom": dm_name or None,
-             "par": par}).fetchone())
+            {"org": int(org_id), "dm": dm_user or None, "nom": dm_name or None}).fetchone())
 
 
 def orgs_a_prevenir() -> dict[int, dict[str, Any]]:

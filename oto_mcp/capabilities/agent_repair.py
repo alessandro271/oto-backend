@@ -203,7 +203,7 @@ def _reecrire_la_procedure(ctx: ResolvedCtx, ep: dict, inp: AgentRepairInput) ->
     `expected_version` est requis : on ne réécrit pas une procédure qu'on n'a pas lue
     dans son état présent. Cas du 09/11/2026 (3Dnatives) : des messages privés Slack
     adressés à un identifiant que l'app ne peut pas joindre."""
-    from ..org_store import instructions
+    from .. import org_store
     org_id, tid = int(ep["org_id"]), int(ep["trigger_id"])
     t = db.get_trigger(tid, org_id)
     if t is None or not t.get("procedure"):
@@ -213,7 +213,7 @@ def _reecrire_la_procedure(ctx: ResolvedCtx, ep: dict, inp: AgentRepairInput) ->
                           "`body_md` et `expected_version` sont requis pour op=set_procedure.")
     note = _exiger_la_phrase(inp)
     slug = t["procedure"]
-    if instructions.get_instruction("org", org_id, slug) is None:
+    if org_store.get_instruction("org", org_id, slug) is None:
         return {"episode": ep, "refus": (
             f"la procédure `{slug}` n'est pas une procédure de l'org {org_id} "
             "(personnelle, d'équipe ou de la plateforme) : escalade-la")}
@@ -225,10 +225,10 @@ def _reecrire_la_procedure(ctx: ResolvedCtx, ep: dict, inp: AgentRepairInput) ->
         return {"episode": episodes_agents.lire(int(ep["id"])),
                 "refus": "épisode clos, ou plafond de réécritures atteint"}
     try:
-        version = instructions.set_instruction("org", org_id, slug, inp.body_md,
+        version = org_store.set_instruction("org", org_id, slug, inp.body_md,
                                                set_by=ctx.sub,
                                                expected_version=inp.expected_version)
-    except instructions.InstructionVersionConflict as e:
+    except org_store.InstructionVersionConflict as e:
         return {"episode": episodes_agents.lire(int(ep["id"])), "refus": (
             f"la procédure a changé depuis ta lecture (version {e.current_version}) : "
             "relis-la")}
@@ -256,8 +256,8 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
         if t is not None:
             manquants = _outils_manquants(t, int(ep["org_id"]))
             if t.get("procedure"):
-                from ..org_store import instructions
-                p = instructions.get_instruction("org", int(ep["org_id"]), t["procedure"])
+                from .. import org_store
+                p = org_store.get_instruction("org", int(ep["org_id"]), t["procedure"])
                 procedure = None if p is None else {
                     "slug": p["slug"], "version": p["version"], "body_md": p["body_md"]}
         return {"episode": ep, "agent": agent, "dernier_travail": job,
