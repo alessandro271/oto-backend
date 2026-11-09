@@ -18,7 +18,8 @@ def test_instance_qui_declare_l_hote_la_description_nomme_open():
 def test_instance_qui_ne_declare_pas_la_description_tait_open():
     d = apps.description_app(False)
     assert "open(url)" not in d and "whole address" not in d
-    assert "go(route) (or a link <a href=\"#/route\">). A click in the app" in d
+    # Sans le réglage, la description est celle d'avant, mot pour mot autour du pont.
+    assert "go(route). A click in the app" in d and "#/route" not in d
 
 
 @pytest.mark.parametrize("brut, attendu", [(None, False), ("", False), ("0", False),

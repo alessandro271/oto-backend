@@ -506,8 +506,8 @@ def liens_exterieurs() -> bool:
 
 
 _PONT_LIENS_EXTERIEURS = (
-    " / open(url): a site outside the app, from a click handler — or just a plain "
-    "<a href=\"https://…\">, preferred. The viewer is shown the whole address and it "
+    " (or a link <a href=\"#/route\">) / open(url): a site outside the app, from a "
+    "click handler — or just a plain <a href=\"https://…\">, preferred. The viewer is shown the whole address and it "
     "opens in a new tab once they confirm (a target on the link is ignored); http(s) "
     "only — a mailto: or other non-http(s), non-# link closes the app; no user part "
     "(https://a@b/); only right after a viewer's click or key, never on load or a "
@@ -560,7 +560,7 @@ def description_app(liens: bool) -> str:
             "download(fileId) (opens the viewer's own file) / "
             "runAgent(agent, {input, files: [ids]}) → {jobId} — the run gets each file's "
             "text and reads it in full with op=read_file / job(jobId) / runs(agent) / "
-            "go(route) (or a link <a href=\"#/route\">)"
+            "go(route)"
             + (_PONT_LIENS_EXTERIEURS if liens else ".") + " "
             "A click in the app does NOT approve anything: every set, add, "
             "upload and runAgent is shown by the HOST screen (outside the app) with what "
