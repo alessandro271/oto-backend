@@ -78,7 +78,9 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # 208 → 210 le 2026-11-09, décision d'Alexis : seranking et seranking_act, servis par
 # leur description, entrent avec leur motif (cf. `tool_output_debt.txt`). Ce n'est pas un
 # critère qui blanchissait : c'est une exception tranchée, la seule à ce jour.
-_PLAFOND = 210
+# 210 → 208 le même jour : seranking et seranking_act payés (seranking 1.1.0, oto-core
+# v1.217.0 : chaque liste paginée déclare `output.projection` ou `strip`).
+_PLAFOND = 208
 
 
 def _debt() -> set[str]:
@@ -164,12 +166,15 @@ def _projette(tool) -> bool:
 def _decrit_projette(tool) -> bool:
     """Un outil servi par le lecteur générique (`tools/decrits.py`) n'a pas de corps à
     lire : sa sortie est dite par sa description. Il projette si CHAQUE fonction qui
-    pagine déclare `output.projection` (les clés gardées de chaque enregistrement,
-    appliquées par la lib). `strip` ne compte pas : il retire une adresse ou un secret,
-    pas le poids d'une liste."""
+    pagine déclare `output.projection` (les clés gardées de chaque enregistrement) ou
+    `output.strip` (les clés retirées), que la lib applique avant de rendre.
+    ⚠️ Assouplissement du 2026-11-09 : `strip` compte aussi. Il est la seule forme quand
+    la liste est à la racine de la réponse (le format ne la projette pas) ou quand
+    projeter ferait perdre ce qui l'entoure (le `total` d'une recherche) ; une fonction
+    qui ne déclare ni l'un ni l'autre rend toujours le brut, et l'outil reste jugé."""
     paginent = [f for f in tool.fonctions
                 if _PAGINATION & set(f.get("input", {}).get("properties", {}))]
-    return all("projection" in (f.get("output") or {}) for f in paginent)
+    return all({"projection", "strip"} & set(f.get("output") or {}) for f in paginent)
 
 
 def _sans_projection(tools) -> set[str]:
@@ -184,7 +189,7 @@ def test_un_outil_neuf_qui_pagine_declare_sa_projection():
         "chaque tour. Deux issues : exposer `full: bool = False` et resserrer le "
         "défaut (cf. `tools/aiark.py::_shape`), ou appeler `output_projection.project` "
         "/ `summarize` dans le corps de l'outil, ou, pour un outil servi par sa description, "
-        "déclarer `output.projection` sur chaque fonction qui pagine. Ne PAS l'ajouter à "
+        "déclarer `output.projection` (ou `strip`) sur chaque fonction qui pagine. Ne PAS l'ajouter à "
         "`tool_output_debt.txt` : la dette ne grossit pas.")
 
 
@@ -296,10 +301,10 @@ def test_un_fields_homonyme_n_est_pas_une_projection():
 
 
 def test_un_outil_decrit_projette_par_sa_description():
-    """Le lecteur générique n'a pas de corps à lire : c'est `output.projection` de
-    chaque fonction qui pagine qui en tient lieu. Sans elle, la liste sort telle que
-    l'amont la livre, et l'outil est jugé comme un outil écrit à la main qui ne
-    projette pas."""
+    """Le lecteur générique n'a pas de corps à lire : c'est `output.projection` ou
+    `output.strip` de chaque fonction qui pagine qui en tient lieu. Sans l'un ni
+    l'autre, la liste sort telle que l'amont la livre, et l'outil est jugé comme un
+    outil écrit à la main qui ne projette pas."""
     from fastmcp import FastMCP
 
     import _decrit_d_essai as essai
@@ -316,7 +321,11 @@ def test_un_outil_decrit_projette_par_sa_description():
 
     assert _pagine(lecteur(essai.description()))
     assert _projette(lecteur(essai.description())), "list_things déclare sa projection"
+    strip_seul = essai.description()
+    for f in strip_seul["functions"]:
+        (f.get("output") or {}).pop("projection", None)
+    assert _projette(lecteur(strip_seul)), "strip seul retire des clés : il compte (2026-11-09)"
     sans = essai.description()
     for f in sans["functions"]:
-        (f.get("output") or {}).pop("projection", None)
-    assert not _projette(lecteur(sans)), "strip seul ne retire pas le poids d'une liste"
+        f.pop("output", None)
+    assert not _projette(lecteur(sans)), "ni projection ni strip : la liste sort brute"

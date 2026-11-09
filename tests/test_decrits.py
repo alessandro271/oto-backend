@@ -572,3 +572,17 @@ def test_seranking_probe_reads_the_credits_left(seranking, vendeur):
     vendeur.answers.append((403, {"message": "Incorrect token"}))
     with pytest.raises(connector_verify.NonAutorise):
         sonde({"key": "k"}, {})
+
+
+def test_seranking_lists_come_back_reduced_to_what_an_agent_reads(seranking, vendeur):
+    """seranking 1.1.0: a list of backlinks keeps its declared keys only; a keyword search keeps its `total` and
+    loses each keyword's history trend."""
+    outils, _ = seranking
+    vendeur.answers.append((200, {"backlinks": [{"url_from": "https://a.example.test/", "url_to": "https://example.com/",
+                                                 "anchor": "oto", "inlink_rank": 3, "ip_from": "192.0.2.1"}]}))
+    rendu = _appel(outils["seranking_act"], op="list_backlinks", target="example.com", mode="domain", limit=10)
+    assert "ip_from" not in json.dumps(rendu) and "url_from" in json.dumps(rendu)
+    vendeur.answers.append((200, {"total": 42, "keywords": [{"keyword": "crm", "volume": 900,
+                                                             "history_trend": {"2026-10": 880}}]}))
+    rendu = _appel(outils["seranking_act"], op="similar_keywords", source="fr", keyword="crm", limit=10)
+    assert rendu["total"] == 42 and "history_trend" not in json.dumps(rendu) and "volume" in json.dumps(rendu)
