@@ -532,7 +532,7 @@ CAPABILITIES += [
             "go(route) (or a link <a href=\"#/route\">) / open(url): a site outside "
             "Tulina, from a click handler — or just a plain <a href=\"https://…\">, "
             "preferred. The viewer is shown the whole address and it opens in a new "
-            "tab once they confirm; http(s) only, no user part (https://a@b/), only "
+            "tab once they confirm; http(s) only (a mailto: or tel: link closes the app), no user part (https://a@b/), only "
             "right after a viewer's click or key, never on load or a timer. Never "
             "window.open, target=\"_blank\" or location.href (they do nothing in the "
             "sandbox); keep addresses readable, no data packed in the query. "

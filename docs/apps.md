@@ -314,7 +314,8 @@ après l'accord du lecteur :
 - **Un lien `<a href="https://…">`** (de préférence) : le pont intercepte le clic, le
   remet à l'hôte, qui demande « Ouvrir un site hors de Tulina ? » en montrant l'adresse
   entière, puis l'ouvre dans un nouvel onglet (`noopener,noreferrer`) si le lecteur
-  confirme. Un `target` sur le lien est ignoré ; `mailto:` et `tel:` ne sont pas pris.
+  confirme. Un `target` sur le lien est ignoré. `mailto:` et `tel:` ne sont pas pris :
+  un tel lien fait quitter la page, Tulina l'arrête et l'app se ferme — n'en pas mettre.
 - **`oto.open(url)`**, depuis le gestionnaire d'un clic (un bouton) : la même question.
 - **Règles** : `http(s)` seul ; une adresse avec une partie utilisateur
   (`https://site@autre.site/`) est refusée — le site y est `autre.site`, que le lecteur
