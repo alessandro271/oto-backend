@@ -1684,6 +1684,37 @@ def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
     return [{**dict(r), "meta": _public_meta(r["meta"])} for r in rows]
 
 
+@lecture_d_appel
+def list_credentials_many(entity_type: str, entity_ids: Sequence[str]) -> dict[str, list[dict]]:
+    """`list_credentials` for a whole list of entities of one type, in ONE query:
+    `{entity_id: [rows]}`, each list exactly what `list_credentials(entity_type, id)`
+    returns (same columns, same `meta` filtering, same `connector, account` order). An
+    entity without any row is absent from the dict.
+
+    Why: `GET /api/me/connectors` annotates the catalog with the keys of EVERY other
+    org the caller belongs to (`access.reachable_instances_map`) — one round trip per
+    org. A member of ~40 orgs paid ~40 round trips on each library open."""
+    ids = sorted({str(e) for e in entity_ids})
+    if not ids:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_id, connector, account, secret_kind, set_by, set_at, meta "
+            "FROM connector_credentials WHERE entity_type = %s AND entity_id = ANY(%s) "
+            "ORDER BY entity_id, connector, account",
+            (entity_type, ids),
+        ).fetchall()
+    from .connectors import orphelins
+    orphelins.signaler("connector_credentials",
+                       (r["connector"] for r in rows
+                        if not (r["meta"] or {}).get("base_url")))
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        ligne = {k: v for k, v in dict(r).items() if k != "entity_id"}
+        out.setdefault(r["entity_id"], []).append({**ligne, "meta": _public_meta(r["meta"])})
+    return out
+
+
 def scan_vault_health() -> dict:
     """Scan de santé du coffre (#72) : parcourt TOUTES les lignes chiffrées de
     `connector_credentials` et teste leur déchiffrement — SANS jamais garder ni
