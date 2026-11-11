@@ -161,3 +161,58 @@ def test_le_nombre_de_requetes_ne_suit_pas_le_nombre_d_orgs(jeu):
     assert apres == avant, f"le compte de requêtes suit les orgs du membre : {avant} → {apres}"
     assert sum(len(v) for v in _carte().values()) > sum(len(v) for v in carte_avant.values()), (
         "les orgs ajoutées n'apparaissent pas dans la carte : le banc ne mesure rien")
+
+
+# ── `roster=true` : la liste qui ne peint que logos, libellés et états ─────────────
+# Même jeu : un membre de plusieurs orgs et équipes, des clés à tous les paliers. Le
+# mode saute les trois enrichissements propres au demandeur (présence de credential,
+# instances à portée, aptitude du flux de connexion) et le DIT dans l'enveloppe.
+
+_PROPRES_AU_DEMANDEUR = {"credential", "reachable_instances"}
+_ENRICHISSEMENT_CONNECT = {"callback_url", "app_ready", "app_ready_scopes", "fixed",
+                           "warnings", "app_owner", "ready_options"}
+
+
+def _sans_enrichissement(row: dict) -> dict:
+    out = {k: v for k, v in row.items() if k not in _PROPRES_AU_DEMANDEUR}
+    if isinstance(out.get("connect"), dict):
+        out["connect"] = {k: v for k, v in out["connect"].items()
+                          if k not in _ENRICHISSEMENT_CONNECT}
+    return out
+
+
+@pytest.mark.parametrize("include", [None, ["card"]], ids=["compact", "card"])
+def test_roster_rend_les_memes_lignes_moins_l_enrichissement(jeu, include):
+    from oto_mcp.capabilities._types import ResolvedCtx
+    from oto_mcp.capabilities.connectors import selection as S
+    ctx = ResolvedCtx(sub=jeu.sub, org_id=jeu.org)
+    plein = S._me(ctx, S.MyConnectorsInput(include=include))
+    leger = S._me(ctx, S.MyConnectorsInput(include=include, roster=True))
+    assert any(_PROPRES_AU_DEMANDEUR & r.keys() for r in plein["connectors"]), (
+        "le jeu n'a ni clé ni instance à portée : la comparaison ne prouve rien")
+    assert not any(_PROPRES_AU_DEMANDEUR & r.keys() for r in leger["connectors"])
+    assert _json([_sans_enrichissement(r) for r in leger["connectors"]]) == \
+        _json([_sans_enrichissement(r) for r in plein["connectors"]])
+    assert leger["credentials"] == "not_computed" and leger["reach"] == "not_computed"
+    assert "reach" not in plein, "la lecture par défaut a changé de forme"
+
+
+def test_roster_coute_peu_et_ne_suit_ni_les_orgs_ni_les_cles(jeu):
+    from oto_mcp.capabilities._types import ResolvedCtx
+    from oto_mcp.capabilities.connectors import selection as S
+    ctx = ResolvedCtx(sub=jeu.sub, org_id=jeu.org)
+    inp = S.MyConnectorsInput(include=["card"], roster=True)
+    S._me(ctx, inp)
+    _, avant = _compter(lambda: S._me(ctx, inp))
+    _, plein = _compter(lambda: S._me(ctx, S.MyConnectorsInput(include=["card"])))
+    assert avant <= 20 and avant * 2 < plein, (avant, plein)
+    _orgs_en_plus(jeu, 200, 5)
+    _, apres = _compter(lambda: S._me(ctx, inp))
+    assert apres == avant, (avant, apres)
+
+
+def test_roster_refuse_une_lecture_ciblee():
+    from pydantic import ValidationError
+    from oto_mcp.capabilities.connectors import selection as S
+    with pytest.raises(ValidationError, match="roster"):
+        S.MyConnectorsInput(roster=True, name="linkedin")
