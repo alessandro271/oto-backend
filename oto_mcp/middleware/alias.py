@@ -27,7 +27,9 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
     En SORTIE, `on_list_tools` est au contraire le DERNIER à retoucher la liste (une
     chaîne extern→interne se déroule en sens inverse au retour) : le renommage
     s'applique après le filtrage de visibilité et l'enrichissement des descriptions,
-    sur la liste réellement servie.
+    sur la liste réellement servie. Le TITRE de chaque outil (posé au montage,
+    `tool_alias.poser_les_titres`) suit le nom ici : un alias déprécié reçoit le sien,
+    un outil renommé au préfixe du tenant voit `Oto:` devenir le nom du produit.
 
     Deux crans de prudence :
 
@@ -79,9 +81,13 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
                 if ancien in pris:
                     continue
                 pris.add(ancien)
+                # Son propre titre : copié tel quel, l'ancien nom porterait le titre
+                # du nouveau, et l'annuaire afficherait deux fois le même outil.
+                titre = f"{tool_alias.titre_pose(t)} (deprecated name: {ancien})"
                 out.append(t.model_copy(update={
                     "name": ancien,
                     "description": deprecations.avis(t.name) + (t.description or ""),
+                    **tool_alias.champs_titre(t, titre),
                 }))
         return out
 
@@ -110,6 +116,13 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
                 nom = tool_alias.public(t.name, prefix)
                 if nom != t.name and nom not in pris:
                     maj["name"] = nom
+                # Le TITRE au nom du produit : `Oto: Doc` → `Acme: Doc`, y compris pour
+                # `data_*`/`run_*`/`feedback`, dont le NOM reste (nom de capacité) mais
+                # dont le titre portait notre marque.
+                titre = tool_alias.titre_pose(t)
+                public = tool_alias.titre_public(titre, prefix)
+                if public != titre:
+                    maj.update(tool_alias.champs_titre(t, public))
                 # La DESCRIPTION aussi : c'est sur elle que le modèle choisit, et 27
                 # d'entre elles renvoient à un outil voisin (« resolve it with
                 # oto_kb »). Laissée en canonique, elle fait rappeler un nom que le

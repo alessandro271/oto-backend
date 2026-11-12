@@ -696,6 +696,12 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # que décroître. Cf. `middleware/un_seul_canal.py`.
     from .middleware.un_seul_canal import UnSeulCanalMiddleware, retirer_les_schemas_vides
     retirer_les_schemas_vides(instance)
+    # Après le DERNIER montage, lui aussi : chaque outil porte son TITRE (`title` et
+    # `annotations.title`), dérivé du libellé de son connecteur — l'annuaire des
+    # connecteurs d'Anthropic refuse un outil sans. Un outil sans libellé, ou deux
+    # outils au même titre, font LEVER la construction (`tool_alias.poser_les_titres`).
+    from . import tool_alias
+    tool_alias.poser_les_titres(instance)
 
     # oto-backend#534 : chronomètre TOUTE la chaîne de middlewares ci-dessous, sans
     # toucher un seul de ses appels ni leur ordre (contrat figé, cf. les commentaires

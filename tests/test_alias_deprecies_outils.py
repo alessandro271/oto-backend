@@ -108,12 +108,15 @@ async def test_la_liste_sert_les_deux_noms(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_lalias_decrit_le_meme_contrat_que_son_outil(monkeypatch):
-    """Hors le nom et l'avis en tête : même schéma d'entrée, même schéma de sortie."""
+    """Hors le nom, l'avis en tête et le titre (propre à chaque entrée, cf.
+    `tests/test_tool_alias_titres.py`) : même schéma d'entrée, même schéma de sortie."""
     servis = {t.name: t for t in await _liste_servie(monkeypatch)}
+    hors_contrat = {"name": True, "description": True, "title": True,
+                    "annotations": {"title"}}
     for ancien, canonique in deprecations.TOOLS.items():
         a, c = servis[ancien], servis[canonique]
-        assert (a.model_dump(exclude={"name", "description"})
-                == c.model_dump(exclude={"name", "description"})), (
+        assert (a.model_dump(exclude=hors_contrat)
+                == c.model_dump(exclude=hors_contrat)), (
             f"`{ancien}` a dérivé de `{canonique}` : l'agent lirait un contrat et en "
             "appellerait un autre.")
         assert a.description == deprecations.avis(canonique) + (c.description or "")
