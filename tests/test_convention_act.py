@@ -128,7 +128,9 @@ def test_un_connecteur_servi_suit_sa_description(par_connecteur):
             agit = nom != ns
             assert all(descriptions.agit(f) is agit for f in fonctions), nom
             annotation = (ACTE if agit else SIMULATION if descriptions.lecteur_simule(fonctions) else LECTURE)
-            assert outils[nom].annotations == annotation, nom
+            # Le titre est propre à chaque outil (`tool_alias.poser_les_titres`) : la
+            # convention porte sur les indices, pas sur lui.
+            assert outils[nom].annotations.model_copy(update={"title": None}) == annotation, nom
 
 
 def test_un_connecteur_migre_ne_sert_que_sa_paire(par_connecteur):
