@@ -977,17 +977,9 @@ def register(mcp: FastMCP) -> None:
         elif op == "transcript":
             meeting = _need(meeting_id, "meeting_id", op)
             recording = _need(call_recording_id, "call_recording_id", op)
-            if not cursor:
-                result = client.call_recordings.transcript(meeting, recording)
-            else:
-                # The pinned client reads the first page only (its method takes no
-                # cursor): the next pages go through the SAME `_request`, so their
-                # refusals are re-typed like the first one's. Attio pages the
-                # segments by `cursor` and answers `pagination.next_cursor`.
-                result = client._request(
-                    "GET",
-                    f"meetings/{meeting}/call_recordings/{recording}/transcript",
-                    params={"cursor": cursor})
+            # An empty `cursor` is no cursor: the first page, never `?cursor=`.
+            result = client.call_recordings.transcript(
+                meeting, recording, cursor=cursor or None)
         else:
             raise _bad(_one_of("op", _MEETING_OPS))
 

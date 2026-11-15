@@ -26,7 +26,7 @@ the connector mirrors the **141 documented routes**, without exception. by famil
 **inbox** — `lemlist_inbox` (conversations, drafts, labels) and `lemlist_act` (the direct sends, and the personas of the shared base)
 **unsubscribes** — `lemlist_unsubscribe`: ⚠️ **three distinct lists** (v1 emails/domains, v2 variables, a contact's do-not-contact flag); writing to one does not write to the others
 **signals** — `lemlist_watchlist`: companies that are hiring, fundraising, job changes, visiting your website… (website visitors: section below)
-**the rest** — `lemlist_task`, `lemlist_database` (shared base, read-only: people, companies, filters, personas — pass `compact=True` on people/companies, section below; saving or deleting a persona is `lemlist_act`), `lemlist_team`, `lemlist_mailbox` (SMTP/IMAP connection + lemwarm), `lemlist_deliverability`, `lemlist_webhook`, `lemlist_get_activities`
+**the rest** — `lemlist_task`, `lemlist_database` (shared base, read-only: people, companies, filters, personas — pass `compact=True` on people/companies, section below; saving or deleting a persona is `lemlist_act`), `lemlist_team`, `lemlist_mailbox` (SMTP/IMAP connection + lemwarm), `lemlist_deliverability`, `lemlist_webhook`, `lemlist_get_activities` (pass `compact=True`, section below)
 
 ## usage — website visitors
 
@@ -64,6 +64,14 @@ two surfaces send **indirectly**, and stay visible by saying so: a watch list se
 - `fields=["full_name", "experiences.title"]` keeps only those keys of each record (dotted path for a nested key, lists traversed, never an index); a key a record lacks is skipped. with `compact=True`, each field named is taken from the full record and REPLACES the short view's key of the same first level: `compact=True, fields=["experiences.title"]` gives every position, past ones included, each reduced to its title. a malformed list is refused before any request.
 - neither given: the page as lemlist sends it. `total`, `page`, `size` are always kept. both apply to `people` and `companies` only.
 - a view applies to the `results` list only: a page lemlist sends without one is refused as `lemlist_page_without_results` — call again without `fields` and `compact` to read it whole.
+
+## usage — reading activities
+
+`lemlist_get_activities` returns each event with its whole lead: every personalised copy of the sequence (HTML), the custom variables, lemlist's metadata. 100 events weigh hundreds of thousands of characters — more than an agent run can read.
+- **agents: pass `compact=True`** — each event keeps `_id`, `type`, `createdAt`, `campaignId`, `campaignName`, `sequenceStep`, `leadId`, `contactId`, `leadEmail`, `leadFirstName`, `leadLastName`, `leadCompanyName`, `fromEmail` (who replied), `sendUserEmail`, `subject`, and `excerpt`: the first 280 characters of the body (text first, else lemlist's preview, else the HTML without its tags). never HTML, never the lead's variables.
+- `fields=["type", "lead.variables.email"]` keeps only those keys (dotted path for a nested key, lists traversed, never an index); a key an event lacks is skipped. with `compact=True`, each field named is taken from the full event and REPLACES the short view's key of the same first level. a malformed list is refused before any request.
+- neither given: the events as lemlist sends them. both apply with `all_pages=True` too.
+- a view applies to a list only: an answer lemlist sends as something else is refused as `lemlist_activities_not_a_list` — call again without `fields` and `compact` to read it whole.
 
 ## note — lemlist API pitfalls
 

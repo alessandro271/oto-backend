@@ -82,7 +82,9 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # v1.217.0 : chaque liste paginée déclare `output.projection` ou `strip`).
 # 208 → 207 le 2026-11-13 : lemlist_database payé (`fields` et `compact`, appliqués par le
 # client d'oto-core, `oto.tools.lemlist.database_views`) — le défaut reste la page brute.
-_PLAFOND = 207
+# 207 → 206 le 2026-11-15 : lemlist_get_activities payé (`fields` et `compact`, appliqués
+# par le client d'oto-core, `oto.tools.lemlist.activity_views`) — le défaut reste la liste brute.
+_PLAFOND = 206
 
 
 def _debt() -> set[str]:

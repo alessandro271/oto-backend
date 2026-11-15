@@ -52,14 +52,14 @@ def _bad(msg: str) -> McpError:
 _DATABASE_VIEWS = "oto.tools.lemlist.database_views"
 
 
-def _raised_by_database_view(e: BaseException) -> bool:
-    """True when `e` was raised inside the view module itself, not by the request or
-    anything it calls: the view refuses a page that has no `results` list with a bare
+def raised_by_view(e: BaseException, module: str) -> bool:
+    """True when `e` was raised inside the view `module` of oto-core itself, not by the
+    request or anything it calls: a view refuses an answer it cannot shape with a bare
     `RuntimeError`, and only that one is renamed."""
     tb = e.__traceback__
     while tb is not None and tb.tb_next is not None:
         tb = tb.tb_next
-    return tb is not None and tb.tb_frame.f_globals.get("__name__") == _DATABASE_VIEWS
+    return tb is not None and tb.tb_frame.f_globals.get("__name__") == module
 
 
 def _page_without_results(kind: str) -> McpError:
@@ -833,7 +833,7 @@ def register(mcp: FastMCP) -> None:
                     raise
                 raise _bad(str(e)) from e
             except RuntimeError as e:
-                if not view or not _raised_by_database_view(e):
+                if not view or not raised_by_view(e, _DATABASE_VIEWS):
                     raise
                 raise _page_without_results(op) from e
         elif op == "filters":
