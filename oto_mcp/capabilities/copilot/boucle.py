@@ -294,7 +294,7 @@ async def conduire(fil: dict, b: Boite, cle: cles.Cle) -> AsyncIterator[dict]:
                 yield e
         except cles.SansCle as e:
             await sauver(fil)
-            yield ev("error", message=e.message)
+            yield ev("error", message=e.message, code=e.code)
             yield ev("done")
             return
         except modele.ErreurModele as e:
