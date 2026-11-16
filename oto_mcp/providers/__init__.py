@@ -82,6 +82,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "lemlist",
     # Neighbour of `lemlist`: the domains and mailboxes it sends from — wired 2026-10-05.
     "mailpool",
+    # Neighbour of `lemlist` by trade (cold email), served by the generic reader of
+    # its description.
+    "instantly",
     "kaspr",
     "pennylane",
     # The firm side of the same publisher (one token, every company of the firm):
@@ -184,6 +187,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "bigquery",
     # eighth service (2026-10-08) — same shape, `adwords` consent only, read-only tools.
     "google_ads",
+    # ninth service (2026-11-15) — same shape, `webmasters.readonly` consent only,
+    # read-only tool. The service-account connector `google_search_console` stays.
+    "search_console",
     # --- open-data / no credential ------------------------------------------
     # Unrelated public sources → distinct connectors (formerly `fr_open`, which
     # merged them: an incoherent "open data" bag, activating one activated the other).
@@ -254,7 +260,7 @@ _DECLARATIONS: tuple[str, ...] = (
     "make",
     "zapier",
     "fireflies",
-    # --- generic http connector (secret IN the oto vault) ---------------------
+    # --- `api` connector, generic HTTP client (secret IN the oto vault) ---------------------
     "api",
     "webflow",
     # Neighbour of `webflow` by trade (CMS): the two cards read together.
@@ -284,6 +290,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "amplitude",
     "snitcher",
     "waalaxy",
+    # Neighbour of `waalaxy` by trade (LinkedIn outreach), served by the generic
+    # reader of its description.
+    "heyreach",
     "airtable",
     "tally",
     # Neighbour of `tally` by trade (online forms); read-only.

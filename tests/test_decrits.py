@@ -411,12 +411,99 @@ def test_search_console_is_inscribed_with_its_service_account_key():
     assert descriptions.refus_de_montage(descriptions.charger("google_search_console")) == []
 
 
-def test_search_console_serves_one_reading_tool(search_console):
+def test_search_console_serves_its_reads_and_an_act_side_that_submits(search_console):
     outils, _ = search_console
-    assert set(outils) == {"google_search_console"}
+    assert set(outils) == {"google_search_console", "google_search_console_act"}
     assert outils["google_search_console"].parameters["properties"]["op"]["enum"] == [
         "list_sites", "query_search_analytics", "inspect_url", "list_sitemaps", "get_sitemap"]
-    assert descriptions.effets(descriptions.charger("google_search_console")) == {}
+    assert outils["google_search_console_act"].parameters["properties"]["op"]["enum"] == ["add_sitemap"]
+    assert outils["google_search_console_act"].annotations == ACTE
+    assert descriptions.effets(descriptions.charger("google_search_console")) == {
+        "google_search_console_act": {"envoyer": "add_sitemap"}}
+
+
+def _scope_de_l_assertion(requete) -> str:
+    """The `scope` claim of the service account's assertion, read in the token request's form."""
+    import base64
+    from urllib.parse import parse_qs
+    jwt = parse_qs(essai.envoyee(requete)["body"])["assertion"][0]
+    claims = jwt.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))["scope"]
+
+
+def test_search_console_reads_at_the_default_level_with_the_read_scope(search_console, vendeur):
+    """No level set: the description's `default_level`, `read` — the key asks for webmasters.readonly, as before the
+    levels existed."""
+    outils, _ = search_console
+    vendeur.answers.extend([(200, {"access_token": "ya29.not-real", "expires_in": 3599}),
+                            (200, {"siteEntry": []})])
+    _appel(outils["google_search_console"], op="list_sites")
+    assert _scope_de_l_assertion(vendeur.requests[0]) == "https://www.googleapis.com/auth/webmasters.readonly"
+
+
+def test_search_console_refuses_a_submit_at_read_before_sending_anything(search_console, vendeur):
+    outils, _ = search_console
+    with pytest.raises(decrits.RefusNomme) as refus:
+        _appel(outils["google_search_console_act"], op="add_sitemap", site_url="sc-domain:example.com",
+               feedpath="https://www.example.com/sitemap.xml")
+    assert (refus.value.code, refus.value.status_code) == ("access_level_denied", None)
+    message = str(refus.value)
+    assert "'read'" in message and "oto_connector_access_level(op='set', scope='org'" in message
+    assert "level='full'" in message and "Nothing was sent." in message
+    assert vendeur.requests == []
+    info = error_taxonomy.classify(refus.value)
+    assert (info.code, info.retryable) == ("access_level_denied", False)
+
+
+@pytest.fixture
+def niveau(monkeypatch):
+    """The level the org set, as the guard resolves it at the call."""
+    def poser(valeur):
+        monkeypatch.setattr(decrits.access_level_gate, "level_of_the_call", lambda nom: valeur)
+    return poser
+
+
+def test_search_console_submits_a_sitemap_at_full(search_console, vendeur, niveau):
+    outils, _ = search_console
+    niveau("full")
+    vendeur.answers.extend([(200, {"access_token": "ya29.not-real-full", "expires_in": 3599}), (200, {})])
+    rendu = _appel(outils["google_search_console_act"], op="add_sitemap", site_url="sc-domain:example.com",
+                   feedpath="https://www.example.com/sitemap.xml")
+    assert rendu == {}
+    jeton, appel = vendeur.requests
+    assert _scope_de_l_assertion(jeton) == "https://www.googleapis.com/auth/webmasters"
+    assert appel.method == "PUT" and appel.url == (
+        "https://searchconsole.googleapis.com/webmasters/v3/sites/sc-domain%3Aexample.com/sitemaps/"
+        "https%3A%2F%2Fwww.example.com%2Fsitemap.xml")
+
+
+def test_search_console_names_a_property_shared_restricted(search_console, vendeur, niveau):
+    """`full` bounds, it does not grant: a property that shares the key as Restricted refuses the submit, under the
+    description's code and message (the gesture: Owner or Full), and the key is not painted red."""
+    outils, _ = search_console
+    niveau("full")
+    vendeur.answers.extend([(200, {"access_token": "ya29.not-real-full", "expires_in": 3599}),
+                            (403, {"error": {"code": 403, "message": "User does not have sufficient permission for "
+                                                                    "site 'sc-domain:example.com'.",
+                                             "errors": [{"reason": "insufficientPermissions"}]}})])
+    with pytest.raises(decrits.RefusNomme) as refus:
+        _appel(outils["google_search_console_act"], op="add_sitemap", site_url="sc-domain:example.com",
+               feedpath="https://www.example.com/sitemap.xml")
+    assert (refus.value.code, refus.value.status_code) == ("owner_or_full_required", 403)
+    info = error_taxonomy.classify(refus.value)
+    assert (info.code, info.hint) == ("owner_or_full_required", None)
+    assert "Owner or Full" in info.message
+    assert not error_taxonomy.credential_rejected_in_chain(refus.value)
+
+
+def test_search_console_refuses_a_level_its_description_does_not_declare(search_console, vendeur, niveau):
+    outils, _ = search_console
+    niveau("admin")
+    with pytest.raises(decrits.RefusNomme) as refus:
+        _appel(outils["google_search_console"], op="list_sites")
+    assert refus.value.code == "unknown_access_level"
+    assert "oto_connector_access_level(op='set'" in str(refus.value) and "Nothing was sent." in str(refus.value)
+    assert vendeur.requests == []
 
 
 def test_search_console_exchanges_the_key_then_calls_with_the_token(search_console, vendeur):
@@ -585,6 +672,71 @@ def test_seranking_lists_come_back_reduced_to_what_an_agent_reads(seranking, ven
                                                              "history_trend": {"2026-10": 880}}]}))
     rendu = _appel(outils["seranking_act"], op="similar_keywords", source="fr", keyword="crm", limit=10)
     assert rendu["total"] == 42 and "history_trend" not in json.dumps(rendu) and "volume" in json.dumps(rendu)
+
+
+# --- HeyReach and Instantly: one key each, a read side and an act side that reaches people --------------------------
+
+
+@pytest.fixture
+def prospection(vendeur, monkeypatch):
+    """The two real descriptions mounted as the registry inscribes them, the caller's key by `resolve_api_key`."""
+    monkeypatch.setattr(decrits.access, "resolve_api_key", lambda nom, *a, **k: (f"key-of-{nom}", False))
+    outils = {}
+    for nom in ("heyreach", "instantly"):
+        outils.update({t.name: t for t in decrits.monter(FastMCP(nom), nom, descriptions.charger(nom))})
+    yield outils
+    for nom in ("heyreach", "instantly"):
+        connector_verify._REGISTRY.pop(nom, None)
+        connector_verify._COUVERTURE.pop(nom, None)
+
+
+@pytest.mark.parametrize("nom", ["heyreach", "instantly"])
+def test_outreach_connectors_are_inscribed_with_the_customers_key(nom):
+    c = providers.REGISTRY[nom]
+    assert (c.namespaces, c.auth_modes, c.secret_kind, c.keyed, c.decrit) == (
+        (nom,), frozenset({"byo_user", "byo_org"}), "api_key", True, True)
+    assert descriptions.refus_de_montage(descriptions.charger(nom)) == []
+
+
+def test_outreach_what_reaches_people_is_on_the_act_side(prospection):
+    """Every function that sends, starts outreach or destroys is an op of `<ns>_act`, declared by the description's
+    class and effect; the reading side reads only."""
+    assert {"heyreach", "heyreach_act", "instantly", "instantly_act"} <= set(prospection)
+    for nom in ("heyreach", "instantly"):
+        assert prospection[nom].annotations == LECTURE and prospection[f"{nom}_act"].annotations == ACTE
+        assert effets.EFFETS[f"{nom}_act"] == descriptions.effets(descriptions.charger(nom))[f"{nom}_act"]
+    assert "send_message" in effets.EFFETS["heyreach_act"]["envoyer"].split()
+    assert "stop_lead_in_campaign" in effets.EFFETS["heyreach_act"]["detruire"].split()
+    assert "reply_to_email" in effets.EFFETS["instantly_act"]["envoyer"].split()
+    assert "move_leads" in effets.EFFETS["instantly_act"]["detruire"].split()
+
+
+def test_heyreach_lists_one_page_by_offset_each_item_projected(prospection, vendeur):
+    """heyreach 1.0.1: the page is `items`, each item keeps its declared keys; `totalCount` is not served, the next page
+    is `offset` + `limit`."""
+    vendeur.answers.append((200, {"totalCount": 1, "items": [
+        {"id": 1001, "name": "Q4", "status": "IN_PROGRESS", "excludeListsIds": [7], "campaignAccountIds": [3001]}]}))
+    rendu = _appel(prospection["heyreach"], op="list_campaigns", limit=50, offset=50, statuses=["IN_PROGRESS"])
+    assert "excludeListsIds" not in json.dumps(rendu) and "totalCount" not in json.dumps(rendu)
+    assert "Q4" in json.dumps(rendu)
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["url"]) == ("POST", "https://api.heyreach.io/api/public/campaign/GetAll")
+    assert envoi["headers"]["x-api-key"] == "key-of-heyreach"
+    assert envoi["body"] == {"limit": 50, "offset": 50, "statuses": ["IN_PROGRESS"]}
+
+
+def test_instantly_move_leads_answers_its_job_projected(prospection, vendeur):
+    """instantly 1.0.1: `move_leads` does not paginate — its `limit` bounds the leads moved, sent as is — and its
+    answer, a background job, keeps its declared keys."""
+    vendeur.answers.append((200, {"id": "job-1", "type": "move-leads", "status": "pending", "progress": 0,
+                                  "workspace_id": "ws-1", "data": {"secret_like": "x"}}))
+    rendu = _appel(prospection["instantly_act"], op="move_leads", campaign="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+                   to_list_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d", limit=25)
+    assert rendu == {"id": "job-1", "type": "move-leads", "status": "pending", "progress": 0}
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["url"]) == ("POST", "https://api.instantly.ai/api/v2/leads/move")
+    assert envoi["headers"]["authorization"] == "Bearer key-of-instantly"
+    assert envoi["body"]["limit"] == 25 and len(vendeur.requests) == 1
 
 
 # --- a login and a password, and the platform key (11/11/2026) ------------------------------------------------------

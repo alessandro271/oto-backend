@@ -1133,6 +1133,21 @@ admin de l'org). Écartés : `allowed: false` au catalogue (l'écran ne les prop
 refusés à la pose (`model_region_blocked`, 403), et un travail déjà en file sur l'un d'eux
 est arrêté à la réservation, sur la clé de l'org comme sur la nôtre, raison écrite.
 
+Une org peut aussi éteindre un modèle à la fois (`orgs.disabled_models`, vide par défaut ;
+`oto_org_settings domain=models`, REST `GET|PUT /api/orgs/{id}/models` avec
+`{model, enabled}`, admin de l'org ; 15/11/2026). Éteint : `allowed: false, disabled: true`
+au catalogue, jamais par défaut (le défaut se redérive sur le premier modèle proposable
+qui reste), refusé à la pose (`model_disabled`, 403). Un agent déjà posé dessus ne tourne
+plus, **sans repli sur un autre modèle** (16/11/2026) : à l'horloge, l'occurrence est
+sautée (`refused_model_disabled` sur la page de l'agent) ; au webhook, la livraison est
+refusée (409 `model_disabled`, même trace) ; `run_now` et `rerun` sont refusés (403
+`model_disabled`) ; une campagne s'arrête (`stop_reason = model_disabled`). Un travail
+déjà en file sur lui est arrêté à la réservation, raison écrite. La bascule (`set`) rend
+`agents_on_model` : le nombre et les ids des agents de l'org posés sur ce modèle, en
+pause compris (rallumés, ils buteraient sur le même arrêt). Le modèle par défaut ne
+s'éteint pas (`model_is_default`, 409) ; les abonnements personnels (`sub:*`) ne se
+basculent pas (`unknown_model`).
+
 ### Un agent tourne sur la clé de SON org — ou ne tourne pas (12/09/2026)
 
 La remise de clé (#874, ci-dessus) avait un envers que rien ne gardait : **une org
@@ -1277,7 +1292,11 @@ Un déclencheur porte désormais un **genre** (`runner_triggers.kind`) :
 **Le genre se pose à la CRÉATION et ne se change jamais** (`kind` est hors de
 l'allowlist d'`update_trigger`). Basculer un agent d'un coup d'envoi à l'autre
 laisserait derrière soit un cron orphelin, soit un secret qui ouvre une porte que
-plus personne ne regarde.
+plus personne ne regarde. ⚠️ `kind` reste dans le schéma d'`update`, et un autre
+genre y est **refusé** (`kind_immutable`, qui dit de créer un nouvel agent de
+l'autre genre) — il était accepté puis ignoré, la réponse disant toujours l'ancien
+genre ; le même genre est sans effet. Jugé avant le cadencement : `kind=schedule
+cron=…` sur un webhook dit le genre, pas `invalid_schedule`.
 
 **Ce qu'une retouche peut toucher dépend du genre.** Sur un webhook, `cron` et
 `tz` sont refusés (`invalid_schedule`) — sans cette garde, un cron posé lui
@@ -2909,6 +2928,17 @@ préparant autre chose : une perte que seule une requête manuelle révèle n'es
 une perte connue. `expired_count: 0` est un vrai zéro, servi, pas une absence de
 mesure. **Deux dates et pas une** : une perte ancienne qui a cessé n'appelle pas
 le même geste qu'une perte qui continue ce matin.
+
+**« A-t-il tourné ? » se lit aussi sur le déclencheur** : `list`/`get` portent
+`last_run` (sa dernière occurrence `{status, due_at, finished_at}` sur 35 jours —
+`status` celui de la file : l'occurrence a-t-elle tourné, pas ce que l'agent a conclu,
+le run lié au travail étant celui du worker) et `last_done_at` (la fin de son dernier
+passage réussi), lus en deux requêtes pour toute la liste (`db.derniers_travaux`).
+La seule autre réponse était la liste des runs de l'org (`oto_org_monitoring
+op=runs`), plus récent d'abord : un agent toutes les quinze minutes en remplit la
+première page en une dizaine d'heures, et un agent de veille y cherchant le soir le
+passage du matin d'un autre agent, sans suivre `next_cursor`, concluait « n'a pas
+tourné » à tort. `op=runs` renvoie donc à `last_run` (`hint`).
 
 ⚠️ **Un déclencheur qui ne TIQUE plus ne périme plus** — et les deux gestes qui
 l'arrêtent laissaient donc leurs occurrences éternelles. **Éteindre** (`enabled =
