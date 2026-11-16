@@ -60,16 +60,19 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import datetime as _dt
+import re
 from typing import Literal, Optional
 
+import requests
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
-from mcp.types import ErrorData, INVALID_PARAMS
+from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
 from .. import access
 from ..connectors import verify as connector_verify
 from ..output_projection import project
 from .lecture import LECTURE
+from .lemlist_crm import raised_by_view
 
 #: Action vocabulary of lemlist's v2 bulk. Deliberately written by hand:
 #: it is NOT a snake_case of the v1 flags — email verification is called
@@ -192,8 +195,39 @@ def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
 
+#: The module of oto-core that shapes a list of activities (`fields`, `compact`).
+_ACTIVITY_VIEWS = "oto.tools.lemlist.activity_views"
+
+
+def _activities_not_a_list() -> McpError:
+    """lemlist answered `GET /activities` with something other than a list. The view
+    cannot apply, and returning the answer whole would hand the agent what `fields`
+    and `compact` were asked to avoid."""
+    return McpError(ErrorData(code=INTERNAL_ERROR, message=(
+        "lemlist returned activities that are not a list, so `fields` and `compact` "
+        "cannot shape them. Call again without `fields` and `compact` to read the "
+        "answer as lemlist sends it."),
+        data={"code": "lemlist_activities_not_a_list", "retryable": False}))
+
+
+#: A bound given as a bare day (`YYYY-MM-DD`), with no time part.
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def _default_window(start_date: Optional[str], end_date: Optional[str]) -> tuple[str, str]:
-    """Fill in the stats window — ISO 8601 bounds, both required upstream."""
+    """Fill in the stats window — ISO 8601 instants, both required upstream.
+
+    A date-only bound is a whole UTC day, both ends included: the start opens
+    at `T00:00:00.000Z`, the end closes at `T23:59:59.999Z` (the shape of
+    lemlist's own examples). Sent bare, lemlist reads `2026-11-12` as that
+    midnight: a same-day window was zero-wide and every counter read 0, and a
+    longer one silently dropped its last day. A bound with a time part is an
+    instant and passes through untouched.
+    """
+    if start_date and _DATE_ONLY.fullmatch(start_date):
+        start_date = f"{start_date}T00:00:00.000Z"
+    if end_date and _DATE_ONLY.fullmatch(end_date):
+        end_date = f"{end_date}T23:59:59.999Z"
     # Aliased `_dt`: `timezone` is an ARGUMENT of `lemlist_campaign`/
     # `lemlist_schedule` (lemlist's IANA zone), importing it bare would shadow it.
     now = _dt.datetime.now(_dt.timezone.utc)
@@ -412,9 +446,18 @@ def register(mcp: FastMCP) -> None:
         field names changed with the fix (`nbLeads`, `messagesSent`, `opened`,
         `replied`… instead of `emails_sent` & co).
 
+        `start_date`/`end_date`: both ends included; a date-only bound
+        (`YYYY-MM-DD`) is a whole UTC day, so `start_date=end_date` reads that
+        one day; instants with a time part are sent as is.
+
         Args:
-            start_date / end_date: ISO 8601 window. Defaults to "since 2015" →
-                now, i.e. the campaign's whole life.
+            start_date / end_date: ISO 8601 window, both ends included.
+                Defaults to "since 2015" → now, i.e. the campaign's whole
+                life. A date-only bound (`YYYY-MM-DD`) is a whole UTC day:
+                `start_date=end_date="2026-11-12"` reads that one day. For a
+                day in another timezone pass UTC instants (a Paris day in
+                winter: `2026-11-11T23:00:00.000Z` →
+                `2026-11-12T22:59:59.999Z`), sent as is.
             channels: Any of `email`, `linkedin`, `others`.
             ab_selected: `A` or `B`, to read one side of a running A/B test.
             send_user: `usr_…|sender@email` — both halves required.
@@ -444,8 +487,15 @@ def register(mcp: FastMCP) -> None:
         all_pages: bool = False,
         since: Optional[str] = None,
         max_pages: int = 50,
+        fields: Optional[list[str]] = None,
+        compact: bool = False,
     ) -> dict:
         """Get activity events (opens, clicks, replies, LinkedIn actions…).
+
+        Each event carries its whole lead (every personalised copy of the
+        sequence, in HTML, and the custom variables) and lemlist's metadata:
+        100 events run to hundreds of thousands of characters. Pass
+        `compact=True` unless you need a field it drops.
 
         Args:
             campaign_id: Restrict to a campaign.
@@ -465,18 +515,46 @@ def register(mcp: FastMCP) -> None:
                 paging route only takes the campaign and the date floor.
             since: With `all_pages`, keep only what is newer than this date.
             max_pages: Ceiling on the walk.
+            compact: The short view of each event: what happened, when, in
+                which campaign and step, to which lead, who sent or answered,
+                the subject, and `excerpt` (the first 280 characters of the
+                body). Never HTML, never the lead's variables.
+            fields: Keep only these keys of each event, a nested one by a
+                dotted path (`lead.variables.email`). With `compact=True`,
+                each one named replaces the short view's key of the same first
+                level. Neither: the events as lemlist sends them.
         """
         client, is_platform = _client()
-        if all_pages:
-            events = client.sync_activities(
-                campaign_id=campaign_id, since=since, max_pages=max_pages)
-        else:
-            events = client.get_activities(
-                campaign_id=campaign_id, limit=limit, offset=offset,
-                type=activity_type, lead_id=lead_id, is_first=is_first,
-                start_date=start_date, end_date=end_date,
-                min_date=min_date, max_date=max_date,
-            )
+        # Passed only when asked for: a call without a view stays the call lemlist
+        # has always received, whatever the installed client.
+        view = {}
+        if fields is not None:
+            view["fields"] = fields
+        if compact:
+            view["compact"] = compact
+        try:
+            if all_pages:
+                events = client.sync_activities(
+                    campaign_id=campaign_id, since=since, max_pages=max_pages,
+                    **view)
+            else:
+                events = client.get_activities(
+                    campaign_id=campaign_id, limit=limit, offset=offset,
+                    type=activity_type, lead_id=lead_id, is_first=is_first,
+                    start_date=start_date, end_date=end_date,
+                    min_date=min_date, max_date=max_date, **view,
+                )
+        except ValueError as e:
+            # A malformed `fields` or `compact`: the client refuses it before any
+            # request. Only then: `requests` has ValueErrors of its own (a bad URL,
+            # a body that is not JSON), which say nothing about the arguments.
+            if not view or isinstance(e, requests.RequestException):
+                raise
+            raise _bad(str(e)) from e
+        except RuntimeError as e:
+            if not view or not raised_by_view(e, _ACTIVITY_VIEWS):
+                raise
+            raise _activities_not_a_list() from e
         return {"activities": events, "count": len(events)}
 
     @mcp.tool(annotations=LECTURE)
@@ -976,7 +1054,10 @@ def register(mcp: FastMCP) -> None:
           (`emailsSent`, `emailsOpened`, `emailsReplied`, `senderNames`, `state`)
           — the shape for comparing campaigns.
         - `batch_stats`: `campaign_ids` (≤ 100) + optional `start_date`/`end_date`
-          (defaults to the whole life), `channels` (`email`/`linkedin`/`others`),
+          (defaults to the whole life; both ends included, a date-only
+          `YYYY-MM-DD` bound is a whole UTC day, so `start_date=end_date` reads
+          that one day; instants with a time part are sent as is),
+          `channels` (`email`/`linkedin`/`others`),
           `send_user` (`usr_…|sender@email`), `ab_selected` (`A`/`B`).
           Same counters as `lemlist_get_campaign_stats`, in one call.
 
