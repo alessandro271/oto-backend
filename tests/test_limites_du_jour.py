@@ -195,7 +195,7 @@ def test_le_resolveur_passe_par_la_porte_sur_chaque_cle_refacturee():
     assert "credits.reserver(" not in src.replace("limite_du_jour.reserver(", "")
     for rang in ("tenant", "platform"):
         assert (f'limite_du_jour.reserver(sub, heritage.org_des_cles(sub, active_org), '
-                f'"{rang}")') in src
+                f'"{rang}", provider)') in src
 
 
 def test_la_porte_refuse_avant_de_reserver(liste, monkeypatch):
@@ -209,6 +209,41 @@ def test_la_porte_refuse_avant_de_reserver(liste, monkeypatch):
     with pytest.raises(McpError):
         limite_du_jour.reserver("u-1", 7, "platform")
     assert len(vu) == 1, "un refus ne laisse aucune réservation"
+
+
+_MESSAGERIE = ("unipile", "linkedin_unipile", "whatsapp", "telegram", "instagram")
+
+
+@pytest.mark.parametrize("connecteur", _MESSAGERIE)
+def test_la_messagerie_hebergee_passe_meme_bloquee(liste, monkeypatch, connecteur):
+    """La messagerie se paie au siège et au mois, pas à l'appel : une personne bloquée
+    la garde — ses canaux compris, qui délèguent leur clé à `unipile`."""
+    from oto_mcp.access import credits
+    vu = []
+    monkeypatch.setattr(credits, "reserver", lambda *a: vu.append(a))
+    liste["blocs"] = [_bloc(7, "u-1", "member")]
+    limite_du_jour.invalider()
+    limite_du_jour.reserver("u-1", 7, "platform", connecteur)
+    assert vu == [("u-1", 7, "platform")]
+    with pytest.raises(McpError):  # le contrefactuel : un outil facturé à l'appel
+        limite_du_jour.reserver("u-1", 7, "platform", "serper")
+    with pytest.raises(McpError):  # connecteur inconnu de l'appelant : refusé
+        limite_du_jour.reserver("u-1", 7, "platform", None)
+
+
+def test_l_exemption_ne_couvre_aucun_connecteur_facture_a_l_appel():
+    """La règle est DÉRIVÉE (`quotas.paid_option_for` + la délégation de clé du
+    registre), pas une liste : on fige ce qu'elle exempte, et on vérifie qu'aucun
+    connecteur exempté ne déclare de coût à l'appel dans `oto.connectors.declared` —
+    une option payante posée demain sur un connecteur au coût déclaré rougit ici."""
+    from oto.connectors.declared import DECLARED
+    from oto_mcp import providers
+    exemptes = {n for n in providers.REGISTRY if not limite_du_jour.facture_a_l_appel(n)}
+    assert exemptes == set(_MESSAGERIE)
+    for nom in exemptes:
+        couts = [f for f, d in DECLARED.get(nom, {}).items() if "cost" in d]
+        assert not couts, f"{nom} déclare un coût à l'appel ({couts}) : il ne peut être exempté"
+
 
 class _Ctx:
     sub = "worker-1"
@@ -360,7 +395,8 @@ def test_sans_aucune_limite_aucune_porte_ne_change_rien(tour, liste, monkeypatch
     monkeypatch.setattr(routes.cles, "resoudre",
                         lambda *a: pytest.fail("clé résolue sans blocage"))
 
-    limite_du_jour.reserver("u-1", 7, "platform")
+    for connecteur in (None, "serper", "unipile"):
+        limite_du_jour.reserver("u-1", 7, "platform", connecteur)
     assert tour._reserver_un_tour(_Ctx(), 5, 0, 1000) == {"ok": True, "held": True,
                                                            "reserved": 10}
     # `tours` est le même module pour le runner et l'agent intégré : doublé après.
@@ -369,7 +405,7 @@ def test_sans_aucune_limite_aucune_porte_ne_change_rien(tour, liste, monkeypatch
     copilot_cle.reserver(Cle("sk", None, "platform"), "copilot:t:000001", "u-1", 7,
                          "claude-sonnet-5", 1000)
     assert routes._limite_du_jour(_ctx_copilot()) is None
-    assert vu == [("outil", "u-1", 7, "platform"),
+    assert vu == [("outil", "u-1", 7, "platform")] * 3 + [
                   ("copilot", "copilot:t:000001", "u-1", 7, 1000, "claude-sonnet-5")]
 
 
