@@ -51,6 +51,10 @@ def ns_not_found(sub: Optional[str], datastore: str) -> AuthzDenied:
     """
     if est_un_nom_de_tableau(datastore):
         return refus_nom_de_tableau(datastore)
+    if ownership.vue_bornee() is not None:
+        # Vue bornée (oto#270) : rien d'une autre org ne sort, pas même son indice —
+        # la même règle que la face MCP (`DatastorePg._trouver`).
+        return AuthzDenied(404, "datastore_not_found")
     try:
         # La recherche est celle de la face MCP (#631) ; seul le remède diffère.
         elsewhere = hors_org.ou_existe(sub, datastore)
