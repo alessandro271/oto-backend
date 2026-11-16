@@ -1127,6 +1127,11 @@ def main():
     # par défaut en silence. Cf. `links.verifier_reglages`.
     from . import links
     links.verifier_reglages()
+    # Charte des emails du tenant primaire (`OTO_BRAND_CHARTE`) : posée mais illisible,
+    # elle refuse le démarrage ici, jamais la charte du code en silence.
+    # Cf. `email_brand.verifier_reglages`.
+    from . import email_brand
+    email_brand.verifier_reglages()
     # Modèles de l'agent intégré (`OTO_COPILOT_MODEL`, `OTO_COPILOT_MODEL_UP`) : un modèle
     # sans prix connu refuse le démarrage ici, jamais le défaut en silence.
     # Cf. `capabilities/copilot/palier.verifier_reglages`.
