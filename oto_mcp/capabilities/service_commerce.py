@@ -108,9 +108,12 @@ class ServiceOrgInput(BaseModel):
 
 class ServiceMembersInput(BaseModel):
     org_id: int
-    # `false` : les membres seuls, `last_activity_at` à `None` — sans lire l'activité
-    # (`db.org_members_by_seniority`). Pour qui n'a besoin que de la population.
-    activity: bool = True
+    # Défaut `false` : les membres seuls, `last_activity_at` à `None`, sans lire le
+    # registre des totaux — la population ne dépend pas de son retard (aucun 503).
+    # `true` : la dernière activité, lue sur les totaux ; registre en retard = 503 nommé
+    # (`bornee`). Le consommateur qui autorise ses gestes de facturation sur les membres
+    # ne lit pas l'activité et ne doit pas dépendre du registre.
+    activity: bool = False
 
 
 class ServiceMemberRow(BaseModel):
@@ -125,7 +128,8 @@ class ServiceMemberRow(BaseModel):
 class ServiceMembers(BaseModel):
     """Les membres de l'org PAR ANCIENNETÉ (`joined_at`, puis `sub`) — l'ordre dans
     lequel le commerce désigne les membres payants. `last_activity_at` = dernier appel
-    d'outil émis sous CETTE org, `None` s'il n'y en a jamais eu (ou `activity=false`)."""
+    d'outil émis sous CETTE org, `None` s'il n'y en a jamais eu — lue sur `activity=true`
+    seulement, `None` partout sinon (le défaut)."""
     org_id: int
     members: list[ServiceMemberRow]
 
@@ -546,8 +550,10 @@ CAPABILITIES += [
                authz=COMMERCE_SERVICE, mcp=None, Output=ServiceMembers,
                errors=(_ORG_INCONNUE,),
                description="[service commerce] Members of an org by seniority "
-                           "(`joined_at`), with email and last activity under this org "
-                           "(`activity=false`: members only, `last_activity_at` null).",
+                           "(`joined_at`), with email. `activity=true`: also the last "
+                           "activity under this org (503 `aggregate_incomplete` while the "
+                           "daily totals lag); default: members only, "
+                           "`last_activity_at` null.",
                rest=RestBinding("GET", "/api/service/orgs/{id}/members", _ID)),
     Capability(key="service.org.usage", handler=_usage, Input=ServiceUsageInput,
                authz=COMMERCE_SERVICE, mcp=None, Output=ServiceUsage,

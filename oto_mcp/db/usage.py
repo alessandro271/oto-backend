@@ -2577,7 +2577,7 @@ def activation_funnel(active_window_days: int = 30) -> dict:
 _ADOPTION_LIST_CAP = 500
 
 
-def org_members_by_seniority(org_id: int, *, activity: bool = True) -> list[dict]:
+def org_members_by_seniority(org_id: int, *, activity: bool) -> list[dict]:
     """Les membres de l'org PAR ANCIENNETÉ (`joined_at`, puis `sub`), avec leur email et
     leur dernier appel d'outil émis sous CETTE org (`None` s'il n'y en a jamais eu) —
     la lecture du service commerce (`service.org.members`) : il désigne les membres
@@ -2595,9 +2595,10 @@ def org_members_by_seniority(org_id: int, *, activity: bool = True) -> list[dict
     × le volume de l'org : sur une grosse org, plus que le délai du commerce (30 s).
     Sur les totaux, le journal direct ne porte plus que la veille et le jour courant.
 
-    `activity=False` : la liste seule, `last_activity_at` à `None` partout, sans lire ni
-    journal ni totaux — pour qui n'a besoin que des membres (le commerce qui applique
-    une limite de dépense par membre). Lève `AgregatIncomplet` / `LectureTropLongue`
+    `activity=False` (le défaut de la route) : la liste seule, `last_activity_at` à
+    `None` partout, sans lire ni journal ni totaux — pour qui n'a besoin que des membres
+    (le commerce qui applique une limite de dépense par membre). `activity` sans défaut
+    ici : l'appelant dit ce qu'il lit. Lève `AgregatIncomplet` / `LectureTropLongue`
     (activité seulement) : la face en fait un refus nommé (`bornee`)."""
     if not activity:
         with _connect() as conn:

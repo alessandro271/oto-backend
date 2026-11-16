@@ -793,7 +793,7 @@ réponse à l'ancienne lecture du journal, recopiée dans le banc.
 | `tool_call_stats` | `monitoring.summary`, `org.monitoring.summary`, `me.activity_summary`, consoles `op=summary` | oui — p95 sur les valeurs |
 | `connector_failure_stats` | `monitoring.connectors`, `org.monitoring.connectors`, `op=connectors` | oui |
 | `org_adoption` | `org.monitoring.adoption`, `op=adoption` | oui — le dernier appel sur tout l'historique consolidé |
-| `org_members_by_seniority` | `service.org.members` (commerce) | oui — le dernier appel de chaque membre sur tout l'historique consolidé ; `activity=false` ne lit rien |
+| `org_members_by_seniority` | `service.org.members` (commerce) | oui, sur `activity=true` — le dernier appel de chaque membre sur tout l'historique consolidé ; par défaut, la route ne lit rien |
 | `list_tenants_overview`, `get_tenant_overview` | `admin.tenants`, `admin.tenant`, console de tenant | oui |
 | `count_org_mcp_calls` | `billing.status` (usage inclus du mois), fiche d'org `org.get`, `org.admin.get` | oui |
 | `list_billable_calls_for_org`, `list_tool_calls`, `list_runs`, `export_tool_calls_for_org`, activité d'un tableau | `usage/calls`, `calls`, `runs`, `export`… | non — des LISTES, ligne à ligne |

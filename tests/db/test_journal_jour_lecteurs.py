@@ -409,7 +409,7 @@ def test_membres_par_anciennete(registre):
     ref = _ref_membres_par_anciennete(1)
     assert any(r["last_activity_at"] for r in ref) and any(
         r["last_activity_at"] is None for r in ref), "le banc couvre les deux cas"
-    assert db.org_members_by_seniority(1) == ref
+    assert db.org_members_by_seniority(1, activity=True) == ref
     assert db.org_members_by_seniority(1, activity=False) == [
         {**r, "last_activity_at": None} for r in ref]
 

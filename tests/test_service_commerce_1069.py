@@ -136,7 +136,7 @@ def test_les_membres_sortent_par_anciennete_avec_leur_derniere_activite(registre
     registre_a_jour()
     aujourd_hui = datetime.now(timezone.utc).replace(microsecond=0)
     _appel_journal(org, cadet, T0 + timedelta(days=6, hours=1))  # jour consolidé : invisible
-    out = _appel("service.org.members", org_id=org)
+    out = _appel("service.org.members", org_id=org, activity=True)
     assert [m["sub"] for m in out["members"]] == [aine, cadet]
     assert out["members"][0]["last_activity_at"] is None, "l'appel d'une autre org ne compte pas"
     assert out["members"][1]["last_activity_at"].startswith("2026-09-07T00:00")
@@ -144,18 +144,25 @@ def test_les_membres_sortent_par_anciennete_avec_leur_derniere_activite(registre
     assert out["members"][0]["email"] == f"{aine}@exemple.test"
     # Le jour courant se lit au journal direct.
     _appel_journal(org, aine, aujourd_hui)
-    out = _appel("service.org.members", org_id=org)
+    out = _appel("service.org.members", org_id=org, activity=True)
     assert datetime.fromisoformat(out["members"][0]["last_activity_at"]) == aujourd_hui
 
 
-def test_les_membres_seuls_ne_lisent_pas_l_activite(live):
-    """`activity=false` : la population, sans journal ni totaux — même un registre des
-    totaux en retard (ici : vide, sous un journal qui a des lignes) ne la refuse pas."""
+@pytest.mark.parametrize("champs", [{}, {"activity": False}], ids=["defaut", "false"])
+def test_les_membres_seuls_ne_lisent_pas_l_activite(live, monkeypatch, champs):
+    """Par défaut (et sur `activity=false`) : la population, sans journal ni totaux —
+    le registre n'est pas appelé, donc un registre en retard (ici : vide, sous un
+    journal qui a des lignes) ne la refuse jamais."""
+    from oto_mcp.db import journal_jour
+
+    def _interdit(*a, **k):
+        raise AssertionError("le registre des totaux ne doit pas être lu")
+    monkeypatch.setattr(journal_jour, "source", _interdit)
     org = _org()
     cadet = _membre(org, T0 + timedelta(days=5))
     aine = _membre(org, T0)
     _appel_journal(org, cadet, T0 + timedelta(days=6))
-    out = _appel("service.org.members", org_id=org, activity=False)
+    out = _appel("service.org.members", org_id=org, **champs)
     assert [m["sub"] for m in out["members"]] == [aine, cadet]
     assert all(m["last_activity_at"] is None for m in out["members"])
     assert out["members"][1]["email"] == f"{cadet}@exemple.test"
@@ -163,11 +170,12 @@ def test_les_membres_seuls_ne_lisent_pas_l_activite(live):
 
 def test_une_activite_illisible_est_un_refus_nomme(live):
     """Registre des totaux vide sous un journal qui a des lignes : l'activité n'est pas
-    lue au journal en silence, la face le dit (`bornee`, 503 `aggregate_incomplete`)."""
+    lue au journal en silence, la face le dit (`bornee`, 503 `aggregate_incomplete`) —
+    sur `activity=true` seulement."""
     org = _org()
     sub = _membre(org, T0)
     _appel_journal(org, sub, T0 + timedelta(days=1))
-    refus = _refus("service.org.members", org_id=org)
+    refus = _refus("service.org.members", org_id=org, activity=True)
     assert (refus.status, refus.code) == (503, "aggregate_incomplete")
 
 
