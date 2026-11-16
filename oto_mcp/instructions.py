@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 
-from . import outils_retires, ownership, providers, run_status, tool_alias
+from . import deprecations, outils_retires, ownership, providers, run_status, tool_alias
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ Oto — TA boîte à outils d'automatisation (prospection B2B, données entrepri
 
 - **Procédure d'abord** : `oto_procedure op=list` — une procédure existante fait autorité.
 - **Encadre et remonte** : `run_start(label, guide?)` → `_run_id=` sur CHAQUE appel → `run_finish(run_id, done|partial|failed|blocked)`. Échec d'outil ou capacité manquante → `feedback(signal='gap'|'tool_feedback')`, immédiatement, de toi-même.
-- **Travaille dans un projet** : agir POUR un projet = `_project=<id>` sur chaque appel ; tâche ad-hoc = crée un projet, jamais hors-sol.
+- **Travaille dans un projet** : agir POUR un projet = `_project=<id>` sur chaque appel ; ponctuel = fais-le, sans créer de projet ; on en crée un pour du récurrent ou à la demande.
 - **Aucun état de session** : tout contexte se passe DANS l'appel : `_project`/`_org`/`_group`/`_account`/`_instance` (optionnels — omis = défaut) et `_run_id`, OBLIGATOIRE dès qu'un run est ouvert ou une ligne réservée (sinon écriture REFUSÉE).
 - **Ce qui dure** : règles de l'org → son guide (`oto_guide`, rendu par `oto_context`) ; la personne → sa fiche (`oto_profile`) et sa note (`oto_guide scope=user`) ; faits d'un travail → un doc de son projet (`oto_doc`). Cherche là avant le web.
 - **Registre FIGÉ** : un outil non listé s'appelle via `oto_call(name, arguments)` — n'en déduis jamais qu'une capacité n'existe pas.
@@ -145,8 +145,9 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
         except Exception:
             pass
 
-    from .connectors import http_operations     # les connecteurs PERSONNALISÉS de l'org
-    custom = http_operations.for_context(org_id, connectors)
+    # Les connecteurs PERSONNALISÉS : ceux de l'appelant (sa clé perso), puis l'org.
+    from .connectors import api_operations
+    custom = api_operations.for_context(org_id, sub, connectors)
 
     projects: list[str] = []
     try:
@@ -242,7 +243,7 @@ def _format_context(ctx: dict) -> str:
         lines.append(f"- Active team: {ctx['group_name']}")
     if ctx["connectors"]:
         lines.append(f"- Active connectors: {', '.join(ctx['connectors'])}")
-    from .connectors.http_operations import context_line
+    from .connectors.api_operations import context_line
     lines += [context_line(c) for c in ctx.get("custom_connectors") or []]
     if ctx["projects"]:
         lines.append(f"- Recent projects: {' · '.join(ctx['projects'])}")
@@ -257,9 +258,10 @@ def _format_context(ctx: dict) -> str:
             # handshake et croyait reprendre un travail que personne ne menait plus.
             bits.append(f"{label}{doc} {run_status.describe(r)}")
         lines.append(f"- Recent runs: {' · '.join(bits)}")
-    annonce = outils_retires.annonce_act_du_jour()
-    if annonce:
-        lines.append(f"- {annonce}")
+    for annonce in (outils_retires.annonce_act_du_jour(),
+                    deprecations.annonce_connecteur_api_du_jour()):
+        if annonce:
+            lines.append(f"- {annonce}")
     return "\n".join(lines)
 
 
