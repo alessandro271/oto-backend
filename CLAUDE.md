@@ -301,6 +301,9 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   d'autre (chaque table classée, un schéma non couvert REFUSE), puis l'importer dans une base née par
   `oto-mcp perimetre naitre`, AVANT le premier démarrage de l'app (sinon refus nommé, #1161) : tenant en ligne 1, comptes dénudés, secrets rechiffrés, vérification par relecture ; le
   journal d'appels hors de la fenêtre de coupure, par tranches de dates poussées puis diff (#1088)
+- `purge-de-tenant.md` — effacer de l'instance partagée un tenant parti sur sa propre instance, en un passage
+  (`scripts/purger_tenant.py tout`) : base, journal par lots, objets toutes versions, archives froides réécrites ;
+  à blanc par défaut, refus nommés, constat par élément ; annuaire et sauvegardes hors script
 - `droits-declares.md` — ce que le cœur applique sans savoir qui paie : catalogue, trois portées (org,
   personne dans l'org, personne partout),
   `value_for` (le plus généreux gagne), défauts déclarés par l'instance (`OTO_ENTITLEMENT_DEFAULTS`)
