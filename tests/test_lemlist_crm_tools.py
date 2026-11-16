@@ -339,6 +339,20 @@ def _activites_doublees(monkeypatch, body):
     return sent
 
 
+@pytest.mark.exige_pin_oto_core   # lit le vrai client : faux si le venv retarde
+def test_list_des_desinscriptions_lit_la_liste_v2_par_le_vrai_client(monkeypatch):
+    """`GET /unsubscribes` (liste v1) répond 404 « Route not found ». Le client
+    épinglé lit la liste v2 sous le nom `list_unsubscribes` : `op="list"` y passe,
+    une page de 100, sa clé `unsubscribes` gardée."""
+    sent = _activites_doublees(monkeypatch, [{"value": "example.test"}])
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)):
+        out = _tool("lemlist_unsubscribe").fn(op="list")
+    ((method, url, params),) = sent
+    assert method == "GET" and url.endswith("/v2/unsubscribes/variables")
+    assert params == {"limit": 100}
+    assert out["unsubscribes"] == [{"value": "example.test"}]
+
+
 def test_compact_des_activites_atteint_le_vrai_client(monkeypatch):
     """Les tests ci-dessus doublent le client et ne voient pas qu'un oto-core sans la
     vue lève `TypeError` au premier vrai appel : celui-ci joue le client épinglé."""

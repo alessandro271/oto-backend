@@ -504,7 +504,8 @@ def register(mcp: FastMCP) -> None:
 
         They do not hold the same objects, and writing to one does not write to
         the others:
-        - v1 `list`/`get`/`add`/`delete`/`export` — emails and whole DOMAINS.
+        - v1 `get`/`add`/`delete`/`export` — emails and whole DOMAINS
+          (`list` = `var_list`: the v1 listing is gone).
         - v2 `var_*` — any identifying value (email, domain, LinkedIn URL,
           phone), with `var_bulk` for up to 10 000 at once.
         - v2 `contact_*` — the do-not-contact flag on a CRM contact, which rides
@@ -523,6 +524,9 @@ def register(mcp: FastMCP) -> None:
         if op in ("list", "var_list") and limit is None:
             limit = _UNSUB_DEFAULT_PAGE
         if op == "list":
+            # The library reads the v2 list under this name (the v1 listing route
+            # is no longer served): the same list as `var_list`, emails and
+            # domains included. Same page, under the key `list` always returned.
             rows = client.list_unsubscribes(offset=offset, limit=limit)
             result = {"unsubscribes": rows, **_unsub_page(rows, limit, offset)}
         elif op in ("get", "add", "delete"):
