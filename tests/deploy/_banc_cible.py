@@ -109,6 +109,12 @@ class Banc:
             for p in PREFIXES:
                 texte = texte.replace(p, str(racine) + p)
             script.write_text(texte, encoding="utf-8")
+        # La bibliothèque bleu/vert prend le verrou mémoire de la box sous /run/lock/ :
+        # redirigé vers le /var/lock/ de la racine jetable (le /run/ du banc doit rester
+        # vide après la porte), pour que le banc ne crée rien sur la machine qui le joue.
+        lib = self.tag / "deploy" / "oto-mcp-bluegreen.sh"
+        lib.write_text(lib.read_text(encoding="utf-8").replace("/run/lock/", f"{racine}/var/lock/"),
+                       encoding="utf-8")
         self.bin = racine / "banc-bin"
         self.bin.mkdir()
         for nom, corps in DOUBLURES.items():
