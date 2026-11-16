@@ -204,3 +204,19 @@ def test_refus_google_nommes(google, status, corps, motif):
     google.replies = [(status, corps)]
     with pytest.raises(McpError, match=motif):
         _call(op="list_sitemaps", site_url=SITE)
+
+
+def test_chaque_description_dit_quand_prendre_l_autre():
+    """Deux connecteurs, une même API : la description servie de chacun dit lequel
+    prendre selon l'accès — la connexion Google de la personne ou le compte de service
+    de l'org, seul à soumettre un sitemap."""
+    from fastmcp import FastMCP
+    from oto_mcp import providers
+    from oto_mcp.connectors import descriptions
+    from oto_mcp.tools import decrits
+
+    assert "`google_search_console`" in _tool().description
+    c = providers.REGISTRY["google_search_console"]
+    lecture = decrits.monter(FastMCP("t"), c.name, descriptions.charger(c.name), c.tool_note)[0]
+    assert lecture.name == "google_search_console"
+    assert "`search_console`" in lecture.description and "sitemap" in c.tool_note

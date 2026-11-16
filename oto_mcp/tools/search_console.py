@@ -228,6 +228,8 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Read Google Search Console for the properties YOUR Google user can open (read-only).
 
+        Take it with the person's own Google connection; with the org's service account, take `google_search_console`.
+
         Ops (all free, bounded by Google's quotas):
         - `list_sites` (default) → {siteEntry: [{siteUrl, permissionLevel}]}. `siteUrl`
           is the `site_url` every other op takes: `sc-domain:example.com` (Domain
