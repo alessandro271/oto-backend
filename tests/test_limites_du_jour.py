@@ -443,8 +443,22 @@ def test_la_base_refuse_une_portee_incoherente(live):
                                       "until": DEMAIN}])
 
 
-def test_le_mouvement_d_un_appel_dit_qui_l_a_fait(live):
+def test_le_mouvement_d_un_appel_dit_qui_l_a_fait(live, monkeypatch):
+    """Le flux rend, avec chaque règlement, la personne qui a agi (`acting_sub` de la
+    réservation) ; un versement n'en a pas.
+
+    Ce test lit la PROJECTION du flux, pas son horizon : le flux ne sert que sous
+    l'horizon des transactions ouvertes de TOUT le serveur, qu'une transaction longue
+    d'un autre test tient en arrière plus longtemps que n'importe quelle relecture. La
+    lecture garde la requête servie, l'horizon (`xmin` de l'instantané) remplacé par sa
+    borne haute (`xmax`) : tout ce qui est validé et visible est rendu. L'horizon a ses
+    propres tests (`tests/test_credits_port_live.py`)."""
     from oto_mcp.db import credits as db_credits
+    from oto_mcp.db._conn import _connect
+    horizon = "pg_snapshot_xmin(pg_current_snapshot())"
+    assert db_credits._PAGE.count(horizon) == 1, "l'horizon du flux a changé de forme"
+    monkeypatch.setattr(db_credits, "_PAGE", db_credits._PAGE.replace(
+        horizon, "pg_snapshot_xmax(pg_current_snapshot())"))
     org = _org()
     payeur = f"org:{org}"
     db_credits.verser(payeur, 1000, "pack", f"k-{uuid.uuid4().hex}")
@@ -454,15 +468,14 @@ def test_le_mouvement_d_un_appel_dit_qui_l_a_fait(live):
                         scale_version=1, quantity=100, reserved=10, deadline_s=600,
                         forcer=True, acting_sub="u-qui-agit")
     db_credits.regler(uid, montant=7, quantite=80, meta={})
-    # Le flux ne sert que sous l'horizon des transactions OUVERTES du serveur (une suite
-    # parallèle en tient) : on relit jusqu'à ce qu'il ait passé notre règlement.
-    import time
-    for _ in range(100):
-        lu = db_credits.page_de_mouvements(0, 0, 1000)
-        mien = [m for m in lu["mouvements"] if m["call_uid"] == uid]
-        if mien:
-            break
-        time.sleep(0.1)
+    # Le curseur juste avant le versement de NOTRE payeur : la page ne dépend pas des
+    # mouvements que les autres tests ont écrits avant.
+    with _connect() as conn:
+        premier = conn.execute(
+            "SELECT xid::text AS xid, id FROM credit_movements WHERE payer = %s "
+            "ORDER BY xid, id LIMIT 1", (payeur,)).fetchone()
+    lu = db_credits.page_de_mouvements(int(premier["xid"]), premier["id"] - 1, 1000)
+    mien = [m for m in lu["mouvements"] if m["call_uid"] == uid]
     assert [(m["kind"], m["payer"], m["sub"]) for m in mien] == [
         ("settle", payeur, "u-qui-agit")]
     versement = [m for m in lu["mouvements"] if m["payer"] == payeur
