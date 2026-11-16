@@ -1,24 +1,28 @@
-"""Purger un tenant tiers parti sur sa propre instance : base, objets, archives du journal.
+"""Purger un tenant tiers parti sur sa propre instance : base, journal, archives, objets.
 
 Le plan d'exécution est `docs/purge-de-tenant.md` ; chaque geste est décrit dans son
-module (`oto_mcp/export_perimetre/purge*.py`). Tout est À BLANC par défaut.
+module (`oto_mcp/export_perimetre/purge*.py`).
 
-    purger_tenant.py tout --tenant <slug> [--dossier D]              # comptes 1, 2, 3
-    purger_tenant.py tout --tenant <slug> --dossier D --appliquer \\
-        [--extraction-faite E]                                       # le passage entier
-    purger_tenant.py base --tenant <slug> [--appliquer]              # 1. la base
-    purger_tenant.py objets --tenant <slug> --dossier D [--appliquer] # 2. le stockage
-    purger_tenant.py archives --tenant <slug> --dossier D \\
-        [--extraire E | --appliquer --extrait E]                     # 3. les archives
-    purger_tenant.py extraire --tenant <slug> --dossier D --depuis <instant>
-        # la remise au titulaire, sur décision : elle lit du CONTENU
+    purger_tenant.py tout --tenant <slug> --dossier D           # à blanc ; FIGE le périmètre
+    purger_tenant.py tout --tenant <slug> --dossier D --appliquer [--extraction-faite E]
+    purger_tenant.py base --tenant <slug>                         # comptes seuls
+    purger_tenant.py objets --tenant <slug>                       # comptes seuls
+    purger_tenant.py archives --tenant <slug>                     # comptes seuls, par mois
+    purger_tenant.py extraire --tenant <slug> --dossier R --depuis <instant>
+        # la remise au titulaire, sur décision : elle lit du CONTENU (jamais un secret)
 
-`--dossier` garde l'état d'un passage (`perimetre.json`, `objets.json`, `etat.json`,
-`constat.json`) : le périmètre et les objets se relèvent AVANT la purge de la base, et
-servent encore après. Une étape faite n'est pas rejouée ; rejouée, chacune ne trouve
-plus rien. L'environnement est celui du backend (`DATABASE_URL`, `OTO_MCP_S3_*`) ; sur la
-box, par le lanceur (`deploy/lanceur_secrets.py --script scripts/purger_tenant.py …`).
-Un refus s'imprime nommé et sort en code 2, sans rien écrire.
+Le passage (`tout --appliquer`) exige le compte à blanc fait sur le MÊME dossier : il y a
+figé le périmètre (`etat.json`), comparé ensuite à une lecture fraîche tant que le tenant
+existe — le moindre écart refuse. Ordre : la base (une transaction, tout sauf le journal),
+le journal par lots, les archives (sous le verrou de l'archivage quotidien), les objets,
+puis le recompte depuis le périmètre figé et le constat (`constat.json`). Une étape faite
+n'est pas rejouée ; une étape qui échoue s'inscrit dans `etat.json` et tout s'arrête ;
+rejoué sur le même dossier, le passage reprend là.
+
+Les comptes tournent dans une transaction `READ ONLY` explicite. L'environnement est
+celui du backend (`DATABASE_URL`, `OTO_MCP_S3_*`) ; sur la box, par le lanceur
+(`deploy/lanceur_secrets.py --script scripts/purger_tenant.py …`). Un refus s'imprime
+nommé et sort en code 2.
 """
 from __future__ import annotations
 
@@ -39,8 +43,7 @@ from oto_mcp.export_perimetre import (purge, purge_archives, purge_objets,  # no
                                       purge_remise)
 from oto_mcp.export_perimetre.perimetre import PerimetreRefuse  # noqa: E402
 
-ETAPES = ("archives", "journal", "base", "objets")   # l'ordre du passage
-ELEMENTS = ("base", "objets", "archives")             # ce que le constat vérifie
+ETAPES = ("base", "journal", "archives", "objets")    # l'ordre du passage
 HORS_SCRIPT = {"annuaire": "la base d'annuaire (comptes de connexion) du tenant : autres "
                            "identifiants, jouée par l'infrastructure dans le même passage",
                "sauvegardes": "les sauvegardes de la base antérieures au passage : vérifier "
@@ -62,10 +65,8 @@ def _archivage():
     return mod
 
 
-def _connexion(lecture_seule: bool) -> psycopg.Connection:
-    conn = psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row, autocommit=True)
-    conn.read_only = lecture_seule
-    return conn
+def _connexion() -> psycopg.Connection:
+    return psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row, autocommit=True)
 
 
 class _Verrou:
@@ -83,12 +84,18 @@ class _Verrou:
         self.conn.execute("SELECT pg_advisory_unlock(%s)", (self.cle,))
 
 
+def _public_base() -> str:
+    from oto_mcp import media_store
+    return media_store.public_base()
+
+
 # ── l'état d'un passage ──────────────────────────────────────────────────────────────
 
-def _lire_json(dossier: str | None, nom: str) -> dict | None:
-    if not dossier or not os.path.exists(os.path.join(dossier, nom)):
+def _lire_json(dossier: str, nom: str) -> dict | None:
+    chemin = os.path.join(dossier, nom)
+    if not os.path.exists(chemin):
         return None
-    with open(os.path.join(dossier, nom), encoding="utf-8") as f:
+    with open(chemin, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -100,116 +107,125 @@ def _ecrire_json(dossier: str, nom: str, donnees: dict) -> None:
     os.replace(chemin + ".tmp", chemin)
 
 
-def releve(conn, slug: str, dossier: str | None) -> dict:
-    """Le périmètre et les objets du tenant, relevés une fois AVANT la purge de la base
-    et gardés dans `dossier` : après elle, plus rien ne les désigne."""
-    deja = _lire_json(dossier, "perimetre.json")
-    if deja is not None:
-        if deja["tenant"] != slug:
-            raise EtapeEchouee(f"{dossier} est le passage du tenant {deja['tenant']!r}")
-        return deja
-    lu = purge.lire(conn, slug)
-    if lu is None:
-        raise EtapeEchouee(f"tenant {slug!r} absent et aucun relevé dans {dossier!r} : son "
-                           "périmètre ne se lit plus")
-    from oto_mcp import media_store
-    cles, prefixes = purge.cles_d_objet(conn, slug, media_store.public_base())
-    r = {"tenant": slug, "id": lu.perimetre.id_tenant, "orgs": list(lu.perimetre.orgs),
-         "comptes": len(lu.perimetre.subs), "cles": sorted(cles), "prefixes": sorted(prefixes)}
-    if dossier:
-        _ecrire_json(dossier, "perimetre.json", r)
-    return r
+def _tenant_du_journal(fige) -> purge_archives.Tenant:
+    return purge_archives.Tenant(*purge.classeur_du_journal(fige))
 
 
-def _tenant_du_journal(r: dict) -> purge_archives.Tenant:
-    return purge_archives.Tenant(f"{r['tenant']}:", frozenset(str(o) for o in r["orgs"]))
+# ── les comptes (lecture seule) ──────────────────────────────────────────────────────
+
+def compte_base(conn, slug: str) -> dict:
+    with purge.en_lecture_seule(conn):
+        plan = purge.a_blanc(conn, slug)
+        par_mois = purge.journal_par_mois(conn, slug)
+    return {"present": plan.id_tenant is not None, "orgs": len(plan.orgs),
+            "comptes": plan.comptes, "supprimer": plan.supprimer,
+            "total": sum(plan.supprimer.values()), "dont_appels_de_support":
+            plan.appels_de_support, "journal_par_mois": par_mois, "conserver": plan.conserver}
 
 
-# ── les trois éléments ───────────────────────────────────────────────────────────────
-
-def compte_base(conn, slug: str, r: dict) -> dict:
-    """Le compte à blanc ; le tenant parti, ce qui en resterait encore : ses orgs relevées,
-    ses comptes."""
-    plan = purge.a_blanc(conn, slug)
-    total = sum(plan.supprimer.values())
-    if plan.id_tenant is None:
-        total = conn.execute(
-            "SELECT (SELECT count(*) FROM orgs WHERE id = ANY(%(o)s)) + (SELECT count(*) "
-            "FROM users WHERE left(sub, length(%(p)s)) = %(p)s) AS n",
-            {"o": r["orgs"], "p": f"{slug}:"}).fetchone()["n"]
-    return {"present": plan.id_tenant is not None, "supprimer": plan.supprimer,
-            "journal_par_mois": purge.journal_par_mois(conn, slug),
-            "total": total, "conserver": plan.conserver}
+def releve(conn, slug: str) -> dict:
+    """Le périmètre frais et ses objets, à figer."""
+    with purge.en_lecture_seule(conn):
+        lu = purge.lire(conn, slug)
+        if lu is None:
+            raise EtapeEchouee(f"tenant {slug!r} absent : rien à relever")
+        prefixes, hors = purge.objets(conn, lu, _public_base())
+    return {"tenant": slug, "perimetre": purge.en_dict(lu.perimetre),
+            "prefixes": sorted(prefixes), "cles_hors_prefixe": len(hors)}
 
 
 def compte_objets(s3, bucket: str, r: dict) -> dict:
-    return purge_objets.resume(purge_objets.inventaire(s3, bucket, set(r["cles"]),
-                                                       set(r["prefixes"])))
+    return {**purge_objets.resume(purge_objets.inventaire(s3, bucket, set(r["prefixes"]))),
+            "cles_hors_prefixe_non_touchees": r["cles_hors_prefixe"]}
 
 
-def compte_archives(conn, s3, bucket: str, r: dict) -> dict:
-    mois = purge_archives.compter(conn, s3, bucket, _tenant_du_journal(r))
+def compte_archives(conn, s3, bucket: str, fige, extrait: str | None = None) -> dict:
+    with purge.en_lecture_seule(conn):
+        mois = purge_archives.compter(conn, s3, bucket, _tenant_du_journal(fige), extrait)
     return {m.mois: {"cle": m.cle, "total": m.total, "tenant": m.tenant, "reste": m.reste,
-                     "versions_anciennes": m.versions_anciennes} for m in mois}
+                     "versions_anciennes": m.versions_anciennes,
+                     "registre_en_retard": m.registre_en_retard} for m in mois}
 
+
+# ── tout ─────────────────────────────────────────────────────────────────────────────
 
 def tout(args) -> int:
     mod = _archivage()
-    bucket = mod._env("OTO_MCP_S3_BUCKET")
-    s3 = mod._s3_client()
-    if args.appliquer and not args.dossier:
-        raise SystemExit("--appliquer exige --dossier : l'état du passage s'y garde")
-    etat = _lire_json(args.dossier, "etat.json") or {"fait": {}}
-    with _connexion(lecture_seule=not args.appliquer) as conn, _Verrou(conn, mod):
-        r = releve(conn, args.tenant, args.dossier)
-        avant = {"base": compte_base(conn, args.tenant, r),
-                 "objets": compte_objets(s3, bucket, r),
-                 "archives": compte_archives(conn, s3, bucket, r)}
-        if not args.appliquer:
-            print(json.dumps({"a_blanc": avant, "hors_script": HORS_SCRIPT}, indent=2,
-                             ensure_ascii=False, default=str))
-            print("\nÀ BLANC : rien n'a été écrit.")
-            return 0
-        etat.setdefault("avant", avant)
-        etat["tenant"] = args.tenant
-        tenant = _tenant_du_journal(r)
-        try:
-            if "archives" not in etat["fait"]:
-                mois = purge_archives.compter(conn, s3, bucket, tenant)
-                extrait = args.extraction_faite or os.path.join(args.dossier, "journal-archive")
-                if not args.extraction_faite:
-                    purge_archives.extraire(s3, bucket, tenant,
-                                            [m for m in mois if m.tenant], extrait)
-                etat["fait"]["archives"] = {"extrait": extrait, **purge_archives.reecrire(
-                    conn, s3, bucket, tenant, mois, extrait)}
-                _ecrire_json(args.dossier, "etat.json", etat)
-            if "journal" not in etat["fait"]:
-                etat["fait"]["journal"] = {"supprime": purge.vider_par_lots(
-                    conn, args.tenant, rapport=_avancement)}
-                _ecrire_json(args.dossier, "etat.json", etat)
-            if "base" not in etat["fait"]:
-                conn.autocommit = False
-                plan = purge.appliquer(conn, args.tenant)
-                conn.autocommit = True
-                etat["fait"]["base"] = {"supprime": sum(plan.supprimer.values())
-                                        + etat["fait"]["journal"]["supprime"]}
-                _ecrire_json(args.dossier, "etat.json", etat)
-            if "objets" not in etat["fait"]:
-                versions = purge_objets.inventaire(s3, bucket, set(r["cles"]),
-                                                   set(r["prefixes"]))
-                etat["fait"]["objets"] = {"supprime": purge_objets.supprimer(s3, bucket,
-                                                                             versions)}
-                _ecrire_json(args.dossier, "etat.json", etat)
-        except Exception as e:
-            etat["echec"] = {"etape": next(x for x in ETAPES if x not in etat["fait"]),
-                             "erreur": f"{type(e).__name__} : {e}"}
+    bucket, s3 = mod._env("OTO_MCP_S3_BUCKET"), mod._s3_client()
+    with _connexion() as conn:
+        return (_passage if args.appliquer else _a_blanc)(args, conn, mod, bucket, s3)
+
+
+def _a_blanc(args, conn, _mod, bucket, s3) -> int:
+    r = releve(conn, args.tenant)
+    deja = _lire_json(args.dossier, "etat.json")
+    if deja is not None:
+        fige = purge.de_dict(deja["perimetre"])
+        with purge.en_lecture_seule(conn):
+            purge.verifier_fige(conn, fige)
+    else:
+        _ecrire_json(args.dossier, "etat.json", {**r, "fait": {}})
+        fige = purge.de_dict(r["perimetre"])
+    versionnement = s3.get_bucket_versioning(Bucket=bucket).get("Status")
+    avant = {"base": compte_base(conn, args.tenant), "objets": compte_objets(s3, bucket, r),
+             "archives": compte_archives(conn, s3, bucket, fige),
+             "seau_versionne": versionnement == "Enabled"}
+    print(json.dumps({"a_blanc": avant, "hors_script": HORS_SCRIPT}, indent=2,
+                     ensure_ascii=False, default=str))
+    print(f"\nÀ BLANC : rien n'a été écrit en base ni sur le stockage. Périmètre figé dans "
+          f"{os.path.join(args.dossier, 'etat.json')}.")
+    return 0
+
+
+def _passage(args, conn, mod, bucket, s3) -> int:
+    etat = _lire_json(args.dossier, "etat.json")
+    if etat is None or etat.get("tenant") != args.tenant:
+        raise EtapeEchouee(f"aucun périmètre figé pour {args.tenant!r} dans {args.dossier} : "
+                           "faire d'abord le compte à blanc sur ce dossier")
+    fige = purge.de_dict(etat["perimetre"])
+    if "base" not in etat["fait"]:
+        with purge.en_lecture_seule(conn):
+            purge.verifier_fige(conn, fige)
+        etat.setdefault("avant", {"base": compte_base(conn, args.tenant)})
+        _ecrire_json(args.dossier, "etat.json", etat)
+    extrait = args.extraction_faite or os.path.join(args.dossier, "journal-archive")
+    tenant = _tenant_du_journal(fige)
+    etape = None
+    try:
+        for etape in ETAPES:
+            if etape in etat["fait"]:
+                continue
+            if etape == "base":
+                plan = purge.appliquer(conn, fige)
+                fait = {"supprime": sum(plan.supprimer.values()), "par_table": plan.supprimer}
+            elif etape == "journal":
+                fait = {"supprime": purge.vider_journal(conn, fige, rapport=_avancement)}
+            elif etape == "archives":
+                with _Verrou(conn, mod):
+                    purge_archives.exiger_versionnement(s3, bucket)
+                    mois = purge_archives.compter(conn, s3, bucket, tenant, extrait)
+                    etat.setdefault("archives_avant", {m.mois: m.tenant for m in mois})
+                    purge_archives.extraire(s3, bucket, tenant, [m for m in mois if m.tenant],
+                                            extrait)
+                    fait = {"extrait": extrait, "mois": purge_archives.reecrire(
+                        conn, s3, bucket, tenant, mois, extrait)}
+            else:
+                versions = purge_objets.inventaire(s3, bucket, set(etat["prefixes"]))
+                etat.setdefault("objets_avant", purge_objets.resume(versions))
+                fait = {"supprime": purge_objets.supprimer(s3, bucket, versions)}
+            etat["fait"][etape] = fait
+            etat.pop("echec", None)
             _ecrire_json(args.dossier, "etat.json", etat)
-            print(json.dumps(etat, indent=2, ensure_ascii=False, default=str), file=sys.stderr)
-            raise
-        etat.pop("echec", None)
-        apres = {"base": compte_base(conn, args.tenant, r),
-                 "objets": compte_objets(s3, bucket, r),
-                 "archives": compte_archives(conn, s3, bucket, r)}
+    except Exception as e:
+        etat["echec"] = {"etape": etape, "erreur": f"{type(e).__name__} : {e}",
+                         "faites": list(etat["fait"])}
+        _ecrire_json(args.dossier, "etat.json", etat)
+        print(json.dumps(etat["echec"], indent=2, ensure_ascii=False), file=sys.stderr)
+        raise
+    with purge.en_lecture_seule(conn):
+        recompte = purge.recompter(conn, fige)
+    apres = {"base": recompte, "objets": compte_objets(s3, bucket, etat),
+             "archives": compte_archives(conn, s3, bucket, fige, extrait)}
     constat = _constat(etat, apres)
     _ecrire_json(args.dossier, "constat.json", constat)
     print(json.dumps(constat, indent=2, ensure_ascii=False, default=str))
@@ -222,89 +238,76 @@ def _avancement(fait: int, total: int) -> None:
 
 
 def _constat(etat: dict, apres: dict) -> dict:
-    av = etat["avant"]
-    reste_archives = sum(m["tenant"] for m in apres["archives"].values())
+    av, fait, rb = etat["avant"]["base"], etat["fait"], apres["base"]
+    arch = apres["archives"]
     elements = {
-        "base": {"avant": av["base"]["total"], "supprime": etat["fait"]["base"]["supprime"],
-                 "reste": apres["base"]["total"], "conserve": apres["base"]["conserver"]
-                 or av["base"]["conserver"],
+        "base": {"avant": av["total"],
+                 "dont_appels_de_support": av["dont_appels_de_support"],
+                 "supprime": fait["base"]["supprime"] + fait["journal"]["supprime"],
+                 "reste": sum(rb.supprimer.values()),
+                 "reste_par_table": {t: n for t, n in rb.supprimer.items() if n},
+                 "conserve": {t: n for t, n in rb.conserver.items() if n},
                  "pourquoi_conserve": purge.CONSERVEES},
-        "objets": {"avant": av["objets"], "supprime": etat["fait"]["objets"]["supprime"],
-                   "reste": apres["objets"]["versions"]},
-        "archives": {"avant": {m: v["tenant"] for m, v in av["archives"].items()},
-                     "supprime": etat["fait"]["archives"], "reste": reste_archives},
+        "objets": {"avant": etat.get("objets_avant"), "supprime": fait["objets"]["supprime"],
+                   "reste": apres["objets"]["versions"],
+                   "cles_hors_prefixe_non_touchees":
+                       apres["objets"]["cles_hors_prefixe_non_touchees"]},
+        "archives": {"avant": etat.get("archives_avant"), "fait": fait["archives"]["mois"],
+                     "reste": sum(m["tenant"] for m in arch.values())
+                     + sum(1 for m in arch.values() if m["registre_en_retard"])},
     }
     for nom, hors in HORS_SCRIPT.items():
         elements[nom] = {"hors_script": hors}
-    return {"tenant": etat.get("tenant"), "elements": elements,
-            "complet": all(elements[e]["reste"] == 0 for e in ELEMENTS)}
+    return {"tenant": etat["tenant"], "elements": elements,
+            "complet": all(elements[e]["reste"] == 0 for e in ("base", "objets", "archives"))}
 
 
 def _constat_texte(c: dict) -> str:
     e = c["elements"]
+    b, o, a = e["base"], e["objets"], e["archives"]
     lignes = ["", "── CONSTAT ──",
-              f"base     : {e['base']['avant']} ligne(s) avant, {e['base']['supprime']} "
-              f"supprimée(s), {e['base']['reste']} restante(s) ; conservé : "
-              f"{ {t: n for t, n in e['base']['conserve'].items() if n} }",
-              f"objets   : {e['objets']['avant']['versions']} version(s) avant, "
-              f"{e['objets']['supprime']} supprimée(s), {e['objets']['reste']} restante(s)",
-              f"archives : {sum(e['archives']['avant'].values())} ligne(s) du tenant avant, "
-              f"{e['archives']['reste']} restante(s)"]
+              f"base     : {b['avant']} ligne(s) avant (dont {b['dont_appels_de_support']} "
+              f"appels de support), {b['supprime']} supprimée(s), {b['reste']} restante(s) ; "
+              f"conservé : {b['conserve']}",
+              f"objets   : {(o['avant'] or {}).get('versions', 0)} version(s) avant, "
+              f"{o['supprime']} supprimée(s), {o['reste']} restante(s) ; "
+              f"{o['cles_hors_prefixe_non_touchees']} clé(s) hors préfixe non touchée(s)",
+              f"archives : {sum((a['avant'] or {}).values())} ligne(s) du tenant avant, "
+              f"{a['reste']} restante(s)"]
     lignes += [f"{n:<9}: À FAIRE HORS SCRIPT — {v['hors_script']}" for n, v in e.items()
                if "hors_script" in v]
     lignes.append("COMPLET" if c["complet"] else "INCOMPLET : un reste n'est pas nul")
     return "\n".join(lignes)
 
 
+# ── comptes seuls ────────────────────────────────────────────────────────────────────
+
 def base(args) -> int:
-    with _connexion(lecture_seule=not args.appliquer) as conn:
-        if not args.appliquer:
-            print(json.dumps(compte_base(conn, args.tenant, {"orgs": []}), indent=2, default=str))
-            print("\nÀ BLANC : rien n'a été écrit.")
-            return 0
-        journal = purge.vider_par_lots(conn, args.tenant, rapport=_avancement)
-        conn.autocommit = False
-        plan = purge.appliquer(conn, args.tenant)
-        print(json.dumps({"journal_par_lots": journal, "supprime": plan.supprimer,
-                          "conserve": plan.conserver}, indent=2))
+    with _connexion() as conn:
+        print(json.dumps(compte_base(conn, args.tenant), indent=2, default=str))
     return 0
 
 
 def objets(args) -> int:
     mod = _archivage()
-    bucket, s3 = mod._env("OTO_MCP_S3_BUCKET"), mod._s3_client()
-    with _connexion(lecture_seule=True) as conn:
-        r = releve(conn, args.tenant, args.dossier)
-    versions = purge_objets.inventaire(s3, bucket, set(r["cles"]), set(r["prefixes"]))
-    print(json.dumps(purge_objets.resume(versions)))
-    if args.appliquer:
-        purge_objets.supprimer(s3, bucket, versions)
-        reste = purge_objets.inventaire(s3, bucket, set(r["cles"]), set(r["prefixes"]))
-        print(json.dumps({"reste": purge_objets.resume(reste)}))
-        return 0 if not reste else 1
+    with _connexion() as conn:
+        r = releve(conn, args.tenant)
+    print(json.dumps(compte_objets(mod._s3_client(), mod._env("OTO_MCP_S3_BUCKET"), r),
+                     indent=2))
     return 0
 
 
 def archives(args) -> int:
     mod = _archivage()
-    bucket, s3 = mod._env("OTO_MCP_S3_BUCKET"), mod._s3_client()
-    with _connexion(lecture_seule=not args.appliquer) as conn, _Verrou(conn, mod):
-        r = releve(conn, args.tenant, args.dossier)
-        tenant = _tenant_du_journal(r)
-        mois = purge_archives.compter(conn, s3, bucket, tenant)
-        print(json.dumps(compte_archives(conn, s3, bucket, r), indent=2))
-        if args.extraire:
-            print(json.dumps(purge_archives.extraire(s3, bucket, tenant,
-                                                     [m for m in mois if m.tenant],
-                                                     args.extraire)))
-        if args.appliquer:
-            print(json.dumps(purge_archives.reecrire(conn, s3, bucket, tenant, mois,
-                                                     args.extrait), indent=2))
+    with _connexion() as conn:
+        r = releve(conn, args.tenant)
+        print(json.dumps(compte_archives(conn, mod._s3_client(), mod._env("OTO_MCP_S3_BUCKET"),
+                                         purge.de_dict(r["perimetre"])), indent=2))
     return 0
 
 
 def extraire(args) -> int:
-    with _connexion(lecture_seule=True) as conn:
+    with _connexion() as conn, purge.en_lecture_seule(conn):
         lu = purge.lire(conn, args.tenant)
         if lu is None:
             raise EtapeEchouee(f"tenant {args.tenant!r} absent : rien à remettre")
@@ -323,18 +326,13 @@ def main(argv: list[str] | None = None) -> int:
     for nom in ("tout", "base", "objets", "archives", "extraire"):
         s = sous.add_parser(nom)
         s.add_argument("--tenant", required=True)
-        s.add_argument("--dossier", required=nom in ("objets", "extraire"))
-        if nom != "extraire":
-            s.add_argument("--appliquer", action="store_true")
+        if nom in ("tout", "extraire"):
+            s.add_argument("--dossier", required=True)
+    sous.choices["tout"].add_argument("--appliquer", action="store_true")
     sous.choices["tout"].add_argument("--extraction-faite", metavar="DOSSIER")
-    g = sous.choices["archives"].add_mutually_exclusive_group()
-    g.add_argument("--extraire", metavar="DOSSIER")
-    g.add_argument("--extrait", metavar="DOSSIER")
     sous.choices["extraire"].add_argument("--depuis", required=True,
                                           help="instant du transfert (ISO 8601, UTC)")
     args = p.parse_args(argv)
-    if args.commande == "archives" and args.appliquer and not args.extrait:
-        p.error("archives --appliquer exige --extrait <dossier> (la part déjà remise)")
     try:
         return {"tout": tout, "base": base, "objets": objets, "archives": archives,
                 "extraire": extraire}[args.commande](args)
