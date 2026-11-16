@@ -5,9 +5,11 @@ an org admin turns a model of the catalogue (`runner_models.MODELES`) off or bac
 Empty by default: the state of every org before the switch existed, so nothing changes
 until an admin turns one off. Off, the model is marked `allowed: false, disabled: true`
 in the catalogue (the picker hides it, it is never the default), an agent cannot be set
-on it (`_modele.exige_modele_permis` → `model_disabled`), an agent already on it runs
-on the org's default model instead (`_modele.charge_de_l_org`), and a job already queued
-on it is stopped at the claim with the reason written (`runner_jobs._avec_cle`).
+on it (`_modele.exige_modele_permis` → `model_disabled`), an agent already on it no
+longer runs — no fallback to another model: its occurrences are refused and named
+(`refused_model_disabled`), a manual run is refused (`model_disabled`), a campaign stops
+(`stop_reason = model_disabled`) — and a job already queued on it is stopped at the
+claim with the reason written (`runner_jobs._avec_cle`).
 
 The column is born in `CREATE TABLE orgs` (`db/schema/orgs.py`); an existing base gets
 it from the revision `20261115_2100_disabled_models` or from the boot, same DDL
@@ -53,3 +55,13 @@ def poser(org_id: int, model: str, allume: bool) -> bool:
     with _connect() as conn:
         row = conn.execute(sql, params).fetchone()
     return row is not None
+
+
+def agents_sur(org_id: int, model: str) -> list[int]:
+    """The ids of the org's agents (`runner_triggers`) set on this model, paused ones
+    included: switched back on, they would hit the same stop. Sorted."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id FROM runner_triggers WHERE org_id = %s AND model = %s ORDER BY id",
+            (int(org_id), model)).fetchall()
+    return [int(r["id"]) for r in rows]

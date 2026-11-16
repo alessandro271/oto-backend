@@ -628,7 +628,8 @@ class Delivery(BaseModel):
     #: `refused_too_large` | `refused_stale` (signature valide, horodatage hors
     #: fenêtre — un rejeu ou une horloge dérivée) | `refused_no_model` (l'agent ne
     #: déclare aucun modèle : rien n'est enfilé) | `refused_requires` (un agent qu'il
-    #: exige n'a pas réussi aujourd'hui : l'échéance est sautée). Un refus garde son MOTIF : c'est lui qui rend une
+    #: exige n'a pas réussi aujourd'hui : l'échéance est sautée) | `refused_model_disabled`
+    #: (un admin de l'org a éteint le modèle de l'agent : rien n'est enfilé). Un refus garde son MOTIF : c'est lui qui rend une
     #: source mal branchée réparable plutôt que mystérieuse.
     #: ⚠️ Figé à la RÉCEPTION : `queued` = « acceptée, travail enfilé », jamais
     #: « encore en attente ». Ce que le travail est devenu depuis, c'est `job_status`.
@@ -1534,6 +1535,10 @@ def _exiger_lancable(ctx: ResolvedCtx, t: dict, procedure: Optional[str],
         raise AuthzDenied(409, "trigger_no_model",
                           f"{sans_famille}. Déclare un modèle du catalogue "
                           "(`op=update model=…`, liste : `runner.models`).")
+    # Un modèle ÉTEINT par un admin de l'org : le run ne part pas, et rien ne le
+    # remplace (même refus qu'à la pose, `model_disabled`).
+    if _modele.modele_eteint(ctx.org_id, model):
+        raise AuthzDenied(403, "model_disabled", _modele.RAISON_MODELE_ETEINT)
     famille = runner_models.famille(model)
     _modele.exige_servi(_modele.exige_un_runner(ctx.org_id), famille)
     _cle_exigee.exiger_a_la_pose(ctx.org_id, famille)
@@ -3154,6 +3159,9 @@ CAPABILITIES += [
                           "automatisation inconnue dans l'org du porteur"),
             DeclaredError(400, "procedure_archived",
                           "`run_now` d'un agent dont la procédure est archivée"),
+            DeclaredError(403, "model_disabled",
+                          "pose, changement de modèle, `run_now` ou `rerun` sur un modèle "
+                          "qu'un admin de l'org a éteint (`oto_org_settings domain=models`)"),
             _procedure_du_travail.REFUS_INCONNUE,
             DeclaredError(400, "handoff_run_now_only", "`handoff` hors d'`op=run_now`"),
             DeclaredError(400, "chain_self",

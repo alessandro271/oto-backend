@@ -93,6 +93,7 @@ def test_un_admin_eteint_puis_rallume(client, org):
                    headers=_h(org["admin"]))
     assert r.status_code == 200, r.text
     assert r.json()["disabled"] == ["claude-opus-5"]
+    assert r.json()["agents_on_model"] == {"count": 0, "ids": []}
     assert client.get(org["route"], headers=_h(org["membre"])).json()["disabled"] == [
         "claude-opus-5"]
     r = client.put(org["route"], json={"model": "claude-opus-5", "enabled": True},

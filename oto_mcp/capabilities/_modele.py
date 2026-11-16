@@ -6,14 +6,11 @@ vit dans `runner_models` (pur, lu aussi par la base).
 """
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
 from .. import db, runner_models
 from . import _cle_exigee
 from ._types import AuthzDenied
-
-logger = logging.getLogger(__name__)
 
 
 def exige_un_runner(org_id: int) -> dict:
@@ -111,18 +108,17 @@ def exige_region_permise(org_id: Optional[int], model: Optional[str]) -> None:
         raise AuthzDenied(403, "model_region_blocked", RAISON_REGION_CN)
 
 
-#: Ce que lit une org dont un admin a ÉTEINT le modèle (`db/modeles_eteints.py`) : la
-#: raison d'un refus, à la pose comme à la réservation.
+#: Le code d'un modèle ÉTEINT par un admin de l'org (`db/modeles_eteints.py`) : refus à la
+#: pose et au lancement à la main, livraison refusée d'un agent (`refused_model_disabled`),
+#: arrêt d'une campagne (`stop_reason`).
+CODE_MODELE_ETEINT = "model_disabled"
+
+#: Ce que lit une org dont un admin a ÉTEINT le modèle : la raison d'un refus, à la pose,
+#: au lancement et à la réservation. Aucun repli sur un autre modèle : le run s'arrête.
 RAISON_MODELE_ETEINT = (
     "un admin de l'organisation a éteint ce modèle pour ses agents "
     "(`oto_org_settings domain=models`). Choisis un autre modèle, ou demande à un admin "
     "de le rallumer.")
-
-#: Ce que porte un travail parti sur le modèle par DÉFAUT parce que celui de son agent
-#: est éteint (`charge_de_l_org`, champ `modele_remplace.raison`).
-RAISON_MODELE_REMPLACE = (
-    "le modèle de cet agent est éteint par un admin de l'organisation : ce run tourne sur "
-    "le modèle par défaut de l'organisation.")
 
 
 def modele_eteint(org_id: Optional[int], model: Optional[str]) -> bool:
@@ -137,33 +133,6 @@ def exige_modele_permis(org_id: Optional[int], model: Optional[str]) -> None:
     exige_region_permise(org_id, model)
     if modele_eteint(org_id, model):
         raise AuthzDenied(403, "model_disabled", RAISON_MODELE_ETEINT)
-
-
-def charge_de_l_org(org_id: Optional[int], model: Optional[str]) -> dict:
-    """`runner_models.charge(model)`, sauf si l'org a ÉTEINT ce modèle depuis que l'agent
-    a été posé : le travail part alors sur le modèle par défaut de l'org, et le dit
-    (`modele_remplace` : `{de, par, raison}` — le worker lit la charge champ par champ et
-    l'ignore ; la file la garde pour qui relit le travail).
-
-    ⚠️ Sans défaut (aucun modèle servi et permis), le travail part sur le modèle éteint :
-    la réservation l'arrête alors, raison écrite (`runner_jobs._avec_cle`) — jamais un
-    travail qui tournerait en silence sur ce que l'org a refusé."""
-    charge = runner_models.charge(model)
-    if not modele_eteint(org_id, model):
-        return charge
-    try:
-        etat = etat_servi(db.runner_arme(int(org_id)), int(org_id))
-    except Exception as e:  # noqa: BLE001 — la réservation garde de toute façon
-        logger.warning("org %s : défaut illisible pour remplacer le modèle éteint %s (%s)",
-                       org_id, model, e)
-        return charge
-    defaut = next((m["id"] for m in etat.get("models") or [] if m.get("default")), None)
-    if not defaut or defaut == model:
-        return charge
-    logger.info("org %s : modèle %s éteint — le travail part sur le défaut %s",
-                org_id, model, defaut)
-    return {**runner_models.charge(defaut),
-            "modele_remplace": {"de": model, "par": defaut, "raison": RAISON_MODELE_REMPLACE}}
 
 
 def exige_un_modele(famille: Optional[str]) -> None:

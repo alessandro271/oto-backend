@@ -241,7 +241,7 @@ def _org_active_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def _aucun_modele_eteint_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sans base, aucune org n'a éteint de modèle (`orgs.disabled_models`). La lecture a
-    lieu à chaque travail posé par un agent (`_modele.charge_de_l_org`), à chaque
+    lieu à chaque occurrence d'un agent (horloge, webhook, lancement, campagne), à chaque
     réservation et à chaque catalogue servi ; un banc qui double le runner sans base n'a
     rien à y lire. Un banc sur base réelle lit la vraie colonne ; un banc qui teste
     l'interrupteur la double lui-même."""

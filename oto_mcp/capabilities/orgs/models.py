@@ -3,14 +3,18 @@
 Un interrupteur par modèle du catalogue (`runner_models.MODELES`), hors abonnements
 personnels (`sub:*` : chacun le sien, rien à éteindre pour l'org). Tous allumés par
 défaut. Éteint par un admin de l'org : plus proposé (`allowed: false, disabled: true` au
-catalogue, jamais par défaut), plus posable (`model_disabled`), un agent déjà dessus part
-sur le défaut de l'org (`_modele.charge_de_l_org`), et un travail déjà en file sur lui est
-arrêté à la réservation, raison écrite (`runner_jobs._avec_cle`).
+catalogue, jamais par défaut), plus posable (`model_disabled`). Un agent déjà dessus ne
+tourne plus, sans repli sur un autre modèle : ses occurrences sont refusées et nommées
+(`refused_model_disabled` sur sa page, 409 `model_disabled` au webhook), un lancement à la
+main est refusé (`model_disabled`), une campagne s'arrête (`stop_reason`), et un travail
+déjà en file est arrêté à la réservation, raison écrite (`runner_jobs._avec_cle`). La
+bascule rend les agents de l'org posés sur ce modèle (`agents_on_model`), en pause
+compris : rallumés, ils buteraient sur le même arrêt.
 
-⚠️ Le modèle par DÉFAUT de l'org ne s'éteint pas (`model_is_default`) : c'est sur lui que
-partent les agents des modèles éteints. Éteindre d'abord un autre ne change rien à cette
-règle ; le défaut se redérive (`_modele.etat_servi`), donc éteindre l'actuel défaut exige
-d'en avoir un autre — un geste à part que l'écran ne propose pas.
+⚠️ Le modèle par DÉFAUT de l'org ne s'éteint pas (`model_is_default`) : c'est celui que
+l'écran propose à une nouvelle pose. Le défaut se redérive (`_modele.etat_servi`), donc
+éteindre l'actuel défaut exige d'en avoir un autre — un geste à part que l'écran ne
+propose pas.
 
 Lecture = membre ; écriture = org_admin. Une déclaration → deux surfaces : REST
 `/api/orgs/{id}/models` ici, MCP par la console `oto_org_settings domain=models`
@@ -46,6 +50,20 @@ class ModelesDeLOrg(BaseModel):
     disabled: list[str]
 
 
+class AgentsDuModele(BaseModel):
+    #: Combien d'agents de l'org sont posés sur le modèle basculé, en pause compris.
+    count: int
+    #: Leurs ids (`runner_triggers.id`), triés.
+    ids: list[int]
+
+
+class ModeleBascule(ModelesDeLOrg):
+    #: Le modèle basculé.
+    model: str
+    #: Les agents de l'org posés sur ce modèle : éteint, aucun ne tourne plus.
+    agents_on_model: AgentsDuModele
+
+
 def lire(org_id: int) -> dict:
     eteints = db.modeles_eteints.eteints(org_id)
     if eteints is None:
@@ -69,11 +87,13 @@ def basculer(org_id: int, model: str, allume: bool) -> dict:
         if defaut == model:
             raise AuthzDenied(
                 409, "model_is_default",
-                f"`{model}` est le modèle par défaut de l'organisation : c'est sur lui que "
-                "partent les agents des modèles éteints. Il reste allumé.")
+                f"`{model}` est le modèle par défaut de l'organisation : c'est celui que "
+                "propose l'écran à une nouvelle pose. Il reste allumé.")
     if not db.modeles_eteints.poser(org_id, model, allume):
         raise AuthzDenied(404, "unknown_org", f"Org #{org_id} inconnue.")
-    return lire(org_id)
+    agents = db.modeles_eteints.agents_sur(org_id, model)
+    return {**lire(org_id), "model": model,
+            "agents_on_model": {"count": len(agents), "ids": agents}}
 
 
 def _get(ctx: ResolvedCtx, inp: GetModelsInput) -> dict:
@@ -102,14 +122,17 @@ CAPABILITIES += [
     ),
     Capability(
         key="org.models.set", handler=_set, Input=SetModelInput,
-        authz=ORG_ADMIN_OF("org_id"), Output=ModelesDeLOrg, errors=_ERREURS_SET,
+        authz=ORG_ADMIN_OF("org_id"), Output=ModeleBascule, errors=_ERREURS_SET,
         description=("Turn one model on or off for this org's agents (`model`, `enabled`). "
                      "Off: no longer offered (`allowed: false, disabled: true`), an agent "
-                     "cannot be set on it (`model_disabled`), an agent already on it runs "
-                     "on the org's default model instead, and a job already queued on it "
-                     "is stopped at the claim with the reason written. The org's default "
-                     "model cannot be turned off (`model_is_default`); personal "
-                     "subscription models are not switchable. Org admin."),
+                     "cannot be set on it (`model_disabled`), an agent already on it stops "
+                     "running, with no fallback model (each occurrence refused as "
+                     "`model_disabled`, a fleet stopped), and a job already queued on it "
+                     "is stopped at the claim with the reason written. Returns "
+                     "`agents_on_model` (`count`, `ids`): the org's agents set on this "
+                     "model, paused ones included. The org's default model cannot be "
+                     "turned off (`model_is_default`); personal subscription models are "
+                     "not switchable. Org admin."),
         rest=RestBinding("PUT", _PATH, _ID),
     ),
 ]

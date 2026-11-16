@@ -501,9 +501,10 @@ CAPABILITIES += [
             "turned off for its agents: get returns `disabled` = their ids; set takes "
             "`model` + `enabled` true|false; off = no longer offered (`allowed: false, "
             "disabled: true`), an agent cannot be set on it (`model_disabled`), an agent "
-            "already on it runs on the org's default model, a job already queued on it is "
-            "stopped at the claim; the default model cannot be turned off "
-            "(`model_is_default`)). "
+            "already on it stops running with no fallback model (`model_disabled`), a job "
+            "already queued on it is stopped at the claim; set returns `agents_on_model` "
+            "= `count` + `ids` of the org's agents on that model, paused ones included; "
+            "the default model cannot be turned off (`model_is_default`)). "
             "op=get is member, set is org admin."),
         mcp="oto_org_settings",
     ),

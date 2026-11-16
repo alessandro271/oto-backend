@@ -682,9 +682,8 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
         return _refuser_sans_cle(job, appelant, _modele.RAISON_REGION_CN)
     if _modele.modele_eteint(job["org_id"], (job.get("payload") or {}).get("model")):
         # Un admin a ÉTEINT ce modèle (`orgs.disabled_models`) depuis que le travail a été
-        # posé. La réservation ne change pas de famille — le worker qui réserve sert
-        # celle-ci —, elle l'arrête, raison écrite ; l'occurrence suivante de l'agent
-        # partira sur le défaut de l'org (`_modele.charge_de_l_org`).
+        # posé. Il ne part sur aucun autre modèle : il est arrêté, raison écrite. Les
+        # occurrences suivantes de l'agent ne s'enfilent plus (`refused_model_disabled`).
         return _refuser_sans_cle(job, appelant, _modele.RAISON_MODELE_ETEINT)
     if _abonnement.est_abonnement(famille):
         # ⚠️ **Aucune clé n'est cherchée ici, et c'est le fond du sujet** (OTO-130) :
@@ -1394,6 +1393,15 @@ def _produire_pour_une_campagne(org_id: Optional[int], bail_s: int) -> Optional[
         f = db.campagne_a_servir(org_id, _ordre_de_service.ordonner)
         if not f or not f.get("sub"):
             return None
+        if _modele.modele_eteint(f["org_id"], f.get("model")):
+            # Un admin a ÉTEINT le modèle de la campagne (`orgs.disabled_models`) : elle
+            # s'ARRÊTE, motif nommé dans `stop_reason`, là où son propriétaire lit ses
+            # autres arrêts. Aucun repli sur un autre modèle ; ses travaux déjà en file
+            # sont refusés à la réservation (`_avec_cle`).
+            db.demander_arret(f["id"], f["org_id"], _modele.CODE_MODELE_ETEINT)
+            logger.warning("campagne %s arrêtée : modèle %s éteint par l'org %s",
+                           f["id"], f.get("model"), f["org_id"])
+            return None
         # Une campagne d'avant #1067 garde le NOM de son tableau : son identifiant est
         # posé ici, au premier travail, avant que la consigne ne le cite.
         f = _lignes_reservables.fixer_le_tableau(f)
@@ -1424,8 +1432,7 @@ def _produire_pour_une_campagne(org_id: Optional[int], bail_s: int) -> Optional[
                      # Le modèle déclaré par le passage, et la famille qui route le
                      # travail. Une flotte sans modèle — ou d'un modèle hors
                      # catalogue — n'envoie rien : n'importe quel worker la sert.
-                     # Un modèle éteint par l'org part sur son défaut, et le dit.
-                     **_modele.charge_de_l_org(f["org_id"], f.get("model")),
+                     **runner_models.charge(f.get("model")),
                      "input": message,
                      "label": f"flotte {f.get('namespace')} — {f['procedure']}"},
             fleet_id=f["id"], sub=f["sub"], seulement_si_servable=True)
