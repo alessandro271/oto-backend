@@ -13,14 +13,22 @@ key resolved per call via `access.resolve_api_key("higgsfield")`: the customer's
 
 **The price guard.** `create_generation` REQUIRES `max_usd`. It estimates first (free), reads a
 dollar amount with `oto.tools.higgsfield.price_of`, and submits only when that amount
-is known and at most `max_usd`; otherwise nothing is sent. `max_usd` itself is bounded by
+is at most `max_usd`. An amount that cannot be read (`usd` None) is refused where WE bill,
+on the shared key, and on a call whose key is not known (no `key_mode` noted): nothing
+is sent. On a customer's own key (`access.BYO_MODES`) the job is sent with its price
+served as it is, unpriced (`usd` None, `basis` says why): Higgsfield charges their balance,
+oto bills nothing. A refusal named `higgsfield_price_unknown` (a combination `price_of`
+has no measure for) also files a platform signal, one per combination
+(`_signaler_prix_inconnu`). `max_usd` itself is bounded by
 the instance (`OTO_HIGGSFIELD_MAX_USD_PAR_APPEL`): above it, refused before Higgsfield is
 called (`max_usd_above_cap`). Higgsfield answers some
 estimates with a sentence of per-second prices instead of an amount: the amount read
 from it is flagged `approximate`. GPT Image 2.5 (`marketing-studio/image/flare`, `/sunburst`)
-gives only per-1M-token rates, and no job reports what it was charged: `price_of` answers the
-charge measured per quality and resolution (no margin), flagged `approximate`, and that price
-is what the shared key bills — not the job's own charge.
+gives only per-1M-token rates, and no job status reports what it was charged: `price_of`
+answers the charge measured for the job's combination (shape, quality, resolution,
+reference images; no margin), flagged `approximate`, and that price is what the shared key
+bills — not the job's own charge. A combination not measured has no price
+(`higgsfield_price_unknown`).
 
 **The shared key** (closed, on grant, with a daily quota in micro-dollars of job price).
 Higgsfield charges a job only once it COMPLETES — failed, nsfw and canceled jobs are free —
@@ -96,6 +104,11 @@ MAX_USD_ABOVE_CAP = "max_usd_above_cap"
 #: — or that is not recorded at all: one refusal for both, so it never says whether the
 #: job exists (`_travail_de_l_org`).
 JOB_NOT_FOUND = "job_not_found"
+#: How `price_of` begins the `basis` of a combination it has no measure for (connectors
+#: lib). Written here, not imported: the refusal and its signal do not wait for that lib.
+PRICE_UNKNOWN = "higgsfield_price_unknown"
+#: The parameters that make a GPT Image 2.5 combination, as the signal names it.
+_COMBINAISON = ("aspect_ratio", "quality", "resolution")
 
 
 class HiggsfieldASec(RuntimeError):
@@ -132,6 +145,54 @@ def microdollars(usd: float) -> int:
 
 def _sur_cle_plateforme() -> bool:
     return (session_org.current_call_trace() or {}).get("key_mode") == "platform"
+
+
+def _sur_cle_propre() -> bool:
+    """The call goes through the customer's own key (user, group, org or tenant), noted
+    by the resolver. False on the shared key AND when no `key_mode` is noted: a key whose
+    payer is not known is never treated as someone else's."""
+    return (session_org.current_call_trace() or {}).get("key_mode") in access.BYO_MODES
+
+
+def combinaison(model: str, params: dict) -> str:
+    """The combination a price was asked for, as the signal names it: the model, the
+    parameters that set a measured charge (absent = `-`), and the number of reference
+    images."""
+    refs = params.get("image_urls")
+    n = len(refs) if isinstance(refs, list) else 0
+    valeurs = " ".join(f"{k}={params.get(k, '-')}" for k in _COMBINAISON)
+    return f"{model} {valeurs} image_urls={n}"
+
+
+def _signaler_prix_inconnu(model: str, params: dict, basis: str) -> None:
+    """A refusal named `higgsfield_price_unknown` goes to the platform's signals
+    (`oto_admin_signal`), with the combination as its target: the existing deposit
+    (`db.usage.insert_usage_signal`) turns a repeat of a pending one into an occurrence,
+    so the pile holds ONE signal per combination. Any other unreadable price (no
+    `duration`, a video input) is the caller's to fix, and files nothing. Never fails the
+    refusal: a deposit that breaks is an ERROR (Sentry)."""
+    if not basis.startswith(PRICE_UNKNOWN):
+        return
+    from ..db import usage
+    cible = f"{PRICE_UNKNOWN} {combinaison(model, params)}"
+    try:
+        usage.insert_usage_signal(
+            sub=None, org_id=None, signal="gap", kind="billing", target=cible,
+            body=(f"A Higgsfield job was refused: no measured price for {cible}. "
+                  f"Measure this combination or decline it. Basis: {basis}"),
+            session_id=None, source="tool")
+    except Exception:
+        logger.error("higgsfield: the unknown-price signal for %s was not filed", cible,
+                     exc_info=True)
+
+
+def _prix_inconnu(model: str, params: dict, price: dict) -> None:
+    """A price that cannot be read: REFUSED unless the key is the customer's own."""
+    if _sur_cle_propre():
+        return
+    _signaler_prix_inconnu(model, params, str(price["basis"]))
+    raise _bad(f"Higgsfield: the price of this job cannot be read ({price['basis']}), "
+               "so it was not sent. Nothing was charged.")
 
 
 def _gratuit() -> None:
@@ -370,8 +431,9 @@ def register(mcp: FastMCP) -> None:
           the same `params` as the generation. Answers `usd` (null when no amount can be
           read, `basis` says why), `approximate` (true when read from a per-second price
           sentence: it prices a 16:9 output before discount; also true for GPT Image 2.5,
-          `marketing-studio/image/flare|sunburst`, priced at its measured charge per
-          `quality` and `resolution`) and the raw `estimate`.
+          `marketing-studio/image/flare|sunburst`, priced at the charge measured for its
+          shape, `quality`, `resolution` and reference images; a combination not measured
+          has `usd` null, `basis` `higgsfield_price_unknown`) and the raw `estimate`.
         - `get_request` — one job (`request_id`): `status` queued, in_progress,
           completed, failed (with `error`), nsfw or canceled. Once completed, `outputs`
           lists every file address and `expires_at` says when they are deleted (seven
@@ -426,13 +488,14 @@ def register(mcp: FastMCP) -> None:
         cancel or delete one, or get an address to upload an input file.
 
         `op`:
-        - `create_generation` — submit `model` with its `params`, REFUSED unless its price is
-          known and at most `max_usd` (US dollars, required). The price is estimated
-          first, free; when it cannot be read (no amount, no `duration` on a per-second
-          price, a video input on a model priced without one) nothing is sent and the
-          answer says why. Answers at once: `request_id`, `status` queued, the `price`
-          used for the check. The job runs for seconds (a still) to minutes (a clip):
-          follow it with `higgsfield` op='get_request'. Never retried; sending the same
+        - `create_generation` — submit `model` with its `params`, REFUSED when its price is
+          above `max_usd` (US dollars, required). The price is estimated first, free;
+          when it cannot be read (no amount, no `duration` on a per-second price, a video
+          input on a model priced without one, a combination not measured) nothing is
+          sent on the shared key and the answer says why; on your own key the job is
+          sent unpriced (`price.usd` null, no `max_usd` check). Answers at once:
+          `request_id`, `status` queued, the `price` used for the check. The job runs
+          for seconds (a still) to minutes (a clip): follow it with `higgsfield` op='get_request'. Never retried; sending the same
           `idempotency_key` again returns the original job instead of a second one.
           Many models make sound by default (`generate_audio`, `sound`): turn it off in
           `params` unless sound is wanted, it costs more.
@@ -458,7 +521,7 @@ def register(mcp: FastMCP) -> None:
             op: What to do (see above).
             model: `create_generation`: the model slug from `higgsfield` op='list_models'.
             params: `create_generation`: the model's own parameters, e.g. {"prompt": "…", "image_url": "https://…", "duration": 5, "resolution": "720p"}.
-            max_usd: `create_generation`: the most this job may cost, in US dollars, at most the instance's ceiling (refused above it); above `max_usd`, or when the price cannot be read, nothing is sent.
+            max_usd: `create_generation`: the most this job may cost, in US dollars, at most the instance's ceiling (refused above it); above `max_usd` nothing is sent, nor on the shared key when the price cannot be read.
             request_id: `cancel`, `delete`: the job's id.
             content_type: `create_upload`: the input file's type.
             idempotency_key: `create_generation`: your own key (1-255 visible ASCII characters) to make a repeat safe; a fresh one otherwise.
@@ -481,16 +544,19 @@ def register(mcp: FastMCP) -> None:
             price = _priced(m, p)
             usd = price["usd"]
             if usd is None:
-                raise _bad(f"Higgsfield: the price of this job cannot be read ({price['basis']}), "
-                           "so it was not sent. Nothing was charged.")
-            if usd > cap:
+                _prix_inconnu(m, p, price)
+            elif usd > cap:
                 raise _bad(f"Higgsfield: this job costs about ${usd:.3f} ({price['basis']}), above "
                            f"max_usd ${cap:.2f}. Nothing was sent; raise max_usd only once that "
                            "price is agreed.")
             # Resolved again for the job's price: on the platform key, the grant's quota is
             # checked for it BEFORE anything is sent.
-            units = microdollars(usd)
+            units = microdollars(usd) if usd is not None else 1
             client = _client(units=units)
+            if usd is None:
+                # The key may have changed between the two resolutions: checked again on
+                # the one that sends.
+                _prix_inconnu(m, p, price)
             platform = _sur_cle_plateforme()
             answer = _run(lambda: client.generate(m, p, idempotency_key=idempotency_key,
                                                   expires_after=expires_after), spends=True)
