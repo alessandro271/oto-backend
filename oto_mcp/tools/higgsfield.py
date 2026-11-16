@@ -11,13 +11,16 @@ key resolved per call via `access.resolve_api_key("higgsfield")`: the customer's
 - `higgsfield_act` — submit a generation (`create_generation`), cancel a queued job, delete a
   finished job's files, get a presigned address for an input file.
 
-**The price guard.** `create_generation` REQUIRES `max_usd`. It estimates first (free), reads a
-dollar amount with `oto.tools.higgsfield.price_of`, and submits only when that amount
-is at most `max_usd`. An amount that cannot be read (`usd` None) is refused where WE bill,
-on the shared key, and on a call whose key is not known (no `key_mode` noted): nothing
-is sent. On a customer's own key (`access.BYO_MODES`) the job is sent with its price
-served as it is, unpriced (`usd` None, `basis` says why): Higgsfield charges their balance,
-oto bills nothing. A refusal named `higgsfield_price_unknown` (a combination `price_of`
+**The price guard.** `create_generation` estimates first (free), reads a dollar amount
+with `oto.tools.higgsfield.price_of`, and submits only when that amount is at most
+`max_usd`, REQUIRED whenever the amount is known. An amount that cannot be read (`usd`
+None) is refused where WE bill, on the shared key, and on a call whose key is not known
+(no `key_mode` noted): nothing is sent. On a customer's own key (`access.BYO_MODES`):
+- with `max_usd`, refused all the same (`higgsfield_cap_unverifiable`): the caller asked
+  for a ceiling nobody can check, and it is not dropped in silence;
+- without it, the job is sent unpriced (`usd` None, `basis` says why, `note` says it is
+  not estimated and not billed by the platform): Higgsfield charges their balance.
+A refusal named `higgsfield_price_unknown` (a combination `price_of`
 has no measure for) also files a platform signal, one per combination
 (`_signaler_prix_inconnu`). `max_usd` itself is bounded by
 the instance (`OTO_HIGGSFIELD_MAX_USD_PAR_APPEL`): above it, refused before Higgsfield is
@@ -100,6 +103,10 @@ _HINT = "full=true returns the raw records."
 ENV_MAX_USD = "OTO_HIGGSFIELD_MAX_USD_PAR_APPEL"
 MAX_USD_DEFAULT = "5"
 MAX_USD_ABOVE_CAP = "max_usd_above_cap"
+#: On the customer's own key, a `max_usd` given for a job whose price cannot be read.
+CAP_UNVERIFIABLE = "higgsfield_cap_unverifiable"
+#: What the answer of a job sent unpriced says.
+NOTE_NON_CHIFFRE = "price not estimated; not billed by the platform"
 #: A job read, canceled or deleted on the shared key that the caller's org did not submit
 #: — or that is not recorded at all: one refusal for both, so it never says whether the
 #: job exists (`_travail_de_l_org`).
@@ -186,9 +193,15 @@ def _signaler_prix_inconnu(model: str, params: dict, basis: str) -> None:
                      exc_info=True)
 
 
-def _prix_inconnu(model: str, params: dict, price: dict) -> None:
-    """A price that cannot be read: REFUSED unless the key is the customer's own."""
+def _prix_inconnu(model: str, params: dict, price: dict, cap: Optional[float]) -> None:
+    """A price that cannot be read: REFUSED unless the key is the customer's own and no
+    `max_usd` was asked. On their own key a `max_usd` cannot be checked: a named refusal,
+    and no signal — the platform bills nothing there."""
     if _sur_cle_propre():
+        if cap is not None:
+            raise _bad(f"{CAP_UNVERIFIABLE}: the price of this job cannot be read "
+                       f"({price['basis']}), so max_usd ${cap:.2f} cannot be checked. Nothing "
+                       "was sent; on your own key, omit max_usd to send it unpriced.")
         return
     _signaler_prix_inconnu(model, params, str(price["basis"]))
     raise _bad(f"Higgsfield: the price of this job cannot be read ({price['basis']}), "
@@ -489,11 +502,14 @@ def register(mcp: FastMCP) -> None:
 
         `op`:
         - `create_generation` — submit `model` with its `params`, REFUSED when its price is
-          above `max_usd` (US dollars, required). The price is estimated first, free;
-          when it cannot be read (no amount, no `duration` on a per-second price, a video
-          input on a model priced without one, a combination not measured) nothing is
-          sent on the shared key and the answer says why; on your own key the job is
-          sent unpriced (`price.usd` null, no `max_usd` check). Answers at once:
+          above `max_usd` (US dollars, required whenever the price is known). The price is
+          estimated first, free; when it cannot be read (no amount, no `duration` on a
+          per-second price, a video input on a model priced without one, a combination
+          not measured) nothing is sent on the shared key and the answer says why. On
+          your own key, a `max_usd` that cannot be checked is refused
+          (`higgsfield_cap_unverifiable`); without `max_usd` the job is sent unpriced
+          (`price.usd` null, `price.note` says it is not estimated and not billed by the
+          platform). Answers at once:
           `request_id`, `status` queued, the `price` used for the check. The job runs
           for seconds (a still) to minutes (a clip): follow it with `higgsfield` op='get_request'. Never retried; sending the same
           `idempotency_key` again returns the original job instead of a second one.
@@ -521,7 +537,7 @@ def register(mcp: FastMCP) -> None:
             op: What to do (see above).
             model: `create_generation`: the model slug from `higgsfield` op='list_models'.
             params: `create_generation`: the model's own parameters, e.g. {"prompt": "…", "image_url": "https://…", "duration": 5, "resolution": "720p"}.
-            max_usd: `create_generation`: the most this job may cost, in US dollars, at most the instance's ceiling (refused above it); above `max_usd` nothing is sent, nor on the shared key when the price cannot be read.
+            max_usd: `create_generation`: the most this job may cost, in US dollars, at most the instance's ceiling (refused above it); required when the price can be read, and above it nothing is sent. When the price cannot be read, nothing is sent on the shared key; on your own key, omit it to send the job unpriced (given, it is refused: `higgsfield_cap_unverifiable`).
             request_id: `cancel`, `delete`: the job's id.
             content_type: `create_upload`: the input file's type.
             idempotency_key: `create_generation`: your own key (1-255 visible ASCII characters) to make a repeat safe; a fresh one otherwise.
@@ -533,18 +549,24 @@ def register(mcp: FastMCP) -> None:
         if op == "create_generation":
             _refuse_ignored(op, request_id=request_id, content_type=content_type)
             m, p = _need(model, "model", op), _need(params, "params", op)
-            cap = _need(max_usd, "max_usd", op)
-            if isinstance(cap, bool) or not isinstance(cap, (int, float)) or cap <= 0:
-                raise _bad("`max_usd` must be a positive amount in US dollars. Nothing was sent.")
-            ceiling = max_usd_cap()
-            if cap > ceiling:
-                raise _bad(f"{MAX_USD_ABOVE_CAP}: max_usd ${cap:.2f} is above this instance's "
-                           f"ceiling of ${ceiling:.2f} per generation. Nothing was sent; split "
-                           "the work into cheaper jobs, or ask the instance's operator.")
+            cap = max_usd
+            if cap is not None:
+                if isinstance(cap, bool) or not isinstance(cap, (int, float)) or cap <= 0:
+                    raise _bad("`max_usd` must be a positive amount in US dollars. "
+                               "Nothing was sent.")
+                ceiling = max_usd_cap()
+                if cap > ceiling:
+                    raise _bad(f"{MAX_USD_ABOVE_CAP}: max_usd ${cap:.2f} is above this "
+                               f"instance's ceiling of ${ceiling:.2f} per generation. Nothing "
+                               "was sent; split the work into cheaper jobs, or ask the "
+                               "instance's operator.")
             price = _priced(m, p)
             usd = price["usd"]
             if usd is None:
-                _prix_inconnu(m, p, price)
+                _prix_inconnu(m, p, price, cap)
+            elif cap is None:
+                raise _bad(f"op='{op}' requires `max_usd` (this job costs about ${usd:.3f}, "
+                           f"{price['basis']}). Nothing was sent.")
             elif usd > cap:
                 raise _bad(f"Higgsfield: this job costs about ${usd:.3f} ({price['basis']}), above "
                            f"max_usd ${cap:.2f}. Nothing was sent; raise max_usd only once that "
@@ -556,7 +578,7 @@ def register(mcp: FastMCP) -> None:
             if usd is None:
                 # The key may have changed between the two resolutions: checked again on
                 # the one that sends.
-                _prix_inconnu(m, p, price)
+                _prix_inconnu(m, p, price, cap)
             platform = _sur_cle_plateforme()
             answer = _run(lambda: client.generate(m, p, idempotency_key=idempotency_key,
                                                   expires_after=expires_after), spends=True)
@@ -566,6 +588,8 @@ def register(mcp: FastMCP) -> None:
                                   else None, m, usd, bool(price["approximate"]))
             if isinstance(answer, dict):
                 answer["price"] = {k: price[k] for k in ("usd", "approximate", "basis")}
+                if usd is None:
+                    answer["price"]["note"] = NOTE_NON_CHIFFRE
             return answer
         _refuse_ignored(op, model=model, params=params, max_usd=max_usd,
                         idempotency_key=idempotency_key, expires_after=expires_after)

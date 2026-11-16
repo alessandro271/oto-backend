@@ -17,7 +17,7 @@ in the Higgsfield console ([console.higgsfield.ai](https://console.higgsfield.ai
 
 ## note — what can mislead
 
-- `create_generation` **refuses** a job above `max_usd`: say the price to the person and get their OK before raising it. A job whose price cannot be read is refused on the **shared key**; on **your own key** it is sent unpriced (`price.usd` null, no `max_usd` check), on your balance
+- `create_generation` **refuses** a job above `max_usd`: say the price to the person and get their OK before raising it. A job whose price cannot be read is refused on the **shared key**; on **your own key** it is refused if `max_usd` is given (`higgsfield_cap_unverifiable`: that ceiling cannot be checked), and sent unpriced without it (`price.usd` null, `price.note`), on your balance
 - `max_usd` itself has a ceiling set by the instance (`OTO_HIGGSFIELD_MAX_USD_PAR_APPEL`, 5 dollars by default): above it the job is refused (`max_usd_above_cap`) before Higgsfield is called
 - some models are priced by a sentence of per-second rates rather than an amount: the price read from it is marked `approximate` (16:9 output, before discount); a job with a **video as input** on such a model cannot be priced and is refused
 - GPT Image 2.5 (`marketing-studio/image/flare`, `/sunburst`, same price) is priced by the token, and Higgsfield never says what a job cost: the price is the **charge measured per `quality` and `resolution`** (no margin), marked `approximate`, and it is what the shared key bills. The charge is measured per combination of shape (`aspect_ratio`), `quality`, `resolution` and reference images (`image_urls`): `estimate` says the price of yours. A combination not measured has no price (`usd` null, `basis` `higgsfield_price_unknown`)

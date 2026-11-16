@@ -1127,8 +1127,9 @@ annulé : gratuit — et son statut ne porte aucun prix. Sur la clé plateforme
   micro-dollars, l'unité de `grant_quota_unit`), le note en `units`, et note le travail avec
   ce prix (table `higgsfield_jobs`). Aucune `quantity` : rien n'est encore facturé.
 - **Un prix illisible** (`usd` nul) est refusé sur la clé plateforme, et sur un appel dont la
-  clé n'est pas connue ; sur la clé propre du client, le travail part non chiffré
-  (`price.usd` nul), sans rien facturer. Un refus nommé `higgsfield_price_unknown` (une
+  clé n'est pas connue ; sur la clé propre du client, un `max_usd` invérifiable est refusé
+  (`higgsfield_cap_unverifiable`, sans signal), et sans `max_usd` le travail part non chiffré
+  (`price.usd` nul, `price.note`), sans rien facturer. Un refus nommé `higgsfield_price_unknown` (une
   combinaison que la lib n'a pas mesurée) dépose un signal plateforme (`oto_admin_signal`,
   `gap`/`billing`), un par combinaison : sa redite s'y rattache en occurrence.
 - **La lecture d'un travail abouti** (`higgsfield` op=get_request) par l'org qui l'a soumis
