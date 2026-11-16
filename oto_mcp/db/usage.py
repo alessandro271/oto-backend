@@ -2578,10 +2578,12 @@ _ADOPTION_LIST_CAP = 500
 
 
 def org_members_by_seniority(org_id: int, *, activity: bool) -> list[dict]:
-    """Les membres de l'org PAR ANCIENNETÉ (`joined_at`, puis `sub`), avec leur email et
+    """Les membres de l'org PAR ANCIENNETÉ (`joined_at`, puis `sub`), avec leur email,
+    leur langue choisie (`users.locale`, `None` si jamais choisie : rien n'est deviné) et
     leur dernier appel d'outil émis sous CETTE org (`None` s'il n'y en a jamais eu) —
     la lecture du service commerce (`service.org.members`) : il désigne les membres
-    payants dans cet ordre et écrit ses relances à partir de la dernière activité.
+    payants dans cet ordre, écrit ses relances à partir de la dernière activité, et
+    chaque message dans la langue de son destinataire.
 
     Toute la population, sans plafond : une liste tronquée ferait retomber au gratuit
     des membres qui paient.
@@ -2604,7 +2606,7 @@ def org_members_by_seniority(org_id: int, *, activity: bool) -> list[dict]:
         with _connect() as conn:
             return [dict(r) for r in conn.execute(
                 """
-                SELECT m.sub, u.email, m.org_role, m.is_active, m.joined_at,
+                SELECT m.sub, u.email, u.locale, m.org_role, m.is_active, m.joined_at,
                        NULL::timestamptz AS last_activity_at
                 FROM org_members m
                 LEFT JOIN users u ON u.sub = m.sub
@@ -2622,7 +2624,7 @@ def org_members_by_seniority(org_id: int, *, activity: bool) -> list[dict]:
             f"""
             WITH d AS (SELECT sub, MAX(dernier_at) AS last_activity_at
                          FROM ({tout}) t GROUP BY sub)
-            SELECT m.sub, u.email, m.org_role, m.is_active, m.joined_at,
+            SELECT m.sub, u.email, u.locale, m.org_role, m.is_active, m.joined_at,
                    d.last_activity_at
             FROM org_members m
             LEFT JOIN users u ON u.sub = m.sub

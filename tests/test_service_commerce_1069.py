@@ -179,6 +179,22 @@ def test_une_activite_illisible_est_un_refus_nomme(live):
     assert (refus.status, refus.code) == (503, "aggregate_incomplete")
 
 
+@pytest.mark.parametrize("activity", [False, True], ids=["membres_seuls", "activite"])
+def test_chaque_membre_porte_sa_langue_choisie(registre_a_jour, activity):
+    # Le commerce écrit ses e-mails aux admins dans la langue de CHACUN (users.locale),
+    # avec ou sans la lecture de l'activité.
+    org = _org()
+    fr, sans = _membre(org, T0), _membre(org, T0 + timedelta(days=1))
+    with _connect() as conn:
+        conn.execute("UPDATE users SET locale = 'fr' WHERE sub = %s", (fr,))
+    if activity:
+        registre_a_jour()
+    out = {m["sub"]: m for m in _appel("service.org.members", org_id=org,
+                                       activity=activity)["members"]}
+    assert out[fr]["locale"] == "fr"
+    assert out[sans]["locale"] is None, "jamais choisie : None, pas une langue devinée"
+
+
 def test_une_org_archivee_ou_inconnue_est_un_404_nomme(live):
     assert _refus("service.org.members", org_id=_org(archivee=True)).code == "unknown_org"
     assert _refus("service.org.entitlements.list", org_id=10**12).code == "unknown_org"

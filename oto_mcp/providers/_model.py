@@ -276,6 +276,11 @@ class Connector:
     # `_decrit` only — false for every hand-written connector, which keeps its
     # `tools/<name>.py`.
     decrit: bool = False
+    # One sentence the platform adds to the READ tool's description of a described
+    # connector, after its head (`tools/decrits.texte_de_l_outil`): what the shared
+    # description cannot say, such as which sibling connector of THIS platform to take
+    # instead. Empty = the description's text alone. Set by `_decrit` only.
+    tool_note: str = ""
 
     @property
     def org_shareable(self) -> bool:
@@ -600,7 +605,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        account_noun="",
        field_discriminator="", credential_of=None, hosted_channel=None,
        spends_keys_of=(), grant_quota_unit="", grant_quota_per="",
-       decrit=False) -> Connector:
+       decrit=False, tool_note="") -> Connector:
     """Factory for a registry entry — called by `providers/<name>.py`.
 
     Adding a FIELD per connector = adding it to `Connector` AND here, then
@@ -623,11 +628,12 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         account_noun=account_noun, field_discriminator=field_discriminator,
         credential_of=credential_of, hosted_channel=hosted_channel,
         spends_keys_of=tuple(spends_keys_of), grant_quota_unit=grant_quota_unit,
-        grant_quota_per=grant_quota_per, decrit=decrit,
+        grant_quota_per=grant_quota_per, decrit=decrit, tool_note=tool_note,
     )
 
 
-def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota=None) -> Connector:
+def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota=None,
+            tool_note="") -> Connector:
     """Registry entry of a connector served by the GENERIC READER of its description
     (`tools/decrits.py`), which runs it by the library's engine: its label, namespace,
     modes and credential fields are READ in the description (`oto.connectors.descriptions`),
@@ -646,7 +652,8 @@ def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota
 
     A description with mode `platform` takes `platform_key_open` and `default_quota`:
     whether the shared key serves every org or only the granted ones, and its daily
-    quota, are the registry's decision, never a default. Without the mode, neither."""
+    quota, are the registry's decision, never a default. Without the mode, neither.
+    `tool_note`: one sentence added to the read tool's description (`Connector.tool_note`)."""
     from ..connectors import descriptions  # lazy: this module stays pure
 
     description = descriptions.charger(name)
@@ -666,7 +673,7 @@ def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota
                              f"({', '.join(c['name'] for c in champs)})")
         return _c(
             name, [connecteur["namespace"]], auth_modes=modes, keyed=False, secret_kind="fields",
-            label=connecteur["label"], help=help, href=href, decrit=True,
+            label=connecteur["label"], help=help, href=href, decrit=True, tool_note=tool_note,
             credential_fields=tuple(CredentialField(c["name"], c["label"], secret=c.get("secret") is True,
                                                     help=key_help[c["name"]]) for c in champs),
             **reglages,
@@ -678,5 +685,5 @@ def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota
     return _c(
         name, [connecteur["namespace"]], auth_modes=modes, keyed=cle,
         secret_kind="api_key" if cle else "fields", label=connecteur["label"], help=help, href=href,
-        credential_fields=(champ,), decrit=True, **reglages,
+        credential_fields=(champ,), decrit=True, tool_note=tool_note, **reglages,
     )

@@ -274,7 +274,7 @@ def _ref_membres_par_anciennete(org_id):
     """`service.org.members` avant la bascule : une sonde `MAX(created_at)` par membre."""
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
-            """SELECT m.sub, u.email, m.org_role, m.is_active, m.joined_at,
+            """SELECT m.sub, u.email, u.locale, m.org_role, m.is_active, m.joined_at,
                       a.last_activity_at
                  FROM org_members m
                  LEFT JOIN users u ON u.sub = m.sub
