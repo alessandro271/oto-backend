@@ -104,7 +104,7 @@ def setup_params(label: str, base_url: Optional[str], auth_mode: Optional[str],
 def _sub() -> str:
     sub = current_user_sub_from_token()
     if sub is None:
-        raise _bad("http connector unavailable in local stdio (org credential required).")
+        raise _bad("`api` connector unavailable in local stdio (org credential required).")
     return sub
 
 
@@ -113,7 +113,7 @@ def _resolved(account: Optional[str] = None):
     action resolved by name), else `_account`, team, org."""
     rc = access.resolve_credential("api", want="byo", account=account)
     if rc.entity_type is None:
-        raise _bad("http connector: no Custom API account of yours, your team's or your "
+        raise _bad("`api` connector: no Custom API account of yours, your team's or your "
                    "org's resolves — connect one first (`api(op=\"setup_link\")`).")
     return rc
 
@@ -122,7 +122,7 @@ def _definition(rc) -> dict:
     try:
         return store.load_definition(rc.entity_type, str(rc.entity_id), rc.account)
     except store.InstanceMissing as e:
-        raise _bad(f"http connector: {e}.")
+        raise _bad(f"`api` connector: {e}.")
 
 
 def _org_connectors(sub: str) -> list[dict]:
@@ -183,8 +183,10 @@ def register(mcp: FastMCP) -> None:
             base_url: setup_link — API root to pre-fill (e.g. https://api.acme.test/v1),
                 no query.
             auth_mode: setup_link — bearer | header | query | basic | oauth2 | session
-                | none. `session` = an account's login and password, for a service
-                with no API key: read-only, its steps are filled in on the card.
+                | visitor | none. `session` = an account's login and password, for a
+                service with no API key: read-only, its steps are filled in on the card.
+                `visitor` = a public site with no account, read with the cookies its
+                entry page sets (named on the card).
             header_name: setup_link — header NAME carrying the key, header mode
                 (e.g. x-api-key).
             query_param: setup_link — parameter NAME carrying the key, query mode.
