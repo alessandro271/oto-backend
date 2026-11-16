@@ -134,9 +134,23 @@ def clear_unipile_account(sub: str, org_id: Optional[int], provider: str = "LINK
         return
     with _connect() as conn:
         conn.execute(
+            # A row already disconnected keeps its date: billing reads it (the connection
+            # lens, prorated connection-months), and a repeated DELETE must not move it.
             "UPDATE unipile_accounts SET disconnected_at = NOW() "
-            "WHERE sub = %s AND org_id = %s AND provider = %s",
+            "WHERE sub = %s AND org_id = %s AND provider = %s AND disconnected_at IS NULL",
             (sub, org_id, provider))
+
+
+def unipile_account_in_service(account_id: str) -> bool:
+    """Un binding VIVANT, dans n'importe quelle org, nomme-t-il encore ce compte ?
+    (un compte adopté dans une autre org y reste en service : le supprimer chez le
+    fournisseur couperait cette org)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM unipile_accounts "
+            "WHERE account_id = %s AND disconnected_at IS NULL) AS vivant",
+            (account_id,)).fetchone()
+    return bool(row["vivant"])
 
 
 def org_unipile_account_ids(org_id: Optional[int], provider: str = "LINKEDIN") -> set:

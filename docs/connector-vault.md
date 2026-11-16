@@ -635,7 +635,9 @@ connecteur, lui, n'a pas d'alias : `http` refuse en nommant `api` (`providers.CO
 refus « connecteur inconnu » ; source de fichier `kind="http"` → `kind="api"`). Les données suivent en deux temps : le **coffre** par une étape de démarrage
 (`api_operations.copier_depuis_http`, COPIE re-chiffrée — l'AAD porte le nom du connecteur — qui laisse les
 lignes `http` en place, garde le partage de la ligne (`share_*`) et recopie la définition de chaque instance) ;
-le reste par la révision `20261112_1200_connecteur_api`, à jouer après le tag : sélections, activations,
+le reste par la révision `20261112_1200_connecteur_api`, à jouer APRÈS la copie — après le tag chez nous ; sur
+une cible, qui migre avant de démarrer, la porte joue la copie d'abord (`oto-mcp maintenance copies-du-coffre`,
+`instance-cible.md` § Les migrations) : sélections, activations,
 réglages, kits, listes d'outils, et ce qui DÉSIGNE une instance `http` — règles d'accès des comptes
 (`connector_account_rules`), arêtes `grants`, liens de projet (`target_ref`, `instance_ref`, `identity_ref`) —
 repointé vers la copie `api` du même propriétaire et du même compte. Pourquoi la révision et pas le démarrage :
@@ -669,6 +671,26 @@ fait chez le tiers), `op=request` (appel brut), `op=import` (conversion OpenAPI,
 écriture mais préparant une écriture) et `op=set_definition`. Les outils d'avant la paire
 (`api_get`/`api_post`/`api_doc`) restent servis ; `api` reste dans `A_MIGRER` tant
 qu'ils n'ont pas rejoint la paire.
+
+**`class: read` par action** : une action peut déclarer `class: read` (le mot d'oto-core, `class` d'une
+fonction décrite), seule valeur admise, sur un GET ou un POST seulement — une recherche envoyée en corps
+JSON, un point d'appel RPC. Posée par qui administre la carte (`set_definition`, mêmes droits que ci-dessus),
+elle change deux choses pour **cette action seule** : son effet (`tools/effets` la juge `lire` au lieu de
+`envoyer`) et le mode `session`, qui la laisse passer au lieu de la refuser (`api_session_read_only`). Sans
+elle, une action se juge sur son verbe ; un appel brut (`op=request`) ne la porte jamais. `write` et
+`sensitive` sont refusés : ils ne diraient rien de plus que le verbe, ou moins.
+
+**La réponse d'une action** (`oto_mcp/custom_ops_output.py`) : deux clés facultatives, les mots et le code d'oto-core
+(`oto.connectors.serve`, jamais recopié). `output` (`items`, `strip`, `projection` ; doc « sortie » de la lib) dit
+ce que l'agent reçoit : la liste à déballer, les clés retirées par chemin à points, les clés de premier niveau
+gardées ; une réponse sans la liste `items` déclarée est refusée (`api_output_items_missing`), jamais lue vide.
+`refusals` (doc « signal de refus » de la lib) dit une erreur que le service écrit dans le **corps d'un succès**
+(`{"hasError": true, "errorCode": …}` sous un 200) : `{code, when: 200, body: {path, equals | contains}, message,
+retryable?}`. Jugée sur le corps brut, avant `output`, la première entrée qui tient est servie en refus nommé
+(`code`, `retryable`), suivie d'un extrait de la réponse, clôturé comme le corps d'une erreur du tiers — jamais
+un succès. `when` vaut 200 seulement (un statut d'erreur arrive déjà à l'agent avec son corps, et le client ne
+rend pas le 2xx exact d'un succès) ; `body` est exigé ; `marks_account` n'est pas pris. Une action qui ne déclare
+ni l'une ni l'autre rend exactement ce qu'elle rendait ; `op=request` ne les porte jamais.
 
 **Le même lien pour tout le catalogue** : `oto_connector(op="setup_link", name=…)`
 (`capabilities/connectors/setup_link.py`) rend la carte d'UN connecteur
@@ -719,6 +741,13 @@ La ligne membre se déduit de l'identité de l'appelant, jamais d'un argument : 
 la clé d'un autre membre ; l'autorisation se branche sur `scope` (`BY_OP`). Le jar du mode `session`
 vit dans la ligne résolue, donc un par personne. Banc : `tests/test_api_cle_membre_live.py`.
 
+**Plusieurs clés perso** (13/11/2026) : chaque compte de la carte est une API distincte, donc l'axe
+`_account` est annoncé **statiquement** sur les outils `api*` (`account_axis_static`) — une session qui a
+figé sa liste avant la seconde clé le voit déjà. Deux clés au même palier sans défaut et sans `_account` :
+`api_get`/`api_post`/`api_doc` refusent par l'ambiguïté de la cascade (`CompteAmbigu`, qui nomme les
+comptes), jamais par « carte non configurée » — `tools/api._resolve` ne ravale plus les refus de la
+résolution. Banc : `tests/test_api_cles_perso_multiples_live.py`.
+
 Les listes de l'agent la montrent (`connectors/api_operations.org_connectors`) : `api(op="list")` sans
 `_account`, la ligne « Custom connector » du contexte et `oto_connector(name=…)` listent les clés de
 l'APPELANT (`scope: "member"`, mention « your personal key, used before the org's ») avant celles de
@@ -736,7 +765,10 @@ reste sur l'hôte de la `base_url`, un hôte listé ou le domaine déclaré, et 
 (`connectors/api_session.guard` ; les exceptions nommées ne valent que pour l'hôte de la `base_url`). Un 401
 ou un renvoi vers une page de login déclenche un login complet et un seul rejeu ; refusé encore, la clé passe
 au rouge (`credential_rejected`). Le mode **ne fait que lire** : `api_post` et les verbes d'écriture
-d'`api_act` sont refusés par nom (`api_session_read_only`) avant tout envoi, `dry_run` compris.
+d'`api_act` sont refusés par nom (`api_session_read_only`) avant tout envoi, `dry_run` compris — sauf une
+action déclarée `class: read` (ci-dessus). ⚠️ oto-core garde sa propre garde de lecture seule
+(`READ_ONLY_MODES`) : tant qu'elle ne connaît pas cette exception, un POST `class: read` passe la garde
+de l'hôte et reste refusé par le client.
 
 **Le jar de cookies** est un état du compte qui change à l'usage, pas à la pose. Il ne va donc pas dans
 `secret_enc` (que seule la pose réécrit, sous verrou optimiste) mais dans un **satellite scellé** de la même
@@ -746,8 +778,23 @@ des surfaces de statut comme un bearer). Écrit par fusion JSONB : ni `version` 
 scellé porte l'empreinte des champs qui décident qui se connecte (base, identifiant, mot de passe, étapes) :
 un jar scellé pour d'autres champs n'est pas resservi. Une repose remplace `meta`, donc efface le jar. Entre
 processus, **le dernier écrivain gagne** — au pire un login de plus, jamais un autre compte. Un scellé qui ne
-se déchiffre plus (ligne déplacée, renommée, copiée vers une autre instance) est un cache perdu : journalisé,
-et l'appel se reconnecte. Le jar n'est jamais rendu à l'agent ni journalisé.
+se déchiffre plus (ligne déplacée, renommée — la ligne `''` devenue `principal` à la pose d'un premier
+compte nommé —, copiée vers une autre instance) est un cache perdu : journalisé, et l'appel se reconnecte.
+`crypto.unseal` lève alors `crypto.EnveloppeIndechiffrable`, seule erreur que `read_jar` avale (une master
+key absente monte). Le jar n'est jamais rendu à l'agent ni journalisé.
+
+**Le mode `visitor`** (14/11/2026) : pour un site public sans compte. La carte ne prend que `session`, lu par
+oto-core avec son propre jeu fermé (`login` = `{path, method: "GET", query}`, sans `follow`, sans page de
+login par défaut) : la « connexion » est le GET d'une page d'entrée dont la réponse pose les cookies du
+visiteur, ses redirections suivies. Même garde à chaque saut, même jar scellé, même empreinte
+(`api_session.JAR_MODES`, `keeps_jar`) — identifiant et mot de passe y valent vide. Un 401 relance une
+visite et un seul rejeu. Le site qui ne donne pas de session (aucun cookie posé, visite refusée, refus
+encore après une visite neuve) est refusé par nom, `api_visitor_refused`, **jamais** `credential_rejected` :
+il n'y a pas de clé à reposer, la carte ne passe pas au rouge. Le mode **n'est pas en lecture seule** (aucun
+mot de passe d'une personne n'est en jeu) : un POST y est jugé comme partout (`tools/effets` : `api_post`
+envoie, `api_act` suit le verbe), sans exception par mode. Non traité ici : une réponse 200 qui porte une
+erreur métier dans son corps (un drapeau d'erreur, un code) reste un succès jusqu'au lot qui projette la
+réponse (`output`). Banc : `tests/test_api_mode_visiteur.py`.
 
 ### `inst:{id}` — la forme de fil
 

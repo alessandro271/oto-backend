@@ -108,6 +108,33 @@ def exige_region_permise(org_id: Optional[int], model: Optional[str]) -> None:
         raise AuthzDenied(403, "model_region_blocked", RAISON_REGION_CN)
 
 
+#: Le code d'un modèle ÉTEINT par un admin de l'org (`db/modeles_eteints.py`) : refus à la
+#: pose et au lancement à la main, livraison refusée d'un agent (`refused_model_disabled`),
+#: arrêt d'une campagne (`stop_reason`).
+CODE_MODELE_ETEINT = "model_disabled"
+
+#: Ce que lit une org dont un admin a ÉTEINT le modèle : la raison d'un refus, à la pose,
+#: au lancement et à la réservation. Aucun repli sur un autre modèle : le run s'arrête.
+RAISON_MODELE_ETEINT = (
+    "un admin de l'organisation a éteint ce modèle pour ses agents "
+    "(`oto_org_settings domain=models`). Choisis un autre modèle, ou demande à un admin "
+    "de le rallumer.")
+
+
+def modele_eteint(org_id: Optional[int], model: Optional[str]) -> bool:
+    """L'org a-t-elle éteint ce modèle (`orgs.disabled_models`) ? Une org inconnue ou
+    aucun modèle n'éteignent rien."""
+    return db.modeles_eteints.est_eteint(org_id, model)
+
+
+def exige_modele_permis(org_id: Optional[int], model: Optional[str]) -> None:
+    """Refuse de poser un agent sur un modèle que l'org a écarté : sa région
+    (`model_region_blocked`, 403) ou le modèle lui-même (`model_disabled`, 403)."""
+    exige_region_permise(org_id, model)
+    if modele_eteint(org_id, model):
+        raise AuthzDenied(403, "model_disabled", RAISON_MODELE_ETEINT)
+
+
 def exige_un_modele(famille: Optional[str]) -> None:
     """Refuse de poser un agent hébergé sans modèle déclaré. Lève `model_required`.
 
@@ -182,6 +209,7 @@ def etat_servi(etat: dict, org_id: Optional[int] = None) -> dict:
                                        routee=bool(etat.get("farm_routed")))
                 if org_id is not None and familles else [])
     modeles = runner_models.catalogue(familles, sans_cle)
+    ecartes = False
     # Lu seulement quand un modèle qui tourne en Chine est SERVI : sinon rien à écarter,
     # et l'état du runner se lit à chaque écran d'agent — pas une lecture de plus.
     if org_id is not None and any(m["served"] and (m.get("hosting") or {}).get("region")
@@ -192,4 +220,23 @@ def etat_servi(etat: dict, org_id: Optional[int] = None) -> dict:
             for m in modeles:
                 if (m.get("hosting") or {}).get("region") == "cn":
                     m["allowed"], m["default"] = False, False
+                    ecartes = True
+    # Les modèles ÉTEINTS un par un par un admin (`orgs.disabled_models`). Lus seulement
+    # quand une famille est servie : sans elle, rien n'est proposé, rien à éteindre.
+    if org_id is not None and familles:
+        eteints = set(db.modeles_eteints.eteints(int(org_id)) or ())
+        for m in modeles:
+            if m["id"] in eteints:
+                m["allowed"], m["disabled"], m["default"] = False, True, False
+                ecartes = True
+    if ecartes:
+        # ⚠️ Le défaut se REDÉRIVE : le premier modèle proposable (servi, payable, pas un
+        # abonnement — la règle de `runner_models.catalogue`) que l'org n'a pas écarté.
+        # Éteindre Sonnet ne doit pas laisser l'org sans modèle proposé quand Opus est là.
+        proposables = (set(familles) - set(sans_cle)
+                       - runner_models.FAMILLES_PERSONNELLES)
+        defaut = next((m["id"] for m in modeles
+                       if m["family"] in proposables and m.get("allowed", True)), None)
+        for m in modeles:
+            m["default"] = m["id"] == defaut
     return {**etat, "families": familles, "models": modeles}

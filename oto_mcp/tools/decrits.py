@@ -24,6 +24,12 @@ connector. What the description derives (pair, effects, batches, personal argume
 - A refusal the description names (`engine.Refused`) becomes `RefusNomme` (`status_code`, `retryable`,
   `credential_rejected` from `marks_account`), which the error taxonomy reads like any upstream error; an undeclared
   status passes as the engine raised it (`UpstreamHTTPError`, its body masked of the call's secrets).
+- A connector whose description declares access levels (`auth.access_levels`) is governed like any leveled
+  connector (`connectors/access_levels.py`): the org's or team's level, else the description's `default_level`. The
+  guard (`connectors/access_level_gate.py`) refuses what the level does not cover before the tool runs; the engine
+  receives the level of the call (`access_level=`), refuses on its own what it does not serve, and a service account
+  claims that level's scopes. Both refusals, and a level the description no longer declares, say the gesture: an org
+  admin sets the level (`oto_connector_access_level`).
 - The probe (`connector.probe`) is registered with `connectors/verify`, `auth`, or `auth+quota` with a balance.
 - What it does not know how to serve is refused at MOUNT (`descriptions.verifier`), never approximated at call time.
 """
@@ -43,7 +49,7 @@ from pydantic import PrivateAttr
 from oto.connectors import cost, engine, serve
 
 from .. import access, session_org
-from ..connectors import descriptions
+from ..connectors import access_level_gate, descriptions
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from .lecture import ACTE, LECTURE, SIMULATION
@@ -96,13 +102,15 @@ def _phrase(texte: str) -> str:
     return texte if fin < 0 else texte[:fin + 1]
 
 
-def texte_de_l_outil(description: dict, outil: str, fonctions: list[dict]) -> str:
-    """The tool's description: what the side does, then one sentence per op."""
+def texte_de_l_outil(description: dict, outil: str, fonctions: list[dict], note: str = "") -> str:
+    """The tool's description: what the side does, then one sentence per op. `note`, the platform's sentence
+    (`Connector.tool_note`), follows the head of the READ tool."""
     label = description["connector"]["label"]
     ns = descriptions.espace(description)
     if outil == ns:
         tete = (f"{label} — read{' or prepare' if descriptions.lecteur_simule(fonctions) else ''}. Nothing is sent "
-                f"or destroyed here{f' (that is `{ns}_act`)' if len(descriptions.outils(description)) > 1 else ''}.")
+                f"or destroyed here{f' (that is `{ns}_act`)' if len(descriptions.outils(description)) > 1 else ''}."
+                f"{f' {note}' if note else ''}")
     else:
         tete = f"{label} — act: what this tool does reaches the vendor, sends or destroys. Reading is `{ns}`."
     ops = "\n".join(f"- `{f['name']}` — {_phrase(f['description'])}" for f in fonctions)
@@ -135,6 +143,7 @@ class Servi:
         self.plateforme = "platform" in description["connector"]["modes"]
         self.sonde = (description["connector"].get("probe") or {}).get("function")
         self.fonctions = {f["name"]: f for f in description["functions"]}
+        self.a_niveaux = "access_levels" in description["connector"]["auth"]
         self.validateurs = {n: Draft202012Validator(f["input"]) for n, f in self.fonctions.items()}
 
     def _credential_de_l_appelant(self) -> tuple[dict, bool]:
@@ -182,9 +191,15 @@ class Servi:
             raise _invalide(f"op `{f['name']}` reads the {self.description['connector']['label']} account itself; "
                             "this call runs on the shared platform key, whose account is the platform's. "
                             "Nothing was done.")
+        niveau = access_level_gate.level_of_the_call(self.nom) if self.a_niveaux else None
         try:
-            pages = engine.execute(self.description, f["name"], args, credential=credential)
+            pages = engine.execute(self.description, f["name"], args, credential=credential, access_level=niveau)
+        except engine.UnknownAccessLevel as e:
+            raise RefusNomme(engine.Refused("unknown_access_level", f"{e} {self._geste_du_niveau()}")) from e
         except engine.Refused as refus:
+            if refus.code == "access_level_denied":
+                texte = str(refus).removesuffix(f" ({refus.code})")
+                refus = engine.Refused(refus.code, f"{texte} {self._geste_du_niveau('full')}")
             raise RefusNomme(refus) from refus
         except engine.InvalidArguments as e:
             message = str(e)
@@ -193,6 +208,14 @@ class Servi:
             raise _invalide(f"{message} Nothing was done.") from None
         self._noter_la_quantite(f, args, pages.answers)
         return serve.result(serve.function(self.description, f["name"]), pages.answers, pages.next_cursor)
+
+    def _geste_du_niveau(self, niveau: Optional[str] = None) -> str:
+        """What sets the level right: an org admin, by `oto_connector_access_level`."""
+        niveaux = ", ".join(self.description["connector"]["auth"]["access_levels"])
+        return (f"Nothing was sent. An org admin sets the level of the organization "
+                f"({'`' + niveau + '`' if niveau else 'one of ' + niveaux}): oto_connector_access_level(op='set', "
+                f"scope='org', org_id=<the organization's id, from oto_context>, name='{self.nom}', "
+                f"level='{niveau or '<one of ' + niveaux + '>'}').")
 
     def sonder(self, fields: dict, config: Optional[dict] = None) -> Optional[dict]:  # noqa: ARG002
         """"Test connection": the description's probe function, no argument, by the engine; a refusal that marks the
@@ -256,10 +279,10 @@ class OutilDecrit(Tool):
     _ops: list = PrivateAttr()
 
     @classmethod
-    def monte(cls, servi: Servi, outil: str, fonctions: list[dict]) -> "OutilDecrit":
+    def monte(cls, servi: Servi, outil: str, fonctions: list[dict], note: str = "") -> "OutilDecrit":
         ns = descriptions.espace(servi.description)
         annotations = (ACTE if outil != ns else SIMULATION if descriptions.lecteur_simule(fonctions) else LECTURE)
-        tool = cls(name=outil, description=texte_de_l_outil(servi.description, outil, fonctions),
+        tool = cls(name=outil, description=texte_de_l_outil(servi.description, outil, fonctions, note),
                    parameters=schema_union(fonctions), annotations=annotations)
         tool._servi = servi
         tool._ops = [f["name"] for f in fonctions]
@@ -279,12 +302,12 @@ class OutilDecrit(Tool):
         return self.convert_result(await asyncio.to_thread(self._servi.appeler, f, args))
 
 
-def monter(mcp: FastMCP, nom: str, description: dict) -> tuple[OutilDecrit, ...]:
+def monter(mcp: FastMCP, nom: str, description: dict, note: str = "") -> tuple[OutilDecrit, ...]:
     """Mount the pair of one described connector and register its probe; refuse, before mounting anything, a
-    description the reader cannot serve."""
+    description the reader cannot serve. `note`: the platform's sentence for the read tool (`Connector.tool_note`)."""
     descriptions.verifier(description)
     servi = Servi(nom, description)
-    montes = tuple(OutilDecrit.monte(servi, outil, fonctions)
+    montes = tuple(OutilDecrit.monte(servi, outil, fonctions, note)
                    for outil, fonctions in descriptions.outils(description).items())
     for outil in montes:
         mcp.add_tool(outil)
@@ -298,4 +321,4 @@ def monter(mcp: FastMCP, nom: str, description: dict) -> tuple[OutilDecrit, ...]
 def register(mcp: FastMCP) -> None:
     """Mount every inscribed connector (`providers._model._decrit`)."""
     for c in descriptions.inscrits():
-        monter(mcp, c.name, descriptions.charger(c.name))
+        monter(mcp, c.name, descriptions.charger(c.name), c.tool_note)

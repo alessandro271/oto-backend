@@ -20,8 +20,8 @@ l'ancien code les ignore.
 Retour arrière : retire la colonne et la table (le catalogue et ses décisions se perdent ;
 les épisodes restent).
 
-Révision : 20261113_1830_causes_agents
-Précédente : 20261113_1800_usage_org
+Révision : 20261116_2200_causes_agents
+Précédente : 20261115_2100_disabled_models
 """
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ from alembic import op
 from oto_mcp.db import causes_agents
 from oto_mcp.db.schema.runs import AGENT_CAUSES
 
-revision = "20261113_1830_causes_agents"
-down_revision = "20261113_1800_usage_org"
+revision = "20261116_2200_causes_agents"
+down_revision = "20261115_2100_disabled_models"
 branch_labels = None
 depends_on = None
 

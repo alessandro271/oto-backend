@@ -97,12 +97,18 @@ _CLASSE_PAR_METHODE = {"GET": "lire", "HEAD": "lire", "POST": "envoyer", "PATCH"
 def _juge_http_act(op: Optional[str], args: dict) -> Optional[str]:
     """`request` does what its `method` does (none given: the declared doubt). `call` does
     what its SAVED action's method does, read in the database
-    (`api_calls.methode_de_l_action`): an unknown action raises, never a default."""
+    (`api_calls.action_jugee`): an unknown action raises, never a default. An action
+    whose admin declared `class: read` reads, whatever its verb — that action only,
+    never a `request`."""
     if op == "request":
         return _CLASSE_PAR_METHODE.get(str(args.get("method") or "").upper())
     if op == "call":
-        from .api_calls import methode_de_l_action
-        methode = str(methode_de_l_action(args.get("operation"))).upper()
+        from .. import custom_ops
+        from .api_calls import action_jugee
+        action = action_jugee(args.get("operation"))
+        if custom_ops.reads(action):
+            return "lire"
+        methode = str(action.get("method")).upper()
         if methode not in _CLASSE_PAR_METHODE:
             raise EffetNonDeclare(f"`api_act` action `{args.get('operation')}`: "
                                   f"unknown method `{methode}`")
@@ -110,8 +116,15 @@ def _juge_http_act(op: Optional[str], args: dict) -> Optional[str]:
     return None
 
 
+def _juge_urba_reglement(op: Optional[str], args: dict) -> Optional[str]:
+    """`ingest=true` launches the service-side ingestion of a règlement into the shared
+    cache (like `ubersuggest_site_audit` `start`): it writes. Otherwise it reads."""
+    return "ecrire" if args.get("ingest") else None
+
+
 JUGES: dict[str, Juge] = {
     "api_act": _juge_http_act,
+    "urba_reglement": _juge_urba_reglement,
 }
 #: The judges that READ THE DATABASE, by tool and op: `effet()` on such a call is
 #: synchronous I/O — from an `async def`, run it off the event loop
@@ -643,7 +656,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # Rewrites the whole DNS record set, removes records, replaces a CNAME (dry_run=True previews).
     "mailpool_domain_fix": "detruire",
     "mailpool_domains": {"lire": "list get dns audit availability suggestions google_workspace_check microsoft_365_check owners"},
-    "mailpool_mailboxes": {"lire": "list get"},
+    "mailpool_mailboxes": {"lire": "list get export_login export_batches export_batch", "ecrire": "create", "envoyer": "export"},
     # `run` sends a real test email from the mailbox.
     "mailpool_spam_checks": {"lire": "get list", "envoyer": "run", "detruire": "delete"},
     "make_get_scenario": "lire",
@@ -1272,6 +1285,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
 #: on a tool with a list argument either declares its batch here or the tool declares
 #: that list as not a batch (`PAS_UN_LOT`).
 LOTS: dict[str, Lot] = {
+    "mailpool_mailboxes:create": Lot("mailboxes"),
+    "mailpool_mailboxes:export": Lot("mailbox_ids"),
     "lemlist_contact:list_create": Lot("contact_ids"),
     "lemlist_inbox:messages": Lot("cc"),
     "lemlist_inbox:label_create": Lot("cc"),
@@ -1559,7 +1574,7 @@ PAS_UN_LOT: dict[str, str] = {
     "klaviyo_profiles": "additional_fields include",
     "leexi_calls": "owner_uuid participating_user_uuid customer_email_address customer_phone_number",
     "lemlist_act": "filters",
-    "lemlist_campaign": "campaign_ids sender_user_ids channels",
+    "lemlist_campaign": "campaign_ids sender_user_ids senders channels",
     "lemlist_campaign_auto_review": "conditions",
     "lemlist_company": "ids_or_domains fields",
     "lemlist_contact": "ids_or_emails",

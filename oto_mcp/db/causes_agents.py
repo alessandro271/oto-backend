@@ -24,7 +24,7 @@ from ._conn import _connect
 STATUTS = ("proposee", "approuvee", "refusee")
 
 #: La colonne de l'épisode, posée par le démarrage ET la révision
-#: `20261113_1830_causes_agents` : ordre indifférent.
+#: `20261116_2200_causes_agents` : ordre indifférent.
 COLONNE_EMPREINTE = "empreinte"
 DDL_COLONNE_EMPREINTE = (
     "ALTER TABLE agent_episodes ADD COLUMN IF NOT EXISTS empreinte TEXT")
