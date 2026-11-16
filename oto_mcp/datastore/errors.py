@@ -14,6 +14,7 @@ la tenait était l'objet même du mécanisme.
 from __future__ import annotations
 
 from typing import Any, Optional
+from . import jetons
 
 
 class RowValidationError(ValueError):
@@ -210,6 +211,9 @@ def est_un_nom_de_tableau(adresse: Any) -> bool:
     Juge la FORME, et c'est voulu : depuis le retrait du nom (08/11/2026), des chiffres
     désignent toujours un numéro, et `slot:` est résolu en numéro avant le stockage."""
     a = str(adresse if adresse is not None else "").strip()
+    if a in jetons.JETONS_RETIRES or jetons.jeton_de(a) is not None:
+        # Un jeton (même retiré) a son propre refus, qui nomme le geste qui aboutit.
+        return False
     return bool(a) and not a.isdigit() and not a.lower().startswith("slot:")
 
 
