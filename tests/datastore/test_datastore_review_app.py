@@ -236,18 +236,20 @@ def test_values_outside_declared_options_open_no_buttons(served):
     assert store.writes == []
 
 
-def test_app_only_handler_bypasses_visibility_transforms(served):
-    """Ce que le module et `docs/mcp-apps.md` affirment, JOUÉ : une règle de visibilité
-    (la même classe de transform que la denylist de session) bloque un tool normal —
-    et laisse passer le gestionnaire app-only sous son nom haché. C'est pourquoi il ne
-    peut compter que sur ses propres gardes."""
+def test_app_only_handler_follows_visibility_transforms(served):
+    """Ce que le module et `docs/mcp-apps.md` affirment, JOUÉ : depuis fastmcp 3.4.8,
+    l'appel par nom haché suit les mêmes règles que l'appel par nom affiché. Une règle
+    de visibilité (la même classe de transform que la denylist de session) qui masque
+    le gestionnaire app-only le rend inappelable sous son nom haché aussi — rien n'est
+    écrit. Le chemin réel (serveur servi, base) : `test_review_app_bouton_chemin_reel.py`."""
     mcp, store, _, mod = served
     args = _tool_calls(_call(mcp, "data_review_app", OPEN))[0]["arguments"]
     mcp.disable(names={"data_review_app", "data_review_decide"})
     with pytest.raises(Exception):
-        _call(mcp, "data_review_app", OPEN)  # le transform mord sur le chemin normal
-    _call(mcp, _decide(mod), {**args, "value": "launched"})
-    assert store.writes == [("657", "r1", {"statut": "launched"})]
+        _call(mcp, "data_review_app", OPEN)
+    with pytest.raises(Exception):
+        _call(mcp, _decide(mod), {**args, "value": "launched"})
+    assert store.writes == []
 
 
 def test_a_value_the_renderer_would_interpolate_opens_no_buttons(served):

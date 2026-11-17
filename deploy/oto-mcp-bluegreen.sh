@@ -121,6 +121,10 @@ bg_log() { echo "[$(date +%H:%M:%S)] $*"; }
 bg_lock() {
   exec 9>"$BG_LOCK"
   flock -w 900 9 || { echo "verrou $BG_LOCK non obtenu après 900 s — un déploiement tourne déjà" >&2; exit 1; }
+  # Verrou MÉMOIRE de la box, partagé avec le build du dashboard (oto-app) : les deux couleurs
+  # vivantes + un build vite ne tiennent pas ensemble dans 8 Go (mesure du 16/11/2026).
+  exec 8>/run/lock/oto-platform-memoire.lock
+  flock -w 600 8 || { echo "verrou mémoire d'oto-platform tenu depuis plus de 600 s (build du dashboard ?)" >&2; exit 1; }
   bg_log "verrou pris ($BG_LOCK)"
 }
 

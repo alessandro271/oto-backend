@@ -2,6 +2,7 @@
 ### code de sortie : 1
 ### commandes
 flock -w 900 9
+flock -w 600 8
 date +%H:%M:%S
 date +%H:%M:%S
 systemctl stop oto-mcp-drain-prod.service
@@ -53,4 +54,5 @@ dependencies = [
 --- /opt/oto-mcp-green/start-encrypted.sh
 #!/bin/bash
 exec /opt/oto-mcp-blue/.venv/bin/oto-mcp
+--- /run/lock/oto-platform-memoire.lock
 --- /var/lock/oto-mcp-bluegreen-prod.lock
