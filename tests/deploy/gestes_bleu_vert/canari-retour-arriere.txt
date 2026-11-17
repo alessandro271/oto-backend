@@ -86,6 +86,10 @@ journalctl -u oto-mcp-canari@green -n 10 --no-pager
 green
 --- /opt/oto-mcp-canari-blue/deploy/lanceur_secrets.py
 # lanceur du tag
+--- /opt/oto-mcp-canari-blue/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur blue
+--- /opt/oto-mcp-canari-blue/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur blue
 --- /opt/oto-mcp-canari-blue/deploy/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur blue
 --- /opt/oto-mcp-canari-blue/deploy/oto-mcp-maintenance.timer
@@ -98,6 +102,10 @@ dependencies = [
 # installateur du tag
 --- /opt/oto-mcp-canari-green/deploy/lanceur_secrets.py
 # lanceur du tag
+--- /opt/oto-mcp-canari-green/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur green
+--- /opt/oto-mcp-canari-green/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur green
 --- /opt/oto-mcp-canari-green/deploy/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur green
 --- /opt/oto-mcp-canari-green/deploy/oto-mcp-maintenance.timer
