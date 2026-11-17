@@ -192,11 +192,20 @@ def _lien_brouillon(message_id: Optional[str], account: Optional[str]) -> Option
 # written once, served in both descriptions.
 _COMPOSITION_ARGS = """\
     body: the message, rendered from markdown to HTML by default.
-    to: recipient(s), comma-separated. REQUIRED for a new message (omit when replying).
+    to: recipient(s), comma-separated. REQUIRED for a new message. A reply goes by
+        default to everyone on the message it answers (its sender in To, the others
+        in Cc, you left out); `to` and/or `cc` replace that, the reply then goes
+        exactly to them (`to` alone copies nobody; `cc` alone keeps the sender in To).
     subject: subject line (new message only; a reply keeps the thread's subject).
-    reply_to: id of the message to reply to. When set, this is a threaded REPLY
-        (subject/thread preserved) and `to`/`subject` are ignored.
-    cc: carbon-copy recipient(s), comma-separated.
+    reply_to_thread: id of a thread (`threadId`) — a threaded REPLY to its LATEST
+        message (drafts and trashed ones left out). The usual way to answer a
+        conversation.
+    reply_to: id of one message to reply to — a threaded REPLY to THAT message.
+        When it is not the latest of its thread, the reply is filed under it and the
+        answer carries `warning` (`code: "not_latest_in_thread"`, `latest_message_id`).
+        Exclusive with `reply_to_thread`. A reply's answer names `to`, `cc` and
+        `replied_to` (the message answered).
+    cc: carbon-copy recipient(s), comma-separated (in a reply, see `to`).
     bcc: blind-copy recipient(s), comma-separated — a new message only.
     html: explicit HTML body (bypasses markdown rendering).
     from_name: optional display name for the From header.
@@ -244,7 +253,7 @@ archives or deletes: that is `gmail_act`, the tool your client asks you to confi
 - **"drafts"**: the drafts. Returns {{drafts: [{{id, message_id, to, subject, date,
   snippet}}], count}} — a draft `id` is what `gmail_act(op="send", draft_id=…)` sends.
 - **"draft"**: WRITE A DRAFT — a new message (`to`, `subject`, `body`) or a threaded reply
-  (`reply_to`). It does NOT leave the mailbox. Returns `kind: "draft"`, its `id` (the `draft_id`, distinct from
+  (`reply_to_thread`, or `reply_to`). It does NOT leave the mailbox. Returns `kind: "draft"`, its `id` (the `draft_id`, distinct from
   `message_id`) and `web_link` (the draft opened in Gmail web, to note where it waits): send it with
   `gmail_act(op="send", draft_id=<id>)` once the person agrees.
   ⚠️ A fresh draft can be MISSING from an already-open Gmail tab for a while (the API has
@@ -275,9 +284,10 @@ LEAVES, a message moves. Reading and drafting are `gmail`.
 `op` (required):
 - **"send"**: send a mail, the mail LEAVES. Either an existing draft, as it stands:
   `draft_id` (from `gmail(op="draft")` or `gmail(op="drafts")`) — the usual path, the
-  person could read it first; or a full message: `to`, `subject`, `body` (or `reply_to`
-  for a threaded reply), the same arguments as `gmail(op="draft")`. Returns `kind:
-  "sent"`, the message `id` and `threadId`. Never report "sent" without reading `kind`.
+  person could read it first; or a full message: `to`, `subject`, `body` (or
+  `reply_to_thread`/`reply_to` for a threaded reply), the same arguments as
+  `gmail(op="draft")`. Returns `kind: "sent"`, the message `id` and `threadId`. Never
+  report "sent" without reading `kind`.
 - **"archive"**: removes the INBOX label from `message_ids`.
 - **"trash"**: moves `message_ids` to the trash (Gmail deletes them after 30 days). One
   call per message: a PARTIAL trash is possible and is named — replay only what was not
@@ -300,8 +310,8 @@ Args:
 """
 
 #: The arguments that only make sense when composing — refused elsewhere, never ignored.
-_COMPOSITION_KEYS = ("body", "to", "subject", "reply_to", "cc", "bcc", "html",
-                     "from_name", "attachments")
+_COMPOSITION_KEYS = ("body", "to", "subject", "reply_to", "reply_to_thread", "cc", "bcc",
+                     "html", "from_name", "attachments")
 
 
 def _refuse_composition(op: str, **valeurs) -> None:
@@ -312,10 +322,14 @@ def _refuse_composition(op: str, **valeurs) -> None:
                    "done.")
 
 
-async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, cc, bcc, html,
-                    from_name, markdown, attachments, sign, account=None) -> dict:
+async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, reply_to_thread,
+                    cc, bcc, html, from_name, markdown, attachments, sign,
+                    account=None) -> dict:
     """Write a draft (`envoyer=False`) or send (`True`) — the ONE composition path of both
     tools: signature, attachments, reply or new message."""
+    if reply_to and reply_to_thread:
+        raise _bad("`reply_to` (one message) and `reply_to_thread` (the latest message of "
+                   "a thread) are exclusive: pass one. Nothing was written.")
     if not body:
         raise _bad("`body` is required to compose a message. Nothing was written.")
     html = _html_du_corps(body, html, markdown)
@@ -334,8 +348,9 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, cc, b
             signature_etat = "appended"
         else:
             signature_etat = "none_configured"
-    if not reply_to and not to:
-        raise _bad("`to` is required for a new message (or provide `reply_to` to reply).")
+    if not reply_to and not reply_to_thread and not to:
+        raise _bad("`to` is required for a new message (or provide `reply_to_thread` or "
+                   "`reply_to` to reply).")
     try:
         # oto-backend#867 lot 2 — each attachment (drive/gmail/url) is
         # resolved by a synchronous HTTP call (file_source.resolve), in series:
@@ -369,18 +384,19 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, cc, b
         return out
 
     try:
-        if reply_to:
+        if reply_to or reply_to_thread:
             if not envoyer:
                 return _acte(await asyncio.to_thread(
                     lambda: client.create_draft_reply(
-                        message_id=reply_to, body=body, html=html, cc=cc, markdown=markdown,
-                        attachments=att_paths,
+                        message_id=reply_to, thread_id=reply_to_thread, body=body, html=html,
+                        to=to, cc=cc, markdown=markdown, attachments=att_paths,
                     )
                 ))
             return _acte(await asyncio.to_thread(
                 lambda: client.reply(
-                    message_id=reply_to, body=body, html=html, cc=cc,
-                    from_name=from_name, markdown=markdown, attachments=att_paths,
+                    message_id=reply_to, thread_id=reply_to_thread, body=body, html=html,
+                    to=to, cc=cc, from_name=from_name, markdown=markdown,
+                    attachments=att_paths,
                 )
             ))
         if not envoyer:
@@ -418,6 +434,7 @@ def register(mcp: FastMCP) -> None:
         to: Optional[str] = None,
         subject: Optional[str] = None,
         reply_to: Optional[str] = None,
+        reply_to_thread: Optional[str] = None,
         cc: Optional[str] = None,
         bcc: Optional[str] = None,
         html: Optional[str] = None,
@@ -435,8 +452,8 @@ def register(mcp: FastMCP) -> None:
                        f".xlsx spreadsheet (got op='{op}').")
         if op != "draft":
             _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
-                                cc=cc, bcc=bcc, html=html, from_name=from_name,
-                                attachments=attachments)
+                                reply_to_thread=reply_to_thread, cc=cc, bcc=bcc, html=html,
+                                from_name=from_name, attachments=attachments)
 
         if op == "accounts":
             sub = access.current_user_sub_or_raise()
@@ -481,8 +498,8 @@ def register(mcp: FastMCP) -> None:
         # op == "draft" — the only one left (input guard above).
         return await _composer(
             client, envoyer=False, body=body, to=to, subject=subject, reply_to=reply_to,
-            cc=cc, bcc=bcc, html=html, from_name=from_name, markdown=markdown,
-            attachments=attachments, sign=sign, account=account)
+            reply_to_thread=reply_to_thread, cc=cc, bcc=bcc, html=html, from_name=from_name,
+            markdown=markdown, attachments=attachments, sign=sign, account=account)
 
     @mcp.tool(name="gmail_act", annotations=ACTE)
     @documente(_GMAIL_ACT_DOC)
@@ -494,6 +511,7 @@ def register(mcp: FastMCP) -> None:
         to: Optional[str] = None,
         subject: Optional[str] = None,
         reply_to: Optional[str] = None,
+        reply_to_thread: Optional[str] = None,
         cc: Optional[str] = None,
         bcc: Optional[str] = None,
         html: Optional[str] = None,
@@ -512,15 +530,15 @@ def register(mcp: FastMCP) -> None:
                            "draft's `draft_id` (its `id` in gmail op='draft'/'drafts'). "
                            "Nothing was done.")
             _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
-                                cc=cc, bcc=bcc, html=html, from_name=from_name,
-                                attachments=attachments)
+                                reply_to_thread=reply_to_thread, cc=cc, bcc=bcc, html=html,
+                                from_name=from_name, attachments=attachments)
         elif op != "send":
             if draft_id is not None:
                 raise _bad(f"`draft_id` only applies to op='send'/'delete_draft', not "
                            f"op='{op}'. Nothing was done.")
             _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
-                                cc=cc, bcc=bcc, html=html, from_name=from_name,
-                                attachments=attachments)
+                                reply_to_thread=reply_to_thread, cc=cc, bcc=bcc, html=html,
+                                from_name=from_name, attachments=attachments)
         elif message_ids is not None:
             raise _bad("`message_ids` only applies to op='archive'/'trash', not "
                        "op='send'. Nothing was sent.")
@@ -528,8 +546,9 @@ def register(mcp: FastMCP) -> None:
             # A draft is sent AS IT STANDS: an argument beside it would be silently
             # ignored — and the person would believe it was applied.
             _refuse_composition("send with draft_id", body=body, to=to, subject=subject,
-                                reply_to=reply_to, cc=cc, bcc=bcc, html=html,
-                                from_name=from_name, attachments=attachments)
+                                reply_to=reply_to, reply_to_thread=reply_to_thread, cc=cc,
+                                bcc=bcc, html=html, from_name=from_name,
+                                attachments=attachments)
 
         client = await _client_for_user_async(account)
 
@@ -539,8 +558,9 @@ def register(mcp: FastMCP) -> None:
                 return {**sent, "kind": "sent", "draft_id": draft_id}
             return await _composer(
                 client, envoyer=True, body=body, to=to, subject=subject,
-                reply_to=reply_to, cc=cc, bcc=bcc, html=html, from_name=from_name,
-                markdown=markdown, attachments=attachments, sign=sign)
+                reply_to=reply_to, reply_to_thread=reply_to_thread, cc=cc, bcc=bcc,
+                html=html, from_name=from_name, markdown=markdown, attachments=attachments,
+                sign=sign)
 
         if op == "delete_draft":
             await asyncio.to_thread(client.delete_draft, draft_id)
