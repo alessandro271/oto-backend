@@ -45,6 +45,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -169,32 +170,37 @@ def _debit(ops: int = 1) -> None:
 _FIELDS: dict[tuple[str, str], dict] = {}
 _FIELDS_MAX = 300
 
-#: (hashed access token, customer, login customer, query, Google token) → (expires, page).
-_PAGES: "OrderedDict[tuple, tuple[float, dict]]" = OrderedDict()
+#: (hashed access token, customer, login customer, query, Google token) → (expires,
+#: page as JSON text). Text, not dicts: its size is what is bounded, and parsed rows
+#: would weigh several times more. Read and written in the worker threads, hence the lock.
+_PAGES: "OrderedDict[tuple, tuple[float, str]]" = OrderedDict()
+_PAGES_LOCK = threading.Lock()
 
 
 def _page_get(key: tuple) -> Optional[dict]:
-    hit = _PAGES.get(key)
-    if hit is None:
-        return None
-    if hit[0] < time.monotonic():
-        _PAGES.pop(key, None)
-        return None
-    _PAGES.move_to_end(key)
-    return hit[1]
+    with _PAGES_LOCK:
+        hit = _PAGES.get(key)
+        if hit is None:
+            return None
+        if hit[0] < time.monotonic():
+            _PAGES.pop(key, None)
+            return None
+        _PAGES.move_to_end(key)
+    return json.loads(hit[1])
 
 
 def _page_put(key: tuple, data: dict) -> None:
     """Keep a Google page only if a next slice will be read from it, and small enough."""
-    rows = data.get("results") or []
-    if len(rows) <= _DEFAULT_ROWS:
+    if len(data.get("results") or []) <= _DEFAULT_ROWS:
         return
-    if len(json.dumps(rows, default=str, ensure_ascii=False)) > _PAGE_MAX_BYTES:
+    blob = json.dumps(data, default=str, ensure_ascii=False)
+    if len(blob) > _PAGE_MAX_BYTES:
         return
-    _PAGES[key] = (time.monotonic() + _PAGE_TTL_S, data)
-    _PAGES.move_to_end(key)
-    while len(_PAGES) > _PAGE_MAX_ENTRIES:
-        _PAGES.popitem(last=False)
+    with _PAGES_LOCK:
+        _PAGES[key] = (time.monotonic() + _PAGE_TTL_S, blob)
+        _PAGES.move_to_end(key)
+        while len(_PAGES) > _PAGE_MAX_ENTRIES:
+            _PAGES.popitem(last=False)
 
 
 # --- the client, per call ----------------------------------------------------
@@ -431,16 +437,23 @@ def register(mcp: FastMCP) -> None:
         google_token, offset = (_decode_cursor(page_token, query) if page_token
                                 else (None, 0))
         client = await _client(account)
-        # The next slices of a Google page come from `_PAGES`: no second request. Keyed
-        # by the ACCESS TOKEN that would ask (hashed): the same Google identity, and
-        # its current grant — another account, a reconnection, a new token: no hit.
-        key = (hashlib.sha256(str(getattr(client, "_token", "")).encode()).hexdigest(),
-               cid, lcid, query, google_token)
-        data = _page_get(key) if offset else None
+        # The next slices of a Google page come from `_PAGES` (this process): no second
+        # request. Keyed by the ACCESS TOKEN that would ask (hashed): the same Google
+        # identity and grant — another account, a reconnection, a new token: no hit. No
+        # token readable → no cache at all, never a key shared between people.
+        token = getattr(client, "_token", None)
+        key = ((hashlib.sha256(token.encode()).hexdigest(), cid, lcid, query, google_token)
+               if isinstance(token, str) and token else None)
+        data = (await asyncio.to_thread(_page_get, key)) if key and offset else None
         if data is None:
-            data = await _run(lambda: client.search(cid, query, page_token=google_token,
-                                                    login_customer_id=lcid))
-            _page_put(key, data)
+            def fetch() -> dict:
+                page = client.search(cid, query, page_token=google_token,
+                                     login_customer_id=lcid)
+                if key:
+                    _page_put(key, page)
+                return page
+
+            data = await _run(fetch)
         return {"customer_id": cid,
                 **_page(data, query, google_token, offset, min(max_rows, _MAX_ROWS))}
 

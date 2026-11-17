@@ -373,8 +373,8 @@ def test_la_page_gardee_expire(google):
     google.replies = [{"results": _rows(450), "fieldMask": MASK}]
     search = _tool("google_ads_search")
     out = search(customer_id="1234567890", query=Q, max_rows=200)
-    for key, (_, data) in list(T._PAGES.items()):
-        T._PAGES[key] = (0.0, data)
+    for key, (_, blob) in list(T._PAGES.items()):
+        T._PAGES[key] = (0.0, blob)
     search(customer_id="1234567890", query=Q, max_rows=200, page_token=out["page_token"])
     assert len(google.requests) == 2
 
@@ -521,3 +521,16 @@ def test_le_budget_compte_en_base(base, caller, monkeypatch):
     assert e.value.error.data["used"] == T._ORG_PER_MINUTE + 1
     caller["org"] = 77
     T._debit()
+
+
+def test_sans_jeton_lisible_aucune_page_n_est_gardee(google, monkeypatch):
+    """Jamais une clé partagée entre personnes : sans jeton, pas de mémoire."""
+    from oto_mcp.tools import google_ads as T
+
+    class SansJeton:
+        def search(self, *a, **k):
+            return {"results": _rows(450), "fieldMask": MASK}
+
+    monkeypatch.setattr(T, "_client_for_user", lambda account=None: SansJeton())
+    out = _tool("google_ads_search")(customer_id="1234567890", query=Q, max_rows=200)
+    assert out["row_count"] == 200 and not T._PAGES
