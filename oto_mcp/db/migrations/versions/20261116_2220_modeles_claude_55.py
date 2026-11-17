@@ -36,14 +36,14 @@ un modèle 5.5 APRÈS la révision redescend lui aussi : un retour arrière se j
 ramener un code qui ne connaîtrait pas les ids 5.5.
 
 Révision : 20261116_2220_modeles_claude_55
-Précédente : 20261115_2100_disabled_models
+Précédente : 20261116_2200_causes_agents
 """
 from __future__ import annotations
 
 from alembic import op
 
 revision = "20261116_2220_modeles_claude_55"
-down_revision = "20261115_2100_disabled_models"
+down_revision = "20261116_2200_causes_agents"
 branch_labels = None
 depends_on = None
 
