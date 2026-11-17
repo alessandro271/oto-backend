@@ -193,9 +193,11 @@ def _lien_brouillon(message_id: Optional[str], account: Optional[str]) -> Option
 _COMPOSITION_ARGS = """\
     body: the message, rendered from markdown to HTML by default.
     to: recipient(s), comma-separated. REQUIRED for a new message. A reply goes by
-        default to everyone on the message it answers (its sender in To, the others
-        in Cc, you left out); `to` and/or `cc` replace that, the reply then goes
-        exactly to them (`to` alone copies nobody; `cc` alone keeps the sender in To).
+        default to the author of the message it answers ALONE; `to` and/or `cc`
+        replace that, the reply then goes exactly to them (`cc` alone keeps the author
+        in To).
+    reply_all: in a reply only — also copy everyone else on the message answered (its
+        To and Cc, you left out). Ignored in favour of an explicit `to`/`cc`.
     subject: subject line (new message only; a reply keeps the thread's subject).
     reply_to_thread: id of a thread (`threadId`) — a threaded REPLY to its LATEST
         message (drafts and trashed ones left out). The usual way to answer a
@@ -310,8 +312,8 @@ Args:
 """
 
 #: The arguments that only make sense when composing — refused elsewhere, never ignored.
-_COMPOSITION_KEYS = ("body", "to", "subject", "reply_to", "reply_to_thread", "cc", "bcc",
-                     "html", "from_name", "attachments")
+_COMPOSITION_KEYS = ("body", "to", "subject", "reply_to", "reply_to_thread", "reply_all",
+                     "cc", "bcc", "html", "from_name", "attachments")
 
 
 def _refuse_composition(op: str, **valeurs) -> None:
@@ -323,7 +325,7 @@ def _refuse_composition(op: str, **valeurs) -> None:
 
 
 async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, reply_to_thread,
-                    cc, bcc, html, from_name, markdown, attachments, sign,
+                    reply_all, cc, bcc, html, from_name, markdown, attachments, sign,
                     account=None) -> dict:
     """Write a draft (`envoyer=False`) or send (`True`) — the ONE composition path of both
     tools: signature, attachments, reply or new message."""
@@ -348,6 +350,9 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, reply
             signature_etat = "appended"
         else:
             signature_etat = "none_configured"
+    if reply_all is not None and not (reply_to or reply_to_thread):
+        raise _bad("`reply_all` only applies to a reply (`reply_to_thread` or `reply_to`). "
+                   "Nothing was written.")
     if not reply_to and not reply_to_thread and not to:
         raise _bad("`to` is required for a new message (or provide `reply_to_thread` or "
                    "`reply_to` to reply).")
@@ -388,13 +393,15 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, reply
             if not envoyer:
                 return _acte(await asyncio.to_thread(
                     lambda: client.create_draft_reply(
-                        message_id=reply_to, thread_id=reply_to_thread, body=body, html=html,
+                        message_id=reply_to, thread_id=reply_to_thread,
+                        reply_all=bool(reply_all), body=body, html=html,
                         to=to, cc=cc, markdown=markdown, attachments=att_paths,
                     )
                 ))
             return _acte(await asyncio.to_thread(
                 lambda: client.reply(
-                    message_id=reply_to, thread_id=reply_to_thread, body=body, html=html,
+                    message_id=reply_to, thread_id=reply_to_thread,
+                    reply_all=bool(reply_all), body=body, html=html,
                     to=to, cc=cc, from_name=from_name, markdown=markdown,
                     attachments=att_paths,
                 )
@@ -435,6 +442,7 @@ def register(mcp: FastMCP) -> None:
         subject: Optional[str] = None,
         reply_to: Optional[str] = None,
         reply_to_thread: Optional[str] = None,
+        reply_all: Optional[bool] = None,
         cc: Optional[str] = None,
         bcc: Optional[str] = None,
         html: Optional[str] = None,
@@ -452,8 +460,9 @@ def register(mcp: FastMCP) -> None:
                        f".xlsx spreadsheet (got op='{op}').")
         if op != "draft":
             _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
-                                reply_to_thread=reply_to_thread, cc=cc, bcc=bcc, html=html,
-                                from_name=from_name, attachments=attachments)
+                                reply_to_thread=reply_to_thread, reply_all=reply_all,
+                                cc=cc, bcc=bcc, html=html, from_name=from_name,
+                                attachments=attachments)
 
         if op == "accounts":
             sub = access.current_user_sub_or_raise()
@@ -498,7 +507,8 @@ def register(mcp: FastMCP) -> None:
         # op == "draft" — the only one left (input guard above).
         return await _composer(
             client, envoyer=False, body=body, to=to, subject=subject, reply_to=reply_to,
-            reply_to_thread=reply_to_thread, cc=cc, bcc=bcc, html=html, from_name=from_name,
+            reply_to_thread=reply_to_thread, reply_all=reply_all, cc=cc, bcc=bcc, html=html,
+            from_name=from_name,
             markdown=markdown, attachments=attachments, sign=sign, account=account)
 
     @mcp.tool(name="gmail_act", annotations=ACTE)
@@ -512,6 +522,7 @@ def register(mcp: FastMCP) -> None:
         subject: Optional[str] = None,
         reply_to: Optional[str] = None,
         reply_to_thread: Optional[str] = None,
+        reply_all: Optional[bool] = None,
         cc: Optional[str] = None,
         bcc: Optional[str] = None,
         html: Optional[str] = None,
@@ -530,15 +541,17 @@ def register(mcp: FastMCP) -> None:
                            "draft's `draft_id` (its `id` in gmail op='draft'/'drafts'). "
                            "Nothing was done.")
             _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
-                                reply_to_thread=reply_to_thread, cc=cc, bcc=bcc, html=html,
-                                from_name=from_name, attachments=attachments)
+                                reply_to_thread=reply_to_thread, reply_all=reply_all,
+                                cc=cc, bcc=bcc, html=html, from_name=from_name,
+                                attachments=attachments)
         elif op != "send":
             if draft_id is not None:
                 raise _bad(f"`draft_id` only applies to op='send'/'delete_draft', not "
                            f"op='{op}'. Nothing was done.")
             _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
-                                reply_to_thread=reply_to_thread, cc=cc, bcc=bcc, html=html,
-                                from_name=from_name, attachments=attachments)
+                                reply_to_thread=reply_to_thread, reply_all=reply_all,
+                                cc=cc, bcc=bcc, html=html, from_name=from_name,
+                                attachments=attachments)
         elif message_ids is not None:
             raise _bad("`message_ids` only applies to op='archive'/'trash', not "
                        "op='send'. Nothing was sent.")
@@ -546,7 +559,8 @@ def register(mcp: FastMCP) -> None:
             # A draft is sent AS IT STANDS: an argument beside it would be silently
             # ignored — and the person would believe it was applied.
             _refuse_composition("send with draft_id", body=body, to=to, subject=subject,
-                                reply_to=reply_to, reply_to_thread=reply_to_thread, cc=cc,
+                                reply_to=reply_to, reply_to_thread=reply_to_thread,
+                                reply_all=reply_all, cc=cc,
                                 bcc=bcc, html=html, from_name=from_name,
                                 attachments=attachments)
 
@@ -558,7 +572,8 @@ def register(mcp: FastMCP) -> None:
                 return {**sent, "kind": "sent", "draft_id": draft_id}
             return await _composer(
                 client, envoyer=True, body=body, to=to, subject=subject,
-                reply_to=reply_to, reply_to_thread=reply_to_thread, cc=cc, bcc=bcc,
+                reply_to=reply_to, reply_to_thread=reply_to_thread, reply_all=reply_all,
+                cc=cc, bcc=bcc,
                 html=html, from_name=from_name, markdown=markdown, attachments=attachments,
                 sign=sign)
 

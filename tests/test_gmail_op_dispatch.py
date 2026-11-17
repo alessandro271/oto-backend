@@ -513,3 +513,26 @@ def test_trash_404_tells_the_agent_to_use_delete_draft(client):
     with pytest.raises(McpError, match=r"DRAFT.*delete_draft.*draft_id"):
         _call("gmail_act", op="trash", message_ids=["m-draft"])
     client.delete_draft.assert_not_called()
+# --- répondre à tous se demande : par défaut, l'auteur seul ----------------------
+
+@pytest.mark.parametrize("act,method", [(True, "reply"), (False, "create_draft_reply")])
+def test_a_reply_goes_to_the_author_alone_unless_reply_all(client, act, method):
+    kwargs = dict(body="hi", reply_to_thread="t1")
+    _call("gmail_act", op="send", **kwargs) if act else _call("gmail", op="draft", **kwargs)
+    assert getattr(client, method).call_args.kwargs["reply_all"] is False
+    kwargs["reply_all"] = True
+    _call("gmail_act", op="send", **kwargs) if act else _call("gmail", op="draft", **kwargs)
+    assert getattr(client, method).call_args.kwargs["reply_all"] is True
+
+
+def test_reply_all_is_refused_on_a_new_message(client):
+    with pytest.raises(McpError, match="only applies to a reply"):
+        _call("gmail_act", op="send", body="hi", to="a@example.com", subject="s",
+              reply_all=True)
+    client.send.assert_not_called()
+
+
+def test_reply_all_is_refused_outside_composition(client):
+    with pytest.raises(McpError, match="only apply when composing"):
+        _call("gmail", op="search", query="x", reply_all=True)
+    client._factory.assert_not_called()
