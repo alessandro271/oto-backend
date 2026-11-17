@@ -63,7 +63,7 @@ def test_une_adresse_resolue_note_sa_forme_et_l_avis_du_nom(adresse, forme, avis
 
 
 def test_un_slot_resolu_note_slot_meme_si_le_store_voit_un_numero(monkeypatch):
-    from oto_mcp.access import scope
+    from oto_mcp import access as scope
 
     monkeypatch.setattr(scope, "resolve_slot_tableau", lambda name: "204")
     trace: dict = {}
