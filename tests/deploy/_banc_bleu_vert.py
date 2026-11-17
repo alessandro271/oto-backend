@@ -40,7 +40,7 @@ le script écrit sur sa sortie ; son code de sortie ; et l'état final des fichi
 qu'il écrit (amont Caddy, pointeur de couleur, coordonnée de version, unités posées).
 Deux traces égales = les mêmes gestes, au caractère près.
 
-Les chemins absolus des scripts (`/opt/`, `/etc/`, `/var/lock/`) sont réécrits vers
+Les chemins absolus des scripts (`/opt/`, `/etc/`, `/var/lock/`, `/run/lock/`) sont réécrits vers
 la racine jetable AVANT exécution, puis la racine est retirée de la trace : les
 chemins y apparaissent donc tels qu'ils sont sur la box.
 
@@ -192,7 +192,7 @@ PYPROJECT = ('dependencies = [\n'
 
 
 def _reecrire(texte: str, racine: str, variantes: dict[str, str] | None = None) -> str:
-    for prefixe in ("/opt/", "/etc/", "/var/lock/"):
+    for prefixe in ("/opt/", "/etc/", "/var/lock/", "/run/lock/"):
         texte = texte.replace(prefixe, racine + prefixe)
     if (variantes or {}).get("BANC_LANCEUR_PROPAGE"):
         texte = re.sub(r"(?m)^BG_LANCEUR=versionne$", "BG_LANCEUR=propage", texte)
@@ -208,7 +208,7 @@ def _preparer(racine: pathlib.Path, deploy: pathlib.Path, env: str, active: str,
         cible.write_text(_reecrire((deploy / nom).read_text(encoding="utf-8"), r, variantes),
                          encoding="utf-8")
         cible.chmod(0o755)
-    for d in ("etc/oto-mcp", "etc/caddy", "etc/systemd/system", "var/lock"):
+    for d in ("etc/oto-mcp", "etc/caddy", "etc/systemd/system", "var/lock", "run/lock"):
         (racine / d).mkdir(parents=True)
     (racine / "etc/caddy/Caddyfile").write_text("# Caddyfile du banc\n")
     (racine / f"etc/oto-mcp/active-{env}").write_text(active + "\n")
