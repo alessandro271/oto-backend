@@ -4,9 +4,9 @@ Le commerce facture et garde l'abonnement `active` quand il ne peut pas débiter
 échéance (`block_code`). La fiche d'admin d'org (`oto_admin_org op=get`, bloc `billing`)
 lisait la table de facturation du CŒUR, figée depuis la bascule : elle disait « actif,
 rien de bloqué » d'une org dont plus rien ne se prélevait. Elle lit désormais l'état
-POUSSÉ (`subscription_states`), et refuse net (`subscription_state_missing`) tant que
-rien n'a été poussé — `status = none` (aucun abonnement au commerce) est un état, pas une
-absence.
+POUSSÉ (`subscription_states`) ; tant que rien n'a été poussé, elle reste servie et
+NOMME l'absence (`state: missing`) — `status = none` (aucun abonnement au commerce) est un
+état, pas une absence. Sans facturation sur l'instance, `billing` dit `state: disabled`.
 """
 from __future__ import annotations
 
@@ -107,11 +107,12 @@ def test_un_envoi_plus_ancien_est_un_409(monkeypatch):
 
 # ── la fiche d'admin lit l'état poussé, jamais la table figée ────────────────
 
-def _fiche(monkeypatch, etat):
+def _fiche(monkeypatch, etat, *, facturation=True):
     from oto_mcp import access, billing, db
     from oto_mcp.capabilities.orgs import reads
     org = {"id": 7, "name": "Acme", "description": "", "domain": None, "industry": "",
            "location": "", "logo_url": None}
+    monkeypatch.setenv("OTO_BILLING_ENABLED", "1" if facturation else "0")
     monkeypatch.setattr(org_store, "get_org", lambda i: org if i == 7 else None)
     monkeypatch.setattr(org_store, "get_trial_ends_at", lambda i: None)
     monkeypatch.setattr(org_store, "get_org_role", lambda i, sub: None)
@@ -126,55 +127,76 @@ def _fiche(monkeypatch, etat):
     def _figee(i):
         raise AssertionError("la fiche d'admin a lu la facturation figée du cœur")
     monkeypatch.setattr(billing, "status", _figee)
+    lus = []
 
     def _lire(conn, i):
+        lus.append(i)
         if etat is None:
             raise etat_abonnement.EtatJamaisPousse(i)
         return {"org_id": i, **_iso(etat), "received_at": T0.isoformat()}
     monkeypatch.setattr(etat_abonnement, "lire_etat", _lire)
     from oto_mcp.db import entitlements as db_entitlements
     monkeypatch.setattr(db_entitlements, "lignes_filtrees", lambda **_kw: [])
-    return reads
+    return reads, lus
 
 
-def _get(monkeypatch, etat):
+def _get(monkeypatch, etat, **kw):
     from oto_mcp.capabilities import admin_console as ac
     from oto_mcp.capabilities._types import ResolvedCtx
-    reads = _fiche(monkeypatch, etat)
+    reads, lus = _fiche(monkeypatch, etat, **kw)
     out = ac._org(ResolvedCtx(sub="op"), ac.OrgAdminInput(op="get", org_id=7))
     reads.OrgAdminDetail.model_validate(out)
-    return out["billing"]
+    # La fiche est ENTIÈRE dans les trois formes.
+    assert out["org"]["id"] == 7 and "members" in out and "entitlements" in out
+    return out["billing"], lus
 
 
-def test_une_org_bloquee_ne_se_lit_plus_active_sans_blocage(monkeypatch):
-    b = _get(monkeypatch, BLOQUE)
-    assert (b["status"], b["block_code"], b["source"]) == ("active", "no_valid_mandate",
-                                                           "commerce")
-    assert b["block_since"] == (T0 - timedelta(days=33)).isoformat()
-    assert b["subscribed"] is True and b["emitted_at"] == T0.isoformat()
+def test_etat_pousse_une_org_bloquee_ne_se_lit_plus_active_sans_blocage(monkeypatch):
+    b, _ = _get(monkeypatch, BLOQUE)
+    assert b == {"source": "commerce", "state": "pushed", "subscribed": True,
+                 "status": "active", "block_code": "no_valid_mandate",
+                 "block_since": (T0 - timedelta(days=33)).isoformat(),
+                 "current_period_end": T0.isoformat(), "grace_until": None,
+                 "canceled_at": None, "emitted_at": T0.isoformat(),
+                 "received_at": T0.isoformat()}
 
 
-def test_aucun_abonnement_au_commerce(monkeypatch):
+def test_etat_pousse_aucun_abonnement_au_commerce(monkeypatch):
     etat = {k: None for k in BLOQUE} | {"status": "none", "emitted_at": T0}
-    b = _get(monkeypatch, etat)
-    assert (b["status"], b["subscribed"], b["block_code"]) == ("none", False, None)
+    b, _ = _get(monkeypatch, etat)
+    assert (b["state"], b["status"], b["subscribed"], b["block_code"]) == (
+        "pushed", "none", False, None)
 
 
-def test_jamais_pousse_est_un_refus_declare_sans_repli(monkeypatch):
-    from oto_mcp.capabilities._types import AuthzDenied
-    with pytest.raises(AuthzDenied) as e:
-        _get(monkeypatch, None)
-    assert (e.value.status, e.value.code) == (409, "subscription_state_missing")
-    assert e.value.code == etat_abonnement.CODE_JAMAIS_POUSSE
+def test_rien_pousse_la_fiche_est_rendue_et_nomme_l_absence_sans_rien_deviner(monkeypatch):
+    b, lus = _get(monkeypatch, None)
+    assert lus == [7]
+    assert b == {"source": "commerce", "state": "missing",
+                 "code": "subscription_state_missing"}
 
 
-def test_le_refus_est_declare_et_le_texte_servi_le_dit():
+def test_sans_facturation_ni_lecture_ni_erreur(monkeypatch):
+    b, lus = _get(monkeypatch, None, facturation=False)
+    assert b == {"state": "disabled"} and lus == []
+
+
+def test_la_route_suit_le_drapeau_de_facturation(monkeypatch):
+    from _datastore_rest import cap
+    c = cap("service.org.subscription_state")
+    monkeypatch.setenv("OTO_BILLING_ENABLED", "0")
+    assert not c.is_exposed()
+    monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
+    assert c.is_exposed()
+
+
+def test_aucun_refus_sur_la_fiche_et_le_texte_servi_dit_les_trois_formes():
     from _datastore_rest import cap
     for cle in ("admin.org", "org.admin.get"):
-        assert ("subscription_state_missing" in {d.code for d in cap(cle).errors}), cle
+        assert "subscription_state_missing" not in {d.code for d in cap(cle).errors}, cle
     d = cap("admin.org").description
-    assert "pushed by commerce" in d.lower() or "PUSHED by commerce" in d
-    assert "subscription_state_missing" in d and "block_code" in d
+    for mot in ("PUSHED by commerce", "state: pushed", "state: missing",
+                "subscription_state_missing", "state: disabled", "block_code"):
+        assert mot in d, mot
 
 
 @pytest.mark.parametrize("etat, preleve", [
@@ -244,11 +266,12 @@ def test_poser_relire_perime_et_rejeu_sur_base_reelle(live):
     assert lu["status"] == "none" and not etat_abonnement.preleve_encore(lu)
 
 
-def test_la_fiche_d_admin_ne_lit_plus_org_subscriptions(live):
+def test_la_fiche_d_admin_ne_lit_plus_org_subscriptions(live, monkeypatch):
     import psycopg
     from unittest import mock
     from oto_mcp.capabilities._types import ResolvedCtx
     from oto_mcp.capabilities.orgs import reads
+    monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
     org = _org()
     etat_abonnement.poser(org, BLOQUE)
     vues: list[str] = []

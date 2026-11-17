@@ -27,7 +27,7 @@ from .._authz import ORG_MEMBER_OF, PLATFORM_ADMIN, SUB_ONLY
 # plutôt que le recalculer est ce qui garantit que la liste et le refus ne pourront
 # jamais annoncer deux nombres différents (#464).
 from .core import org_quota
-from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .._types import Capability, ResolvedCtx, RestBinding
 
 from ..registry import CAPABILITIES
 
@@ -163,12 +163,9 @@ class OrgBilling(BaseModel):
     `status` qu'il faut lire pour savoir s'il faut alerter. Sans abonnement, seuls
     `subscribed:false` + `plans` reviennent (tous les autres champs absents).
 
-    ⚠️ **Deux sources, une par face.** La fiche d'un MEMBRE (`org.get`) lit encore le
-    module de facturation du cœur, figé depuis la bascule vers le commerce. La fiche
-    d'ADMIN (`org.admin.get`, `oto_admin_org op=get`) sert l'état POUSSÉ par le commerce
-    (`source: "commerce"`) : `status` (`none` = aucun abonnement au commerce),
-    `block_code`/`block_since` (l'échéance qu'il ne peut pas débiter), les dates, et
-    `emitted_at` (quand il a lu cet état) ; ni `plans` ni prix."""
+    ⚠️ Servi par la fiche d'un MEMBRE (`org.get`), qui lit encore le module de
+    facturation du cœur. La fiche d'ADMIN sert `OrgAdminBilling`, l'état poussé par le
+    commerce."""
     subscribed: bool
     # Catalogue public des paliers — présent UNIQUEMENT quand il n'y a pas
     # d'abonnement (c'est l'écran « choisir un plan »).
@@ -193,13 +190,35 @@ class OrgBilling(BaseModel):
     next_billing_at: Optional[str] = None
     grace_until: Optional[str] = None
     canceled_at: Optional[str] = None
-    # L'échéance que le commerce ne peut pas débiter (code de son refus) et depuis quand ;
-    # `null` = rien de bloqué. L'abonnement reste `active` pendant un blocage.
+
+
+class OrgAdminBilling(BaseModel):
+    """Le bloc `billing` de la fiche d'ADMIN : l'état d'abonnement POUSSÉ par le commerce
+    (`service.org.subscription_state`), jamais la table de facturation du cœur. Trois
+    formes, distinguées par `state` :
+
+    - `state: "pushed"`, `source: "commerce"` — l'état reçu : `subscribed` (`active` ou `past_due`), `status`
+      (`none` = aucun abonnement au commerce | `incomplete` | `active` | `past_due` |
+      `canceled`), `block_code` + `block_since` (l'échéance que le commerce ne peut pas
+      débiter, et depuis quand ; l'abonnement reste `active` pendant ce temps),
+      `current_period_end`, `grace_until`, `canceled_at`, `emitted_at` (quand le commerce
+      a lu cet état), `received_at` ;
+    - `state: "missing"`, `source: "commerce"` — le commerce n'a encore rien poussé pour
+      l'org : `code: "subscription_state_missing"`, et AUCUN autre champ — ni
+      `subscribed` ni `status` devinés ;
+    - `state: "disabled"` — l'instance n'a pas de facturation (`OTO_BILLING_ENABLED` ≠ 1,
+      aucun commerce) : aucun autre champ. Un objet plutôt que `null` : le bloc reste
+      garanti aux clients qui le lisent."""
+    state: Literal["pushed", "missing", "disabled"]
+    source: Optional[Literal["commerce"]] = None
+    code: Optional[str] = None
+    subscribed: Optional[bool] = None
+    status: Optional[str] = None
     block_code: Optional[str] = None
     block_since: Optional[str] = None
-    # Fiche d'admin seulement : `commerce` = état poussé par le commerce, lu à
-    # `emitted_at`, reçu par le cœur à `received_at`.
-    source: Optional[str] = None
+    current_period_end: Optional[str] = None
+    grace_until: Optional[str] = None
+    canceled_at: Optional[str] = None
     emitted_at: Optional[str] = None
     received_at: Optional[str] = None
 
@@ -246,7 +265,12 @@ class OrgAdminDetail(OrgDetail):
     """La fiche d'org vue par un admin plateforme : celle des membres, plus les DROITS
     déclarés de l'org (oto-app#13). ⚠️ `entitlements` est à côté de `billing`, pas
     dedans : `billing` et `option_comps` sont hérités et partent avec le retrait de la
-    facturation du cœur (oto-backend#1104) ; les droits restent."""
+    facturation du cœur (oto-backend#1104) ; les droits restent.
+
+    `billing` = l'état poussé par le commerce (`OrgAdminBilling`, trois formes ; sur une
+    instance SANS facturation, `state: "disabled"` : un réglage déclaré de l'instance,
+    pas une lecture manquée)."""
+    billing: OrgAdminBilling
     # Toutes les lignes posées DANS l'org — portée org et personnes dans l'org — échues
     # et à venir comprises (une console doit voir un droit échu). Les dons faits à une
     # personne PARTOUT sont sur sa fiche, ou dans `GET /api/admin/entitlements`.
@@ -387,22 +411,24 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
 def _billing_du_commerce(org_id: int) -> dict:
     """Le bloc `billing` de la fiche d'admin : l'état POUSSÉ par le commerce, qui
     facture — jamais la table de facturation du cœur, figée depuis la bascule. Rien de
-    poussé pour l'org : refus nommé, aucun repli (une org bloquée se lirait « active »)."""
+    poussé pour l'org : refus nommé, aucun repli (une org bloquée se lirait « active »).
+    Instance sans facturation (`billing.is_enabled()` faux) : `state: "disabled"`, rien
+    n'est lu.
+    Rien de poussé : la fiche reste servie ENTIÈRE, et le bloc NOMME l'absence
+    (`state: "missing"`) sans rien deviner — des services lisent cette fiche, un refus
+    les casserait pour un fait qu'ils savent lire."""
+    if not billing.is_enabled():
+        return {"state": "disabled"}
     try:
         with db._connect() as conn:
             etat = etat_abonnement.lire_etat(conn, org_id)
     except etat_abonnement.EtatJamaisPousse as e:
-        raise AuthzDenied(409, "subscription_state_missing", str(e)) from e
-    return {"subscribed": etat["status"] in ("active", "past_due"), "source": "commerce",
+        return {"source": "commerce", "state": "missing", "code": e.code}
+    return {"source": "commerce", "state": "pushed",
+            "subscribed": etat["status"] in ("active", "past_due"),
             **{k: etat[k] for k in ("status", "block_code", "block_since",
                                     "current_period_end", "grace_until", "canceled_at",
                                     "emitted_at", "received_at")}}
-
-
-#: Le refus de la fiche d'admin quand le commerce n'a jamais poussé l'état de l'org.
-ERREUR_ETAT_ABSENT = DeclaredError(
-    409, "subscription_state_missing",
-    "le commerce n'a jamais poussé l'état d'abonnement de l'org : la fiche ne devine pas")
 
 
 def _org_admin_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
@@ -433,7 +459,7 @@ CAPABILITIES += [
                Output=OrgDetail,
                rest=RestBinding("GET", "/api/orgs/{id}", _ID)),
     Capability(key="org.admin.get", handler=_org_admin_detail, Input=OrgIdInput,
-               authz=PLATFORM_ADMIN, Output=OrgAdminDetail, errors=(ERREUR_ETAT_ABSENT,),
+               authz=PLATFORM_ADMIN, Output=OrgAdminDetail,
                rest=RestBinding("GET", "/api/admin/orgs/{id}", _ID)),
     # org.member.list (MCP-only) fusionné dans oto_admin_org_member(op=list).
     # org.secret.list (MCP-only) retiré du MCP (2026-06-25) : le dashboard lit les

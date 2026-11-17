@@ -398,11 +398,17 @@ ou de blocage, l'état de l'abonnement d'une org (`service.org.subscription_stat
 peut pas débiter ; l'abonnement reste `active` pendant ce temps), fin de période, grâce,
 résiliation, et `emitted_at`, l'instant où il a lu l'état — un envoi plus ancien que
 celui déjà reçu est refusé (`409 stale_subscription_state`). La fiche d'admin d'org
-(`oto_admin_org op=get`, bloc `billing`) le sert, et ne lit plus la table de facturation
-du cœur, figée depuis la bascule. Rien de poussé pour l'org : `409
-subscription_state_missing`, sans repli. Tout lecteur passe par
-`db.etat_abonnement.lire_etat(conn, org_id)` (et `preleve_encore(etat)` pour « le
-commerce prélève encore »). La fiche d'un membre (`org.get`) lit encore l'ancien bloc.
+(`oto_admin_org op=get`, bloc `billing`, `source: commerce`) le sert, et ne lit plus la
+table de facturation du cœur, figée depuis la bascule : `state: pushed` et l'état reçu ;
+`state: missing` + `code: subscription_state_missing` tant que rien n'a été poussé pour
+l'org — la fiche reste servie entière (des services la lisent), l'absence est nommée,
+rien n'est deviné. Une instance SANS facturation (`OTO_BILLING_ENABLED` ≠ 1) n'a pas de
+commerce : `billing: {state: disabled}` (un objet, pas `null` : le bloc reste garanti
+aux clients), et la route de service n'est pas montée. Tout lecteur passe
+par `db.etat_abonnement.lire_etat(conn, org_id)`, qui LÈVE `EtatJamaisPousse` faute
+d'état (y compris sur une instance sans facturation : à l'appelant de ne pas l'y appeler),
+et `preleve_encore(etat)` pour « le commerce prélève encore ». La fiche d'un membre
+(`org.get`) lit encore l'ancien bloc.
 
 ## Ce qu'on ne fait pas
 

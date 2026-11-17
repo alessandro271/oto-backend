@@ -277,9 +277,6 @@ def test_la_console_mcp_rend_la_meme_lecture(banc):
 def test_la_fiche_d_org_admin_porte_ses_droits_echus_compris(banc):
     E.grant(banc.ancienne, C.PLATFORM_UNMETERED, banc.source, value=1,
             starts_at=HIER - timedelta(days=1), expires_at=HIER, granted_by="service:banc")
-    # Le `billing` de la fiche d'admin est l'état poussé par le commerce : sans lui, refus.
-    from oto_mcp.db import etat_abonnement
-    etat_abonnement.poser(banc.ancienne, {"status": "none", "emitted_at": datetime.now(timezone.utc)})
     fiche = orgs_reads._org_admin_detail(CTX, orgs_reads.OrgIdInput(org_id=banc.ancienne))
     assert "billing" in fiche and "option_comps" in fiche, "à côté de billing, pas dedans"
     lignes = {(r["sub"], r["right_key"]): r for r in fiche["entitlements"]}

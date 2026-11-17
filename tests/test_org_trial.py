@@ -166,8 +166,7 @@ def _fiche(monkeypatch, fin):
     monkeypatch.setattr(billing, "status", lambda i: {"subscribed": False})
     # Le `billing` de la fiche ADMIN est l'état poussé par le commerce.
     from oto_mcp.capabilities.orgs import reads as _reads
-    monkeypatch.setattr(_reads, "_billing_du_commerce",
-                        lambda i: {"subscribed": False, "status": "none"})
+    monkeypatch.setattr(_reads, "_billing_du_commerce", lambda i: {"state": "disabled"})
     # La fiche ADMIN porte aussi les droits déclarés de l'org (oto-app#13) : sans base,
     # aucune ligne.
     from oto_mcp.db import entitlements as db_entitlements
