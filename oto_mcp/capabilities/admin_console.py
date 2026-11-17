@@ -363,13 +363,19 @@ CAPABILITIES += [
         authz=ADMIN_BY_OP({"create": SUPER_ADMIN, "archive": SUPER_ADMIN,
                            "list": PLATFORM_ADMIN, "get": PLATFORM_ADMIN,
                            "entitlements": PLATFORM_ADMIN}),
-        errors=droits_admin.ERREURS_LISTE,
+        errors=droits_admin.ERREURS_LISTE + (orgs_reads.ERREUR_ETAT_ABSENT,),
         description=("Manage organizations. op=create (`name` + `admin` = email|sub of "
                      "the person who will run it, or \"me\"/omitted for yourself; super "
                      "admin) / archive (`org_id`, super admin; an org already archived answers "
                      "`already_archived: true`, nothing done) / list (all orgs, platform admin) / get "
                      "(`org_id` → full fiche: org (with `trial_ends_at`, the trial end pushed by "
-                     "commerce, null = no trial), members, secrets, option_comps, billing, and "
+                     "commerce, null = no trial), members, secrets, option_comps, `billing` = the "
+                     "subscription state PUSHED by commerce (`status`: none = no "
+                     "subscription | incomplete | active | past_due | canceled; "
+                     "`block_code` + `block_since` = a charge commerce cannot take, the "
+                     "subscription staying `active` meanwhile; period end, grace, "
+                     "cancellation, `emitted_at`); never pushed for that org → 409 "
+                     "`subscription_state_missing`, and "
                      "`entitlements` = the org's declared rights (org rows and rows of a person "
                      "in the org, expired included, with source, dates and who set them); "
                      "platform admin) / entitlements (declared rights across the platform, "

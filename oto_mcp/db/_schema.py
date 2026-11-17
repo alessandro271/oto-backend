@@ -104,6 +104,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.orgs.ORG_FAVORITES,       # pages et tableaux épinglés pour tous les membres d'une org
     schema.usage.USAGE_ORG,          # compteur du jour d'une org sur une clé plateforme à quota par org
     schema.credits.SPEND_BLOCKS,     # blocages du jour poussés par le commerce (limites de dépense)
+    schema.orgs.SUBSCRIPTION_STATES,  # état d'abonnement d'une org, poussé par le commerce
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

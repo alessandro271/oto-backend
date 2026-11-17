@@ -18,6 +18,7 @@ from pydantic import BaseModel
 import logging
 
 from ... import access, billing, db, org_store, session_org
+from ...db import etat_abonnement
 from ...org_store import ORG_ROLES
 from ...tool_visibility import BETA_OPTION
 from .. import droits_admin
@@ -26,7 +27,7 @@ from .._authz import ORG_MEMBER_OF, PLATFORM_ADMIN, SUB_ONLY
 # plutôt que le recalculer est ce qui garantit que la liste et le refus ne pourront
 # jamais annoncer deux nombres différents (#464).
 from .core import org_quota
-from .._types import Capability, ResolvedCtx, RestBinding
+from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 
 from ..registry import CAPABILITIES
 
@@ -160,7 +161,14 @@ class OrgBilling(BaseModel):
     """Abonnement de l'org (ADR 0043). ⚠️ `subscribed: true` couvre **`active` ET
     `past_due`** : un impayé en cours de relance reste « abonné » ici — c'est
     `status` qu'il faut lire pour savoir s'il faut alerter. Sans abonnement, seuls
-    `subscribed:false` + `plans` reviennent (tous les autres champs absents)."""
+    `subscribed:false` + `plans` reviennent (tous les autres champs absents).
+
+    ⚠️ **Deux sources, une par face.** La fiche d'un MEMBRE (`org.get`) lit encore le
+    module de facturation du cœur, figé depuis la bascule vers le commerce. La fiche
+    d'ADMIN (`org.admin.get`, `oto_admin_org op=get`) sert l'état POUSSÉ par le commerce
+    (`source: "commerce"`) : `status` (`none` = aucun abonnement au commerce),
+    `block_code`/`block_since` (l'échéance qu'il ne peut pas débiter), les dates, et
+    `emitted_at` (quand il a lu cet état) ; ni `plans` ni prix."""
     subscribed: bool
     # Catalogue public des paliers — présent UNIQUEMENT quand il n'y a pas
     # d'abonnement (c'est l'écran « choisir un plan »).
@@ -185,6 +193,15 @@ class OrgBilling(BaseModel):
     next_billing_at: Optional[str] = None
     grace_until: Optional[str] = None
     canceled_at: Optional[str] = None
+    # L'échéance que le commerce ne peut pas débiter (code de son refus) et depuis quand ;
+    # `null` = rien de bloqué. L'abonnement reste `active` pendant un blocage.
+    block_code: Optional[str] = None
+    block_since: Optional[str] = None
+    # Fiche d'admin seulement : `commerce` = état poussé par le commerce, lu à
+    # `emitted_at`, reçu par le cœur à `received_at`.
+    source: Optional[str] = None
+    emitted_at: Optional[str] = None
+    received_at: Optional[str] = None
 
 
 class OrgBrief(BaseModel):
@@ -321,7 +338,9 @@ def _list_all_orgs(ctx: ResolvedCtx, inp: NoInput) -> dict:
     ]}
 
 
-def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
+def _fiche(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
+    """La fiche d'org commune aux deux faces, SANS le bloc `billing` : chaque face
+    lit le sien (`_org_detail`, `_org_admin_detail`)."""
     org = org_store.get_org(inp.org_id)
     if not org:
         from .._types import AuthzDenied
@@ -355,17 +374,44 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
         "secrets": org_store.list_org_secrets(inp.org_id),
         # Options payantes offertes (comp admin) au niveau ORG (couche abonnement).
         "option_comps": db.list_option_comps("org", str(inp.org_id)),
-        # Plan/abonnement de l'org (ADR 0043) — pilote le cockpit admin (forcer/
-        # retirer un plan comp). `subscribed=False` + `plans` si aucun abonnement.
-        "billing": billing.status(inp.org_id),
     }
+
+
+def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
+    fiche = _fiche(ctx, inp)
+    # Plan/abonnement de l'org (ADR 0043), lu au module de facturation du cœur.
+    # `subscribed=False` + `plans` si aucun abonnement.
+    return {**fiche, "billing": billing.status(inp.org_id)}
+
+
+def _billing_du_commerce(org_id: int) -> dict:
+    """Le bloc `billing` de la fiche d'admin : l'état POUSSÉ par le commerce, qui
+    facture — jamais la table de facturation du cœur, figée depuis la bascule. Rien de
+    poussé pour l'org : refus nommé, aucun repli (une org bloquée se lirait « active »)."""
+    try:
+        with db._connect() as conn:
+            etat = etat_abonnement.lire_etat(conn, org_id)
+    except etat_abonnement.EtatJamaisPousse as e:
+        raise AuthzDenied(409, "subscription_state_missing", str(e)) from e
+    return {"subscribed": etat["status"] in ("active", "past_due"), "source": "commerce",
+            **{k: etat[k] for k in ("status", "block_code", "block_since",
+                                    "current_period_end", "grace_until", "canceled_at",
+                                    "emitted_at", "received_at")}}
+
+
+#: Le refus de la fiche d'admin quand le commerce n'a jamais poussé l'état de l'org.
+ERREUR_ETAT_ABSENT = DeclaredError(
+    409, "subscription_state_missing",
+    "le commerce n'a jamais poussé l'état d'abonnement de l'org : la fiche ne devine pas")
 
 
 def _org_admin_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
     """La fiche d'org, plus ses droits déclarés : servie au SEUL admin plateforme
-    (`org.admin.get`, `oto_admin_org op=get`) — la fiche d'un membre n'en dit rien."""
-    fiche = _org_detail(ctx, inp)
-    return {**fiche, "entitlements": droits_admin.droits_de_l_org(inp.org_id)}
+    (`org.admin.get`, `oto_admin_org op=get`) — la fiche d'un membre n'en dit rien.
+    Son `billing` est l'état poussé par le commerce (`_billing_du_commerce`)."""
+    fiche = _fiche(ctx, inp)
+    return {**fiche, "billing": _billing_du_commerce(inp.org_id),
+            "entitlements": droits_admin.droits_de_l_org(inp.org_id)}
 
 
 CAPABILITIES += [
@@ -387,7 +433,7 @@ CAPABILITIES += [
                Output=OrgDetail,
                rest=RestBinding("GET", "/api/orgs/{id}", _ID)),
     Capability(key="org.admin.get", handler=_org_admin_detail, Input=OrgIdInput,
-               authz=PLATFORM_ADMIN, Output=OrgAdminDetail,
+               authz=PLATFORM_ADMIN, Output=OrgAdminDetail, errors=(ERREUR_ETAT_ABSENT,),
                rest=RestBinding("GET", "/api/admin/orgs/{id}", _ID)),
     # org.member.list (MCP-only) fusionné dans oto_admin_org_member(op=list).
     # org.secret.list (MCP-only) retiré du MCP (2026-06-25) : le dashboard lit les
