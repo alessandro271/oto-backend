@@ -32,8 +32,8 @@ La commande est `scripts/purger_tenant.py`. Seul `tout` écrit ; `base`, `objets
 |---|---|---|
 | 1. base | Les lignes du périmètre dans toute table `possedee`, `indirecte` ou `exclue`, avec les dérivés du journal par org (`journal_totaux_jour`, `journal_jobs_jour`), la ligne du tenant et ses comptes. | **Conservées** (`purge.CONSERVEES`) : nos pièces, c'est-à-dire les acceptations de nos documents légaux et les tables de commerce et de facturation (voir plus bas). **Non touchées** : les tables `instance` sans propriétaire. |
 | 2. journal | Les appels du périmètre (`tool_calls`), selon `purge.JOURNAL_REGLE` : une org du périmètre, ou un compte du tenant sans org. Les appels de nos administrateurs dans une org du tenant partent avec elle (leurs arguments portent des données du tenant) ; ils sont comptés à part (« dont N appels de support »). | Les appels d'un compte du tenant dans une org voisine, et ceux d'un voisin dont le compte effectif est du tenant : ils sont au voisin. |
-| 3. archives du journal | Dans chaque mois inscrit au registre `journal_archives`, quelle que soit sa date, EXACTEMENT les enregistrements que la règle du journal désigne (la même règle, compilée en Python). L'archive est réécrite sous la même clé ; ses versions non courantes sont supprimées. | Les enregistrements des autres, octet pour octet. Un mois où la part du tenant vaut 0 n'est pas réécrit. |
-| 4. objets | Toutes les versions sous les préfixes de ses propriétaires : `avatars/<sub>/`, `images/<sub>/`, `copilot-attachments/<sub>/`, `org-logos/<org>/`, `project-files/<projet>/`, `transcription-jobs/<projet>/`, `app-files/<app>/`. Le `/` final est exigé. | Les clés que la base désigne HORS de ces préfixes : comptées, jamais supprimées, à examiner. Les dépôts de transit (`tmp/`) expirent seuls en un jour. |
+| 3. archives du journal | Dans chaque mois inscrit au registre `journal_archives`, quelle que soit sa date, EXACTEMENT les enregistrements que la règle du journal désigne (la même règle, compilée en Python). L'archive est réécrite sous la même clé ; la nouvelle version est relue par son versionId, puis l'ancienne est supprimée par le sien. | Les enregistrements des autres, octet pour octet. Un mois où la part du tenant vaut 0 n'est pas réécrit. |
+| 4. objets | Toutes les versions (et marqueurs de suppression) sous les préfixes de ses propriétaires, chacune supprimée par son versionId, `null` compris : `avatars/<sub>/`, `images/<sub>/`, `copilot-attachments/<sub>/`, `org-logos/<org>/`, `project-files/<projet>/`, `transcription-jobs/<projet>/`, `app-files/<app>/`. Le `/` final est exigé. | Les clés que la base désigne HORS de ces préfixes : comptées, jamais supprimées, à examiner. Les dépôts de transit (`tmp/`) expirent seuls en un jour. |
 | 5. annuaire | **Hors script** : la base de comptes de connexion du tenant, avec d'autres identifiants et une autre base. | — |
 | 6. sauvegardes | **Hors script** : les sauvegardes de la base antérieures au passage gardent tout, jusqu'à leur expiration. | jusqu'à leur échéance |
 
@@ -66,7 +66,8 @@ sujet à part, à trancher avant sa purge.
 - `reference_entrante` : une ligne qui reste désigne par clé étrangère une ligne supprimée (la facturation, ci-dessus).
 - `ArchiveDiscordante` :
   - une archive ne se relit pas au compte inscrit au registre ;
-  - le seau n'est pas versionné ;
+  - une archive touchée n'a pas de filet : version courante `null`, gestion de versions jamais activée, plusieurs versions ou un marqueur de suppression ;
+  - la nouvelle version d'une archive ne se relit pas juste (l'ancienne est gardée) ;
   - une extraction déjà là est incomplète.
 
 ## Le passage, dans l'ordre
@@ -100,13 +101,23 @@ verrou de l'archivage quotidien. Le passage enchaîne :
    clé étrangère : rien n'empêche cet ordre.
 4. **Archives**, sous le verrou de l'archivage quotidien (`deploy/archive_tool_calls.py`,
    `LOCK_KEY`) :
-   - le seau doit être versionné ;
+   - chaque archive touchée doit avoir UNE version, au versionId réel (pas `null`), sans
+     marqueur de suppression, et la gestion de versions doit être `Enabled` ou
+     `Suspended` : en `Suspended`, l'écriture crée la version `null` et laisse vivre la
+     version au versionId réel, qui sert de filet. Tout autre cas est refusé avant toute
+     écriture ; le compte à blanc dit, par archive, la version courante, le verdict et
+     les lignes à retirer ;
    - la part du tenant est extraite dans `P/journal-archive/`, ou dans
      `--extraction-faite`. Une extraction complète déjà là est reprise ;
-   - chaque mois concerné est réécrit, relu depuis le stockage et recompté (part 0,
-     reste égal au compte) ;
-   - le registre est mis à jour, puis les versions non courantes sont supprimées.
-5. **Objets** : toutes les versions sous les préfixes figés sont supprimées.
+   - chaque mois concerné est réécrit ; la NOUVELLE version, lue par son versionId, est
+     recomptée (part 0, reste égal au compte) ;
+   - le registre est mis à jour, puis l'ANCIENNE version est supprimée par son versionId :
+     sans cela, la purge n'est pas finie, elle porte encore le tenant ;
+   - si la nouvelle version ne se relit pas juste, l'ancienne est gardée : la nouvelle est
+     retirée par son versionId si l'ancienne est relue présente (elle redevient
+     courante), sinon le refus nomme les deux versionId et le geste à faire.
+5. **Objets** : toutes les versions sous les préfixes figés sont supprimées, chacune par
+   son versionId (une suppression sans versionId ne poserait qu'un marqueur).
 6. **Recompte**, dans une nouvelle transaction `READ ONLY`, depuis le périmètre figé :
    - toutes les tables purgées, la ligne du tenant et les comptes à son préfixe ;
    - l'inventaire des objets ;
@@ -123,8 +134,8 @@ passage saute ce qui est fait et reprend là. Pour les archives :
 
 - une panne entre le dépôt d'une archive et la mise à jour du registre est reconnue à la
   relecture : l'objet courant est déjà la version purgée (part 0, total égal à
-  l'inscrit moins la part extraite). Seuls le registre et les versions anciennes sont
-  alors traités ;
+  l'inscrit moins la part extraite). Seuls le registre et les versions anciennes (par
+  leur versionId) sont alors traités ;
 - une panne avant la suppression des versions anciennes est reprise de même.
 
 **Le volume.** Sur une base jetable, 1,5 M lignes de journal sur 4,2 M sont parties en
@@ -139,6 +150,7 @@ nettoyage de la base. Un créneau creux suffit.
 base     : N ligne(s) avant (dont S appels de support), N supprimée(s), 0 restante(s) ; conservé : {legal_acceptances: …}
 objets   : V version(s) avant, V supprimée(s), 0 restante(s) ; H clé(s) hors préfixe non touchée(s)
 archives : A ligne(s) du tenant avant, 0 restante(s)
+  AAAA-MM : R ligne(s) retirée(s) ; ancienne version supprimée <versionId> ; nouvelle version <versionId>
 annuaire : À FAIRE HORS SCRIPT — …
 sauvegardes: À FAIRE HORS SCRIPT — …
 COMPLET

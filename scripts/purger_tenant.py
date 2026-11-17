@@ -142,9 +142,23 @@ def compte_objets(s3, bucket: str, r: dict) -> dict:
 def compte_archives(conn, s3, bucket: str, fige, extrait: str | None = None) -> dict:
     with purge.en_lecture_seule(conn):
         mois = purge_archives.compter(conn, s3, bucket, _tenant_du_journal(fige), extrait)
-    return {m.mois: {"cle": m.cle, "total": m.total, "tenant": m.tenant, "reste": m.reste,
+    return {m.mois: {"cle": m.cle, "version_courante": m.version, "verdict": _verdict(m),
+                     "total": m.total, "tenant": m.tenant, "reste": m.reste,
                      "versions_anciennes": m.versions_anciennes,
                      "registre_en_retard": m.registre_en_retard} for m in mois}
+
+
+def _verdict(m: purge_archives.Mois) -> str:
+    if m.registre_en_retard:
+        return "reprise : déjà réécrite, registre et versions anciennes à finir"
+    if not m.touchee:
+        return "non touchée : aucune ligne du tenant"
+    return f"refusée : {m.refus}" if m.refus else "acceptée"
+
+
+def _archives_texte(archives: dict) -> str:
+    return "\n".join(f"  {mois} : version {a['version_courante']} — {a['verdict']} — "
+                     f"{a['tenant']} ligne(s) à retirer" for mois, a in archives.items())
 
 
 # ── tout ─────────────────────────────────────────────────────────────────────────────
@@ -166,12 +180,13 @@ def _a_blanc(args, conn, _mod, bucket, s3) -> int:
     else:
         _ecrire_json(args.dossier, "etat.json", {**r, "fait": {}})
         fige = purge.de_dict(r["perimetre"])
-    versionnement = s3.get_bucket_versioning(Bucket=bucket).get("Status")
     avant = {"base": compte_base(conn, args.tenant), "objets": compte_objets(s3, bucket, r),
              "archives": compte_archives(conn, s3, bucket, fige),
-             "seau_versionne": versionnement == "Enabled"}
+             "seau_versionnement": purge_archives.statut_versionnement(s3, bucket)}
     print(json.dumps({"a_blanc": avant, "hors_script": HORS_SCRIPT}, indent=2,
                      ensure_ascii=False, default=str))
+    print(f"\nArchives (versionnement du seau : {avant['seau_versionnement']}) :\n"
+          + _archives_texte(avant["archives"]))
     print(f"\nÀ BLANC : rien n'a été écrit en base ni sur le stockage. Périmètre figé dans "
           f"{os.path.join(args.dossier, 'etat.json')}.")
     return 0
@@ -202,8 +217,8 @@ def _passage(args, conn, mod, bucket, s3) -> int:
                 fait = {"supprime": purge.vider_journal(conn, fige, rapport=_avancement)}
             elif etape == "archives":
                 with _Verrou(conn, mod):
-                    purge_archives.exiger_versionnement(s3, bucket)
                     mois = purge_archives.compter(conn, s3, bucket, tenant, extrait)
+                    purge_archives.exiger_acceptees(mois)
                     etat.setdefault("archives_avant", {m.mois: m.tenant for m in mois})
                     purge_archives.extraire(s3, bucket, tenant, [m for m in mois if m.tenant],
                                             extrait)
@@ -240,6 +255,7 @@ def _avancement(fait: int, total: int) -> None:
 def _constat(etat: dict, apres: dict) -> dict:
     av, fait, rb = etat["avant"]["base"], etat["fait"], apres["base"]
     arch = apres["archives"]
+    reecrits = fait["archives"]["mois"]
     elements = {
         "base": {"avant": av["total"],
                  "dont_appels_de_support": av["dont_appels_de_support"],
@@ -253,8 +269,11 @@ def _constat(etat: dict, apres: dict) -> dict:
                    "cles_hors_prefixe_non_touchees":
                        apres["objets"]["cles_hors_prefixe_non_touchees"]},
         "archives": {"avant": etat.get("archives_avant"), "fait": fait["archives"]["mois"],
+                     # une version ancienne d'un mois réécrit porte encore le tenant
                      "reste": sum(m["tenant"] for m in arch.values())
-                     + sum(1 for m in arch.values() if m["registre_en_retard"])},
+                     + sum(1 for m in arch.values() if m["registre_en_retard"])
+                     + sum(arch[mois]["versions_anciennes"] for mois in reecrits
+                           if mois in arch)},
     }
     for nom, hors in HORS_SCRIPT.items():
         elements[nom] = {"hors_script": hors}
@@ -274,6 +293,12 @@ def _constat_texte(c: dict) -> str:
               f"{o['cles_hors_prefixe_non_touchees']} clé(s) hors préfixe non touchée(s)",
               f"archives : {sum((a['avant'] or {}).values())} ligne(s) du tenant avant, "
               f"{a['reste']} restante(s)"]
+    for mois, f in a["fait"].items():
+        supprimees = f.get("version_supprimee") or ", ".join(f.get("versions_supprimees", ()))
+        lignes.append(f"  {mois} : {f['retirees']} ligne(s) retirée(s) ; ancienne version "
+                      f"supprimée {supprimees or '—'} ; nouvelle version "
+                      f"{f['version_nouvelle']}" + (f" (reprise : {f['reprise']})"
+                                                    if "reprise" in f else ""))
     lignes += [f"{n:<9}: À FAIRE HORS SCRIPT — {v['hors_script']}" for n, v in e.items()
                if "hors_script" in v]
     lignes.append("COMPLET" if c["complet"] else "INCOMPLET : un reste n'est pas nul")

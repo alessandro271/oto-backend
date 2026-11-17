@@ -1,6 +1,7 @@
 """La purge d'un tenant hors de la base : objets du stockage (versions comprises),
 archives froides du journal, remise au titulaire, et le passage entier
-(`scripts/purger_tenant.py tout`), sur une vraie base et un stockage factice VERSIONNÉ.
+(`scripts/purger_tenant.py tout`), sur une vraie base et un stockage factice qui suit la
+gestion de versions de S3 (`Enabled`, `Suspended`, jamais activée).
 
 L'archive factice porte les pièges du CSV de `COPY` : une valeur NULL (champ vide) à côté
 d'une chaîne vide (`""`), un champ sur deux lignes, des guillemets doublés. La réécriture
@@ -31,37 +32,70 @@ SEAU = "seau"
 
 
 class FauxS3Versionne:
-    """Ce que la purge demande à boto3, sur un seau versionné."""
+    """Ce que la purge demande à boto3, avec la gestion de versions de S3 : `Enabled`
+    (chaque écriture a son versionId), `Suspended` (une écriture crée la version `null` et
+    ne remplace qu'une version `null`), `None` (jamais activée : tout est `null`). Une
+    suppression sans versionId pose un marqueur (`None` dans la liste) sauf si jamais
+    activée."""
 
-    def __init__(self, versionne: bool = True):
-        self.versions: dict[str, list[tuple[str, bytes]]] = {}
+    def __init__(self, statut: str | None = "Enabled"):
+        self.versions: dict[str, list[tuple[str, bytes | None]]] = {}
         self.n = 0
-        self.versionne = versionne
+        self.statut = statut
         self.panne_apres_depot = False
+        self.depot_rate = False
 
     def get_bucket_versioning(self, Bucket):  # noqa: N803
-        return {"Status": "Enabled"} if self.versionne else {}
+        return {"Status": self.statut} if self.statut else {}
 
-    def poser(self, cle: str, donnees: bytes) -> None:
-        self.n += 1
-        self.versions.setdefault(cle, []).append((f"v{self.n}", donnees))
+    def poser(self, cle: str, donnees: bytes | None) -> str:
+        if self.statut == "Enabled":
+            self.n += 1
+            vid = f"v{self.n}"
+        else:
+            vid = "null"
+        garde = [v for v in self.versions.get(cle, []) if v[0] != vid]
+        self.versions[cle] = [*garde, (vid, donnees)]
+        return vid
 
-    def upload_file(self, chemin, Bucket, Key):  # noqa: N803
-        self.poser(Key, pathlib.Path(chemin).read_bytes())
+    def put_object(self, Bucket, Key, Body):  # noqa: N803
+        donnees = b"pas du gzip" if self.depot_rate else Body.read()
+        vid = self.poser(Key, donnees)
         if self.panne_apres_depot:
             self.panne_apres_depot = False
             raise RuntimeError("panne entre le dépôt et le registre")
+        return {"VersionId": vid} if self.statut else {}
 
-    def get_object(self, Bucket, Key):  # noqa: N803
-        if not self.versions.get(Key):
-            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
-        return {"Body": io.BytesIO(self.versions[Key][-1][1])}
+    def _version(self, Key, VersionId):  # noqa: N803
+        vs = self.versions.get(Key) or []
+        if VersionId is None:
+            if not vs or vs[-1][1] is None:
+                raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+            return vs[-1][1]
+        for vid, donnees in vs:
+            if vid == VersionId and donnees is not None:
+                return donnees
+        raise ClientError({"Error": {"Code": "NoSuchVersion"}}, "GetObject")
+
+    def get_object(self, Bucket, Key, VersionId=None):  # noqa: N803
+        return {"Body": io.BytesIO(self._version(Key, VersionId))}
+
+    def head_object(self, Bucket, Key, VersionId=None):  # noqa: N803
+        self._version(Key, VersionId)
+        return {}
 
     def delete_object(self, Bucket, Key, VersionId=None):  # noqa: N803
-        vs = self.versions.get(Key, [])
-        self.versions[Key] = [v for v in vs if VersionId is not None and v[0] != VersionId]
-        if not self.versions[Key]:
-            del self.versions[Key]
+        if VersionId is None:
+            if self.statut:
+                self.poser(Key, None)                      # un marqueur, données gardées
+            else:
+                self.versions.pop(Key, None)
+            return
+        vs = [v for v in self.versions.get(Key, []) if v[0] != VersionId]
+        if vs:
+            self.versions[Key] = vs
+        else:
+            self.versions.pop(Key, None)
 
     def get_paginator(self, nom):
         assert nom == "list_object_versions"
@@ -69,10 +103,11 @@ class FauxS3Versionne:
 
         class _P:
             def paginate(self, Bucket, Prefix):  # noqa: N803
-                vs = [{"Key": k, "VersionId": vid, "Size": len(d), "IsLatest": i == len(l) - 1}
-                      for k, l in sorted(faux.versions.items()) if k.startswith(Prefix)
-                      for i, (vid, d) in enumerate(l)]
-                return [{"Versions": vs}]
+                tout = [({"Key": k, "VersionId": vid, "IsLatest": i == len(l) - 1}, d)
+                        for k, l in sorted(faux.versions.items()) if k.startswith(Prefix)
+                        for i, (vid, d) in enumerate(l)]
+                return [{"Versions": [{**v, "Size": len(d)} for v, d in tout if d is not None],
+                         "DeleteMarkers": [v for v, d in tout if d is None]}]
         return _P()
 
 
@@ -132,15 +167,41 @@ ENTETE = "id,sub,effective_sub,org_id,args\n"
 
 
 def _poser_archive(base, s3, m: str, voisin: str) -> tuple[list[str], list[str]]:
+    """L'archive, une seule version, écrite quand les versions étaient actives (versionId
+    réel), comme sur le stockage avant une suspension."""
     objet, du_tenant, autres = _archive(base[m]["org"], base[m]["alice"], base[voisin]["org"])
-    s3.poser(CLE, b"version plus ancienne")
+    statut, s3.statut = s3.statut, "Enabled"
     s3.poser(CLE, objet)
+    s3.statut = statut
     _registre(base, objet, 8)
     return du_tenant, autres
 
 
-def test_archives_compter_extraire_reecrire_et_reprendre(base, s3, tmp_path):
+STATUTS = pytest.mark.parametrize("statut", ["Enabled", "Suspended"])
+
+
+@pytest.fixture
+def seau(statut):
+    return FauxS3Versionne(statut)
+
+
+def _lignes(base) -> int:
+    with psycopg.connect(base["dsn"], autocommit=True) as c:
+        return c.execute("SELECT lignes FROM journal_archives WHERE mois = %s",
+                         (MOIS,)).fetchone()[0]
+
+
+def _vider(base, s3) -> None:
+    with psycopg.connect(base["dsn"], autocommit=True) as c:
+        c.execute("DELETE FROM journal_archives")
+    s3.versions.pop(CLE, None)
+
+
+@STATUTS
+def test_archives_compter_extraire_reecrire_et_reprendre(base, seau, tmp_path):
+    s3 = seau
     du_tenant, autres = _poser_archive(base, s3, F, E)
+    ancienne = s3.versions[CLE][0][0]
     # Un autre mois, quel qu'il soit, sans ligne du tenant : parcouru, compté, intact.
     autre_cle = "journal/tool_calls/2001-02.csv.gz"
     s3.poser(autre_cle, b"ancienne")
@@ -155,8 +216,9 @@ def test_archives_compter_extraire_reecrire_et_reprendre(base, s3, tmp_path):
     try:
         with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
             mois, autre = purge_archives.compter(c, s3, SEAU, tenant)
-            assert (mois.total, mois.tenant, mois.reste, mois.versions_anciennes) == (8, 3, 5, 1)
-            assert (autre.total, autre.tenant) == (5, 0)        # les cas croisés restent
+            assert (mois.total, mois.tenant, mois.reste, mois.versions_anciennes) == (8, 3, 5, 0)
+            assert (mois.version, mois.refus) == (ancienne, None)
+            assert (autre.total, autre.tenant, autre.refus) == (5, 0, None)
             # Réécrire sans extraction remise : refusé.
             with pytest.raises(purge_archives.ArchiveDiscordante):
                 purge_archives.reecrire(c, s3, SEAU, tenant, [mois], str(tmp_path / "rien"))
@@ -169,25 +231,145 @@ def test_archives_compter_extraire_reecrire_et_reprendre(base, s3, tmp_path):
             s3.panne_apres_depot = True
             with pytest.raises(RuntimeError, match="panne"):
                 purge_archives.reecrire(c, s3, SEAU, tenant, [mois, autre], extrait)
+            nouvelle = s3.versions[CLE][-1][0]
+            assert [v for v, _ in s3.versions[CLE]] == [ancienne, nouvelle]
             with pytest.raises(purge_archives.ArchiveDiscordante, match="inscrit 8"):
                 purge_archives.compter(c, s3, SEAU, tenant)      # sans l'extraction
             mois, autre = purge_archives.compter(c, s3, SEAU, tenant, extrait)
             assert mois.registre_en_retard and (mois.total, mois.tenant) == (5, 0)
             fait = purge_archives.reecrire(c, s3, SEAU, tenant, [mois, autre], extrait)
-            assert fait == {MOIS: {"retirees": 3, "reste": 5, "versions_supprimees": 2,
-                                   "reprise": "registre"}}
+            assert fait == {MOIS: {"retirees": 3, "reste": 5, "version_nouvelle": nouvelle,
+                                   "versions_supprimees": [ancienne], "reprise": "registre"}}
+            assert [v for v, _ in s3.versions[CLE]] == [nouvelle]
             reecrit = gzip.decompress(s3.versions[CLE][-1][1]).decode()
             assert reecrit == ENTETE + "".join(autres)            # octet pour octet
-            assert len(s3.versions[CLE]) == 1
             assert s3.versions[autre_cle] == intact
-            assert c.execute("SELECT lignes FROM journal_archives WHERE mois = %s",
-                             (MOIS,)).fetchone()["lignes"] == 5
+            assert _lignes(base) == 5
             mois, _ = purge_archives.compter(c, s3, SEAU, tenant, extrait)
             assert (mois.tenant, mois.versions_anciennes, mois.registre_en_retard) == (0, 0, False)
     finally:
-        with psycopg.connect(base["dsn"], autocommit=True) as c:
-            c.execute("DELETE FROM journal_archives")
-        s3.versions.pop(CLE, None)
+        _vider(base, s3)
+        s3.versions.pop(autre_cle, None)
+
+
+@STATUTS
+def test_reecrire_verifie_la_nouvelle_puis_supprime_l_ancienne(base, seau, tmp_path, statut):
+    """Le même chemin en `Enabled` et en `Suspended` : la nouvelle version est relue par
+    son versionId, puis l'ancienne, qui porte encore le tenant, est supprimée par le sien."""
+    s3 = seau
+    _, autres = _poser_archive(base, s3, F, E)
+    ancienne = s3.versions[CLE][0][0]
+    tenant, extrait = _tenant(base, F), str(tmp_path / "extrait")
+    try:
+        with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
+            mois = purge_archives.compter(c, s3, SEAU, tenant)
+            purge_archives.extraire(s3, SEAU, tenant, mois, extrait)
+            fait = purge_archives.reecrire(c, s3, SEAU, tenant, mois, extrait)
+        nouvelle = "null" if statut == "Suspended" else s3.versions[CLE][-1][0]
+        assert fait == {MOIS: {"retirees": 3, "reste": 5, "version_supprimee": ancienne,
+                               "version_nouvelle": nouvelle}}
+        assert [v for v, _ in s3.versions[CLE]] == [nouvelle]
+        assert gzip.decompress(s3.versions[CLE][0][1]).decode() == ENTETE + "".join(autres)
+        assert _lignes(base) == 5
+    finally:
+        _vider(base, s3)
+
+
+def _ancienne_courante_null(s3):
+    s3.statut = "Suspended"
+    objet = s3.versions.pop(CLE)[0][1]
+    s3.poser(CLE, objet)                                   # la seule copie, `null`
+
+
+def _jamais_activee(s3):
+    s3.statut = None
+    objet = s3.versions.pop(CLE)[0][1]
+    s3.poser(CLE, objet)
+
+
+def _deux_versions(s3):
+    s3.poser(CLE, s3.versions[CLE][0][1])
+
+
+def _marqueur(s3):
+    objet = s3.versions[CLE][0][1]
+    s3.delete_object(SEAU, CLE)                            # marqueur, non courant ensuite
+    s3.poser(CLE, objet)
+
+
+@pytest.mark.parametrize("preparer, raison", [
+    (_ancienne_courante_null, "version courante `null`"),
+    (_jamais_activee, "jamais activée"),
+    (_deux_versions, "2 versions sur la clé"),
+    (_marqueur, "marqueur"),
+])
+def test_une_archive_sans_filet_est_refusee_avant_toute_ecriture(base, tmp_path, preparer,
+                                                                 raison, script, capsys):
+    s3 = FauxS3Versionne("Enabled")
+    _poser_archive(base, s3, F, E)
+    preparer(s3)
+    avant = list(s3.versions[CLE])
+    tenant, extrait = _tenant(base, F), str(tmp_path / "extrait")
+    try:
+        with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
+            (mois,) = purge_archives.compter(c, s3, SEAU, tenant)
+            assert mois.refus and raison in mois.refus
+            purge_archives.extraire(s3, SEAU, tenant, [mois], extrait)
+            with pytest.raises(purge_archives.ArchiveDiscordante, match="rien n'est écrit"):
+                purge_archives.reecrire(c, s3, SEAU, tenant, [mois], extrait)
+            # Le compte à blanc du script dit le verdict, la version et la part.
+            with purge.en_lecture_seule(c):
+                fige = purge.lire(c, base[F]["slug"]).perimetre
+            compte = script.compte_archives(c, s3, SEAU, fige)
+        assert compte[MOIS]["verdict"].startswith("refusée : ")
+        assert raison in compte[MOIS]["verdict"] and compte[MOIS]["tenant"] == 3
+        assert compte[MOIS]["version_courante"] == avant[-1][0]
+        assert s3.versions[CLE] == avant and _lignes(base) == 8
+    finally:
+        _vider(base, s3)
+
+
+@STATUTS
+def test_une_nouvelle_version_ratee_garde_l_ancienne(base, seau, tmp_path):
+    s3 = seau
+    _poser_archive(base, s3, F, E)
+    avant = list(s3.versions[CLE])
+    ancienne = avant[0][0]
+    tenant, extrait = _tenant(base, F), str(tmp_path / "extrait")
+    try:
+        with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
+            mois = purge_archives.compter(c, s3, SEAU, tenant)
+            purge_archives.extraire(s3, SEAU, tenant, mois, extrait)
+            s3.depot_rate = True
+            with pytest.raises(purge_archives.ArchiveDiscordante) as refus:
+                purge_archives.reecrire(c, s3, SEAU, tenant, mois, extrait)
+        nouvelle = f"v{s3.n}" if s3.statut == "Enabled" else "null"
+        assert ancienne in str(refus.value) and f"nouvelle version {nouvelle}" in str(refus.value)
+        assert "redevient courante" in str(refus.value)
+        assert s3.versions[CLE] == avant and _lignes(base) == 8       # ancienne gardée
+    finally:
+        _vider(base, s3)
+
+
+def test_nouvelle_ratee_et_ancienne_illisible_ne_retire_rien(base, tmp_path, monkeypatch):
+    s3 = FauxS3Versionne("Suspended")
+    _poser_archive(base, s3, F, E)
+    tenant, extrait = _tenant(base, F), str(tmp_path / "extrait")
+    try:
+        with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
+            mois = purge_archives.compter(c, s3, SEAU, tenant)
+            purge_archives.extraire(s3, SEAU, tenant, mois, extrait)
+            s3.depot_rate = True
+
+            def illisible(**_):
+                raise ClientError({"Error": {"Code": "500"}}, "HeadObject")
+            monkeypatch.setattr(s3, "head_object", illisible)
+            with pytest.raises(purge_archives.ArchiveDiscordante, match="PAS retirée"):
+                purge_archives.reecrire(c, s3, SEAU, tenant, mois, extrait)
+        assert [v for v, _ in s3.versions[CLE]] == [mois[0].version, "null"]
+        assert _lignes(base) == 8
+    finally:
+        _vider(base, s3)
 
 
 def test_archive_qui_ne_porte_pas_le_compte_du_registre_refuse(base, s3):
@@ -201,13 +383,6 @@ def test_archive_qui_ne_porte_pas_le_compte_du_registre_refuse(base, s3):
     finally:
         with psycopg.connect(base["dsn"], autocommit=True) as c:
             c.execute("DELETE FROM journal_archives")
-
-
-def test_un_seau_non_versionne_refuse_la_reecriture(base, tmp_path):
-    s3 = FauxS3Versionne(versionne=False)
-    with psycopg.connect(base["dsn"], row_factory=dict_row) as c, \
-            pytest.raises(purge_archives.ArchiveDiscordante, match="pas versionné"):
-        purge_archives.reecrire(c, s3, SEAU, _tenant(base, F), [], str(tmp_path))
 
 
 def test_objets_par_prefixes_toutes_versions_puis_rien(base, s3):
@@ -229,6 +404,22 @@ def test_objets_par_prefixes_toutes_versions_puis_rien(base, s3):
     assert all(k in s3.versions for k in base[E]["objets"])   # le voisin est intact
     with pytest.raises(ValueError):
         purge_objets.inventaire(s3, SEAU, {"project-files/1"})
+
+
+def test_objets_en_suspended_chaque_version_par_son_id_sans_marqueur(base):
+    """En `Suspended`, supprimer sans versionId poserait un marqueur et laisserait les
+    données : chaque version, `null` comprise, part par son versionId."""
+    s3 = FauxS3Versionne("Enabled")
+    cle = f"avatars/{base[F]['alice']}/a.png"
+    s3.poser(cle, b"avant la suspension")
+    s3.statut = "Suspended"
+    s3.poser(cle, b"apres")                                     # version `null`
+    versions = purge_objets.inventaire(s3, SEAU, {f"avatars/{base[F]['alice']}/"})
+    assert sorted(v.version for v in versions) == ["null", "v1"]
+    assert purge_objets.supprimer(s3, SEAU, versions) == 2
+    assert cle not in s3.versions                               # ni version ni marqueur
+    with pytest.raises(ValueError, match="sans versionId"):
+        purge_objets.supprimer(s3, SEAU, [purge_objets.Version(cle, None, 0)])
 
 
 def _script(monkeypatch, s3):
@@ -271,12 +462,15 @@ def test_extraire_remet_le_journal_et_les_lignes_tardives_sans_secret(base, tmp_
     assert manifeste["tables"]["runner_triggers"] == 1
 
 
-def test_tout_en_un_passage_avec_constat_puis_rien(base, tmp_path, script, s3):
+def test_tout_en_un_passage_avec_constat_puis_rien(base, tmp_path, script, s3, capsys):
     _poser_archive(base, s3, E, F)
     slug, dossier = base[E]["slug"], str(tmp_path / "passage")
     # Sans compte à blanc sur ce dossier, pas de passage.
     assert script.main(["tout", "--tenant", slug, "--dossier", dossier, "--appliquer"]) == 2
+    ancienne = s3.versions[CLE][0][0]
     assert script.main(["tout", "--tenant", slug, "--dossier", dossier]) == 0      # à blanc
+    assert f"{MOIS} : version {ancienne} — acceptée — 3 ligne(s) à retirer" in \
+        capsys.readouterr().out
     assert all(k in s3.versions for k in base[E]["objets"])
     assert script.main(["tout", "--tenant", slug, "--dossier", dossier, "--appliquer"]) == 0
     constat = json.loads((tmp_path / "passage" / "constat.json").read_text())
@@ -285,6 +479,13 @@ def test_tout_en_un_passage_avec_constat_puis_rien(base, tmp_path, script, s3):
     assert e["base"]["supprime"] > 0 and e["base"]["reste"] == 0
     assert e["objets"]["reste"] == 0 and e["objets"]["cles_hors_prefixe_non_touchees"] == 1
     assert e["archives"]["avant"] == {MOIS: 3} and e["archives"]["reste"] == 0
+    nouvelle = s3.versions[CLE][-1][0]
+    assert e["archives"]["fait"] == {MOIS: {"retirees": 3, "reste": 5,
+                                            "version_supprimee": ancienne,
+                                            "version_nouvelle": nouvelle}}
+    assert [v for v, _ in s3.versions[CLE]] == [nouvelle]
+    assert (f"{MOIS} : 3 ligne(s) retirée(s) ; ancienne version supprimée {ancienne} ; "
+            f"nouvelle version {nouvelle}") in capsys.readouterr().out
     assert "annuaire" in e and "sauvegardes" in e
     assert f"project-files/{E}/abc/f.txt" in s3.versions               # hors préfixe
     assert not any(k in s3.versions for k in base[E]["objets"] if not k.startswith("project"))

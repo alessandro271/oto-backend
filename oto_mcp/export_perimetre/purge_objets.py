@@ -7,10 +7,12 @@ tenant sont donc ceux des PRÉFIXES de ses propriétaires (`purge.objets`) :
 final est exigé : `project-files/12/` ne touche pas `project-files/123/`. Les préfixes se
 relèvent AVANT la purge de la base et se gardent : après, plus rien ne les désigne.
 
-Le seau peut être versionné : supprimer la version courante laisserait les précédentes.
-L'inventaire liste donc TOUTES les versions (et marqueurs de suppression) sous chaque
-préfixe, la suppression les retire une à une, et le contrôle relit l'inventaire, qui doit
-être vide.
+Le seau peut être versionné (`Enabled` ou `Suspended`) : supprimer sans versionId ne
+ferait que poser un marqueur de suppression et laisserait les données. L'inventaire liste
+donc TOUTES les versions (et marqueurs de suppression) sous chaque préfixe, la suppression
+les retire une à une PAR LEUR VERSIONID (`null` compris, ce qui retire vraiment la version
+`null`), et le contrôle relit l'inventaire, qui doit être vide. Une version listée sans
+versionId est refusée avant toute suppression.
 """
 from __future__ import annotations
 
@@ -53,10 +55,11 @@ def resume(versions: list[Version]) -> dict:
 
 
 def supprimer(s3, bucket: str, versions: list[Version]) -> int:
-    """Supprime chaque version. Rejouable : une version déjà partie ne coûte rien."""
+    """Supprime chaque version par son versionId. Rejouable : une version déjà partie ne
+    coûte rien."""
+    sans_id = sorted(v.cle for v in versions if v.version is None)
+    if sans_id:
+        raise ValueError(f"versions listées sans versionId, rien n'est supprimé : {sans_id}")
     for v in versions:
-        if v.version is None:
-            s3.delete_object(Bucket=bucket, Key=v.cle)
-        else:
-            s3.delete_object(Bucket=bucket, Key=v.cle, VersionId=v.version)
+        s3.delete_object(Bucket=bucket, Key=v.cle, VersionId=v.version)
     return len(versions)
