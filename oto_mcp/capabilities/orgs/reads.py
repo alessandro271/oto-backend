@@ -194,7 +194,7 @@ class OrgBilling(BaseModel):
 
 class OrgAdminBilling(BaseModel):
     """Le bloc `billing` de la fiche d'ADMIN : l'état d'abonnement POUSSÉ par le commerce
-    (`service.org.subscription_state`), jamais la table de facturation du cœur. Trois
+    (`service.org.subscription_state`), jamais la table de facturation du cœur. Deux
     formes, distinguées par `state` :
 
     - `state: "pushed"`, `source: "commerce"` — l'état reçu : `subscribed` (`active` ou `past_due`), `status`
@@ -205,12 +205,9 @@ class OrgAdminBilling(BaseModel):
       a lu cet état), `received_at` ;
     - `state: "missing"`, `source: "commerce"` — le commerce n'a encore rien poussé pour
       l'org : `code: "subscription_state_missing"`, et AUCUN autre champ — ni
-      `subscribed` ni `status` devinés ;
-    - `state: "disabled"` — l'instance n'a pas de facturation (`OTO_BILLING_ENABLED` ≠ 1,
-      aucun commerce) : aucun autre champ. Un objet plutôt que `null` : le bloc reste
-      garanti aux clients qui le lisent."""
-    state: Literal["pushed", "missing", "disabled"]
-    source: Optional[Literal["commerce"]] = None
+      `subscribed` ni `status` devinés."""
+    state: Literal["pushed", "missing"]
+    source: Literal["commerce"]
     code: Optional[str] = None
     subscribed: Optional[bool] = None
     status: Optional[str] = None
@@ -267,9 +264,8 @@ class OrgAdminDetail(OrgDetail):
     dedans : `billing` et `option_comps` sont hérités et partent avec le retrait de la
     facturation du cœur (oto-backend#1104) ; les droits restent.
 
-    `billing` = l'état poussé par le commerce (`OrgAdminBilling`, trois formes ; sur une
-    instance SANS facturation, `state: "disabled"` : un réglage déclaré de l'instance,
-    pas une lecture manquée)."""
+    `billing` = l'état poussé par le commerce (`OrgAdminBilling`, deux formes : reçu ou
+    jamais reçu)."""
     billing: OrgAdminBilling
     # Toutes les lignes posées DANS l'org — portée org et personnes dans l'org — échues
     # et à venir comprises (une console doit voir un droit échu). Les dons faits à une
@@ -411,14 +407,10 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
 def _billing_du_commerce(org_id: int) -> dict:
     """Le bloc `billing` de la fiche d'admin : l'état POUSSÉ par le commerce, qui
     facture — jamais la table de facturation du cœur, figée depuis la bascule. Rien de
-    poussé pour l'org : refus nommé, aucun repli (une org bloquée se lirait « active »).
-    Instance sans facturation (`billing.is_enabled()` faux) : `state: "disabled"`, rien
-    n'est lu.
+    poussé pour l'org : aucun repli (une org bloquée se lirait « active »).
     Rien de poussé : la fiche reste servie ENTIÈRE, et le bloc NOMME l'absence
     (`state: "missing"`) sans rien deviner — des services lisent cette fiche, un refus
     les casserait pour un fait qu'ils savent lire."""
-    if not billing.is_enabled():
-        return {"state": "disabled"}
     try:
         with db._connect() as conn:
             etat = etat_abonnement.lire_etat(conn, org_id)

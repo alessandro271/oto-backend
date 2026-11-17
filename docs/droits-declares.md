@@ -402,11 +402,10 @@ celui déjà reçu est refusé (`409 stale_subscription_state`). La fiche d'admi
 table de facturation du cœur, figée depuis la bascule : `state: pushed` et l'état reçu ;
 `state: missing` + `code: subscription_state_missing` tant que rien n'a été poussé pour
 l'org — la fiche reste servie entière (des services la lisent), l'absence est nommée,
-rien n'est deviné. Une instance SANS facturation (`OTO_BILLING_ENABLED` ≠ 1) n'a pas de
-commerce : `billing: {state: disabled}` (un objet, pas `null` : le bloc reste garanti
-aux clients), et la route de service n'est pas montée. Tout lecteur passe
+rien n'est deviné. La route de service est toujours montée ; seule l'identité de service
+du commerce l'ouvre. Tout lecteur passe
 par `db.etat_abonnement.lire_etat(conn, org_id)`, qui LÈVE `EtatJamaisPousse` faute
-d'état (y compris sur une instance sans facturation : à l'appelant de ne pas l'y appeler),
+d'état (à l'appelant de dire ce que vaut l'absence),
 et `preleve_encore(etat)` pour « le commerce prélève encore ». La fiche d'un membre
 (`org.get`) lit encore l'ancien bloc.
 

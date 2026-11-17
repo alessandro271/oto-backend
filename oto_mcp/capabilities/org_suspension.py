@@ -37,7 +37,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from .. import billing, org_store, org_suspension
+from .. import org_store, org_suspension
 from ..db import etat_abonnement
 from ..db.tenants import TenantDesactive
 from ._authz import COMMERCE_SERVICE, SUPER_ADMIN
@@ -295,8 +295,5 @@ CAPABILITIES += [
             "`emitted_at` again is replayed. The core only serves it (admin org detail, "
             "`billing`) and acts on nothing. `changed` says whether a field moved."),
         rest=RestBinding("PUT", "/api/service/orgs/{id}/subscription-state", {"id": "org_id"}),
-        # Comme toute la surface de facturation : absente sans `OTO_BILLING_ENABLED=1`
-        # (une instance sans commerce n'a personne pour pousser).
-        gate=billing.is_enabled,
     ),
 ]

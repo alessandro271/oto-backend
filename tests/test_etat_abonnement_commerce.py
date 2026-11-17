@@ -6,7 +6,8 @@ lisait la table de facturation du CŒUR, figée depuis la bascule : elle disait 
 rien de bloqué » d'une org dont plus rien ne se prélevait. Elle lit désormais l'état
 POUSSÉ (`subscription_states`) ; tant que rien n'a été poussé, elle reste servie et
 NOMME l'absence (`state: missing`) — `status = none` (aucun abonnement au commerce) est un
-état, pas une absence. Sans facturation sur l'instance, `billing` dit `state: disabled`.
+état, pas une absence. Aucun drapeau de facturation n'y touche : la route est toujours
+montée, la fiche lit toujours l'état poussé.
 """
 from __future__ import annotations
 
@@ -107,12 +108,13 @@ def test_un_envoi_plus_ancien_est_un_409(monkeypatch):
 
 # ── la fiche d'admin lit l'état poussé, jamais la table figée ────────────────
 
-def _fiche(monkeypatch, etat, *, facturation=True):
+def _fiche(monkeypatch, etat, *, drapeau="0"):
     from oto_mcp import access, billing, db
     from oto_mcp.capabilities.orgs import reads
     org = {"id": 7, "name": "Acme", "description": "", "domain": None, "industry": "",
            "location": "", "logo_url": None}
-    monkeypatch.setenv("OTO_BILLING_ENABLED", "1" if facturation else "0")
+    # Le drapeau de l'ancienne facturation du cœur ne décide de rien ici.
+    monkeypatch.setenv("OTO_BILLING_ENABLED", drapeau)
     monkeypatch.setattr(org_store, "get_org", lambda i: org if i == 7 else None)
     monkeypatch.setattr(org_store, "get_trial_ends_at", lambda i: None)
     monkeypatch.setattr(org_store, "get_org_role", lambda i, sub: None)
@@ -146,7 +148,7 @@ def _get(monkeypatch, etat, **kw):
     reads, lus = _fiche(monkeypatch, etat, **kw)
     out = ac._org(ResolvedCtx(sub="op"), ac.OrgAdminInput(op="get", org_id=7))
     reads.OrgAdminDetail.model_validate(out)
-    # La fiche est ENTIÈRE dans les trois formes.
+    # La fiche est ENTIÈRE dans les deux formes.
     assert out["org"]["id"] == 7 and "members" in out and "entitlements" in out
     return out["billing"], lus
 
@@ -175,28 +177,31 @@ def test_rien_pousse_la_fiche_est_rendue_et_nomme_l_absence_sans_rien_deviner(mo
                  "code": "subscription_state_missing"}
 
 
-def test_sans_facturation_ni_lecture_ni_erreur(monkeypatch):
-    b, lus = _get(monkeypatch, None, facturation=False)
-    assert b == {"state": "disabled"} and lus == []
+@pytest.mark.parametrize("drapeau", ["0", "1"])
+def test_le_drapeau_de_facturation_ne_change_rien_a_la_fiche(monkeypatch, drapeau):
+    b, lus = _get(monkeypatch, BLOQUE, drapeau=drapeau)
+    assert lus == [7] and b["state"] == "pushed"
+    b, lus = _get(monkeypatch, None, drapeau=drapeau)
+    assert lus == [7] and b["state"] == "missing"
 
 
-def test_la_route_suit_le_drapeau_de_facturation(monkeypatch):
+@pytest.mark.parametrize("drapeau", ["0", "1"])
+def test_la_route_est_toujours_montee(monkeypatch, drapeau):
     from _datastore_rest import cap
     c = cap("service.org.subscription_state")
-    monkeypatch.setenv("OTO_BILLING_ENABLED", "0")
-    assert not c.is_exposed()
-    monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
-    assert c.is_exposed()
+    monkeypatch.setenv("OTO_BILLING_ENABLED", drapeau)
+    assert c.gate is None and c.is_exposed()
 
 
-def test_aucun_refus_sur_la_fiche_et_le_texte_servi_dit_les_trois_formes():
+def test_aucun_refus_sur_la_fiche_et_le_texte_servi_dit_les_deux_formes():
     from _datastore_rest import cap
     for cle in ("admin.org", "org.admin.get"):
         assert "subscription_state_missing" not in {d.code for d in cap(cle).errors}, cle
     d = cap("admin.org").description
     for mot in ("PUSHED by commerce", "state: pushed", "state: missing",
-                "subscription_state_missing", "state: disabled", "block_code"):
+                "subscription_state_missing", "block_code"):
         assert mot in d, mot
+    assert "state: disabled" not in d
 
 
 @pytest.mark.parametrize("etat, preleve", [
@@ -271,7 +276,6 @@ def test_la_fiche_d_admin_ne_lit_plus_org_subscriptions(live, monkeypatch):
     from unittest import mock
     from oto_mcp.capabilities._types import ResolvedCtx
     from oto_mcp.capabilities.orgs import reads
-    monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
     org = _org()
     etat_abonnement.poser(org, BLOQUE)
     vues: list[str] = []
@@ -319,7 +323,7 @@ def _ce_que_lit_le_service(corps: dict) -> tuple:
             sorted((m["sub"], m["email"], m["suspended"]) for m in corps["members"]))
 
 
-def test_la_fiche_rest_garde_ce_que_lit_un_service_sous_les_trois_formes(live, monkeypatch):
+def test_la_fiche_rest_garde_ce_que_lit_un_service_sous_les_deux_formes(live, monkeypatch):
     from _datastore_rest import call
     monkeypatch.setenv("OTO_MCP_ADMIN_SUB", OPERATEUR)
     org, actif, suspendu = _org_peuplee()
@@ -329,22 +333,18 @@ def test_la_fiche_rest_garde_ce_que_lit_un_service_sous_les_trois_formes(live, m
         assert statut == 200, corps
         return corps
 
-    monkeypatch.setenv("OTO_BILLING_ENABLED", "0")
-    eteint = _fiche_rest()
-    monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
     rien_pousse = _fiche_rest()
     etat_abonnement.poser(org, BLOQUE)
     pousse = _fiche_rest()
 
-    assert eteint["billing"] == {"state": "disabled"}
     assert rien_pousse["billing"] == {"source": "commerce", "state": "missing",
                                       "code": "subscription_state_missing"}
     assert (pousse["billing"]["state"], pousse["billing"]["block_code"]) == (
         "pushed", "no_valid_mandate")
-    attendu = (eteint["org"]["name"], sorted([
+    attendu = (rien_pousse["org"]["name"], sorted([
         (actif, f"{actif}@example.test", False),
         (suspendu, f"{suspendu}@example.test", True)]))
-    for corps in (eteint, rien_pousse, pousse):
+    for corps in (rien_pousse, pousse):
         assert _ce_que_lit_le_service(corps) == attendu
 
 
@@ -352,12 +352,10 @@ def test_la_liste_rest_garde_id_created_by_created_at(live, monkeypatch):
     from _datastore_rest import call
     monkeypatch.setenv("OTO_MCP_ADMIN_SUB", OPERATEUR)
     org, _, _ = _org_peuplee()
-    for drapeau in ("0", "1"):
-        monkeypatch.setenv("OTO_BILLING_ENABLED", drapeau)
-        statut, corps = call("org.admin.list", sub=OPERATEUR)
-        assert statut == 200, corps
-        [ligne] = [o for o in corps["orgs"] if o["id"] == org]
-        assert ligne["created_by"] == OPERATEUR
-        # Forme servie aujourd'hui : `AAAA-MM-JJ HH:MM:SS`, sans fuseau. On tient sa
-        # présence et sa lecture, pas un fuseau qu'elle ne porte pas.
-        assert datetime.fromisoformat(ligne["created_at"])
+    statut, corps = call("org.admin.list", sub=OPERATEUR)
+    assert statut == 200, corps
+    [ligne] = [o for o in corps["orgs"] if o["id"] == org]
+    assert ligne["created_by"] == OPERATEUR
+    # Forme servie aujourd'hui : `AAAA-MM-JJ HH:MM:SS`, sans fuseau. On tient sa
+    # présence et sa lecture, pas un fuseau qu'elle ne porte pas.
+    assert datetime.fromisoformat(ligne["created_at"])

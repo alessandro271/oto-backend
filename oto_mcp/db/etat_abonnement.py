@@ -9,11 +9,8 @@ d'org, bloc `billing`). Deux gestes :
 - `lire_etat(conn, org_id)` : LA lecture du miroir, pour tout lecteur (fiche d'admin
   d'org, garde d'effacement…). Rend l'état reçu ; `status = 'none'` (aucun abonnement au
   commerce) est un état, pas une absence. Rien de poussé pour l'org : `EtatJamaisPousse`,
-  jamais un repli sur une autre source. ⚠️ Sur une instance SANS facturation
-  (`billing.is_enabled()` faux), aucun commerce ne pousse : `lire_etat` lève pour toute
-  org. Ce n'est pas à lui d'en décider : c'est à l'APPELANT de ne pas l'appeler et de
-  dire ce que vaut, pour lui, une instance sans commerce (la fiche d'admin : `billing`
-  `state: disabled` ; une garde « prélève encore ? » : non, personne ne prélève).
+  jamais un repli sur une autre source. C'est à l'APPELANT de dire ce que vaut, pour
+  lui, cette absence (la fiche d'admin : `billing` `state: missing`, servie entière).
 - `preleve_encore(etat)` : l'état dit-il que le commerce prélève encore l'org (actif ou en
   impayé, sans résiliation programmée) ?
 """
