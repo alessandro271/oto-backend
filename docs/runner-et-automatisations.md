@@ -2396,12 +2396,10 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
     alors modifiable par leurs membres, sans `op=lend`. Ouvre aussi l'écriture, à lui
     seul, le partage que le DON a laissé à celui qui donne (`MARQUE_GARDE_AU_DON`, voir
     `give`) : qui a construit et donné l'agent continue de le maintenir, tant que le
-    nouveau propriétaire ne le retire pas (`_partage_ouvrant_le_pool`). Compte aussi, en
-    pool seulement (03/11/2026, `MARQUES_D_ORG_EN_POOL`), le partage d'org que la révision
-    0035 a posé d'office sur les agents d'avant le 02/10 — sans quoi un agent d'avant le
-    partage nominatif restait en pause seule pour tous, faute d'un geste du propriétaire
-    sur chacun. Ne comptent jamais : un partage d'ADMIN (la séquence de l'admin qui se
-    partage l'agent d'un membre), celui du réglage `partage_par_defaut` (un réglage
+    nouveau propriétaire ne le retire pas (`_partage_ouvrant_le_pool`). Ne comptent
+    jamais : un partage d'ADMIN (la séquence de l'admin qui se partage l'agent d'un
+    membre), celui de la révision 0035 (posé d'office, rabattu en lecture par
+    `20261116_2210_office_en_lecture`), celui du réglage `partage_par_defaut` (un réglage
     d'admin, pas un geste du propriétaire) et les partages collectifs d'un ancien propriétaire — le
     pool retire le forfait du jeu, pas l'identité sous laquelle l'agent agit (ses
     connexions personnelles). Hors pool, rien ne change : seul le consentement du
@@ -2459,7 +2457,7 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
     sans éditeur nommé par le propriétaire ET sans prêt collectif vivant : dès le geste,
     la liste se ferme, qu'un partage atteigne déjà quelqu'un ou non. Sur un agent que
     l'org sert par son pool exclusif, elle se ferme dès qu'il porte un partage en
-    écriture vivant posé par son propriétaire ou par la révision 0035.
+    écriture vivant posé par son propriétaire.
   - **Qui a modifié** : chaque retouche (`update`) écrit son auteur dans
     `runner_triggers.updated_by` avec `updated_at` — servi sur `get`/`list`, c'est ce que
     le propriétaire lit pour savoir quel éditeur a changé son agent (§Dater un
@@ -2501,8 +2499,8 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
   nommément (`op=share`) ; le propriétaire et les admins de l'org n'y perdent rien. Un
   partage reposé par une personne avait perdu la marque et ne bouge pas. Le compte par org,
   avant de jouer la révision : `oto-mcp maintenance partages-office --dry-run` (lecture
-  seule, même choix de lignes). Une fois jouée, plus aucun partage d'org ne porte la marque
-  0035 : `MARQUES_D_ORG_EN_POOL` n'ouvre plus rien.
+  seule, même choix de lignes). Ces partages sont en lecture, en pool comme hors pool :
+  aucun partage posé d'office n'ouvre l'écriture d'un agent.
 - **La file de l'org reste lisible, pas ce qu'un agent exécute** : `runner.jobs`
   (`list`, `get`) sert toujours les travaux de toute l'org, mais la charge d'un travail
   enfilé par un agent que l'appelant ne peut pas MODIFIER est réduite à de quoi le

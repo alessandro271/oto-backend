@@ -93,24 +93,10 @@ MARQUE_PARTAGE_PAR_DEFAUT = "reglage:partage_par_defaut"
 #: reposé par quiconque, il perd sa marque ; le nouveau propriétaire le retire
 #: (`op=unshare`).
 MARQUE_GARDE_AU_DON = "don:ancien_proprietaire"
-#: Le `granted_by` du partage `editor` à l'org que la révision 0035 a posé sur les agents
-#: d'avant le partage nominatif : l'org les modifiait déjà, personne n'a repris la main.
+#: Le `granted_by` du partage d'org que la révision 0035 a posé d'office sur les agents
+#: d'avant le partage nominatif. La révision `partages_office.REVISION` le rabat en
+#: lecture sous sa propre marque ; il n'ouvre l'écriture nulle part.
 MARQUE_MIGRATION_0035 = "migration:0035_agents_partages_a_l_org"
-#: Les partages d'org que le pool tient pour consentis (03/11/2026), outre ceux du
-#: propriétaire (`= t.sub`) : celui que la révision 0035 a posé d'office sur les agents
-#: d'avant le 02/10. Ne comptent toujours pas : un partage posé par un ADMIN (la séquence
-#: qui permet de se partager l'agent d'un membre, qui tourne avec ses connexions
-#: personnelles) et celui du réglage `partage_par_defaut` (posé à la naissance par un
-#: réglage d'admin, pas par le propriétaire).
-MARQUES_D_ORG_EN_POOL = (MARQUE_MIGRATION_0035,)
-
-
-def _poseur_compte_en_pool(alias_trigger: str) -> str:
-    """Le `granted_by` d'un partage collectif qui ouvre l'écriture sur un agent servi par
-    le pool exclusif : le propriétaire, ou le partage d'org de la révision 0035
-    (`MARQUES_D_ORG_EN_POOL`)."""
-    marques = ", ".join(f"'{m}'" for m in MARQUES_D_ORG_EN_POOL)
-    return f"(g.granted_by = {alias_trigger}.sub OR g.granted_by IN ({marques}))"
 
 
 def partage_par_defaut_stocke(org_id: int) -> Any:
@@ -353,12 +339,12 @@ def _atteint_par_equipe_ou_org(alias_trigger: str) -> str:
 def _partage_collectif_du_proprietaire(alias_trigger: str) -> str:
     """Un partage `write` vivant posé par le PROPRIÉTAIRE (`granted_by = sub`) à une
     ÉQUIPE de l'org de l'agent dont `%s` est membre, ou à l'ORG entière dont il est
-    membre (`_atteint_par_equipe_ou_org`). Ne comptent donc pas : un partage d'admin
+    membre (`_atteint_par_equipe_ou_org`). Ne comptent donc jamais : un partage d'admin
     (reposé par un admin, un partage perd sa marque — l'upsert réécrit `granted_by`),
-    ceux de la révision 0035 (`MARQUE_MIGRATION_0035`) et du réglage
-    `partage_par_defaut` (`MARQUE_PARTAGE_PAR_DEFAUT`), ceux d'un ancien propriétaire.
-    UN paramètre. Lue par le prêt collectif ; le pool a sa propre lecture
-    (`_partage_ouvrant_le_pool`), où le partage de la révision 0035 compte aussi."""
+    ceux de la révision 0035 (`MARQUE_MIGRATION_0035`) et du réglage `partage_par_defaut`
+    (`MARQUE_PARTAGE_PAR_DEFAUT`), ceux d'un ancien propriétaire. UN paramètre. Lue
+    par le prêt collectif ; le pool a sa propre lecture (`_partage_ouvrant_le_pool`),
+    qui exige aussi le propriétaire pour poseur."""
     from ._partage_vivant import PARTAGE_VIVANT_G
     a = alias_trigger
     return ("EXISTS (SELECT 1 "
@@ -415,7 +401,7 @@ def _partage_ouvrant_le_pool(alias_trigger: str) -> str:
             "WHERE g.resource_type = 'runner_trigger' "
             f"  AND g.resource_id = {a}.id::text "
             f"  AND g.permission = 'write' AND {PARTAGE_VIVANT_G} "
-            f"  AND (({_poseur_compte_en_pool(a)} AND {_atteint_par_equipe_ou_org(a)}) "
+            f"  AND ((g.granted_by = {a}.sub AND {_atteint_par_equipe_ou_org(a)}) "
             f"    OR (g.granted_by = '{MARQUE_GARDE_AU_DON}' "
             "        AND g.principal_type = 'user' AND g.principal_id = q.qui)))")
 
@@ -425,10 +411,8 @@ def _forfait_prete_par_le_pool(alias_trigger: str) -> str:
     (`_servi_par_le_pool`), donc le forfait du propriétaire n'est pas en jeu, ET le
     PROPRIÉTAIRE l'a partagé en écriture à une équipe ou à l'org dont `%s` est membre,
     ou `%s` l'a donné en gardant la main (`_partage_ouvrant_le_pool`) — sans `op=lend`,
-    puisqu'il n'y a pas de forfait à prêter. Compte aussi le partage d'org que la
-    révision 0035 a posé d'office (`MARQUES_D_ORG_EN_POOL`), pour que collaborer ne
-    demande pas un geste de plus par agent d'avant le 02/10. Ni un partage d'ADMIN, ni
-    celui du réglage `partage_par_defaut` n'ouvrent l'écriture — le pool retire le
+    puisqu'il n'y a pas de forfait à prêter. Ni un partage d'admin, ni ceux de la
+    révision 0035 ou de `partage_par_defaut` n'ouvrent l'écriture — le pool retire le
     forfait du jeu, pas l'identité sous laquelle l'agent agit. Le partage NOMMÉ du
     propriétaire compte déjà (`_forfait_prete_nomme`). UN paramètre."""
     a = alias_trigger
@@ -530,8 +514,7 @@ def _liste_plateforme_tenue(t: str) -> str:
             f"  AND NOT ({_servi_par_le_pool(t)} AND EXISTS (SELECT 1 FROM resource_grants g "
             "    WHERE g.resource_type = 'runner_trigger' "
             f"      AND g.resource_id = {t}.id::text "
-            "      AND g.permission = 'write' "
-            f"      AND {_poseur_compte_en_pool(t)} "
+            f"      AND g.permission = 'write' AND g.granted_by = {t}.sub "
             f"      AND {PARTAGE_VIVANT_G}))")
 
 
