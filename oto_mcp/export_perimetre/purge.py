@@ -146,8 +146,8 @@ def _perimetre(conn, slug: str) -> Perimetre | None:
     if ligne["id"] == 1:
         raise PurgeRefusee("tenant_primaire", f"le tenant {slug!r} est la ligne 1, celui de "
                            "l'instance : il ne se purge pas")
-    orgs = [r["id"] for r in conn.execute(
-        "SELECT id FROM orgs WHERE tenant_id = %s ORDER BY id", (ligne["id"],))]
+    from ..db.tenants import orgs_du_tenant
+    orgs = orgs_du_tenant(conn, ligne["id"])
     p = (resoudre(conn, orgs) if orgs else
          Perimetre((), (), (), (), ligne["id"], slug, False, prefixes_tiers(conn)))
     # Les comptes du tenant sans appartenance (anciens membres) : à lui aussi.
