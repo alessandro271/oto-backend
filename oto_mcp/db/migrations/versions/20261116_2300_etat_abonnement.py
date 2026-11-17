@@ -16,7 +16,7 @@ Retour arrière : retire la table (les états poussés se perdent ; le commerce 
 par son remplissage).
 
 Révision : 20261116_2300_etat_abonnement
-Précédente : 20261115_2100_disabled_models
+Précédente : 20261116_2220_modeles_claude_55
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from alembic import op
 from oto_mcp.db.schema.orgs import SUBSCRIPTION_STATES
 
 revision = "20261116_2300_etat_abonnement"
-down_revision = "20261115_2100_disabled_models"
+down_revision = "20261116_2220_modeles_claude_55"
 branch_labels = None
 depends_on = None
 

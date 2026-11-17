@@ -1073,6 +1073,7 @@ travail que ce que le modèle déclare :
 
 | Modèle | `effort` | `max_output_tokens` |
 |---|---|---|
+| `claude-sonnet-5-5`, `claude-opus-5-5`, `claude-haiku-5-5` | — (celui du worker) | — (celui du worker) |
 | `claude-sonnet-5`, `claude-opus-5` | — (celui du worker) | — (celui du worker) |
 | `claude-haiku-4-5` | `none` | — |
 | `mistral-large-2512` | — | 8 192 |
@@ -1097,6 +1098,31 @@ fournisseur.
 ⚠️ **Un `continue` relit l'effort et le plafond du `start`**, jamais le catalogue
 courant (`db.modele_du_run`). Les deux voyagent ensemble : relire l'effort sans le
 plafond faisait lever toute reprise d'un run qui raisonne (relevé en revue).
+
+### La génération Claude 5.5 passe devant, et les agents la rejoignent (11/11/2026)
+
+Le catalogue sert `claude-sonnet-5-5`, `claude-opus-5-5` et `claude-haiku-5-5` EN TÊTE,
+puis les ids d'avant (`claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`), qui restent
+servis et routés. Sonnet 5.5 est donc le défaut proposé quand la famille est servie et
+payable, et `repli_api` envoie `sub:sonnet|opus|haiku` au modèle 5.5 du même tier
+(premier du tier dans l'ordre).
+
+- **Les agents posés passent à la 5.5** par la révision `20261116_2220_modeles_claude_55` :
+  `runner_triggers.model` et `forfait_prete_model` dans la même écriture (un prêt n'est
+  vivant que si les deux sont égaux), puis `runner_fleets.model`.
+- ⚠️ **La révision se joue APRÈS le tag de prod** qui porte ce catalogue : prod et préprod
+  partagent la base et le tick tourne dans les deux. Jouée avant, la prod lirait des ids
+  qu'elle ne connaît pas et refuserait la livraison de ces agents (`motif_sans_famille`).
+  Ordre : fusion -> tag -> `oto-mcp migrer upgrade head` -> comptage (plus aucun
+  déclencheur ni flotte sur un id d'avant). ⚠️ Entre la fusion et le tag, un agent posé ou
+  retouché EN PRÉPROD sur un id 5.5 est refusé par le tick de la prod jusqu'au tag.
+- ⚠️ **`runner_jobs` n'est PAS réécrit.** Un travail enfilé porte sa charge et se route
+  par `model_family` (inchangée) ; un `continue` reprend le modèle du départ de son run,
+  jamais le catalogue courant (ci-dessus).
+- ⚠️ **Les lignes de barème des trois modèles 5.5 se posent AVANT la fusion**
+  (`docs/credits-au-moment-de-l-appel.md`) : sans elles, un tour sur clé refacturée est
+  `credits_unpriced` — refusé en `enforce`, servi sans réservation en `report`. Celles des
+  ids d'avant restent : travaux en vol et reprises se règlent sous elles.
 
 ⚠️ **Le backend se déploie avant le runner.** Un worker d'avant ce lot ignore
 `max_output_tokens` et applique sa variable d'hôte ; un worker d'après lève sur un
@@ -2523,7 +2549,7 @@ ces identifiants. D'où trois conséquences lisibles dans le code :
 - seul un **worker de plateforme** reçoit ce sandbox, et seul lui peut faire arrêter
   un travail faute de connexion — la file est ouverte aux membres, pas ce pouvoir.
 
-**Des ids PRÉFIXÉS.** La famille se DÉDUIT du modèle : `claude-sonnet-5` reste la voie
+**Des ids PRÉFIXÉS.** La famille se DÉDUIT du modèle : `claude-sonnet-5-5` est la voie
 « clé de l'org », `sub:sonnet` est la voie « abonnement ». Le worker retire le préfixe.
 
 **La couture du partage : `_abonnement.peut_agir_pour`.** Au niveau de la PERSONNE : le
@@ -3144,13 +3170,40 @@ passe AVANT l'alerte.
   statut, tentatives, `last_error` — ni son `result` ni `attempt_errors`, qui portent ce
   que l'agent a produit chez son titulaire) / `rerun` (les mêmes gardes que la boucle, plus : épisode clos,
   agent éteint, panne du titulaire ; un refus revient dans `refus`, pas en erreur) /
-  `diagnose` / `escalate` / `close`. Prêté à un agent hébergé de la plateforme par
+  `diagnose` / `escalate` / `close` / `causes` / `set_cause` (le catalogue, ci-dessus). Prêté à un agent hébergé de la plateforme par
   `platform_tools` : sans lui, un agent de notre org lit les pannes d'une autre org sans
   pouvoir rien y faire (`oto_trigger` agit en membre).
+- **Le catalogue des causes, en OMBRE** (13/11/2026) : la regex range trois classes, et
+  tout le reste `inconnu`, diagnostiqué par l'agent médecin un épisode à la fois — ce qu'il
+  trouve ne servait qu'à cet épisode, et deux diagnostics de la même erreur ont rendu deux
+  côtés opposés. Chaque panne reçoit l'EMPREINTE de son motif (`causes_pannes.de` :
+  adresses, courriels, identifiants, dates, nombres et texte cité retirés, puis une LISTE
+  BLANCHE de mots — ne reste que ce qui a la forme du vocabulaire d'erreur, un nom propre
+  hors tête de phrase devient `<nom>`, tout jeton à chiffre, point ou barre `<id>` —,
+  minuscules ; une apostrophe collée à une lettre est une élision, pas une citation ; le
+  catalogue étant commun à toutes les orgs, `tests/test_causes_pannes.py` fixe ce qu'une
+  empreinte ne garde jamais), posée sur
+  l'épisode (`agent_episodes.empreinte`, sa clé hachée). Une empreinte neuve entre au
+  catalogue (`agent_causes`, `db/causes_agents.py`) `proposee`, avec la classe et le côté
+  de la regex — un lot par passage, `ON CONFLICT DO NOTHING` sur une clé texte : rien
+  n'est réécrit, aucune séquence brûlée. Un opérateur (ou l'agent médecin) l'approuve,
+  la refuse ou la corrige (`op=set_cause`) ; approuver une cause du TITULAIRE exige sa
+  copie au client par langue (`{fr|en: {headline, todo, action}}`), refusée si elle porte
+  un nom d'outil, un code, un identifiant, une adresse ou une variable autre que
+  `{marque}` (`causes_pannes.copie_refusee`). Ce qu'une cause couvre (épisodes, vivants,
+  orgs, `classes_vues`) se LIT par jointure (`op=causes`).
+  ⚠️ **Le catalogue ne décide d'AUCUN geste** : l'empreinte se calcule sur le motif
+  tronqué, deux erreurs qui ne diffèrent qu'au-delà de la tête la partagent, et relancer
+  ce qu'on nomme mal referait des effets. Le bilan du passage dit ce qu'il aurait décidé
+  (`catalogue_reconnues`, `catalogue_neuves`, `catalogue_sans_empreinte`, et les
+  `catalogue_desaccords` — cause approuvée d'une autre classe ou d'un autre côté que la
+  regex —, chacun dit au journal) : la regex décide. Une ombre qui casse ne coûte que son
+  bilan (`catalogue_erreur`), jamais le passage.
 - **Où** : boucle `tiers=True` (une relance refait agir un agent chez des tiers),
   ÉTEINTE tant que `OTO_MEDECIN_AGENTS_ENABLED=1` n'est pas déclaré — production seule.
-- Bancs : `tests/test_medecin_agents.py` (sans base), `tests/test_episodes_agents_db.py`
-  (le SQL), `tests/test_migration_20261027_agent_episodes.py`,
+- Bancs : `tests/test_medecin_agents.py` (sans base), `tests/test_causes_pannes.py`
+  (l'empreinte, la copie), `tests/test_episodes_agents_db.py` (le SQL, catalogue
+  compris), `tests/test_migration_20261027_agent_episodes.py`,
   `tests/test_alerte_agents_bloques.py` (le silence).
 
 ### `op=list` : la page dit ce qu'elle laisse dehors (#469, 01/09/2026)
