@@ -26,10 +26,11 @@ Mechanics (`FastMCPApp`, extra `fastmcp[apps]`):
 - `data_review_decide` = APP-ONLY tool: absent from `tools/list` (zero context
   cost), called by the button under a HASHED name `<hash>_data_review_decide`;
   its bare name cannot be found, the model cannot call it.
-  ⚠️ This path BYPASSES session visibility (fastmcp finds an app tool
-  "even hidden by a transform") AND the call axes: `namespace_of` of a hashed
-  name is not `data`, so `CallContextMiddleware` reads neither `_project` nor
-  `_org` there. Hence: the entry call's context is FROZEN in the button's
+  Since fastmcp 3.4.8, a call by hashed name follows the same rules as a call
+  by displayed name (session visibility, enabled state, authorization); the
+  handler still keeps its own guards (the store's). ⚠️ It does BYPASS the call
+  axes: `namespace_of` of a hashed name is not `data`, so
+  `CallContextMiddleware` reads neither `_project` nor `_org` there. Hence: the entry call's context is FROZEN in the button's
   arguments at render time, then RESET here by the axes' own guards
   (`call_axes.PROJECT` / `call_axes.ORG`, membership verified).
   ⚠️ An app-only tool being absent from `tools/list` is marked FIXME on the fastmcp side

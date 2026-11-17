@@ -82,10 +82,13 @@ incrémenté sur une écriture réelle seulement — jamais une garde. ⚠️ Le
 appellent un outil. `@app.ui()` = le point d'entrée servi au modèle ; `@app.tool()` =
 le gestionnaire des boutons, **app-only** — absent de `tools/list` (zéro coût de
 contexte), appelé sous un nom haché `<hash>_data_review_decide`, introuvable sous son
-nom nu. Trois conséquences à connaître :
-- ⚠️ **ce chemin contourne la visibilité de session** : fastmcp retrouve un outil d'app
-  même masqué par un transform. Le gestionnaire ne peut compter que sur ses propres
-  gardes (ici, celles du store).
+nom nu. Trois choses à connaître :
+- **ce chemin suit les mêmes règles que l'appel par nom affiché** : depuis fastmcp
+  3.4.8, l'appel par nom haché passe par le masquage de session, l'état activé et
+  l'autorisation. Le gestionnaire garde ses propres gardes (ici, celles du store).
+  Les masquages que le serveur pose (`session_visibility`, `oto_disable_tool`)
+  partent des outils listés : ils ne désignent jamais le gestionnaire, et le bouton
+  reste servi à qui ouvre la carte (`tests/datastore/test_review_app_bouton_chemin_reel.py`).
 - ⚠️ **et il contourne les axes d'appel** : `namespace_of` d'un nom haché n'est pas
   `data`, donc `CallContextMiddleware` n'y lit ni `_project` ni `_org`. Le contexte de
   l'appel d'entrée est donc FIGÉ dans les arguments du bouton au rendu, et reposé dans
