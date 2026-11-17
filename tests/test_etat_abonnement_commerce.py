@@ -286,3 +286,78 @@ def test_la_fiche_d_admin_ne_lit_plus_org_subscriptions(live, monkeypatch):
     assert not [q for q in vues if "org_subscriptions" in q]
     assert (fiche["billing"]["status"], fiche["billing"]["block_code"]) == (
         "active", "no_valid_mandate")
+
+
+# ── la fiche et la liste, par la vraie route REST, pour un service consommateur ─
+# Un service consommateur lit ces champs de `GET /api/admin/orgs/{id}` (`org.name`,
+# `members[].sub|email|suspended`) et de `GET /api/admin/orgs` (`orgs[].id|created_by|
+# created_at`). Ces deux routes ne sont pas couvertes par la garde de contrat : ce test
+# tient ces champs, quelle que soit la forme du bloc `billing`.
+
+OPERATEUR = "op-fiche-service"
+
+
+def _org_peuplee() -> tuple[int, str, str]:
+    """Une org avec un membre actif et un membre suspendu, créée par l'opérateur."""
+    from oto_mcp.db import users
+    from oto_mcp.db._conn import _connect
+    actif, suspendu = (f"u-{uuid.uuid4().hex[:8]}" for _ in range(2))
+    for sub in (OPERATEUR, actif, suspendu):
+        users.upsert_user(sub, email=f"{sub}@example.test")
+    nom = f"t-{uuid.uuid4().hex[:6]}"
+    with _connect() as conn:
+        org = conn.execute("INSERT INTO orgs (name, created_by) VALUES (%s, %s) "
+                           "RETURNING id", (nom, OPERATEUR)).fetchone()["id"]
+        conn.execute("UPDATE users SET suspended_at = NOW() WHERE sub = %s", (suspendu,))
+    org_store.add_org_member(org, actif, "org_admin", actor=OPERATEUR)
+    org_store.add_org_member(org, suspendu, "org_member", actor=OPERATEUR)
+    return org, actif, suspendu
+
+
+def _ce_que_lit_le_service(corps: dict) -> tuple:
+    return (corps["org"]["name"],
+            sorted((m["sub"], m["email"], m["suspended"]) for m in corps["members"]))
+
+
+def test_la_fiche_rest_garde_ce_que_lit_un_service_sous_les_trois_formes(live, monkeypatch):
+    from _datastore_rest import call
+    monkeypatch.setenv("OTO_MCP_ADMIN_SUB", OPERATEUR)
+    org, actif, suspendu = _org_peuplee()
+
+    def _fiche_rest() -> dict:
+        statut, corps = call("org.admin.get", path_params={"id": str(org)}, sub=OPERATEUR)
+        assert statut == 200, corps
+        return corps
+
+    monkeypatch.setenv("OTO_BILLING_ENABLED", "0")
+    eteint = _fiche_rest()
+    monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
+    rien_pousse = _fiche_rest()
+    etat_abonnement.poser(org, BLOQUE)
+    pousse = _fiche_rest()
+
+    assert eteint["billing"] == {"state": "disabled"}
+    assert rien_pousse["billing"] == {"source": "commerce", "state": "missing",
+                                      "code": "subscription_state_missing"}
+    assert (pousse["billing"]["state"], pousse["billing"]["block_code"]) == (
+        "pushed", "no_valid_mandate")
+    attendu = (eteint["org"]["name"], sorted([
+        (actif, f"{actif}@example.test", False),
+        (suspendu, f"{suspendu}@example.test", True)]))
+    for corps in (eteint, rien_pousse, pousse):
+        assert _ce_que_lit_le_service(corps) == attendu
+
+
+def test_la_liste_rest_garde_id_created_by_created_at(live, monkeypatch):
+    from _datastore_rest import call
+    monkeypatch.setenv("OTO_MCP_ADMIN_SUB", OPERATEUR)
+    org, _, _ = _org_peuplee()
+    for drapeau in ("0", "1"):
+        monkeypatch.setenv("OTO_BILLING_ENABLED", drapeau)
+        statut, corps = call("org.admin.list", sub=OPERATEUR)
+        assert statut == 200, corps
+        [ligne] = [o for o in corps["orgs"] if o["id"] == org]
+        assert ligne["created_by"] == OPERATEUR
+        # Forme servie aujourd'hui : `AAAA-MM-JJ HH:MM:SS`, sans fuseau. On tient sa
+        # présence et sa lecture, pas un fuseau qu'elle ne porte pas.
+        assert datetime.fromisoformat(ligne["created_at"])
