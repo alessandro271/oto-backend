@@ -39,5 +39,5 @@ calls are paced **per person** — the app's quota is shared — and a refusal s
 - amounts are in the **account currency** (`costInLocalCurrency`); `costInUsd` exists too
 - an **empty** report means no activity **or** no access to that data: LinkedIn does not refuse, it answers nothing — check `account_roles`
 - audience pivots are approximate (privacy), keep only the top 100 values per creative per day, drop values under 3 events, and lag 24-48 h; `approximateMemberReach` is not available with them, nor beyond 92 days
-- daily performance data is kept 6 months, monthly data 2 years, account/campaign performance 10 years, audience data 2 years
+- LinkedIn keeps performance data (account, campaign, ad) 10 years, audience data 2 years
 - `pivotValues` are URNs (`urn:li:sponsoredCampaign:…`, `urn:li:organization:…`, `urn:li:geo:…`): match campaign and creative URNs with the list reads; names of geo, title or company URNs are not resolved here

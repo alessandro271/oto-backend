@@ -62,7 +62,7 @@ _ARGS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "get_creative": (("account_id", "creative_id"), ()),
     "analytics": (("pivots", "start"), ("end", "time_granularity", "account_ids",
                                         "campaign_group_ids", "campaign_ids",
-                                        "creative_ids", "fields")),
+                                        "fields")),
 }
 _OPS = tuple(_ARGS)
 
@@ -290,7 +290,7 @@ def _run(fn, *, analytics: bool = False):
 
 
 def _analytics(pivots, start, end, time_granularity, account_ids, campaign_group_ids,
-               campaign_ids, creative_ids, fields) -> Any:
+               campaign_ids, fields) -> Any:
     debut, fin = _jour("start", start), _jour("end", end)
     granularite = time_granularity or "ALL"
     if granularite == "DAILY" and debut is not None:
@@ -302,7 +302,7 @@ def _analytics(pivots, start, end, time_granularity, account_ids, campaign_group
     res = _run(lambda: _client().get_analytics(
         pivots, start, end, time_granularity=granularite, account_ids=account_ids,
         campaign_group_ids=campaign_group_ids, campaign_ids=campaign_ids,
-        creative_ids=creative_ids, fields=fields), analytics=True)
+        fields=fields), analytics=True)
     lignes = (res or {}).get("elements") or [] if isinstance(res, dict) else []
     _GARDE.compter(access.current_user_sub_or_raise(), len(lignes),
                    len(fields or ()) or 8)
@@ -338,7 +338,6 @@ def register(mcp: FastMCP) -> None:
         end: Optional[str] = None,
         time_granularity: Optional[Literal["ALL", "DAILY", "MONTHLY", "YEARLY"]] = None,
         account_ids: Optional[list[str]] = None,
-        creative_ids: Optional[list[str]] = None,
         fields: Optional[list[str]] = None,
         page_size: Optional[int] = None,
         page_token: Optional[str] = None,
@@ -370,7 +369,8 @@ def register(mcp: FastMCP) -> None:
           MEMBER_INDUSTRY, MEMBER_COUNTRY_V2, MEMBER_COMPANY — only alone), `start`
           required, `end` (default today), `time_granularity` ALL | MONTHLY | DAILY
           (≤ 92 days) | YEARLY, and at least one of `account_ids`,
-          `campaign_group_ids`, `campaign_ids`, `creative_ids` (≤ 20 each). `fields`:
+          `campaign_group_ids`, `campaign_ids` (≤ 20 each; per-ad rows are
+          `pivots=["CREATIVE"]` over them). `fields`:
           up to 18 metrics, default impressions, clicks, costInLocalCurrency,
           landingPageClicks, totalEngagements, externalWebsiteConversions,
           oneClickLeads, videoViews. Rows carry `pivotValues` (URNs) and `dateRange`.
@@ -408,7 +408,6 @@ def register(mcp: FastMCP) -> None:
             end: analytics — last day, YYYY-MM-DD (inclusive); default today.
             time_granularity: analytics — ALL (default), DAILY, MONTHLY, YEARLY.
             account_ids: analytics facet — ad account ids.
-            creative_ids: analytics facet — creative ids.
             fields: analytics — metric names (camelCase, ≤ 18).
             page_size: lists — up to 1000 (100 for creatives).
             page_token: lists — `next_page_token` of the previous page.
@@ -422,7 +421,7 @@ def register(mcp: FastMCP) -> None:
             "campaign_ids": campaign_ids, "campaign_types": campaign_types,
             "test": test, "pivots": pivots, "start": start, "end": end,
             "time_granularity": time_granularity, "account_ids": account_ids,
-            "creative_ids": creative_ids, "fields": fields,
+            "fields": fields,
             "page_size": page_size, "page_token": page_token,
         })
         if full and op not in _SLIM_OPS:
@@ -457,4 +456,4 @@ def register(mcp: FastMCP) -> None:
         if op == "get_creative":
             return _run(lambda: _client().get_creative(account_id, creative_id))
         return _analytics(pivots, start, end, time_granularity, account_ids,
-                          campaign_group_ids, campaign_ids, creative_ids, fields)
+                          campaign_group_ids, campaign_ids, fields)

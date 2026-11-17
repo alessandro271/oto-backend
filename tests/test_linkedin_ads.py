@@ -626,7 +626,7 @@ def test_les_arguments_passes_existent_sur_les_methodes_de_la_lib():
         "search_creatives": {"account_id", "campaign_ids", "intended_statuses",
                              "page_size", "page_token"},
         "get_analytics": {"pivots", "start", "end", "time_granularity", "account_ids",
-                          "campaign_group_ids", "campaign_ids", "creative_ids", "fields"},
+                          "campaign_group_ids", "campaign_ids", "fields"},
     }
     for nom, params in attendus.items():
         sig = set(inspect.signature(getattr(LinkedInAdsClient, nom)).parameters) - {"self"}
