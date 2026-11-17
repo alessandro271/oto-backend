@@ -1122,6 +1122,9 @@ def main():
     # Budget d'unités : même garde (`access/credits.verifier_reglages`).
     from .access import credits as budget
     budget.verifier_reglages()
+    # Budget d'opérations Google Ads (`OTO_GOOGLE_ADS_DAILY_OPS`) : même garde.
+    from .tools import google_ads as google_ads_outils
+    google_ads_outils.verifier_reglages()
     # Chemins des liens de l'instance (`OTO_DASHBOARD_LINK_PATHS`) : une déclaration
     # illisible ou un type de lien inconnu refuse le démarrage ici, jamais nos chemins
     # par défaut en silence. Cf. `links.verifier_reglages`.

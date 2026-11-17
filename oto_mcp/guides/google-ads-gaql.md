@@ -49,6 +49,28 @@ The `google_ads_search` docstring stays short; this guide holds what makes a que
 | by device | add `segments.device` to the campaign query |
 | budgets | `SELECT campaign.name, campaign_budget.amount_micros, campaign_budget.delivery_method FROM campaign WHERE campaign.status = 'ENABLED'` |
 
+## Auditing an account (read-only)
+
+An audit is a dozen aggregated queries, not a crawl: each query below is ONE Google request. Run them once per account, `LIMIT` the long lists, and reuse the answers rather than re-asking.
+
+| Audit point | Query |
+|---|---|
+| account settings | `SELECT customer.descriptive_name, customer.currency_code, customer.time_zone, customer.auto_tagging_enabled, customer.optimization_score, customer.test_account FROM customer` |
+| conversion tracking | `SELECT conversion_action.name, conversion_action.status, conversion_action.type, conversion_action.category, conversion_action.primary_for_goal, conversion_action.counting_type, metrics.all_conversions FROM conversion_action WHERE segments.date DURING LAST_30_DAYS` |
+| campaign setup | `SELECT campaign.name, campaign.status, campaign.advertising_channel_type, campaign.bidding_strategy_type, campaign.network_settings.target_search_network, campaign.network_settings.target_content_network, campaign_budget.amount_micros FROM campaign WHERE campaign.status = 'ENABLED'` |
+| lost impression share | `SELECT campaign.name, metrics.search_impression_share, metrics.search_budget_lost_impression_share, metrics.search_rank_lost_impression_share, metrics.cost_micros FROM campaign WHERE segments.date DURING LAST_30_DAYS AND campaign.advertising_channel_type = 'SEARCH'` |
+| quality score | `SELECT ad_group.name, ad_group_criterion.keyword.text, ad_group_criterion.quality_info.quality_score, ad_group_criterion.quality_info.creative_quality_score, ad_group_criterion.quality_info.post_click_quality_score, ad_group_criterion.quality_info.search_predicted_ctr, metrics.cost_micros FROM keyword_view WHERE segments.date DURING LAST_30_DAYS ORDER BY metrics.cost_micros DESC LIMIT 200` |
+| negative keywords | `SELECT campaign.name, campaign_criterion.keyword.text, campaign_criterion.keyword.match_type FROM campaign_criterion WHERE campaign_criterion.negative = TRUE AND campaign_criterion.type = 'KEYWORD' LIMIT 500` |
+| ads: strength and approval | `SELECT ad_group.name, ad_group_ad.ad.id, ad_group_ad.ad.type, ad_group_ad.ad_strength, ad_group_ad.policy_summary.approval_status, ad_group_ad.status FROM ad_group_ad WHERE ad_group_ad.status = 'ENABLED'` |
+| landing pages | `SELECT landing_page_view.unexpanded_final_url, metrics.clicks, metrics.cost_micros, metrics.conversions FROM landing_page_view WHERE segments.date DURING LAST_30_DAYS ORDER BY metrics.cost_micros DESC LIMIT 50` |
+| recent changes (≤ 30 days) | `SELECT change_event.change_date_time, change_event.change_resource_type, change_event.resource_change_operation, change_event.user_email, change_event.client_type FROM change_event WHERE change_event.change_date_time >= '<YYYY-MM-DD>' AND change_event.change_date_time <= '<YYYY-MM-DD>' ORDER BY change_event.change_date_time DESC LIMIT 100` |
+
+Plus the "search terms without conversion" and "keywords" queries above. Nothing here can modify the account: the tools only read.
+
+## Budget
+
+Every Google Ads call of the platform draws on ONE Google quota (the platform's Google Cloud project), so oto caps the Google requests: per org per minute, per org per day, and for the whole platform per day. A refusal says which, when to retry, and that nothing was sent. Stay well under it: aggregated queries with `ORDER BY … LIMIT`, `google_ads_fields` once per resource (its answer is kept), no paging through raw rows — the next slices of a page already read cost nothing for a few minutes, a new Google page costs one request.
+
 ## Paging
 
 Each call returns at most `max_rows` rows (200 by default). `page_token` continues the SAME query (send it unchanged); it expires after about two hours. Prefer `ORDER BY … LIMIT n` and aggregation (fewer segments) over paging through raw rows.
@@ -61,4 +83,5 @@ Each call returns at most `max_rows` rows (200 by default). `page_token` continu
 | through a MANAGER account | access goes through an MCC | pass `login_customer_id=<manager id>` |
 | not a user of any Google Ads account | the connected Google account has no Google Ads access | connect the right Google account, or get it invited |
 | refused the request: … | GAQL error (unknown field, incompatible segment, bad date) | check `google_ads_fields`, fix the query |
-| quota or rate limit | API operations quota | wait, then send fewer, larger queries |
+| quota or rate limit | Google's operations quota | wait, then send fewer, larger queries |
+| read budget reached | oto's cap on the shared quota (see Budget) | retry when it says; fewer, larger queries |

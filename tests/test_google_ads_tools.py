@@ -68,6 +68,32 @@ class _Google(BaseAdapter):
         return [json.loads(r.body) if r.body else None for r in self.requests]
 
 
+@pytest.fixture(autouse=True)
+def caller(monkeypatch):
+    """Une personne, une org, un compteur d'opérations EN MÉMOIRE (la base : en fin de
+    fichier) ; et les deux mémoires du module vidées entre deux tests."""
+    from oto_mcp.tools import google_ads as T
+
+    state = {"sub": "u1", "org": 42, "counts": {}}
+    monkeypatch.setattr(T.access, "current_user_sub_or_raise", lambda: state["sub"])
+    monkeypatch.setattr(T.access, "current_org", lambda sub: state["org"])
+
+    def compter(scope, connector, window_s):
+        k = (scope, connector)
+        state["counts"][k] = state["counts"].get(k, 0) + 1
+        return state["counts"][k]
+
+    from oto_mcp.db import platform_key_rate as db_rate
+    state["real_compter"] = db_rate.compter
+    monkeypatch.setattr(db_rate, "compter", compter)
+    monkeypatch.delenv("OTO_GOOGLE_ADS_DAILY_OPS", raising=False)
+    T._PAGES.clear()
+    T._FIELDS.clear()
+    yield state
+    T._PAGES.clear()
+    T._FIELDS.clear()
+
+
 @pytest.fixture
 def google(monkeypatch):
     from oto.tools.google.ads import GoogleAdsClient
@@ -197,7 +223,7 @@ def test_notre_curseur_tranche_la_page_google_sans_rien_perdre(google):
     page1 = {"results": _rows(450), "fieldMask": MASK, "nextPageToken": "G2"}
     page2 = {"results": _rows(30, 450), "fieldMask": MASK}
     search = _tool("google_ads_search")
-    google.replies = [page1, page1, page1, page2]
+    google.replies = [page1, page2]
     vus, token = [], None
     for _ in range(4):
         kw = {"page_token": token} if token else {}
@@ -205,8 +231,9 @@ def test_notre_curseur_tranche_la_page_google_sans_rien_perdre(google):
         vus += [r[0] for r in out["rows"]]
         token = out.get("page_token")
     assert vus == [str(i) for i in range(480)] and token is None
-    # Google ne reçoit SA page suivante qu'une fois la sienne entièrement servie.
-    assert [b.get("pageToken") for b in google.bodies()] == [None, None, None, "G2"]
+    # Google ne reçoit SA page suivante qu'une fois la sienne entièrement servie, et
+    # les tranches suivantes d'une même page ne lui redemandent rien (`_PAGES`).
+    assert [b.get("pageToken") for b in google.bodies()] == [None, "G2"]
     assert all(b["query"] == Q for b in google.bodies())
 
 
@@ -319,3 +346,178 @@ def test_un_nom_de_ressource_hors_forme_est_refuse_sans_appel(google, resource):
     with pytest.raises(McpError, match="snake_case"):
         _tool("google_ads_fields")(resource=resource)
     assert google.requests == []
+
+
+def test_une_page_gardee_ne_sert_pas_un_autre_jeton(google, monkeypatch):
+    """Clé = le jeton d'accès qui demanderait : un autre compte Google, une autre
+    personne ou une reconnexion redemandent à Google."""
+    from oto.tools.google.ads import GoogleAdsClient
+    from oto_mcp.tools import google_ads as T
+
+    google.replies = [{"results": _rows(450), "fieldMask": MASK}]
+    search = _tool("google_ads_search")
+    out = search(customer_id="1234567890", query=Q, max_rows=200)
+    s = requests.Session()
+    s.mount("https://", google)
+    monkeypatch.setattr(T, "_client_for_user",
+                        lambda account=None: GoogleAdsClient("ya29.autre", session=s))
+    search(customer_id="1234567890", query=Q, max_rows=200, page_token=out["page_token"])
+    assert [r.headers["authorization"] for r in google.requests] == [
+        "Bearer ya29.jeton", "Bearer ya29.autre"]
+    assert not any("ya29" in repr(k) for k in T._PAGES)
+
+
+def test_la_page_gardee_expire(google):
+    from oto_mcp.tools import google_ads as T
+
+    google.replies = [{"results": _rows(450), "fieldMask": MASK}]
+    search = _tool("google_ads_search")
+    out = search(customer_id="1234567890", query=Q, max_rows=200)
+    for key, (_, data) in list(T._PAGES.items()):
+        T._PAGES[key] = (0.0, data)
+    search(customer_id="1234567890", query=Q, max_rows=200, page_token=out["page_token"])
+    assert len(google.requests) == 2
+
+
+# --- 5. budget d'opérations ---------------------------------------------------
+# Toute requête Google tire sur LE quota du projet Google Cloud de la plateforme
+# (Explorer : 2 880 opérations / 24 h glissantes pour TOUTES les orgs).
+
+def test_chaque_requete_google_est_comptee_pour_l_org_et_la_plateforme(google, caller):
+    google.replies = [{"results": [], "fieldMask": MASK}]
+    _tool("google_ads_search")(customer_id="1234567890", query=Q)
+    assert caller["counts"] == {("org:42", "google_ads:minute"): 1,
+                                ("org:42", "google_ads:day"): 1,
+                                ("platform", "google_ads:day"): 1}
+
+
+def test_sans_org_la_personne_est_comptee(google, caller):
+    caller["org"] = None
+    google.replies = [{"resourceNames": []}]
+    _tool("google_ads_customers")()
+    assert ("user:u1", "google_ads:minute") in caller["counts"]
+
+
+def test_la_rafale_d_une_org_est_coupee_sans_appel_google(google, caller):
+    from oto_mcp.tools import google_ads as T
+
+    caller["counts"][("org:42", "google_ads:minute")] = T._ORG_PER_MINUTE
+    google.replies = [{"results": [], "fieldMask": MASK}]
+    with pytest.raises(McpError) as e:
+        _tool("google_ads_search")(customer_id="1234567890", query=Q)
+    assert e.value.error.data["code"] == T.RATE_CODE
+    assert "per minute" in e.value.error.message
+    assert google.requests == []
+    # Refusée à la minute, la requête n'entame pas le budget du jour.
+    assert ("org:42", "google_ads:day") not in caller["counts"]
+    # Une autre org n'est pas touchée.
+    caller["org"] = 77
+    _tool("google_ads_search")(customer_id="1234567890", query=Q)
+    assert len(google.requests) == 1
+
+
+def test_une_org_ne_prend_que_la_moitie_du_budget_du_jour(google, caller, monkeypatch):
+    from oto_mcp.tools import google_ads as T
+
+    monkeypatch.setenv("OTO_GOOGLE_ADS_DAILY_OPS", "100")
+    caller["counts"][("org:42", "google_ads:day")] = 50
+    google.replies = [{"results": [], "fieldMask": MASK}]
+    with pytest.raises(McpError) as e:
+        _tool("google_ads_search")(customer_id="1234567890", query=Q)
+    assert e.value.error.data == {"code": T.RATE_CODE, "scope": "this org, per UTC day",
+                                  "used": 51, "limit": 50, "window_s": 86_400}
+    assert google.requests == []
+
+
+def test_le_budget_de_la_plateforme_coupe_toutes_les_orgs(google, caller):
+    from oto_mcp.tools import google_ads as T
+
+    caller["counts"][("platform", "google_ads:day")] = T.DEFAULT_DAILY_OPS
+    google.replies = [{"results": [], "fieldMask": MASK}]
+    with pytest.raises(McpError, match="whole platform"):
+        _tool("google_ads_search")(customer_id="1234567890", query=Q)
+    assert google.requests == []
+
+
+def test_budget_zero_ne_garde_que_la_rafale(google, caller, monkeypatch):
+    monkeypatch.setenv("OTO_GOOGLE_ADS_DAILY_OPS", "0")
+    google.replies = [{"results": [], "fieldMask": MASK}]
+    _tool("google_ads_search")(customer_id="1234567890", query=Q)
+    assert set(caller["counts"]) == {("org:42", "google_ads:minute")}
+
+
+def test_un_compteur_casse_sert_l_appel_et_le_dit(google, monkeypatch, caplog):
+    import logging
+
+    from oto_mcp.db import platform_key_rate as db_rate
+
+    def casse(*a, **k):
+        raise RuntimeError("base injoignable")
+
+    monkeypatch.setattr(db_rate, "compter", casse)
+    google.replies = [{"results": [], "fieldMask": MASK}]
+    with caplog.at_level(logging.ERROR):
+        _tool("google_ads_search")(customer_id="1234567890", query=Q)
+    assert len(google.requests) == 1 and "counter failed" in caplog.text
+
+
+@pytest.mark.parametrize("valeur", ["beaucoup", "-1", "1.5"])
+def test_un_budget_illisible_refuse_le_demarrage(monkeypatch, valeur):
+    from oto_mcp.tools import google_ads as T
+
+    T.verifier_reglages()
+    monkeypatch.setenv("OTO_GOOGLE_ADS_DAILY_OPS", valeur)
+    with pytest.raises(ValueError, match="OTO_GOOGLE_ADS_DAILY_OPS"):
+        T.verifier_reglages()
+
+
+def test_la_garde_du_budget_est_appelee_au_demarrage():
+    import inspect
+
+    from oto_mcp import server
+
+    assert "google_ads_outils.verifier_reglages()" in inspect.getsource(server.main)
+
+
+def test_les_champs_comptent_deux_requetes_puis_plus_rien(google, caller):
+    google.handler = lambda body: {"results": [
+        {"name": "campaign.id", "category": "ATTRIBUTE", "selectable": True,
+         "filterable": True, "sortable": True}]}
+    fields = _tool("google_ads_fields")
+    first = fields(resource="campaign")
+    assert caller["counts"][("platform", "google_ads:day")] == 2
+    assert fields(resource="campaign") == first
+    assert len(google.requests) == 2
+    assert caller["counts"][("platform", "google_ads:day")] == 2
+
+
+# --- sur une base réelle ------------------------------------------------------
+
+@pytest.fixture
+def base(pg_dsn, monkeypatch):
+    import os
+
+    from _base_jetable import base_jetable
+
+    monkeypatch.setenv("OTO_MCP_MASTER_KEY", os.urandom(32).hex())
+    with base_jetable(pg_dsn):
+        from oto_mcp.db import init_db
+        init_db()
+        yield
+
+
+def test_le_budget_compte_en_base(base, caller, monkeypatch):
+    """Le VRAI compteur (`db/platform_key_rate`) : la rafale d'une org coupe la
+    requête de trop dans la minute, une autre org passe."""
+    from oto_mcp.db import platform_key_rate as db_rate
+    from oto_mcp.tools import google_ads as T
+
+    monkeypatch.setattr(db_rate, "compter", caller["real_compter"])
+    monkeypatch.setattr(T, "_MINUTE_S", 3600)   # aucune minute qui tourne en plein banc
+    for _ in range(T._ORG_PER_MINUTE):
+        T._debit()
+    with pytest.raises(McpError) as e:
+        T._debit()
+    assert e.value.error.data["used"] == T._ORG_PER_MINUTE + 1
+    caller["org"] = 77
+    T._debit()

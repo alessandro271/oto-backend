@@ -510,6 +510,14 @@ _REGLAGES: tuple[Variable, ...] = (
              "`0` = sans limite pour ce connecteur. Vide = la limite commune partout. "
              "Une paire illisible LÈVE au boot.",
              ("oto_mcp/access/platform_rate.py:97",)),
+    Variable("OTO_GOOGLE_ADS_DAILY_OPS", Classe.REGLAGE, None,
+             "Requêtes Google Ads par jour UTC pour TOUTE la plateforme (`tools/"
+             "google_ads.py`) : le quota est celui du projet Google Cloud du client "
+             "OAuth (Explorer 2 880 / 24 h glissantes, Basic 15 000). Défaut 1 440 dans "
+             "le code (la moitié d'Explorer : une journée fixe peut doubler à minuit) ; "
+             "une org n'en prend que la moitié ; `0` = sans budget du jour. Illisible : "
+             "LÈVE au boot.",
+             ("oto_mcp/tools/google_ads.py:101",)),
     Variable("OTO_JOURNAL_REVISIONS", Classe.REGLAGE, "on",
              "Interrupteur du journal des révisions de ligne du datastore (oto#273) : "
              "`off` le coupe pour les écritures de CE processus, sans redéployer (un "
