@@ -67,6 +67,7 @@ from . import (accords as api_routes_accords,
                microsoft as api_routes_microsoft,
                ubersuggest as api_routes_ubersuggest,
                jefacture as api_routes_jefacture,
+               linkedin_ads as api_routes_linkedin_ads,
                logto_webhook as api_routes_logto_webhook,
                receveurs as api_routes_receveurs,
                salesforce as api_routes_salesforce,
@@ -853,6 +854,16 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         options_handler=options_handler,
     )
 
+    # Retour de connexion LinkedIn Ads (code d'autorisation, application plateforme)
+    # — même forme que jefacture.
+    linkedin_ads_routes = api_routes_linkedin_ads.make_routes(
+        verifier=verifier,
+        authenticate=_authenticate,
+        json_response=_json,
+        json_error=_json_error,
+        options_handler=options_handler,
+    )
+
     # Retour de l'écran d'autorisation WordPress (mot de passe d'application) — le
     # `/start` passe par le seam commun (`connectors/flow`), seul le retour est une route.
     wordpress_routes = api_routes_wordpress.make_routes(
@@ -1000,6 +1011,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         *microsoft_routes,
         *ubersuggest_routes,
         *jefacture_routes,
+        *linkedin_ads_routes,
         *wordpress_routes,
         *slack_routes,
         *capability_routes,

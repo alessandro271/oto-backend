@@ -79,6 +79,9 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
         # `jefacture` (2026-10-22) : connexion jefacture.com de la personne (code
         # d'autorisation, application plateforme), même patron.
         "jefacture",
+        # `linkedin_ads` (2026-11-17) : connexion LinkedIn de la personne (code
+        # d'autorisation, application plateforme), même patron.
+        "linkedin_ads",
         # `slack` (2026-10-22) : l'app Slack publiée par l'instance, en un clic (OAuth v2),
         # déclarée dans `auth/slack.py` — à côté du formulaire, pas à sa place.
         "slack",
