@@ -555,6 +555,14 @@ def main() -> int:
             # Un exercice à la main (à blanc, `--export-only`) ne purge pas : il ne dit
             # rien de la santé du travail planifié, il ne laisse donc pas de trace.
             trace = not (args.dry_run or args.export_only)
+            if trace and conn.execute(
+                    "SELECT to_regclass('journal_archive_passages')").fetchone()[0] is None:
+                # Comme pour le registre : AVANT toute suppression. Un passage qui purge
+                # sans pouvoir le tracer laisserait l'alerte dire « en retard » alors que
+                # l'archive a tourné (schéma plus ancien que le script : migration non
+                # jouée, retour arrière de couleur).
+                raise SystemExit("table journal_archive_passages absente : jouer "
+                                 "`oto-mcp migrer upgrade head` — rien n'a été touché")
             debut = conn.execute("SELECT now()").fetchone()[0]
             faits: list[str] = []
             try:

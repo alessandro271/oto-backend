@@ -122,6 +122,19 @@ def test_un_passage_qui_archive_compte_ses_mois(base, monkeypatch):
     assert (p["ok"], p["mois_archives"], p["detail"]) == (True, 1, "mois archivés : 2025-03")
 
 
+def test_sans_table_de_trace_rien_n_est_supprime(base, monkeypatch):
+    """Schéma plus ancien que le script : il s'arrête AVANT d'exporter ou de supprimer,
+    plutôt que de purger sans trace (l'alerte dirait « en retard » à tort)."""
+    _mois_ancien(base)
+    base.execute("DROP TABLE journal_archive_passages")
+    s3 = FauxS3()
+    with pytest.raises(SystemExit, match="journal_archive_passages absente"):
+        _lancer(_script(), monkeypatch, s3)
+    assert base.execute("SELECT count(*) AS n FROM tool_calls").fetchone()["n"] == 6
+    assert base.execute("SELECT count(*) AS n FROM journal_archives").fetchone()["n"] == 0
+    assert s3.objets == {}
+
+
 def test_un_passage_refuse_est_en_echec_et_l_erreur_reste_levee(base, monkeypatch):
     """Inscrit au registre, objet absent : `ArchiveIncoherente`, rien supprimé."""
     _mois_ancien(base)
