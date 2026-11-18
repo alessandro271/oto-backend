@@ -514,7 +514,7 @@ _SERVER_INSTRUCTIONS = instructions.render()
 _TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced",
                 "readonly_forced_bilan", "found_work_emails", "found_personal_emails", "found_phones",
                 "apify_run_id", "higgsfield_request_id", "guide_scope",
-                db.usage._ARG_PROCEDURE)
+                db.usage._ARG_PROCEDURE, "recipe_bridge_refusals")
 
 
 _PREPARED = False

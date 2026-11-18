@@ -18,14 +18,24 @@ de qui l'EXÉCUTE (#1202) : le pont n'ouvre rien que l'appelant ne puisse appele
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
-from .. import deprecations, geste, outils_du_travail, redaction
+from .. import deprecations, geste, outils_du_travail, redaction, session_org
 from ..datastore import via as ds_via
 from ..mcp_errors import McpError
 from ..tools import lecture as lecture_declaree
 from . import ecritures as ec
 from . import moteur
+
+logger = logging.getLogger(__name__)
+
+#: La clé du relevé de l'appel MCP (`session_org.note_call_trace`, versée dans
+#: `tool_calls.args` par `server._TRACED_ARGS`) qui compte les refus du pont.
+CLE_REFUS = "recipe_bridge_refusals"
+#: Au plus tant de couples `code:outil` distincts par appel : une boucle qui essaie
+#: mille noms ne gonfle pas la ligne du journal.
+MAX_REFUS_DISTINCTS = 20
 
 
 def _reponse(issue) -> dict:
@@ -65,8 +75,29 @@ def _sous_le_nom_d_aujourd_hui(appeler):
     qu'`oto_call` aurait servie."""
     async def servi(outil: str, arguments: dict) -> dict:
         with moteur.sous_le_nom_d_aujourd_hui(outil) as nom:
-            return await appeler(nom, arguments)
+            reponse = await appeler(nom, arguments)
+        _noter_refus(outil, reponse)
+        return reponse
     return servi
+
+
+def _noter_refus(outil: str, reponse: Any) -> None:
+    """Un refus du pont (`ok: false`) rendu au code d'une recette laisse une trace : le
+    script le reçoit comme une valeur et peut « réussir » quand même, et sans elle rien
+    ne disait qu'une recette butait (`unknown_tool` d'un ancien nom, #1822). Compté sous
+    `code:outil` (le nom DEMANDÉ par le code) dans la ligne `tool_calls` de l'appel MCP
+    qui joue la recette — son org, son outil (`oto_recipe`) et ses arguments y sont déjà
+    — et journalisé."""
+    if not isinstance(reponse, dict) or reponse.get("ok") is not False:
+        return
+    cle = f"{reponse.get('code') or 'refused'}:{outil}"
+    logger.info("pont des recettes : refus %s", cle)
+    trace = session_org.current_call_trace()
+    if trace is None:
+        return
+    refus = trace.setdefault(CLE_REFUS, {})
+    if cle in refus or len(refus) < MAX_REFUS_DISTINCTS:
+        refus[cle] = refus.get(cle, 0) + 1
 
 
 def _declaration_d_aujourd_hui(nom: str) -> str:
@@ -76,16 +107,21 @@ def _declaration_d_aujourd_hui(nom: str) -> str:
     return deprecations.tool_canonique(outil) + sep + op
 
 
-def appeleur_en_lecture(fastmcp, sub: Optional[str]):
-    """L'`appeler` du pont pour `sub` : un outil en lecture, ou une réponse `ok: false`
-    nommée. Ne lève pas — un refus est une réponse."""
+def _lecture(fastmcp, sub: Optional[str]):
+    """L'appel en lecture du pont, sous le nom d'aujourd'hui déjà traduit."""
     async def appeler(outil: str, arguments: dict) -> dict:
         try:
             tool = await moteur._outil(fastmcp, outil)
         except moteur.RecetteRefusee as e:
             return {"ok": False, "code": e.code, "message": str(e)}
         return await _executer(tool, sub, outil, arguments)
-    return _sous_le_nom_d_aujourd_hui(appeler)
+    return appeler
+
+
+def appeleur_en_lecture(fastmcp, sub: Optional[str]):
+    """L'`appeler` du pont pour `sub` : un outil en lecture, ou une réponse `ok: false`
+    nommée. Ne lève pas — un refus est une réponse."""
+    return _sous_le_nom_d_aujourd_hui(_lecture(fastmcp, sub))
 
 
 #: Ce qu'une page de `data_rows` peut rendre au code.
@@ -133,7 +169,9 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
     `ids` / `entries`, au plus `MAX_FICHES_PAR_APPEL`) compte autant d'écritures que de
     fiches, et n'est joué que s'il tient en entier dans ce qui reste ; une op qui détruit
     est refusée. `compteur` reçoit les comptes."""
-    lecture = appeleur_en_lecture(fastmcp, sub)
+    # Le bord (traduction du nom, trace des refus) est posé une fois, autour de tout
+    # `appeler` : la lecture qu'il appelle n'en reprend pas un second.
+    lecture = _lecture(fastmcp, sub)
     etat = compteur if compteur is not None else compteur_neuf()
     ecritures = frozenset(_declaration_d_aujourd_hui(d) for d in ecritures)
     trouveurs: set[str] = set()
