@@ -46,11 +46,29 @@ nom entier est désormais un candidat ; aucun outil existant ne change de namesp
 
 **Chaque étape passe par `meta.executer_cible`**, la couture d'`oto_call` et des
 recettes. Elle garde donc tout ce qu'un appel direct a : la garde d'activation du
-connecteur pour l'org et l'équipe de l'appel, la cascade de clé, le niveau d'accès, la
-liste d'outils d'un travail hébergé, **sa** ligne dans `tool_calls` (donc sa `quantity`
+connecteur pour l'org et l'équipe de l'appel, la cascade de clé, le niveau d'accès,
+**sa** ligne dans `tool_calls` (donc sa `quantity`
 et son `key_mode` : la facturation reste sur la ligne du fournisseur, jamais sur celle
 du waterfall), et la rédaction de **son** namespace. Le waterfall n'a ni clé ni
 facturation propres.
+
+**Sous un travail hébergé, la cascade accordée couvre ses étapes** (18/11/2026). La
+liste d'outils d'un agent dit ce que le MODÈLE appelle. Un agent qui a `waterfall_person`
+(ou `waterfall_person_act`) fait tourner ses étapes sans lister `lemlist_database`,
+`apollo_match_person`… : pendant la cascade (`moteur._run_cascade`), la garde du travail
+(`outils_du_travail.refus`) laisse passer un outil s'il est l'une des étapes de CETTE
+cascade (`waterfall/cites.outils_internes` : outils d'étape, de collecte, de révélation,
+de variantes, et `jev_items` là où `qualify=` se demande), que l'outil en cours est la
+cascade elle-même (`verrou_org.outil_en_cours`, posé au bord) et qu'elle est dans la
+liste du travail, relue. La table d'étapes est fixée dans le code : `providers=` ne fait
+que choisir parmi elle. Le reste de la garde de l'étape ne bouge pas (activation, niveau
+d'accès, clé). Le modèle, lui, n'appelle toujours que sa liste : `lemlist_database` en
+direct ou par `oto_call` reste refusé. Ce n'est PAS la règle d'`oto_call` ni des
+recettes, dont le corps nomme n'importe quel outil. Avant, chaque étape était refusée
+(`tool_not_in_job`) faute d'être listée, et la parade proposait de lister ses outils, ce
+qui les ouvrait en direct, hors des bornes de la cascade. Seule exception : une réponse
+`pending` se collecte plus tard par un appel du modèle ; si son outil de collecte n'est
+pas dans la liste, le reçu le dit (`missing_tools`, `fix`, `next_step`).
 
 ## Ce que l'ordre par défaut optimise
 
@@ -552,15 +570,13 @@ de `datastore/par_reference` (`docs/donnees-par-reference.md`), comme `lemlist_p
   la cascade → `time_budget` / `max_paid_steps` ; une trouvaille que Jev devait juger et
   n'a pas jugée → `qualification_skipped`. La ligne reste VIDE, le code va au reçu
   (`skipped_<code>`, `errors`), et l'appel suivant la retente.
-- ⚠️ **Une étape hors de la liste d'un agent hébergé** (27/10/2026) : la garde du travail
-  la saute (`appel._call`), comme toute garde. Avant, la ligne revenait
+- ⚠️ **Une étape refusée par la liste d'un agent hébergé** (27/10/2026 ; depuis le
+  18/11/2026 la cascade accordée couvre ses étapes, ce cas ne reste que si le refus a
+  lieu quand même) : la garde du travail la saute (`appel._call`), comme toute garde. Avant, la ligne revenait
   `no_step_answered` — ou `no_match` si une autre étape avait répondu, fermée pour de
   bon — et l'agent concluait à un quota. Désormais : `tool_not_in_job`, la ligne reste
   vide, et le reçu nomme les outils (`missing_tools`) avec le geste qui les donne
-  (`fix`, la forme du refus d'une recette-code) et `next_step` pour l'agent. Un `dry_run`
-  le dit aussi des étapes qu'il planifie : le plan les disait `planned` sans un mot. Avant le run,
-  `missing_tools` de l'agent les nomme déjà quand sa procédure écrit les fournisseurs
-  (`waterfall/cites.py`, `docs/runner-et-automatisations.md`).
+  (`fix`, la forme du refus d'une recette-code) et `next_step` pour l'agent.
 - `qualify` sans Jev utilisable : refusé avant de lire une ligne ; une clé de `providers`
   inconnue : refusée une fois, avant la première ligne.
 - **Mêmes entrées, une recherche** : les lignes dont les entrées normalisées coïncident
