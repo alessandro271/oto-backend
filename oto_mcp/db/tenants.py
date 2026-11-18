@@ -170,6 +170,15 @@ def tenant_desactive_de_l_org(conn, org_id: int) -> "dict | None":
     return dict(row) if row else None
 
 
+def orgs_du_tenant(conn, tenant_id: int) -> list[int]:
+    """Les orgs rattachées au tenant (`orgs.tenant_id`), dans la connexion de l'appelant.
+    Lue par la PURGE d'un tenant parti (`export_perimetre/purge.py`) pour désigner ce qui
+    s'efface : comme la désactivation, le rattachement n'y sert qu'à COUPER, jamais à
+    accorder une identité, un credential ou une visibilité."""
+    return [r["id"] for r in conn.execute(
+        "SELECT id FROM orgs WHERE tenant_id = %s ORDER BY id", (tenant_id,))]
+
+
 def desactiver_tenant(slug: str, *, by: str, reason: str) -> "dict | None":
     """Désactive un tenant ET révoque ce qui est émis pour ses comptes, en UNE
     transaction. `None` si le slug n'existe pas.
