@@ -131,6 +131,7 @@ _PRETS_UNIPILE = """
 SELECT g.owner_sub, g.provider, g.grantee_sub AS cible, ua.org_id, si.id AS instance_id
   FROM connector_account_grants g
   LEFT JOIN unipile_accounts ua ON ua.sub = g.owner_sub AND ua.provider = g.provider
+                             AND ua.slot = g.slot
   LEFT JOIN {instances} si ON """ + sous_instances.JOINTURE + """
  ORDER BY 1, 2, 3, 4
 """
@@ -141,6 +142,7 @@ SELECT gg.owner_sub, gg.provider, gg.grantee_group_id AS cible, gr.org_id AS org
   FROM connector_account_group_grants gg
   JOIN org_groups gr ON gr.id = gg.grantee_group_id
   LEFT JOIN unipile_accounts ua ON ua.sub = gg.owner_sub AND ua.provider = gg.provider
+                             AND ua.slot = gg.slot
   LEFT JOIN {instances} si ON """ + sous_instances.JOINTURE + """
  ORDER BY 1, 2, 3, 5
 """

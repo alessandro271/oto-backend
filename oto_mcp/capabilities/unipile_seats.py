@@ -236,7 +236,8 @@ def liberer(client, account_id: str, rows: list[dict]) -> int:
     unbound = 0
     for r in rows:
         if r.get("disconnected_at") is None and r.get("org_id") is not None:
-            db.clear_unipile_account(r["sub"], r["org_id"], r.get("provider") or "LINKEDIN")
+            db.clear_unipile_account(r["sub"], r["org_id"], r.get("provider") or "LINKEDIN",
+                                     account_id=account_id)
             unbound += 1
     client.delete_account(account_id)
     return unbound

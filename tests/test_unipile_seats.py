@@ -173,7 +173,8 @@ def test_console_mcp_release_exige_un_compte(monkeypatch):
 def _unbind_spy(monkeypatch):
     calls = []
     monkeypatch.setattr(us.db, "clear_unipile_account",
-                        lambda sub, org_id, provider: calls.append((sub, org_id, provider)))
+                        lambda sub, org_id, provider, account_id=None:
+                        calls.append((sub, org_id, provider)))
     return calls
 
 
@@ -185,7 +186,7 @@ def test_force_delie_les_bindings_vivants_AVANT_de_reprendre(monkeypatch):
     rows = [_row("acc_live", sub="u1", org_id=7)]
     deleted, _ = _setup(monkeypatch, accounts=[{"id": "acc_live"}], rows=rows)
     monkeypatch.setattr(us.db, "clear_unipile_account",
-                        lambda sub, org_id, provider: ordre.append("unbind"))
+                        lambda sub, org_id, provider, account_id=None: ordre.append("unbind"))
     real_delete = us._platform_client().delete_account
 
     class Tracing(FakeClient):

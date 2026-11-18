@@ -39,7 +39,14 @@ CREATE TABLE IF NOT EXISTS unipile_accounts (
     -- rebindée déterministiquement au même sub — sans elle, l'heuristique du
     -- poll-and-bind (compte créé APRÈS le pending) rate toute réutilisation.
     disconnected_at TIMESTAMPTZ,
-    PRIMARY KEY (sub, org_id, provider)
+    -- EMPLACEMENT du compte sur ce canal (plusieurs comptes par canal, #multi-comptes) :
+    -- '' = l'emplacement PRINCIPAL — celui de toute ligne née avant, celui qu'une
+    -- (re)connexion ordinaire remplace, le compte servi par défaut. Un compte AJOUTÉ
+    -- prend un emplacement à lui, nommé par son premier `account_id` et jamais renommé :
+    -- c'est la clé stable d'une connexion (facturation, sous-instance, prêt), pas
+    -- l'identifiant courant du compte.
+    slot TEXT NOT NULL DEFAULT '',
+    CONSTRAINT unipile_accounts_slot_pkey PRIMARY KEY (sub, org_id, provider, slot)
 );
 -- ⚠️ PAS d'index sur `org_id` ICI : la colonne est aussi posée par un
 -- `ALTER … ADD COLUMN` de `_init.py`, donc elle peut MANQUER sur une base qui
@@ -61,6 +68,9 @@ CREATE TABLE IF NOT EXISTS unipile_pending (
     org_id BIGINT,                       -- org de contexte au connect (porté au compte)
     provider TEXT NOT NULL DEFAULT 'LINKEDIN',  -- canal demandé (B1, multi-canal)
     platform_seat BOOLEAN NOT NULL DEFAULT FALSE,  -- siège clé plateforme (ADR 0033 B4)
+    -- la demande AJOUTE un compte au canal (nouvel emplacement) au lieu de remplacer
+    -- le compte principal
+    add_account BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -79,6 +89,8 @@ CREATE TABLE IF NOT EXISTS connector_account_grants (
     grantee_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
     granted_by TEXT NOT NULL,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- l'emplacement prêté (`unipile_accounts.slot`) : '' = le compte principal
+    slot TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (owner_sub, provider, grantee_sub)
 );
 CREATE INDEX IF NOT EXISTS idx_account_grants_grantee
@@ -121,6 +133,7 @@ CREATE TABLE IF NOT EXISTS connector_account_group_grants (
     grantee_group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
     granted_by TEXT NOT NULL,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    slot TEXT NOT NULL DEFAULT '',          -- l'emplacement prêté, cf. ci-dessus
     PRIMARY KEY (owner_sub, provider, grantee_group_id)
 );
 CREATE INDEX IF NOT EXISTS idx_account_group_grants_group

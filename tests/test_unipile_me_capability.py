@@ -40,8 +40,10 @@ _STATUT = {
 def socle(monkeypatch):
     vus: list = []
 
-    async def _hosted(sub, channel, force=False, premium=None, app=None):
-        vus.append(("hosted", sub, channel, force, premium, app))
+    async def _hosted(sub, channel, force=False, premium=None, app=None,
+                      add_account=False):
+        vus.append(("hosted", sub, channel, force, premium, app)
+                   + (("add_account",) if add_account else ()))
         return {"url": "https://unipile/auth/xyz", "channel": channel}
 
     def _reconcile(sub):
@@ -53,9 +55,17 @@ def socle(monkeypatch):
     monkeypatch.setattr(tunipile, "status_for", lambda sub: dict(_STATUT))
     monkeypatch.setattr(um.access, "current_org", lambda sub: 35)
     monkeypatch.setattr(um.db, "clear_unipile_account",
-                        lambda sub, org, prov: vus.append(("clear", sub, org, prov)))
+                        lambda sub, org, prov, account_id=None:
+                        vus.append(("clear", sub, org, prov)
+                                   + ((account_id,) if account_id else ())))
     # No platform seat by default: deleting at the provider is tested on its own below.
     monkeypatch.setattr(um.db, "list_unipile_accounts", lambda sub: [])
+    # The channel's accounts HERE, read through `list_unipile_accounts` (so that a test
+    # overriding it below sees them here too), main account first.
+    monkeypatch.setattr(um.db, "live_unipile_accounts", lambda sub, org, prov="LINKEDIN": [
+        a for a in um.db.list_unipile_accounts(sub)
+        if a.get("org_id") == org and a.get("provider") == prov])
+    monkeypatch.setattr(um.db, "get_operated_account", lambda sub, prov: None)
     return vus
 
 
@@ -261,8 +271,8 @@ def test_delier_un_siege_plateforme_le_supprime_chez_unipile(monkeypatch, socle)
     plat = _siege(monkeypatch, socle)
     code, out = call("me.unipile.disconnect")
     assert code == 200
-    assert out == {"ok": True, "channel": "linkedin", "seat": "deleted",
-                   "detail": um._DELETED}
+    assert out == {"ok": True, "channel": "linkedin", "account_id": "a1",
+                   "seat": "deleted", "detail": um._DELETED}
     assert "new account id" in out["detail"] and "not carried over" in out["detail"]
     assert plat.deleted == ["a1"]
     assert socle[0][0] == "clear"          # délier AVANT de supprimer
