@@ -28,15 +28,27 @@ orpheline devient U+FFFD. Une chaîne propre n'est jamais recopiée.
 """
 from __future__ import annotations
 
+import functools
 import logging
+from typing import Any
 
-import pydantic_core
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools.base import default_serializer, resolve_serialize_by_alias
 from fastmcp.tools.tool import Tool, ToolResult
 from mcp.types import TextContent
+from pydantic import TypeAdapter
 
 logger = logging.getLogger(__name__)
+
+# `pydantic_core` n'est pas une dépendance DÉCLARÉE (`tests/test_dependances_declarees.py`) :
+# on passe par `pydantic`. Son `PydanticSerializationError` est un `ValueError`, reconnu
+# à son message.
+_SIGNATURE = "surrogates not allowed"
+
+
+@functools.lru_cache(maxsize=1)
+def _quelconque() -> TypeAdapter:
+    return TypeAdapter(Any)
 
 
 def propre(texte: str) -> bool:
@@ -77,11 +89,11 @@ def serialiser(data) -> str:
     et retombe sur `default_serializer`, ce qu'il faisait sans nous."""
     try:
         return default_serializer(data)
-    except pydantic_core.PydanticSerializationError as e:
-        if "surrogates not allowed" not in str(e):
+    except ValueError as e:
+        if _SIGNATURE not in str(e):
             raise
-    jsonable = pydantic_core.to_jsonable_python(
-        data, fallback=str, by_alias=resolve_serialize_by_alias(data)
+    jsonable = _quelconque().dump_python(
+        data, mode="json", fallback=str, by_alias=resolve_serialize_by_alias(data)
     )
     logger.warning("résultat d'outil : surrogate isolé remplacé par U+FFFD à la sérialisation")
     return default_serializer(sans_surrogate(jsonable))
@@ -108,9 +120,9 @@ def _structure_propre(structure) -> bool:
     pas la nôtre : la structure passe inchangée, et le transport la dira comme avant —
     ce middleware, au-dessus de l'enveloppe d'erreur, ne lève rien de neuf."""
     try:
-        pydantic_core.to_json(structure, fallback=str)
-    except pydantic_core.PydanticSerializationError as e:
-        return "surrogates not allowed" not in str(e)
+        _quelconque().dump_json(structure, fallback=str)
+    except ValueError as e:
+        return _SIGNATURE not in str(e)
     return True
 
 
