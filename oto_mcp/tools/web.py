@@ -6,8 +6,10 @@ details sought there are the end client's priority. Three tiers, one verb,
 and the answer ALWAYS SAYS which path it took:
 
   ① bare HTTP fetch     — free; enough for most sites;
-  ② hosted scraper      — `serper` (~2 credits): basic anti-bot, but NO
-                          guaranteed JS rendering — measured on 02/09/2026, a
+  ② hosted scraper      — `serper` (2 to 10 Serper credits, as Serper bills
+                          the page: 2 on an ordinary one, up to 10 on a hard
+                          one): basic anti-bot, but NO guaranteed JS
+                          rendering — measured on 02/09/2026, a
                           client-rendered site comes back 200 + a near-empty
                           body; it is tier ③ that really executes the JS;
   ③ hosted browser      — DISPOSABLE Chrome session (Browserbase, no account
@@ -336,7 +338,7 @@ def register(mcp: FastMCP) -> None:
         session_org.note_call_trace(quantity=credits_consumed("scrape_page", res))
         if is_platform:
             # `web_read` is the backend's SECOND serper mouth, and it debited 1 where
-            # a scrape costs 2 (the description below has always said so): the
+            # a scrape costs 2 to 10 (what Serper declares in `credits`): the
             # internal quota therefore under-counted by half everything that went
             # through tier ②. Same rule as the `serper_*` tools, imported and
             # not copied — a duplicated cost rule is a rule that diverges.
@@ -350,8 +352,10 @@ def register(mcp: FastMCP) -> None:
         saying which path was used.
 
         Escalation: ① plain HTTP fetch (free) → on 403/timeout/empty shell
-        ② hosted scraper (serper, ~2 credits — basic anti-bot, but NO guaranteed
-        JS rendering: a client-rendered page comes back 200 with a near-empty
+        ② hosted scraper (serper, 2 to 10 Serper credits depending on the page:
+        2 on an ordinary page, up to 10 on a hard one — the actual amount is in
+        `cout.serper_credits`; basic anti-bot, but NO guaranteed JS
+        rendering: a client-rendered page comes back 200 with a near-empty
         body, and ② will report it as read) →
         ③ ONLY IF `browser=true`: a disposable hosted Chrome session
         (real fingerprint, patience — costs a browser session). Without
