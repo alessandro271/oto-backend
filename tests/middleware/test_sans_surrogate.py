@@ -56,7 +56,7 @@ def _transport(r) -> str:
 
 
 def _resultats_serper() -> dict:
-    return {"organic": [{"title": "Cabinet", "snippet": "Avocats " + SEUL + " associés"}]}
+    return {"organic": [{"title": "Résultat", "snippet": "Un extrait " + SEUL + " coupé"}]}
 
 
 def test_sans_le_serialiseur_le_dict_fait_echouer_l_appel():
@@ -76,7 +76,7 @@ def test_un_dict_portant_un_surrogate_isole_est_servi():
     r = _appel(_banc(_resultats_serper))
     assert not r.is_error, _texte(r)
     servi = json.loads(_texte(r))
-    assert servi["organic"][0]["snippet"] == "Avocats " + FFFD + " associés"
+    assert servi["organic"][0]["snippet"] == "Un extrait " + FFFD + " coupé"
     _transport(r)  # ne lève pas
 
 
@@ -103,6 +103,19 @@ def test_le_canal_structure_garde_est_nettoye():
     assert not r.is_error, _texte(r)
     assert r.structured_content == {"nom": "x" + FFFD}
     _transport(r)
+
+
+def test_une_erreur_nettoyee_reste_une_erreur():
+    from fastmcp.tools.tool import ToolResult
+    from mcp.types import TextContent
+    erreur = ToolResult(content=[TextContent(type="text", text="amont : " + SEUL)],
+                        meta={"k": 1})
+    erreur.is_error = True
+    r = sans_surrogate.nettoyer_resultat(erreur, "outil")
+    assert r.is_error is True and r.meta == {"k": 1}
+    assert r.content[0].text == "amont : " + FFFD
+    propre = ToolResult(content=[TextContent(type="text", text="ok")])
+    assert sans_surrogate.nettoyer_resultat(propre) is propre
 
 
 def test_une_paire_complete_est_intacte_et_le_chemin_heureux_inchange():

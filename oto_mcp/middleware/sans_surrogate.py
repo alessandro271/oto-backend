@@ -104,12 +104,13 @@ def poser_le_serialiseur(instance) -> int:
 
 
 def _structure_propre(structure) -> bool:
+    """Faux seulement sur un surrogate isolé. Une autre erreur de sérialisation n'est
+    pas la nôtre : la structure passe inchangée, et le transport la dira comme avant —
+    ce middleware, au-dessus de l'enveloppe d'erreur, ne lève rien de neuf."""
     try:
         pydantic_core.to_json(structure, fallback=str)
     except pydantic_core.PydanticSerializationError as e:
-        if "surrogates not allowed" in str(e):
-            return False
-        raise
+        return "surrogates not allowed" not in str(e)
     return True
 
 
@@ -131,7 +132,9 @@ def nettoyer_resultat(result, outil: str | None = None):
     if not sale:
         return result
     logger.warning("résultat d'outil %s : surrogate isolé remplacé par U+FFFD", outil)
-    return ToolResult(content=contenu, structured_content=structure, meta=result.meta)
+    # `model_copy` : tout autre champ (`meta`, `is_error`…) reste tel quel — une erreur
+    # nettoyée reste une erreur.
+    return result.model_copy(update={"content": contenu, "structured_content": structure})
 
 
 class SansSurrogateMiddleware(Middleware):
