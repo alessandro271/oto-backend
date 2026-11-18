@@ -1287,6 +1287,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
 LOTS: dict[str, Lot] = {
     "mailpool_mailboxes:create": Lot("mailboxes"),
     "mailpool_mailboxes:export": Lot("mailbox_ids"),
+    # `update` edits ONE mailbox (`mailbox_id`): `mailboxes` is refused there.
+    "mailpool_mailboxes:update": Lot("mailboxes"),
     "lemlist_contact:list_create": Lot("contact_ids"),
     "lemlist_inbox:messages": Lot("cc"),
     "lemlist_inbox:label_create": Lot("cc"),
