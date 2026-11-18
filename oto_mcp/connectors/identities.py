@@ -634,15 +634,16 @@ async def _unipile_select(sub: str, identity_id: str, canal: str | None = None) 
     #    self: clears the channel's pointer, as always. Another of my accounts on this
     #    channel HERE (several accounts per channel) = the pointer names it, with myself
     #    as owner — the connection rows are never touched.
-    from .. import access
-    org_ici = access.current_org(sub)
     mes_comptes = db.list_unipile_accounts(sub)
-    own = (next((a for a in mes_comptes
-                 if a["account_id"] == identity_id and a.get("org_id") == org_ici), None)
-           or next((a for a in mes_comptes if a["account_id"] == identity_id), None))
-    if own:
+    miens = [a for a in mes_comptes if a["account_id"] == identity_id]
+    if miens:
+        from .. import access
+        org_ici = access.current_org(sub)
+        own = next((a for a in miens if a.get("org_id") == org_ici), miens[0])
         _exige_canal(own["provider"])
-        if (own.get("org_id") == org_ici
+        voisins = [a for a in mes_comptes if a.get("org_id") == org_ici
+                   and a.get("provider") == own["provider"]]
+        if (own.get("org_id") == org_ici and len(voisins) > 1
                 and identity_id != _own_unipile_account_id(sub, own["provider"])):
             db.set_operated_account(sub, own["provider"], identity_id, sub)
         else:

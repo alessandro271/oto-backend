@@ -136,6 +136,9 @@ class UnipileStatusView(BaseModel):
     byo: bool
     channels: dict[str, UnipileChannel]
     elsewhere: dict[str, UnipileElsewhere]
+    # Another account can be ADDED on a channel here (`me.unipile.connect`
+    # `add_account=true`). False until the database carries the slot key.
+    multi_account: bool = False
 
 
 class UnipileConnectView(BaseModel):

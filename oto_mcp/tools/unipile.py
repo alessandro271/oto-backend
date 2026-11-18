@@ -674,6 +674,11 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origin of the key)
         "byo": byo,
         "channels": _channels_from(accts, ici, defauts),
+        # Several accounts per channel can be connected HERE (`add_account`): the
+        # database has the slot key (`db.slots_ouverts`) and the option is open. The
+        # front shows « Add another account » only on this — a backend without it
+        # would REPLACE the connected account instead.
+        "multi_account": bool(subscribed) and db.slots_ouverts(),
         # per front channel: the sub's account connected ELSEWHERE, adoptable here in one click
         # (the Connect button adopts on the backend side — the UI can announce it).
         "elsewhere": {front_by_provider[p]: v for p, v in elsewhere.items()
@@ -880,6 +885,15 @@ for _con in providers.REGISTRY.values():
 del _con
 
 
+def _par_canal(accts) -> dict:
+    """Accounts grouped by DB provider, in listing order — the main account first
+    (`db.list_unipile_accounts`), so `rows[0]` is the one an admin sheet describes."""
+    out: dict = {}
+    for a in accts:
+        out.setdefault(a["provider"], []).append(a)
+    return out
+
+
 def admin_status_by_org(sub: str, orgs: list) -> list:
     """Messaging state **per org** for the admin sheet (a user can be in N orgs;
     the option is PER ORG). `orgs` = `org_store.list_orgs_for_user(sub)`.
@@ -892,12 +906,13 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
         oid = o["org_id"]
         mode = access.credential_mode_for(sub, "unipile", org=oid)
         byo = mode in access.BYO_MODES
-        by = {a["provider"]: a for a in accts if a.get("org_id") == oid}
+        tous = _par_canal(a for a in accts if a.get("org_id") == oid)
+        by = {p: rows[0] for p, rows in tous.items()}
         out.append({
             "org_id": oid, "org_name": o.get("name"), "is_active": bool(o.get("is_active")),
             "subscribed": access.option_open(sub, "unipile", org=oid),  # single source
             "mode": mode, "byo": byo,
-            "channels": _channels_from(by),
+            "channels": _channels_from(by, tous),
             # Through the seam, never through the sources. `org_comp` = the org's declared
             # right (any source). `user_comp` = the person's account mark,
             # shown for the record — it opens nothing. `subscribed` also counts a
@@ -908,12 +923,13 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
             },
         })
     member = {o["org_id"] for o in orgs}
-    orphans = {a["provider"]: a for a in accts if a.get("org_id") not in member}
+    tous_orphelins = _par_canal(a for a in accts if a.get("org_id") not in member)
+    orphans = {p: rows[0] for p, rows in tous_orphelins.items()}
     if orphans:
         out.append({
             "org_id": None, "org_name": "(outside their orgs)", "is_active": False,
             "subscribed": None, "mode": None, "byo": None,
-            "channels": _channels_from(orphans), "option_source": None,
+            "channels": _channels_from(orphans, tous_orphelins), "option_source": None,
         })
     return out
 

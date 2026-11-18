@@ -33,6 +33,7 @@ _STATUT = {
     "channels": {"linkedin": {"connected": True, "account_id": "a1",
                               "account_name": "Zoé", "connected_at": "2026-08-01"}},
     "elsewhere": {"whatsapp": {"account_id": "a2", "account_name": "Zoé", "org_id": 12}},
+    "multi_account": False,
 }
 
 

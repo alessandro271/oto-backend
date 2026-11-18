@@ -314,6 +314,13 @@ _MEMBERSHIP_TABLES = (("org_members", "org_id"), ("org_group_members", "group_id
 # `(table, colonne de sub, reste de la PK)`.
 _PK_SUB_TABLES = (
     ("unipile_operated_accounts", "sub", ("provider",)),
+    # Les comptes de messagerie hébergée : PK `(sub, org_id, provider, slot)` (et
+    # `uq_unipile_accounts_slot`, son arbitre tant que la base a la PK d'avant). Les
+    # deux comptes de la personne tiennent le même emplacement du même canal dans la
+    # même org ⟹ celui du compte survivant reste, l'autre tombe — sinon l'UPDATE nu
+    # lève et fait échouer TOUT le merge. Le compte Unipile de la ligne retirée n'est
+    # pas supprimé chez le fournisseur : le relevé des sièges le montre orphelin.
+    ("unipile_accounts", "sub", ("org_id", "provider", "slot")),
     # L'abonnement d'une personne (OTO-130) suit le compte fusionné : sa ligne porte
     # le `sandbox_id`, que le worker relit — le sandbox reste celui où elle s'est connectée.
     ("user_model_subscriptions", "sub", ("famille",)),

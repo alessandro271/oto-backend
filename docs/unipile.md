@@ -761,9 +761,13 @@ LinkedIn, deux numéros WhatsApp. Chaque compte est une ligne d'`unipile_account
 
 **Chaque compte ajouté est un siège** : il compte dans le plafond de l'org, et la lentille
 `org.usage.connections` le rend comme une connexion de plus. L'ajout n'adopte pas un
-compte d'une autre org et ne combine pas `premium` (les deux nomment le compte déjà là).
-Un même `account_id` n'occupe jamais deux emplacements (`set_unipile_account` le remet à
-sa place).
+compte d'une autre org et ne combine pas `premium` (les deux nomment le compte déjà là). Quand il ne reste ici que des comptes ajoutés, une connexion ordinaire
+est un ajout (elle ne prend pas l'emplacement principal, donc le défaut, en silence). À la
+réconciliation, si un même canal porte une demande ordinaire et une demande d'ajout,
+l'ajout l'emporte : ce qui ne détruit rien gagne. Un même `account_id` n'occupe jamais deux
+emplacements (`set_unipile_account` le remet à sa place). La fusion de deux comptes de
+personne pré-traite la ligne (`_PK_SUB_TABLES`) : à emplacement égal, celle du survivant
+reste.
 
 **Ce qu'un appel sert sans `_account=`** (`identities.resolve_operated_account_id`) : le
 compte que le membre a choisi par défaut (pointeur `unipile_operated_accounts` avec
@@ -775,7 +779,9 @@ tout seul.** `_account=<account_id>` désigne n'importe lequel des comptes d'ici
 appel.
 
 **La carte** (`me.unipile.status`) garde ses champs : ils décrivent le compte servi par
-défaut ; `channels.<canal>.accounts` liste tous les comptes du canal, le défaut marqué.
+défaut ; `channels.<canal>.accounts` liste tous les comptes du canal, le défaut marqué ;
+`multi_account` dit si l'ajout est ouvert ici (PK à emplacement ET option) — le front
+n'offre « ajouter un compte » que sur lui : un backend d'avant REMPLACERAIT le compte.
 **Délier** prend `account_id` (sans lui : le compte par défaut, jamais tous ; plusieurs
 sans défaut : 409 `account_id_required`). **Prêter** aussi (`connectors.account_grants`,
 `account_id`) : le prêt suit l'emplacement prêté. Limite : un bénéficiaire reçoit UN

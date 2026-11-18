@@ -227,7 +227,8 @@ def _remettre_a_niveau(conn) -> None:
     """Ce qu'une base servie reçoit pour rejoindre le tronc, dans la transaction de
     `conn` : le schéma du démarrage, le backfill qui possède la clé d'`unipile_accounts`
     (joué par le boot juste après `init_db`), puis les contraintes du CREATE TABLE que
-    pose la révision 0057 — sans CONCURRENTLY, le rejeu étant transactionnel."""
+    pose la révision 0057 — sans CONCURRENTLY, le rejeu étant transactionnel — et la PK
+    à emplacement de la révision `20261118_1500_unipile_slots`."""
     from contextlib import contextmanager
 
     from oto_mcp.db import contraintes_create_table, index_concurrent
@@ -247,6 +248,21 @@ def _remettre_a_niveau(conn) -> None:
         db_unipile.backfill_unipile_member_scope()
     contraintes_create_table.poser_dans_la_transaction(
         conn, index_concurrent.scalaire_de(conn))
+    # La PK à emplacement d'`unipile_accounts` (plusieurs comptes par canal) : posée par
+    # la révision `20261118_1500_unipile_slots`, jamais par le démarrage (le code d'avant
+    # arbitre sur l'ancienne PK, base partagée).
+    conn.execute(_revision_unipile_slots().UPGRADE)
+
+
+def _revision_unipile_slots():
+    import importlib.util
+    from pathlib import Path
+    fichier = (Path(__file__).resolve().parent.parent / "oto_mcp" / "db" / "migrations"
+               / "versions" / "20261118_1500_unipile_slots.py")
+    spec = importlib.util.spec_from_file_location("rev_unipile_slots_boot", fichier)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 @pytest.fixture(scope="module")

@@ -47,6 +47,7 @@ def etat(monkeypatch):
     monkeypatch.setattr(db, "suspended_lenders_for", lambda sub, prov: {})
     monkeypatch.setattr(session_org, "current_call_account", lambda: e["pin"])
     monkeypatch.setattr("oto_mcp.providers.is_personal_cross_org", lambda name: False)
+    monkeypatch.setattr(db, "slots_ouverts", lambda: e.get("ouverts", True))
     return e
 
 
@@ -257,12 +258,22 @@ class _Inventaire:
         return True
 
 
-@pytest.mark.parametrize("ajout,slot", [(True, "NEUF"), (False, "")])
-def test_la_reconciliation_lie_dans_l_emplacement_demande(monkeypatch, ajout, slot):
+def _demande(nonce, ajout):
+    return {"nonce": nonce, "org_id": ORG, "provider": "LINKEDIN", "platform_seat": True,
+            "add_account": ajout, "created_at": "2026-11-18T10:00:00Z"}
+
+
+@pytest.mark.parametrize("demandes,slot", [
+    ([("n1", True)], "NEUF"),
+    ([("n1", False)], ""),
+    # Un lien ordinaire abandonné, PUIS « Ajouter un autre compte » : l'intention qui
+    # ne détruit rien l'emporte — le principal n'est pas écrasé par le compte ajouté.
+    ([("n1", False), ("n2", True)], "NEUF"),
+])
+def test_la_reconciliation_lie_dans_l_emplacement_demande(monkeypatch, demandes, slot):
     from oto_mcp import unipile_connect
-    monkeypatch.setattr(db, "list_unipile_pending_for_sub", lambda sub: [{
-        "nonce": "n1", "org_id": ORG, "provider": "LINKEDIN", "platform_seat": True,
-        "add_account": ajout, "created_at": "2026-11-18T10:00:00Z"}])
+    monkeypatch.setattr(db, "list_unipile_pending_for_sub",
+                        lambda sub: [_demande(n, a) for n, a in demandes])
     monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: SimpleNamespace(
         key="K", is_platform=True, config={}))
     monkeypatch.setattr("oto.tools.unipile.make_unipile_client", lambda **k: _Inventaire())
@@ -277,3 +288,24 @@ def test_la_reconciliation_lie_dans_l_emplacement_demande(monkeypatch, ajout, sl
     out = unipile_connect.reconcile_pending("u1", account_id="NEUF")
     assert out["bound"] is True
     assert (ecrit["aid"], ecrit["slot"]) == ("NEUF", slot)
+
+
+def test_connexion_ordinaire_sans_principal_est_un_ajout(connexion, etat):
+    """Il ne reste que des comptes ajoutés : une connexion ordinaire en est un de plus —
+    elle ne prend pas l'emplacement principal (donc le défaut) en silence, et passe
+    par le plafond."""
+    uc, pend = connexion
+    etat["comptes"] = [_compte("B", slot="B")]
+    asyncio.run(uc.hosted_auth_url("u1", "linkedin"))
+    assert pend == {"provider": "LINKEDIN", "add_account": True}
+
+
+def test_le_statut_dit_si_l_ajout_est_ouvert(etat, monkeypatch):
+    monkeypatch.setattr(access, "credential_mode_for", lambda *a, **k: "platform")
+    monkeypatch.setattr(access, "option_open", lambda *a, **k: True)
+    assert unipile_tool.status_for("u1")["multi_account"] is True
+    etat["ouverts"] = False
+    assert unipile_tool.status_for("u1")["multi_account"] is False
+    etat["ouverts"] = True
+    monkeypatch.setattr(access, "option_open", lambda *a, **k: False)
+    assert unipile_tool.status_for("u1")["multi_account"] is False

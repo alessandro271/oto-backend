@@ -207,9 +207,15 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # to reconnect; `force=True` for a REALLY distinct account. (Reconnection
     # in the SAME org = replacement, not concerned: filtered by `org_id`.)
     platform_seat = not byo
-    if add_account and not await asyncio.to_thread(db.live_unipile_accounts, sub, org_id,
-                                                   provider):
+    vivants = await asyncio.to_thread(db.live_unipile_accounts, sub, org_id, provider)
+    if add_account and not vivants:
         add_account = False   # nothing to add to: an ordinary first connection
+    if (not add_account and not premium and vivants
+            and not any((v.get("slot") or "") == db.PRINCIPAL for v in vivants)):
+        # Only ADDED accounts live here (the main one was unlinked): an ordinary
+        # connection would land in the main slot and silently become the default of
+        # every call — and skip the seat cap. It is one more account: an addition.
+        add_account = True
     if add_account:
         if premium:
             raise ConnectRefused(400, "premium_on_add",
@@ -480,6 +486,14 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
     bound: list = []
     motifs: list = []
     done: set = set()   # providers linked during THIS pass
+    # ADD or REPLACE, per channel: the non-destructive intent wins. One pass binds ONE
+    # account per channel and consumes every request of that channel — an abandoned
+    # ordinary link followed by « Add another account » must not overwrite the main
+    # account with the one just added.
+    ajout: dict = {}
+    for p in pendings:
+        canal = (p.get("provider") or "LINKEDIN").upper()
+        ajout[canal] = ajout.get(canal, False) or bool(p.get("add_account"))
     for pend in pendings:
         provider = (pend.get("provider") or "LINKEDIN").upper()
         if provider in done:
@@ -583,8 +597,7 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
         # An ADDING request (several accounts per channel) binds into a slot of its
         # own; any other replaces the main account, as always. Either way an account
         # this member already holds on the channel keeps its slot (`set_unipile_account`).
-        slot = (db.slot_pour_ajout(chosen["id"]) if pend.get("add_account")
-                else db.PRINCIPAL)
+        slot = db.slot_pour_ajout(chosen["id"]) if ajout.get(provider) else db.PRINCIPAL
         issue = unipile_binding.bind_account(sub, chosen["id"], prov,
                              account_name=chosen.get("name"),
                              org_id=pend["org_id"], provider=provider,
