@@ -639,21 +639,22 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
         if a.get("org_id") == o:
             ici.setdefault(a["provider"], []).append(a)
     # The account described per channel = the one served by default (several accounts per
-    # channel): the main one, or the only one left (`db.default_unipile_account`) —
-    # then the default chosen by the member, when it is one of these accounts.
+    # channel): the default chosen by the member, when it is one of these accounts, else
+    # the main one (`db.default_unipile_account`) — never an added one by office.
     accts = {}
     defauts = {}
     for prov, rows in ici.items():
         d = db.default_unipile_account(rows)
-        op = db.get_operated_account(sub, prov) if len(rows) > 1 else None
+        op = (db.get_operated_account(sub, prov)
+              if len(rows) > 1 or d is None else None)
         if op and op.get("owner_sub") == sub:
             d = next((r for r in rows if r["account_id"] == op["account_id"]), d)
         if d is not None:
             accts[prov] = d
             defauts[prov] = d["account_id"]
         else:
-            # Several accounts, none designated: the channel IS connected — describe
-            # the oldest, and mark none as the default.
+            # Accounts, none designated: the channel IS connected — describe the
+            # oldest, and mark none as the default.
             accts[prov] = rows[0]
             defauts[prov] = None
     # Adoption possible? (platform mode = same key everywhere; the option gates the connect)
@@ -1060,8 +1061,8 @@ def unipile_client(provider: str = "LINKEDIN"):
     sans_defaut = None
     try:
         account_id = connector_identities.resolve_operated_account_id(sub, provider)
-    except connector_identities.PlusieursComptesSansDefaut as e:
-        # Several own accounts, none by default: a project that pins one of them
+    except connector_identities.SansCompteParDefaut as e:
+        # Own accounts here, none by default: a project that pins one of them
         # designates it (below) — the refusal only stands when nothing does.
         account_id, sans_defaut = None, e
     except ValueError as e:  # operated pointer revoked/disconnected → explicit error
@@ -1297,10 +1298,14 @@ def register(mcp: FastMCP) -> None:
                 the cookie connection to the wizard (recommended for these products).
             add_account: ADD another account on this channel (a second LinkedIn, a
                 second WhatsApp number…) instead of replacing the connected one. Each
-                added account is one more seat. The person must log in with the OTHER
-                account in the wizard. Calls then pick it with `_account=<account_id>`
-                (list them: `oto_identity(op='list')`), or it becomes the default via
-                `oto_identity(op='set')`.
+                added account is one more seat: under the platform subscription the org
+                must have its own seat cap set, otherwise the call is refused
+                (`unipile_seat_cap_required`) — do not retry, tell the person a platform
+                administrator has to set the org's cap first. The person must log in
+                with the OTHER account in the wizard. An added account is NEVER used by
+                default, even when it is the only one left: calls pick it with
+                `_account=<account_id>` (list them: `oto_identity(op='list')`), or it
+                becomes the default via `oto_identity(op='set')`.
         """
         from .. import unipile_connect
 

@@ -65,6 +65,7 @@ def test_own_account_no_platform_fallback(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda s: 168)
     monkeypatch.setattr(db, "get_unipile_account_id", lambda s, o, p: None)
     monkeypatch.setattr(providers, "is_personal_cross_org", lambda p: True)
+    monkeypatch.setattr(db, "list_unipile_accounts", lambda s: [])
     monkeypatch.setattr(access, "personal_instance_org",
                         lambda s, p, exclude_org=None: None)
     assert ci._own_unipile_account_id("sub1", "LINKEDIN") is None

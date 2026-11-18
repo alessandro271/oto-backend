@@ -185,6 +185,7 @@ def test_unipile_connect_uses_one_group_credential(vault, monkeypatch, authority
                         lambda et, eid, p, account="": {
                             "meta": {"dsn": "group.example.test" if et == "group" else "org.example.test"}})
     monkeypatch.setattr(db, "get_unipile_account", lambda *a: None)
+    monkeypatch.setattr(db, "live_unipile_accounts", lambda *a: [])
     monkeypatch.setattr(db, "list_unipile_accounts", lambda *a: [])
     monkeypatch.setattr(db, "create_unipile_pending", lambda *a, **k: None)
     def unused(*a, **k):

@@ -61,6 +61,28 @@ def plafond_de_comptes(org_id: int) -> int:
     return _default_limit() if limit is None else limit
 
 
+# Adding an account (several accounts per channel) opens a seat the org did not budget
+# for: it is refused until the org has a seat cap OF ITS OWN (`orgs.unipile_account_limit`
+# set, `0` included — an explicit « no cap »). The platform default does not count: it is
+# a runaway guard, not a decision about this org (decision of 18/11/2026).
+CODE_PLAFOND_REQUIS = "unipile_seat_cap_required"
+
+
+def exiger_plafond_pour_ajout(org_id: int, provider: str) -> None:
+    """Raises `ConnectRefused` (403 `unipile_seat_cap_required`) when the org has no seat
+    cap of its own — the gate of every path that ADDS a platform-key account."""
+    if db.get_org_unipile_limit(org_id) is not None:
+        return
+    logger.info("unipile add refused, no own cap org=%s", org_id)
+    raise ConnectRefused(
+        403, CODE_PLAFOND_REQUIS,
+        f"Adding another {provider.title()} account opens one more hosted seat, and this "
+        "org has no hosted-account cap of its own: adding is refused until one is set. "
+        "Ask a platform administrator to set the org's cap (super admin: "
+        f"`PUT /api/admin/orgs/{org_id}/unipile-limit`, body `{{\"limit\": n}}`), then "
+        "retry. The account already connected stays as it is.")
+
+
 def connections_page(sub: "str | None", org_id: "int | None") -> "str | None":
     """The page where THIS account connects its hosted messaging — on ITS product.
 
@@ -141,7 +163,8 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
 
     `add_account=True` (several accounts per channel) = the account that the wizard
     creates is ADDED to the channel, in a slot of its own, instead of replacing the
-    connected one. It is a new seat: the cap applies, and neither the adoption of an
+    connected one. It is a new seat: the org must have a seat cap of its own
+    (`unipile_seat_cap_required` otherwise), the cap applies, and neither the adoption of an
     account from another org nor the premium reconnection apply (both name the account
     already there). Without a connected account on the channel here, it is an ordinary
     first connection. Refused (`multi_account_unavailable`) while the database still
@@ -239,6 +262,9 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
                                                        sub, org_id))
     # Hosted seat cap (reconnecting an existing account = replacement, OK;
     # an ADOPTION below creates a binding in this org → subject to the same cap).
+    # An ADDITION also requires the org's own cap to be set (`exiger_plafond_pour_ajout`).
+    if platform_seat and add_account:
+        await asyncio.to_thread(exiger_plafond_pour_ajout, org_id, provider)
     if platform_seat and (add_account
                           or db.get_unipile_account(sub, org_id, provider) is None):
         limit = plafond_de_comptes(org_id)

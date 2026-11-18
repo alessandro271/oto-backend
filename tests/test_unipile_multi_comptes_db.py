@@ -86,16 +86,21 @@ def test_deconnecter_un_compte_laisse_les_autres(membre):
     assert [v["account_id"] for v in db.live_unipile_accounts(s["sub"], s["org"])] == [s["c"]]
 
 
-def test_sans_principal_le_seul_restant_sert_et_deux_ne_se_devinent_pas(membre):
+def test_sans_principal_aucun_compte_ajoute_ne_sert_d_office(membre):
+    """Le principal déconnecté, un compte ajouté n'est jamais le défaut, même seul
+    (décision du 18/11/2026) : ni servi, ni délié sans être nommé."""
     from oto_mcp import db
     s = membre
     db.set_unipile_account(s["sub"], s["a"], org_id=s["org"], platform_seat=True)
     _ajouter(db, s, s["b"])
     db.clear_unipile_account(s["sub"], s["org"], "LINKEDIN", account_id=s["a"])
-    assert db.get_unipile_account_id(s["sub"], s["org"]) == s["b"]
+    assert db.get_unipile_account_id(s["sub"], s["org"]) is None
+    assert db.get_unipile_account(s["sub"], s["org"], "LINKEDIN") is None
+    assert db.clear_unipile_account(s["sub"], s["org"], "LINKEDIN") == 0
     _ajouter(db, s, s["c"])
     assert db.get_unipile_account_id(s["sub"], s["org"]) is None
     assert db.clear_unipile_account(s["sub"], s["org"], "LINKEDIN") == 0
+    assert len(db.live_unipile_accounts(s["sub"], s["org"])) == 2
 
 
 def test_chaque_compte_a_sa_sous_instance(membre):

@@ -2,9 +2,11 @@
 rend la carte, et ce que fait la demande d'ajout.
 
 Les invariants (un membre à un seul compte ne voit RIEN changer) :
-- sans `_account=` : le compte choisi par défaut, sinon le principal, sinon le seul ;
-- plusieurs comptes et rien qui en désigne un : refus nommé, jamais un choix au hasard
+- sans `_account=` : le compte choisi par défaut, sinon le principal — jamais d'office un
+  compte ajouté, même le seul qui reste (décision du 18/11/2026) ;
+- des comptes et rien qui en désigne un : refus nommé, jamais un choix au hasard
   (un message envoyé sous la mauvaise identité ne se reprend pas) ;
+- ajouter un compte sous la clé plateforme exige le plafond PROPRE de l'org ;
 - un compte ajouté ne devient jamais le défaut tout seul ;
 - `_account=` désigne n'importe lequel de MES comptes d'ici, pour un appel.
 """
@@ -48,6 +50,7 @@ def etat(monkeypatch):
     monkeypatch.setattr(session_org, "current_call_account", lambda: e["pin"])
     monkeypatch.setattr("oto_mcp.providers.is_personal_cross_org", lambda name: False)
     monkeypatch.setattr(db, "slots_ouverts", lambda: e.get("ouverts", True))
+    monkeypatch.setattr(db, "list_account_grants_to", lambda sub: [])
     return e
 
 
@@ -79,8 +82,30 @@ def test_le_defaut_choisi_sert_tant_qu_il_est_ici(etat):
     assert identities.resolve_operated_account_id("u1", "LINKEDIN") == "A"
 
 
-def test_sans_principal_le_seul_restant_sert(etat):
+def test_sans_principal_le_seul_restant_est_refuse_en_le_nommant(etat):
+    # Le principal déconnecté, le compte ajouté qui reste ne sert jamais d'office : il
+    # n'a pas été choisi. Refus nommé (un seul compte : `no_default_account`).
+    etat["comptes"] = [_compte("B", slot="B", nom="Jane Sales")]
+    with pytest.raises(identities.SansCompteParDefaut) as e:
+        identities.resolve_operated_account_id("u1", "LINKEDIN")
+    assert not isinstance(e.value, identities.PlusieursComptesSansDefaut)
+    assert e.value.code == "no_default_account"
+    assert "Jane Sales" in str(e.value) and "`B`" in str(e.value)
+    assert "_account=" in str(e.value) and "oto_identity(op='set')" in str(e.value)
+
+
+def test_sans_principal_le_seul_restant_sert_une_fois_choisi(etat, monkeypatch):
+    poses = []
+    monkeypatch.setattr(db, "set_operated_account",
+                        lambda sub, prov, aid, owner: poses.append((sub, prov, aid, owner)))
+    monkeypatch.setattr(db, "clear_operated_account",
+                        lambda sub, prov: pytest.fail("le choix ne s'efface pas"))
     etat["comptes"] = [_compte("B", slot="B")]
+    asyncio.run(identities._unipile_select("u1", "B", "LINKEDIN"))
+    assert poses == [("u1", "LINKEDIN", "B", "u1")]
+    etat["pointeur"] = {"account_id": "B", "owner_sub": "u1"}
+    assert identities.resolve_operated_account_id("u1", "LINKEDIN") == "B"
+    etat["pointeur"], etat["pin"] = None, "B"          # ou nommé pour l'appel
     assert identities.resolve_operated_account_id("u1", "LINKEDIN") == "B"
 
 
@@ -94,14 +119,29 @@ def test_plusieurs_sans_defaut_refuse_en_les_nommant(etat):
     assert "_account=" in str(e.value)
 
 
-def test_le_client_porte_le_refus_code_a_l_agent(etat, monkeypatch):
+def test_plusieurs_sans_defaut_ne_retombe_pas_sur_l_autre_org(etat, monkeypatch):
+    # Clé propre au membre (BYO qui le suit d'org en org) : son compte de l'org de la clé
+    # ne sert ICI que s'il n'a aucun compte ici. Deux comptes ici sans défaut = refus
+    # nommé, jamais le compte d'une autre org envoyé en silence.
+    etat["comptes"] = [_compte("B", slot="B"), _compte("C", slot="C"), _compte("Z", org=77)]
+    monkeypatch.setattr("oto_mcp.providers.is_personal_cross_org", lambda name: True)
+    monkeypatch.setattr(access, "personal_instance_org", lambda sub, c, exclude_org=None: 77)
+    with pytest.raises(identities.PlusieursComptesSansDefaut):
+        identities.resolve_operated_account_id("u1", "LINKEDIN")
+
+
+@pytest.mark.parametrize("comptes,code", [
+    (["B", "C"], "several_accounts_no_default"),
+    (["B"], "no_default_account"),
+])
+def test_le_client_porte_le_refus_code_a_l_agent(etat, monkeypatch, comptes, code):
     rc = ResolvedCredential("unipile", "PK", True, "platform")
     monkeypatch.setattr(access, "resolve_credential", lambda p, want="auto": rc)
     monkeypatch.setattr(access, "project_pinned_identity", lambda name: None)
-    etat["comptes"] = [_compte("B", slot="B"), _compte("C", slot="C")]
+    etat["comptes"] = [_compte(c, slot=c) for c in comptes]
     with pytest.raises(McpError) as e:
         unipile_tool.unipile_client("LINKEDIN")
-    assert e.value.error.data["code"] == "several_accounts_no_default"
+    assert e.value.error.data["code"] == code
 
 
 def test_le_projet_qui_epingle_un_compte_leve_l_ambiguite(etat, monkeypatch):
@@ -122,7 +162,6 @@ def test_le_projet_qui_epingle_un_compte_leve_l_ambiguite(etat, monkeypatch):
 
 def test_choisir_un_compte_ajoute_pose_le_pointeur_sur_moi(etat, monkeypatch):
     poses, effaces = [], []
-    monkeypatch.setattr(db, "list_account_grants_to", lambda sub: [])
     monkeypatch.setattr(db, "set_operated_account",
                         lambda sub, prov, aid, owner: poses.append((sub, prov, aid, owner)))
     monkeypatch.setattr(db, "clear_operated_account",
@@ -154,13 +193,18 @@ def test_la_carte_liste_tous_les_comptes_et_marque_le_defaut(etat, monkeypatch):
     assert unipile_tool.status_for("u1")["channels"]["telegram"]["accounts"] == []
 
 
-def test_la_carte_sans_defaut_n_en_marque_aucun(etat, monkeypatch):
+@pytest.mark.parametrize("comptes", [["B", "C"], ["B"]])
+def test_la_carte_sans_defaut_n_en_marque_aucun(etat, monkeypatch, comptes):
     monkeypatch.setattr(access, "credential_mode_for", lambda *a, **k: "platform")
     monkeypatch.setattr(access, "option_open", lambda *a, **k: True)
-    etat["comptes"] = [_compte("B", slot="B"), _compte("C", slot="C")]
+    etat["comptes"] = [_compte(c, slot=c) for c in comptes]
     li = unipile_tool.status_for("u1")["channels"]["linkedin"]
     assert li["connected"] is True
     assert not any(a["is_default"] for a in li["accounts"])
+    # Le seul restant, une fois choisi, est marqué : le pointeur se lit aussi pour un.
+    etat["pointeur"] = {"account_id": "B", "owner_sub": "u1"}
+    li = unipile_tool.status_for("u1")["channels"]["linkedin"]
+    assert [a["account_id"] for a in li["accounts"] if a["is_default"]] == ["B"]
 
 
 # --- La demande d'ajout -------------------------------------------------------------
@@ -186,13 +230,15 @@ def connexion(monkeypatch, etat):
         etat["comptes"][0] if etat["comptes"] else None))
     monkeypatch.setattr(db, "seat_binding_elsewhere", lambda *a, **k: {
         "account_id": "AILLEURS", "org_id": 7})
-    monkeypatch.setattr(db, "get_org_unipile_limit", lambda org_id: None)
+    # Le plafond PROPRE de l'org, que l'ajout exige (`plafond` dans l'état).
+    monkeypatch.setattr(db, "get_org_unipile_limit", lambda org_id: etat.get("plafond", 10))
     monkeypatch.setattr(db, "count_unipile_accounts_for_org", lambda org_id: 1)
     monkeypatch.setattr(db, "slots_ouverts", lambda: etat.get("ouverts", True))
     pend = {}
     monkeypatch.setattr(db, "create_unipile_pending",
                         lambda nonce, sub, org, prov, platform_seat=False, add_account=False:
                         pend.update(provider=prov, add_account=add_account))
+    monkeypatch.setattr(unipile_connect, "_default_limit", lambda: 5)
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeClient)
     monkeypatch.setattr("oto_mcp.connectors.activation_gate.exiger_connectable",
                         lambda name, sub: None)
@@ -215,6 +261,58 @@ def test_ajouter_compte_dans_le_plafond(connexion, etat, monkeypatch):
     with pytest.raises(uc.ConnectRefused) as e:
         asyncio.run(uc.hosted_auth_url("u1", "linkedin", add_account=True))
     assert e.value.code == "unipile_account_limit_reached"
+
+
+def test_ajouter_sans_plafond_propre_refuse_et_dit_quoi_faire(connexion, etat):
+    # Le défaut d'instance (5 ici) ne compte pas : l'ajout exige le plafond DE L'ORG.
+    uc, pend = connexion
+    etat["comptes"] = [_compte("A")]
+    etat["plafond"] = None
+    with pytest.raises(uc.ConnectRefused) as e:
+        asyncio.run(uc.hosted_auth_url("u1", "linkedin", add_account=True))
+    assert (e.value.status, e.value.code) == (403, "unipile_seat_cap_required")
+    assert f"/api/admin/orgs/{ORG}/unipile-limit" in e.value.message
+    assert pend == {}
+
+
+def test_ajouter_avec_un_plafond_propre_sans_limite_passe(connexion, etat):
+    # `0` posé = « sans plafond » DÉCIDÉ pour l'org : c'est un plafond posé.
+    uc, pend = connexion
+    etat["comptes"] = [_compte("A")]
+    etat["plafond"] = 0
+    out = asyncio.run(uc.hosted_auth_url("u1", "linkedin", add_account=True))
+    assert out["url"] and pend == {"provider": "LINKEDIN", "add_account": True}
+
+
+def test_connexion_ordinaire_sans_principal_exige_aussi_le_plafond(connexion, etat):
+    # Requalifiée en ajout (il ne reste que des comptes ajoutés) : même garde.
+    uc, pend = connexion
+    etat["comptes"] = [_compte("B", slot="B")]
+    etat["plafond"] = None
+    with pytest.raises(uc.ConnectRefused) as e:
+        asyncio.run(uc.hosted_auth_url("u1", "linkedin"))
+    assert e.value.code == "unipile_seat_cap_required" and pend == {}
+
+
+def test_remplacer_ou_premiere_connexion_sans_plafond_propre_passe(connexion, etat,
+                                                                   monkeypatch):
+    # Hors ajout, rien ne change : le défaut d'instance garde la première connexion.
+    uc, pend = connexion
+    etat["plafond"] = None
+    monkeypatch.setattr(db, "seat_binding_elsewhere", lambda *a, **k: None)
+    out = asyncio.run(uc.hosted_auth_url("u1", "whatsapp"))
+    assert out["url"] and pend == {"provider": "WHATSAPP", "add_account": False}
+
+
+def test_ajouter_sous_cle_byo_n_exige_pas_de_plafond(connexion, etat, monkeypatch):
+    # Clé du client : pas de siège plateforme, pas de garde de plafond.
+    uc, pend = connexion
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: SimpleNamespace(
+        key="KEY", mode="org", config={"dsn": "api.example.test"}))
+    etat["comptes"] = [_compte("A")]
+    etat["plafond"] = None
+    out = asyncio.run(uc.hosted_auth_url("u1", "linkedin", add_account=True))
+    assert out["url"] and pend == {"provider": "LINKEDIN", "add_account": True}
 
 
 def test_ajouter_avant_la_revision_refuse_et_ne_touche_a_rien(connexion, etat):

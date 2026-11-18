@@ -88,7 +88,7 @@ class UnipileDisconnectInput(BaseModel):
     # Front-end channel ('linkedin', 'whatsapp'…); UPPERCASED for the vault.
     channel: str = "linkedin"
     # WHICH account of the channel, when several are connected here. Absent: the one
-    # served by default (the main account, or the only one) — never all of them.
+    # served by default (the main account) — never all of them.
     account_id: Optional[str] = None
 
 
@@ -330,8 +330,8 @@ def _disconnect(ctx: ResolvedCtx, inp: UnipileDisconnectInput) -> dict:
         cible = db.default_unipile_account(mine)
         if cible is None and mine:
             raise AuthzDenied(409, "account_id_required",
-                              f"Several {provider.lower()} accounts are connected here and "
-                              "none is the main one: name the one to unlink (`account_id`: "
+                              f"Your {provider.lower()} accounts connected here have no main "
+                              "one: name the one to unlink (`account_id`: "
                               + ", ".join(f"`{a['account_id']}`" for a in mine) + ").")
     out = {"ok": True, "channel": provider.lower()}
     if cible is None:
@@ -354,7 +354,8 @@ _DOC_CONNECT = (
     "Starts the connection of a hosted messaging account under my org's "
     "subscription. Returns `{url}`: the consent page to open. `add_account=true` adds "
     "another account on the channel (its own seat) instead of replacing the connected "
-    "one. ⚠️ Second possible outcome — "
+    "one; under the platform key it requires the org's own seat cap (403 "
+    "`unipile_seat_cap_required` otherwise). ⚠️ Second possible outcome — "
     "`{adopted: true, channel, account_name}` **with no url**: the account was already "
     "connected under my identity in another org and has just been attached here, there is "
     "nothing to consent to, you must refresh. `premium` activates a LinkedIn product "

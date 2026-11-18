@@ -36,14 +36,14 @@ Retour arrière : rend la PK `(sub, org_id, provider)` — refusé (lève) s'il 
 comptes ajoutés (`slot <> ''`) : les supprimer est une décision, pas un effet de bord.
 
 Révision : 20261118_1500_unipile_slots
-Précédente : 20261116_2220_modeles_claude_55
+Précédente : 20261118_1200_apps_custom_api
 """
 from __future__ import annotations
 
 from alembic import op
 
 revision = "20261118_1500_unipile_slots"
-down_revision = "20261116_2220_modeles_claude_55"
+down_revision = "20261118_1200_apps_custom_api"
 branch_labels = None
 depends_on = None
 

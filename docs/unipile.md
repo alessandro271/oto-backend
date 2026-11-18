@@ -760,7 +760,16 @@ LinkedIn, deux numéros WhatsApp. Chaque compte est une ligne d'`unipile_account
   de l'emplacement — le principal garde la clé d'avant, à l'octet), le prêt qui le vise.
 
 **Chaque compte ajouté est un siège** : il compte dans le plafond de l'org, et la lentille
-`org.usage.connections` le rend comme une connexion de plus. L'ajout n'adopte pas un
+`org.usage.connections` le rend comme une connexion de plus. **Sous la clé plateforme,
+l'ajout exige que l'org ait un plafond PROPRE** (`orgs.unipile_account_limit` posé, `0`
+compris : un « sans plafond » explicite) : sans lui, refus `403 unipile_seat_cap_required`
+(`unipile_connect.exiger_plafond_pour_ajout`), qui dit de faire poser le plafond par un
+admin plateforme (`PUT /api/admin/orgs/{id}/unipile-limit`). Le défaut d'instance
+(`OTO_MCP_UNIPILE_DEFAULT_LIMIT`) ne compte pas : c'est un garde-fou, pas une décision sur
+l'org (décision du 18/11/2026). La garde vit dans `hosted_auth_url`, que les trois chemins
+d'ajout traversent (`me.unipile.connect`, flux de la carte, `unipile_connect_start`), et
+vaut aussi pour la connexion ordinaire requalifiée en ajout ci-dessous. Clé BYO : pas de
+siège plateforme, pas de garde. L'ajout n'adopte pas un
 compte d'une autre org et ne combine pas `premium` (les deux nomment le compte déjà là). Quand il ne reste ici que des comptes ajoutés, une connexion ordinaire
 est un ajout (elle ne prend pas l'emplacement principal, donc le défaut, en silence). À la
 réconciliation, si un même canal porte une demande ordinaire et une demande d'ajout,
@@ -772,9 +781,11 @@ reste.
 **Ce qu'un appel sert sans `_account=`** (`identities.resolve_operated_account_id`) : le
 compte que le membre a choisi par défaut (pointeur `unipile_operated_accounts` avec
 lui-même pour propriétaire, posé par `oto_identity(op='set')` sur un compte ajouté), sinon
-le principal, sinon le seul qui reste. Plusieurs comptes et rien qui en désigne un : refus
-`several_accounts_no_default`, qui les nomme — jamais un choix au hasard. Un projet qui
-épingle un des comptes lève l'ambiguïté. **Un compte ajouté ne devient jamais le défaut
+le principal. **Jamais d'office un compte ajouté, même le seul qui reste** quand le principal
+est déconnecté (décision du 18/11/2026) : des comptes ici et aucun défaut choisi = refus
+qui les nomme, `several_accounts_no_default` pour plusieurs, `no_default_account` pour un
+seul (`identities.SansCompteParDefaut`, dont `PlusieursComptesSansDefaut` hérite) — jamais
+un choix à la place du membre. Un projet qui épingle un des comptes lève le refus. **Un compte ajouté ne devient jamais le défaut
 tout seul.** `_account=<account_id>` désigne n'importe lequel des comptes d'ici pour un
 appel.
 
@@ -782,8 +793,8 @@ appel.
 défaut ; `channels.<canal>.accounts` liste tous les comptes du canal, le défaut marqué ;
 `multi_account` dit si l'ajout est ouvert ici (PK à emplacement ET option) — le front
 n'offre « ajouter un compte » que sur lui : un backend d'avant REMPLACERAIT le compte.
-**Délier** prend `account_id` (sans lui : le compte par défaut, jamais tous ; plusieurs
-sans défaut : 409 `account_id_required`). **Prêter** aussi (`connectors.account_grants`,
+**Délier** prend `account_id` (sans lui : le compte par défaut, jamais tous ; des comptes
+sans principal, même un seul : 409 `account_id_required`). **Prêter** aussi (`connectors.account_grants`,
 `account_id`) : le prêt suit l'emplacement prêté. Limite : un bénéficiaire reçoit UN
 compte par canal d'un même prêteur — en prêter un autre remplace le premier (la PK des
 prêts n'a pas bougé).

@@ -103,7 +103,7 @@ class AccountGrantInput(BaseModel):
     channel: Channel
     grantee: str                         # sub, email, or `group:<id>` (live fan-out)
     # Which of my accounts on this channel to lend, when I have connected several. Absent:
-    # the one served by default (the main account, or the only one left).
+    # the one served by default (the main account).
     account_id: Optional[str] = None
 
 
@@ -223,8 +223,8 @@ def _grant(ctx: ResolvedCtx, inp: AccountGrantInput) -> dict:
         lent = db.default_unipile_account(mine)
         if lent is None and mine:
             raise AuthzDenied(409, "account_id_required",
-                              f"You have several {inp.channel} accounts connected here and "
-                              "none is the main one: name the one to lend (`account_id`: "
+                              f"Your {inp.channel} accounts connected here have no main one: "
+                              "name the one to lend (`account_id`: "
                               + ", ".join(f"`{a['account_id']}`" for a in mine) + ").")
     if lent is None:
         raise AuthzDenied(404, "channel_not_connected",

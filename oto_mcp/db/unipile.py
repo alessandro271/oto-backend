@@ -104,12 +104,11 @@ def set_unipile_account(sub: str, account_id: str, account_name: Optional[str] =
 
 def _par_defaut(rows: list) -> Optional[dict]:
     """Le compte servi SANS choix explicite parmi les comptes vivants d'un canal : le
-    principal s'il vit, sinon le seul qui reste. Plusieurs comptes ajoutés et plus de
-    principal : None — on ne devine pas lequel (le choix se fait, il ne se suppose pas)."""
-    principal = next((r for r in rows if (r.get("slot") or "") == PRINCIPAL), None)
-    if principal is not None:
-        return principal
-    return rows[0] if len(rows) == 1 else None
+    principal s'il vit, sinon None. Le principal déconnecté, un compte ajouté n'est
+    jamais servi d'office, même seul : il ne sert que choisi (défaut posé par le membre,
+    `_account=`, épingle de projet). Le choix se fait, il ne se suppose pas — un message
+    envoyé sous une identité que personne n'a désignée ne se reprend pas."""
+    return next((r for r in rows if (r.get("slot") or "") == PRINCIPAL), None)
 
 
 def default_unipile_account(rows: list) -> Optional[dict]:
@@ -139,7 +138,7 @@ def get_unipile_account_id(sub: str, org_id: Optional[int],
     ou None. `org_id=None` (défensif) → None, jamais un repli org-agnostique.
 
     Plusieurs comptes sur le canal : celui servi par défaut (`_par_defaut` : le
-    principal, sinon le seul) — None quand rien ne le désigne."""
+    principal) — None quand rien ne le désigne."""
     r = _par_defaut(live_unipile_accounts(sub, org_id, provider))
     return r["account_id"] if r else None
 

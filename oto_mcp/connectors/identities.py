@@ -168,6 +168,10 @@ def _own_unipile_account_id(sub: str, provider: str) -> str | None:
     if acc:
         return acc
     if providers.is_personal_cross_org("unipile"):
+        if comptes_du_canal_ici(sub, provider, org=org):
+            # Accounts live HERE but none is served by default (several accounts per
+            # channel): the caller must choose among them — never another org's account.
+            return None
         pio = access.personal_instance_org(sub, "unipile", exclude_org=org)
         if pio is not None:
             return db.get_unipile_account_id(sub, pio, provider)
@@ -349,7 +353,7 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
                 f"{_tableau_de_bord(sub)}/connectors).")
     own = _own_unipile_account_id(sub, provider)
     if own is None:
-        refuser_si_plusieurs_sans_defaut(sub, provider)
+        refuser_si_sans_defaut(sub, provider)
     return own
 
 
@@ -368,17 +372,26 @@ def _unipile_chosen(sub: str, provider: str) -> str | None:
     return _own_unipile_account_id(sub, provider)
 
 
-# Several accounts on one channel, and nothing designates the one to serve (the main
-# account was disconnected, two added ones remain, no default chosen).
+# Own accounts live on this channel here, and nothing designates the one to serve: the
+# main account was disconnected and no default was chosen. Never served by office —
+# not even the only one left (decision of 18/11/2026): the default is a choice.
+CODE_SANS_DEFAUT = "no_default_account"
 CODE_PLUSIEURS = "several_accounts_no_default"
 
 
-class PlusieursComptesSansDefaut(ValueError):
-    """Several own accounts on this channel here, none served by default.
+class SansCompteParDefaut(ValueError):
+    """Own accounts on this channel here, none served by default (one added account
+    left after the main one was disconnected).
 
     A `ValueError` like the other « this identity is not operable here » refusals (their
-    callers convert them, `tools/unipile._refus_identite`): picking one would send a
-    message under an identity nobody chose — irreversible."""
+    callers convert them, `tools/unipile._refus_identite`): serving it anyway would send
+    a message under an identity nobody chose — irreversible."""
+
+    code = CODE_SANS_DEFAUT
+
+
+class PlusieursComptesSansDefaut(SansCompteParDefaut):
+    """SEVERAL own accounts on this channel here, none served by default."""
 
     code = CODE_PLUSIEURS
 
@@ -394,20 +407,27 @@ def comptes_du_canal_ici(sub: str, provider: str, org=None) -> list[dict]:
             if a.get("org_id") == o and (a.get("provider") or "").upper() == p]
 
 
-def refuser_si_plusieurs_sans_defaut(sub: str, provider: str) -> None:
-    """Raises `PlusieursComptesSansDefaut` when the caller has SEVERAL live accounts on
-    this channel in the context org and none is served by default — naming them, and
-    the two ways to choose."""
+def refuser_si_sans_defaut(sub: str, provider: str) -> None:
+    """Raises when the caller has live accounts on this channel in the context org and
+    none is served by default — `PlusieursComptesSansDefaut` for several,
+    `SansCompteParDefaut` for one — naming them, and the two ways to choose. No account
+    here: returns (the caller says « not connected » its own way)."""
     comptes = comptes_du_canal_ici(sub, provider)
-    if len(comptes) < 2:
+    if not comptes:
         return
     noms = ", ".join(f"'{c.get('account_name') or c['account_id']}' (`{c['account_id']}`)"
                      for c in comptes)
-    raise PlusieursComptesSansDefaut(
-        f"You have several {provider.title()} accounts connected here ({noms}) and none is "
-        "the default: name the one to use for this call with `_account=<account_id>`, or "
-        "choose the default once with oto_identity(op='set') or "
-        f"{_tableau_de_bord(sub)}/connectors.")
+    choisir = ("name the one to use for this call with `_account=<account_id>`, or "
+               "choose the default once with oto_identity(op='set') or "
+               f"{_tableau_de_bord(sub)}/connectors.")
+    if len(comptes) > 1:
+        raise PlusieursComptesSansDefaut(
+            f"You have several {provider.title()} accounts connected here ({noms}) and "
+            f"none is the default: {choisir}")
+    raise SansCompteParDefaut(
+        f"Your main {provider.title()} account here was disconnected; {noms} remains, but "
+        "an added account is never used by default without being chosen: "
+        f"{choisir}")
 
 
 def _unipile_client(sub: str):
@@ -630,10 +650,10 @@ async def _unipile_select(sub: str, identity_id: str, canal: str | None = None) 
     if retenu:
         raise _preteur_en_pause(retenu, retenu["provider"], identity_id)
     # 2) One of MY accounts (any mode, including resale). The one served without a
-    #    pointer (the main account of the context org, or the only one) = return to
-    #    self: clears the channel's pointer, as always. Another of my accounts on this
-    #    channel HERE (several accounts per channel) = the pointer names it, with myself
-    #    as owner — the connection rows are never touched.
+    #    pointer (the main account of the context org) = return to self: clears the
+    #    channel's pointer, as always. Another of my accounts on this channel HERE
+    #    (an added account — even the only one left once the main one is gone) = the
+    #    pointer names it, with myself as owner — the connection rows are never touched.
     mes_comptes = db.list_unipile_accounts(sub)
     miens = [a for a in mes_comptes if a["account_id"] == identity_id]
     if miens:
@@ -641,9 +661,7 @@ async def _unipile_select(sub: str, identity_id: str, canal: str | None = None) 
         org_ici = access.current_org(sub)
         own = next((a for a in miens if a.get("org_id") == org_ici), miens[0])
         _exige_canal(own["provider"])
-        voisins = [a for a in mes_comptes if a.get("org_id") == org_ici
-                   and a.get("provider") == own["provider"]]
-        if (own.get("org_id") == org_ici and len(voisins) > 1
+        if (own.get("org_id") == org_ici
                 and identity_id != _own_unipile_account_id(sub, own["provider"])):
             db.set_operated_account(sub, own["provider"], identity_id, sub)
         else:
