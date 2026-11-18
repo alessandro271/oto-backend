@@ -705,6 +705,11 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # outils au même titre, font LEVER la construction (`tool_alias.poser_les_titres`).
     from . import tool_alias
     tool_alias.poser_les_titres(instance)
+    # Après le DERNIER montage, lui aussi : chaque outil sérialise son résultat sans
+    # lever sur un surrogate isolé venu d'un amont (remplacé par U+FFFD) — la conversion
+    # d'un dict en texte casse DANS l'outil, avant tout middleware.
+    from .middleware.sans_surrogate import SansSurrogateMiddleware, poser_le_serialiseur
+    poser_le_serialiseur(instance)
 
     # oto-backend#534 : chronomètre TOUTE la chaîne de middlewares ci-dessous, sans
     # toucher un seul de ses appels ni leur ordre (contrat figé, cf. les commentaires
@@ -730,6 +735,14 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # 0 dans la boucle après.
     from .middleware.identity_scope import IdentityScopeMiddleware
     instance.add_middleware(IdentityScopeMiddleware())
+
+    # -1 bis. Aucun surrogate isolé ne part au transport : le PLUS EXTERNE de ce qui
+    # touche au RÉSULTAT, donc le dernier à le voir au retour — plus interne, un
+    # middleware au-dessus pourrait encore porter le caractère que l'encodage UTF-8 de
+    # la réponse refuse. Il ne lit ni nom ni identité. Son jumeau, le sérialiseur posé
+    # sur chaque outil (`poser_le_serialiseur`, plus haut), couvre la conversion d'un
+    # dict en texte, qui casse AVANT tout middleware.
+    instance.add_middleware(SansSurrogateMiddleware())
 
     # 0. Nom des outils au nom du PRODUIT du tenant (ADR 0052) — OUTERMOST de tout ce
     # qui touche au NOM (la portée d'identité au-dessus n'en lit aucun) :
