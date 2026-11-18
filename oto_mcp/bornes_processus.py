@@ -13,6 +13,9 @@ TOUT ce que sert le processus :
   30 s. En application : posé par connexion (`_conn._connect_options`) ;
 - `session` — l'inactivité d'une session MCP (`borne_session`) : 30 min, une borne de
   l'SDK `mcp` (`session_idle_timeout`), sans aucun état par principal.
+  **Exception au mode** : elle est armée dès que le mode n'est pas `off` (`report`
+  compris) — ce n'est pas un refus (le client rouvre sa session sur le 404), c'est ce
+  qui rend la mémoire des sessions que leurs clients ne ferment jamais.
 
 **Un seul interrupteur, celui de la limite de débit** (`OTO_DEBIT_MODE`,
 `limite_debit.mode_depuis_env`) : `report` (défaut) MESURE et ne refuse rien, `enforce`
