@@ -388,6 +388,50 @@ def test_a_reply_never_starts_a_new_thread(client, act, method):
     client.create_draft.assert_not_called()
 
 
+# --- une réponse vise qui on lui dit, et se range sous le DERNIER message ------
+
+@pytest.mark.parametrize("act,method", [(True, "reply"), (False, "create_draft_reply")])
+def test_a_reply_passes_explicit_to_and_cc(client, act, method):
+    """Avec `reply_to`, `to` et `cc` n'étaient pas transmis : pour viser la bonne
+    personne, l'agent répondait à un message plus ancien, et la réponse s'y rangeait."""
+    kwargs = dict(body="hi", reply_to="m1", to="dan@example.com", cc="eve@example.com")
+    _call("gmail_act", op="send", **kwargs) if act else _call("gmail", op="draft", **kwargs)
+    k = getattr(client, method).call_args.kwargs
+    assert (k["message_id"], k["thread_id"]) == ("m1", None)
+    assert (k["to"], k["cc"]) == ("dan@example.com", "eve@example.com")
+
+
+@pytest.mark.parametrize("act,method", [(True, "reply"), (False, "create_draft_reply")])
+def test_reply_to_thread_answers_the_thread(client, act, method):
+    kwargs = dict(body="hi", reply_to_thread="t1")
+    _call("gmail_act", op="send", **kwargs) if act else _call("gmail", op="draft", **kwargs)
+    k = getattr(client, method).call_args.kwargs
+    assert (k["message_id"], k["thread_id"]) == (None, "t1")
+    client.send.assert_not_called()
+    client.create_draft.assert_not_called()
+
+
+def test_the_not_latest_warning_reaches_the_answer(client):
+    client.create_draft_reply.return_value = {
+        "id": "d1", "message_id": "dm1", "threadId": "t1", "replied_to": "m1",
+        "warning": {"code": "not_latest_in_thread", "latest_message_id": "m3"}}
+    out = _call("gmail", op="draft", body="hi", reply_to="m1")
+    assert out["warning"]["latest_message_id"] == "m3" and out["kind"] == "draft"
+
+
+def test_reply_to_and_reply_to_thread_are_exclusive(client):
+    with pytest.raises(McpError, match="exclusive"):
+        _call("gmail_act", op="send", body="hi", reply_to="m1", reply_to_thread="t1")
+    client.reply.assert_not_called()
+    client.get_signature.assert_not_called()
+
+
+def test_reply_to_thread_is_refused_outside_composition(client):
+    with pytest.raises(McpError, match="only apply when composing"):
+        _call("gmail", op="search", query="x", reply_to_thread="t1")
+    client._factory.assert_not_called()
+
+
 def test_a_new_message_without_a_recipient_is_refused(client):
     with pytest.raises(McpError, match="`to` is required"):
         _call("gmail_act", op="send", body="hi")
@@ -469,3 +513,26 @@ def test_trash_404_tells_the_agent_to_use_delete_draft(client):
     with pytest.raises(McpError, match=r"DRAFT.*delete_draft.*draft_id"):
         _call("gmail_act", op="trash", message_ids=["m-draft"])
     client.delete_draft.assert_not_called()
+# --- répondre à tous se demande : par défaut, l'auteur seul ----------------------
+
+@pytest.mark.parametrize("act,method", [(True, "reply"), (False, "create_draft_reply")])
+def test_a_reply_goes_to_the_author_alone_unless_reply_all(client, act, method):
+    kwargs = dict(body="hi", reply_to_thread="t1")
+    _call("gmail_act", op="send", **kwargs) if act else _call("gmail", op="draft", **kwargs)
+    assert getattr(client, method).call_args.kwargs["reply_all"] is False
+    kwargs["reply_all"] = True
+    _call("gmail_act", op="send", **kwargs) if act else _call("gmail", op="draft", **kwargs)
+    assert getattr(client, method).call_args.kwargs["reply_all"] is True
+
+
+def test_reply_all_is_refused_on_a_new_message(client):
+    with pytest.raises(McpError, match="only applies to a reply"):
+        _call("gmail_act", op="send", body="hi", to="a@example.com", subject="s",
+              reply_all=True)
+    client.send.assert_not_called()
+
+
+def test_reply_all_is_refused_outside_composition(client):
+    with pytest.raises(McpError, match="only apply when composing"):
+        _call("gmail", op="search", query="x", reply_all=True)
+    client._factory.assert_not_called()
