@@ -87,6 +87,9 @@ def caller(monkeypatch):
     state["real_compter"] = db_rate.compter
     monkeypatch.setattr(db_rate, "compter", compter)
     monkeypatch.delenv("OTO_GOOGLE_ADS_DAILY_OPS", raising=False)
+    for nom in ("OTO_PLATFORM_KEY_ORG_RATE", "OTO_PLATFORM_KEY_ORG_RATE_LIMIT",
+                "OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S", "OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES"):
+        monkeypatch.delenv(nom, raising=False)
     T._PAGES.clear()
     T._FIELDS.clear()
     yield state
@@ -381,69 +384,81 @@ def test_la_page_gardee_expire(google):
 
 # --- 5. budget d'opérations ---------------------------------------------------
 # Toute requête Google tire sur LE quota du projet Google Cloud de la plateforme
-# (Explorer : 2 880 opérations / 24 h glissantes pour TOUTES les orgs).
+# (Explorer : 2 880 opérations / 24 h glissantes pour TOUTES les orgs). La borne par
+# org et par minute est celle de l'équité commune (F-051, `access/platform_rate`) ;
+# le plafond du jour de la plateforme est la garde propre à Google.
+
+ORG_MINUTE = ("org:42", "google_ads")
+PLATEFORME_JOUR = ("platform", "google_ads:day")
+
 
 def test_chaque_requete_google_est_comptee_pour_l_org_et_la_plateforme(google, caller):
     google.replies = [{"results": [], "fieldMask": MASK}]
     _tool("google_ads_search")(customer_id="1234567890", query=Q)
-    assert caller["counts"] == {("org:42", "google_ads:minute"): 1,
-                                ("org:42", "google_ads:day"): 1,
-                                ("platform", "google_ads:day"): 1}
+    # Sous `google_ads`, pas sous `google` (le porteur du compte) : c'est son quota.
+    assert caller["counts"] == {ORG_MINUTE: 1, PLATEFORME_JOUR: 1}
+
+
+def test_la_borne_par_org_est_celle_de_f051():
+    from oto_mcp.access import platform_rate
+
+    assert platform_rate.limit_for("google_ads") == 30
 
 
 def test_sans_org_la_personne_est_comptee(google, caller):
     caller["org"] = None
     google.replies = [{"resourceNames": []}]
     _tool("google_ads_customers")()
-    assert ("user:u1", "google_ads:minute") in caller["counts"]
+    assert ("user:u1", "google_ads") in caller["counts"]
 
 
-def test_la_rafale_d_une_org_est_coupee_sans_appel_google(google, caller):
-    from oto_mcp.tools import google_ads as T
+def test_en_report_la_rafale_est_comptee_sans_refus(google, caller):
+    caller["counts"][ORG_MINUTE] = 30
+    google.replies = [{"results": [], "fieldMask": MASK}]
+    _tool("google_ads_search")(customer_id="1234567890", query=Q)
+    assert len(google.requests) == 1 and caller["counts"][ORG_MINUTE] == 31
 
-    caller["counts"][("org:42", "google_ads:minute")] = T._ORG_PER_MINUTE
+
+def test_en_enforce_la_rafale_d_une_org_est_coupee_sans_appel_google(google, caller,
+                                                                      monkeypatch):
+    from oto_mcp.access import platform_rate
+
+    monkeypatch.setenv("OTO_PLATFORM_KEY_ORG_RATE", "enforce")
+    caller["counts"][ORG_MINUTE] = 30
     google.replies = [{"results": [], "fieldMask": MASK}]
     with pytest.raises(McpError) as e:
         _tool("google_ads_search")(customer_id="1234567890", query=Q)
-    assert e.value.error.data["code"] == T.RATE_CODE
-    assert "per minute" in e.value.error.message
+    assert e.value.error.data == {"code": platform_rate.CODE, "connector": "google_ads",
+                                  "used": 31, "limit": 30, "window_s": 60}
+    # Aucune clé à soi ne lève ce quota : le refus ne le propose pas.
+    assert "your own" not in e.value.error.message
     assert google.requests == []
     # Refusée à la minute, la requête n'entame pas le budget du jour.
-    assert ("org:42", "google_ads:day") not in caller["counts"]
+    assert PLATEFORME_JOUR not in caller["counts"]
     # Une autre org n'est pas touchée.
     caller["org"] = 77
     _tool("google_ads_search")(customer_id="1234567890", query=Q)
     assert len(google.requests) == 1
 
 
-def test_une_org_ne_prend_que_la_moitie_du_budget_du_jour(google, caller, monkeypatch):
-    from oto_mcp.tools import google_ads as T
-
-    monkeypatch.setenv("OTO_GOOGLE_ADS_DAILY_OPS", "100")
-    caller["counts"][("org:42", "google_ads:day")] = 50
-    google.replies = [{"results": [], "fieldMask": MASK}]
-    with pytest.raises(McpError) as e:
-        _tool("google_ads_search")(customer_id="1234567890", query=Q)
-    assert e.value.error.data == {"code": T.RATE_CODE, "scope": "this org, per UTC day",
-                                  "used": 51, "limit": 50, "window_s": 86_400}
-    assert google.requests == []
-
-
 def test_le_budget_de_la_plateforme_coupe_toutes_les_orgs(google, caller):
     from oto_mcp.tools import google_ads as T
 
-    caller["counts"][("platform", "google_ads:day")] = T.DEFAULT_DAILY_OPS
+    caller["counts"][PLATEFORME_JOUR] = T.DEFAULT_DAILY_OPS
     google.replies = [{"results": [], "fieldMask": MASK}]
-    with pytest.raises(McpError, match="whole platform"):
+    with pytest.raises(McpError, match="whole platform") as e:
         _tool("google_ads_search")(customer_id="1234567890", query=Q)
+    assert e.value.error.data == {"code": T.RATE_CODE, "scope": "platform",
+                                  "used": T.DEFAULT_DAILY_OPS + 1,
+                                  "limit": T.DEFAULT_DAILY_OPS, "window_s": 86_400}
     assert google.requests == []
 
 
-def test_budget_zero_ne_garde_que_la_rafale(google, caller, monkeypatch):
+def test_budget_zero_ne_garde_que_la_borne_par_org(google, caller, monkeypatch):
     monkeypatch.setenv("OTO_GOOGLE_ADS_DAILY_OPS", "0")
     google.replies = [{"results": [], "fieldMask": MASK}]
     _tool("google_ads_search")(customer_id="1234567890", query=Q)
-    assert set(caller["counts"]) == {("org:42", "google_ads:minute")}
+    assert set(caller["counts"]) == {ORG_MINUTE}
 
 
 def test_un_compteur_casse_sert_l_appel_et_le_dit(google, monkeypatch, caplog):
@@ -513,12 +528,14 @@ def test_le_budget_compte_en_base(base, caller, monkeypatch):
     from oto_mcp.tools import google_ads as T
 
     monkeypatch.setattr(db_rate, "compter", caller["real_compter"])
-    monkeypatch.setattr(T, "_MINUTE_S", 3600)   # aucune minute qui tourne en plein banc
-    for _ in range(T._ORG_PER_MINUTE):
+    monkeypatch.setenv("OTO_PLATFORM_KEY_ORG_RATE", "enforce")
+    # Aucune minute qui tourne en plein banc.
+    monkeypatch.setenv("OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S", "3600")
+    for _ in range(30):
         T._debit()
     with pytest.raises(McpError) as e:
         T._debit()
-    assert e.value.error.data["used"] == T._ORG_PER_MINUTE + 1
+    assert e.value.error.data["used"] == 31
     caller["org"] = 77
     T._debit()
 

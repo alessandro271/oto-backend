@@ -28,12 +28,14 @@ the Google Cloud project of the platform's OAuth client — Explorer access = 2,
 operations per sliding 24 h for the WHOLE platform, Basic = 15,000. One agent looping
 on GAQL would cut every other org (and hammer the audited account). So each Google
 request is counted BEFORE it leaves, in the database (`db/platform_key_rate`, shared by
-the processes), always enforced — a shared third-party quota, the F-051 class:
-- per org, `_ORG_PER_MINUTE` per minute (a loop stops in a minute, not in a day);
-- per org, half the platform's daily budget (no org can drain it alone);
+the processes):
+- per org per minute, by the common fairness of shared quotas (`access/platform_rate`,
+  F-051): its mode (`report` by default, `enforce`) and its limit (`google_ads=30` in
+  its per-carrier defaults, `OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES` above them);
 - the platform, `OTO_GOOGLE_ADS_DAILY_OPS` per UTC day (default 1,440 = half of
   Explorer's 2,880: a fixed day can double across midnight, the sliding 24 h of
-  Google cannot be exceeded; raise it with the access level, `0` = no budget).
+  Google cannot be exceeded; raise it with the access level, `0` = no budget) — the
+  guard of Google's own quota, always enforced, whatever the F-051 mode.
 A broken counter never refuses: logged, the call goes through. The field catalog
 (`google_ads_fields`) is cached per API version: account-independent, it costs once.
 """
@@ -79,9 +81,8 @@ logger = logging.getLogger(__name__)
 
 #: The named code of a budget refusal — tested by callers, never the sentence.
 RATE_CODE = "google_ads_rate_limited"
-_ORG_PER_MINUTE = 30
 DEFAULT_DAILY_OPS = 1440
-_MINUTE_S, _DAY_S = 60, 86_400
+_DAY_S = 86_400
 
 # Google pages kept for the next slices of the same page (`_PAGES`).
 _PAGE_TTL_S = 600
@@ -117,51 +118,46 @@ def verifier_reglages() -> None:
     daily_ops()
 
 
-def _budget_refusal(what: str, used: int, limit: int, window: int) -> McpError:
-    wait = int(window - (time.time() % window)) + 1
-    when = (f"in {wait} s" if window <= _MINUTE_S
-            else f"after 00:00 UTC (in about {wait // 3600 + 1} h)")
+def _budget_refusal(used: int, limit: int) -> McpError:
+    wait = int(_DAY_S - (time.time() % _DAY_S)) + 1
     return McpError(ErrorData(
         code=INVALID_PARAMS,
-        message=(f"Google Ads read budget reached — {what}: {used} Google requests, "
-                 f"limit {limit}. Every Google Ads call of the platform draws on one "
-                 f"shared Google quota, so it is capped. Retry {when}; meanwhile send "
+        message=(f"Google Ads read budget reached — the whole platform, per UTC day: "
+                 f"{used} Google requests, limit {limit}. Every Google Ads call of the "
+                 "platform draws on one shared Google quota, so it is capped. Retry "
+                 f"after 00:00 UTC (in about {wait // 3600 + 1} h); meanwhile send "
                  "fewer, larger queries (ORDER BY … LIMIT, fewer segments, no paging "
                  "through raw rows). Nothing was sent to Google."),
-        data={"code": RATE_CODE, "scope": what, "used": used, "limit": limit,
-              "window_s": window}))
+        data={"code": RATE_CODE, "scope": "platform", "used": used, "limit": limit,
+              "window_s": _DAY_S}))
 
 
 def _debit(ops: int = 1) -> None:
-    """Count `ops` Google requests for the caller's org and for the platform BEFORE
-    they leave; past a limit, refuse (always enforced). The counter failing serves."""
+    """Count `ops` Google requests BEFORE they leave: for the caller's org through the
+    common fairness of shared quotas (F-051, its mode), then for the platform's day
+    (always enforced). The counter failing serves."""
+    from ..access import platform_rate
     from ..db import platform_key_rate as db_rate
 
     sub = access.current_user_sub_or_raise()
     org = access.current_org(sub)
-    who = f"org:{org}" if org is not None else f"user:{sub}"
-    platform = daily_ops()
-    checks = [(who, "google_ads:minute", _MINUTE_S, _ORG_PER_MINUTE,
-               "this org, per minute")]
-    if platform:
-        checks += [(who, "google_ads:day", _DAY_S, max(1, platform // 2),
-                    "this org, per UTC day"),
-                   ("platform", "google_ads:day", _DAY_S, platform,
-                    "the whole platform, per UTC day")]
-    for scope, key, window, limit, what in checks:
-        used = 0
-        try:
-            for _ in range(ops):
-                used = db_rate.compter(scope, key, window)
-        except Exception:
-            logger.exception("google_ads budget: counter failed for %s on %s — call "
-                             "served", scope, key)
-            return
-        if used > limit:
-            if used - ops < limit + 1:   # once per window, not once per call
-                logger.warning("google_ads budget: %s crossed %d requests/%ds",
-                               scope, limit, window)
-            raise _budget_refusal(what, used, limit, window)
+    for _ in range(ops):
+        platform_rate.enforce(_SERVICE, sub, org, shared_quota=True)
+    limit = daily_ops()
+    if not limit:
+        return
+    used = 0
+    try:
+        for _ in range(ops):
+            used = db_rate.compter("platform", "google_ads:day", _DAY_S)
+    except Exception:
+        logger.exception("google_ads budget: platform counter failed — call served")
+        return
+    if used > limit:
+        if used - ops < limit + 1:   # once per day, not once per call
+            logger.warning("google_ads budget: the platform crossed %d requests/day",
+                           limit)
+        raise _budget_refusal(used, limit)
 
 
 # --- what is kept between two calls -------------------------------------------

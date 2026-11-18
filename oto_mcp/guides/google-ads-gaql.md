@@ -69,7 +69,7 @@ Plus the "search terms without conversion" and "keywords" queries above. Nothing
 
 ## Budget
 
-Every Google Ads call of the platform draws on ONE Google quota (the platform's Google Cloud project), so oto caps the Google requests: per org per minute, per org per day, and for the whole platform per day. A refusal says which, when to retry, and that nothing was sent. Stay well under it: aggregated queries with `ORDER BY … LIMIT`, `google_ads_fields` once per resource (its answer is kept), no paging through raw rows — the next slices of a page already read cost nothing for a few minutes, a new Google page costs one request.
+Every Google Ads call of the platform draws on ONE Google quota (the platform's Google Cloud project), so oto caps the Google requests: per org per minute and for the whole platform per day. A refusal says which, when to retry, and that nothing was sent. Stay well under it: aggregated queries with `ORDER BY … LIMIT`, `google_ads_fields` once per resource (its answer is kept), no paging through raw rows — the next slices of a page already read cost nothing for a few minutes, a new Google page costs one request.
 
 ## Paging
 

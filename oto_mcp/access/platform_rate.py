@@ -24,7 +24,12 @@ processes that share the database and nothing else.
 - **Limits**: `OTO_PLATFORM_KEY_ORG_RATE_LIMIT` calls (default 120) per
   `OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S` seconds (default 60);
   `OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES` = `serper=600,aiark=30` per key carrier,
-  `0` = no limit for that connector.
+  `0` = no limit for that connector, over the code's own per-carrier defaults
+  (`DEFAULT_OVERRIDES`).
+- **Beyond platform keys**: a connector whose quota is shared by every org without
+  being a platform key (`google_ads`: the person's token, the platform's Google Cloud
+  project) counts through the same `enforce`, with `shared_quota=True`: counted under
+  ITS name (not its key's carrier), and no key of one's own lifts it.
 - **An unreadable setting refuses to start** (`verifier_reglages`, called at boot): a
   misspelt mode or a limit that is not a whole number is a configuration error, never
   read as the default in silence.
@@ -59,6 +64,9 @@ _ENV_WINDOW = "OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S"
 _ENV_OVERRIDES = "OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES"
 _MODES = ("enforce", "report", "off")
 DEFAULT_LIMIT = 120
+#: Per-carrier limits of the code, under `OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES`.
+#: `google_ads`: one Google Cloud quota for the whole platform (`tools/google_ads.py`).
+DEFAULT_OVERRIDES: dict[str, int] = {"google_ads": 30}
 DEFAULT_WINDOW_S = 60
 
 
@@ -100,7 +108,7 @@ def _overrides() -> dict[str, int]:
     """`OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES` = `serper=600,aiark=30`; a pair without
     `=`, without a name, or without a whole number raises."""
     lu = os.environ.get("OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES") or ""
-    limites: dict[str, int] = {}
+    limites: dict[str, int] = dict(DEFAULT_OVERRIDES)
     for paire in lu.split(","):
         if not paire.strip():
             continue
@@ -140,26 +148,36 @@ def _porteur(sub: Optional[str], org: Optional[int]) -> Optional[str]:
     return f"user:{sub}" if sub else None
 
 
-def refusal(carrier: str, used: int, limit: int, window: int, hint: str = "") -> McpError:
+def refusal(carrier: str, used: int, limit: int, window: int, hint: str = "",
+            shared_quota: bool = False) -> McpError:
+    if shared_quota:
+        message = (f"Too many calls on oto's shared `{carrier}` quota from this org: "
+                   f"{used} in the current {window}-second window, limit {limit} per "
+                   "org. The quota is shared by every org; retry in a minute, and "
+                   "send fewer, larger requests.")
+    else:
+        message = (f"Too many calls on oto's shared `{carrier}` key from this org: {used} "
+                   f"in the current {window}-second window, limit {limit} per org. The "
+                   f"key is shared by every org; retry in a minute, or set your own "
+                   f"`{carrier}` key{hint} to lift the limit.")
     return McpError(ErrorData(
         code=INVALID_PARAMS,
-        message=(f"Too many calls on oto's shared `{carrier}` key from this org: {used} "
-                 f"in the current {window}-second window, limit {limit} per org. The key "
-                 f"is shared by every org; retry in a minute, or set your own "
-                 f"`{carrier}` key{hint} to lift the limit."),
+        message=message,
         data={"code": CODE, "connector": carrier, "used": used, "limit": limit,
               "window_s": window}))
 
 
 def enforce(provider: str, sub: Optional[str], org: Optional[int], *,
-            hint: Callable[[], str] = lambda: "") -> None:
+            hint: Callable[[], str] = lambda: "", shared_quota: bool = False) -> None:
     """Count this platform-key call for its org, and refuse it (in `enforce`) past the
     org's limit for the window. `hint` = where to set one's own key, built only when
-    refusing."""
+    refusing. `shared_quota=True` = a quota of `provider` itself, shared by every org
+    without being a platform key: counted under `provider`'s own name, and no key of
+    one's own lifts it."""
     m = mode()
     if m == "off":
         return
-    carrier = providers.credential_provider(provider)
+    carrier = provider if shared_quota else providers.credential_provider(provider)
     limit = limit_for(carrier)
     qui = _porteur(sub, org)
     if not limit or qui is None:
@@ -180,4 +198,5 @@ def enforce(provider: str, sub: Optional[str], org: Optional[int], *,
         logger.warning("platform-key rate (%s): %s crossed %d calls/%ds on `%s`",
                        m, qui, limit, window, carrier)
     if m == "enforce":
-        raise refusal(carrier, used, limit, window, hint())
+        raise refusal(carrier, used, limit, window, "" if shared_quota else hint(),
+                      shared_quota)

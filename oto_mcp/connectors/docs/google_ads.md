@@ -6,7 +6,7 @@ from this card, click **connect**: Google asks you to authorize **Google Ads onl
 - **no developer token to provide**: Google retired it on 2026-09-09; the API access level is the one of the platform's OAuth app — a refusal saying "approved for test accounts only" is fixed by the platform's administrator, not by reconnecting
 - access through a manager account (MCC): pass its id as `login_customer_id` to read its client accounts
 - **auditing someone else's account**: they add the Google user you connect here to their Google Ads account with the **Read only** access level (Google Ads → Admin → Access and security), or link it under your manager account; the Read only role is Google's own guarantee that nothing can be changed
-- **budget**: every Google Ads call of the platform draws on one shared Google quota, so the number of Google requests is capped per org (per minute and per day) and for the platform (per day) — a refusal says which and when to retry; aggregated queries with `LIMIT` stay far below it
+- **budget**: every Google Ads call of the platform draws on one shared Google quota, so the number of Google requests is capped per org (per minute) and for the platform (per day) — a refusal says which and when to retry; aggregated queries with `LIMIT` stay far below it
 - several Google accounts: each tool acts on the one the call names with `_account=<email>` (the tools' `account=<email>` is the same choice — two different addresses are refused), otherwise the one the project pins, otherwise the default; an unknown address is refused, never replaced by another, and the response names the account that served (`_account`); `google_accounts` tells which ones have authorized Google Ads
 
 ## usage — read campaigns, ads and their performance
