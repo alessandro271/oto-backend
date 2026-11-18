@@ -656,7 +656,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # Rewrites the whole DNS record set, removes records, replaces a CNAME (dry_run=True previews).
     "mailpool_domain_fix": "detruire",
     "mailpool_domains": {"lire": "list get dns audit availability suggestions google_workspace_check microsoft_365_check owners"},
-    "mailpool_mailboxes": {"lire": "list get export_login export_batches export_batch", "ecrire": "create", "envoyer": "export"},
+    "mailpool_mailboxes": {"lire": "list get export_login export_batches export_batch", "ecrire": "create update", "envoyer": "export"},
     # `run` sends a real test email from the mailbox.
     "mailpool_spam_checks": {"lire": "get list", "envoyer": "run", "detruire": "delete"},
     "make_get_scenario": "lire",
@@ -1287,6 +1287,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
 LOTS: dict[str, Lot] = {
     "mailpool_mailboxes:create": Lot("mailboxes"),
     "mailpool_mailboxes:export": Lot("mailbox_ids"),
+    # `update` edits ONE mailbox (`mailbox_id`): `mailboxes` is refused there.
+    "mailpool_mailboxes:update": Lot("mailboxes"),
     "lemlist_contact:list_create": Lot("contact_ids"),
     "lemlist_inbox:messages": Lot("cc"),
     "lemlist_inbox:label_create": Lot("cc"),
