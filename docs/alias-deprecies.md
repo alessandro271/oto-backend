@@ -360,7 +360,7 @@ le journal `tool_calls` (le nom `tool` reste celui d'aujourd'hui).
 
 | Surface | Ancien nom | Nouveau nom | Forme |
 | --- | --- | --- | --- |
-| Outil MCP | `http`, `http_act`, `http_get`, `http_post`, `http_doc` | `api`, `api_act`, `api_get`, `api_post`, `api_doc` | les deux listés et appelables, aussi par `oto_call` ; l'ancien porte l'avis en tête de sa description ET de chaque réponse (`deprecations.avis_d_appel`) |
+| Outil MCP | `http`, `http_act`, `http_get`, `http_post`, `http_doc` | `api`, `api_act`, `api_get`, `api_post`, `api_doc` | les deux listés et appelables, aussi par `oto_call` et depuis une recette ; l'ancien porte l'avis en tête de sa description ET de chaque réponse (`deprecations.avis_d_appel`) |
 | Chemin REST | `GET`/`PUT /api/orgs/{id}/connectors/http/operations` | `…/connectors/api/operations` | 308, dérivé des routes montées (`deprecations._alias_connecteur_api`) |
 | Chemin REST | `POST /api/orgs/{id}/connectors/http/operations/import` | `…/connectors/api/operations/import` | 308 |
 | Chemin REST | `GET`/`PUT /api/orgs/{id}/connectors/http/definition` | `…/connectors/api/definition` | 308 |
@@ -372,6 +372,15 @@ outils activés ou masqués) sont réécrites par la révision `20261112_1200_co
 c'est de la configuration. Une liste qui nomme encore `http_get` continue de fonctionner,
 l'outil s'y lisant par son nom d'aujourd'hui (`deprecations.tool_canonique`). Le texte des
 tenants (procédures, guides, consignes d'agent) n'est pas réécrit : l'alias le sert.
+
+**Les recettes aussi** — le corps d'une recette est du texte de tenant, lui non plus
+n'est pas réécrit. Une recette-code (`oto.call("http_get", …)`), une recette
+déclarative (`tool: http_get`), ses écritures déclarées (`writes: ["http_post"]`) et
+son `data_write(via=…)` se lisent sous le nom d'aujourd'hui, par la même table
+(`recipes/moteur.sous_le_nom_d_aujourd_hui`, porté par le pont des recettes-code et par
+le moteur) : l'appel compte l'alias dans le journal et l'avis tombe une fois en tête de
+la réponse qui joue la recette. ⚠️ Jusqu'au 18/11/2026, le pont cherchait l'ancien nom
+dans le catalogue et rendait `unknown_tool` — le même appel passait par `oto_call`.
 
 ### Pourquoi les clés de capacité n'ont pas d'alias
 

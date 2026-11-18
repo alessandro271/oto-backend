@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .. import geste, outils_du_travail, redaction
+from .. import deprecations, geste, outils_du_travail, redaction
 from ..datastore import via as ds_via
 from ..mcp_errors import McpError
 from ..tools import lecture as lecture_declaree
@@ -57,6 +57,25 @@ async def _executer(tool, sub: Optional[str], outil: str, arguments: dict) -> di
     return _reponse(issue)
 
 
+def _sous_le_nom_d_aujourd_hui(appeler):
+    """`appeler`, qui reçoit le nom d'aujourd'hui d'un outil que le code nomme par un
+    ANCIEN nom (`deprecations.TOOLS` : `http_get` → `api_get`) — la traduction
+    d'`oto_call`, par la même table (`moteur.sous_le_nom_d_aujourd_hui`). Sans elle, le
+    pont cherchait l'ancien nom dans le catalogue et rendait `unknown_tool` à une recette
+    qu'`oto_call` aurait servie."""
+    async def servi(outil: str, arguments: dict) -> dict:
+        with moteur.sous_le_nom_d_aujourd_hui(outil) as nom:
+            return await appeler(nom, arguments)
+    return servi
+
+
+def _declaration_d_aujourd_hui(nom: str) -> str:
+    """Une écriture déclarée (`tool` ou `tool:op`) sous le nom d'aujourd'hui de son outil :
+    une recette qui déclare `http_post` déclare `api_post`, que le pont voit passer."""
+    outil, sep, op = str(nom).partition(":")
+    return deprecations.tool_canonique(outil) + sep + op
+
+
 def appeleur_en_lecture(fastmcp, sub: Optional[str]):
     """L'`appeler` du pont pour `sub` : un outil en lecture, ou une réponse `ok: false`
     nommée. Ne lève pas — un refus est une réponse."""
@@ -66,7 +85,7 @@ def appeleur_en_lecture(fastmcp, sub: Optional[str]):
         except moteur.RecetteRefusee as e:
             return {"ok": False, "code": e.code, "message": str(e)}
         return await _executer(tool, sub, outil, arguments)
-    return appeler
+    return _sous_le_nom_d_aujourd_hui(appeler)
 
 
 #: Ce qu'une page de `data_rows` peut rendre au code.
@@ -116,6 +135,7 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
     est refusée. `compteur` reçoit les comptes."""
     lecture = appeleur_en_lecture(fastmcp, sub)
     etat = compteur if compteur is not None else compteur_neuf()
+    ecritures = frozenset(_declaration_d_aujourd_hui(d) for d in ecritures)
     trouveurs: set[str] = set()
 
     async def appeler(outil: str, arguments: dict) -> dict:
@@ -131,7 +151,7 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
             via = arguments.get("via")
             arguments = {k: v for k, v in arguments.items() if k != "via"}
             if via is not None:
-                nom = str(via).strip()
+                nom = deprecations.tool_canonique(str(via).strip())
                 if nom and nom in trouveurs:
                     # Le geste de l'appel qui a lancé la recette porte l'écriture ; sans
                     # lui (recette lancée hors requête), on en ouvre un : sinon `via`
@@ -234,7 +254,7 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
                                f"has {max(reste, 0)} write(s) left; this call writes "
                                f"{fiches}. Nothing was called."}
         return None
-    return appeler
+    return _sous_le_nom_d_aujourd_hui(appeler)
 
 
 #: Ce qu'un appel EN LOT peut porter de fiches : la borne des outils CRM de la liste

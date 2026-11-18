@@ -86,6 +86,25 @@ def test_un_outil_en_lecture_est_appele_et_son_resultat_rendu(serveur):
     assert appels == ["acme_people"]
 
 
+def test_un_ancien_nom_est_servi_par_l_outil_d_aujourd_hui_et_compte(serveur, monkeypatch):
+    """Nommé par un ancien nom (`deprecations.TOOLS`), l'outil d'aujourd'hui répond, comme
+    par `oto_call` : le journal écrit le nom d'aujourd'hui et compte l'alias dans
+    `args.deprecated_name` — l'usage qui décide de son retrait."""
+    from oto_mcp import deprecations
+    from oto_mcp.db._conn import _connect
+    m, appels = serveur
+    ancien = f"acme_gens_{uuid.uuid4().hex[:6]}"
+    monkeypatch.setitem(deprecations.TOOLS, ancien, "acme_people")
+    reponse = _appeler(m, ancien, {"company": ancien})
+    assert reponse["ok"] and reponse["result"]["content"][0]["name"] == f"{ancien} 0"
+    assert appels == ["acme_people"]
+    with _connect() as conn:
+        lignes = conn.execute(
+            "SELECT tool, args->>'deprecated_name' AS ancien FROM tool_calls "
+            "WHERE sub = %s AND args->>'company' = %s", (SUB, ancien)).fetchall()
+    assert [(r["tool"], r["ancien"]) for r in lignes] == [("acme_people", ancien)]
+
+
 def test_un_outil_qui_ecrit_est_refuse_avant_tout_appel(serveur):
     m, appels = serveur
     reponse = _appeler(m, "acme_post", {"text": "x"})
