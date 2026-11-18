@@ -35,9 +35,6 @@ from typing import Any, Optional
 #:   it is billed, never the reader.
 FACTURATIONS = ("credits", "apify_account", "pending", "launching_org")
 
-# The key rungs the platform's operator pays, and re-bills in credits.
-_CLES_REFACTUREES = frozenset({"platform", "tenant"})
-
 
 def _texte(v: Any) -> Optional[str]:
     return v if isinstance(v, str) and v else None
@@ -50,15 +47,16 @@ def _usd(v: Any) -> Optional[float]:
     return float(v)
 
 
-def recu(run: Any, run_id: Optional[str], *, key_mode: Optional[str],
+def recu(run: Any, run_id: Optional[str], *, refacturee: bool,
          cout: Optional[float] = None, ici: bool = False) -> dict:
     """The receipt of `run` (the run object, `{data: …}` unwrapped).
 
     `cout` is the run's final cost when known, `ici` whether this call traced it for
-    billing; `key_mode` is the rung of the key that served the call."""
+    billing; `refacturee` whether the key that served the call is one the operator pays
+    and re-bills in credits (`access.credits.rang_refacture`)."""
     run = run if isinstance(run, dict) else {}
     cout = _usd(cout)
-    if key_mode not in _CLES_REFACTUREES:
+    if not refacturee:
         facturation = "apify_account"
     elif cout is None:
         facturation = "pending"
@@ -88,9 +86,11 @@ def ligne(r: dict) -> str:
     """The receipt as the one line that heads a LIST answer."""
     cout = r.get("cost_usd")
     usage = r.get("usage_total_usd")
-    return (f"Apify receipt — run_id={r.get('run_id')} dataset_id={r.get('dataset_id')} "
+    ds = r.get("dataset_id")
+    relire = (f" Read the output again with `apify_dataset_items(dataset_id=\"{ds}\")`."
+              if ds else "")
+    return (f"Apify receipt — run_id={r.get('run_id') or 'null'} dataset_id={ds or 'null'} "
             f"status={r.get('status')} cost_usd="
             f"{'null' if cout is None else f'{cout:.6f}'} usage_total_usd="
             f"{'null' if usage is None else f'{usage:.6f}'} billing={r.get('billing')} "
-            f"({_DIT.get(r.get('billing'), '')}). Read the output again with "
-            f"`apify_dataset_items(dataset_id=\"{r.get('dataset_id')}\")`.")
+            f"({_DIT.get(r.get('billing'), '')}).{relire}")

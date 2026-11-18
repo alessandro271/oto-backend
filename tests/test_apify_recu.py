@@ -46,7 +46,7 @@ def _sans_base():
 
 
 def _appel(outil, *, run=None, statut=None, items=None, abort=None,
-           key_mode="platform", **kwargs):
+           key_mode="platform", ligne=None, **kwargs):
     """Appelle `outil` sur un client Apify simulé, la clé de l'appel au rang `key_mode`.
     Rend `(sortie, avis)` — `avis` = chaque ligne posée en tête de la réponse."""
     with ExitStack() as pile:
@@ -56,7 +56,8 @@ def _appel(outil, *, run=None, statut=None, items=None, abort=None,
         inst.api_key = "fake-key"
         pile.enter_context(patch("oto_mcp.tools.apify.session_org.note_call_trace"))
         pile.enter_context(patch("oto_mcp.tools.apify.session_org.current_call_trace",
-                                 return_value={"key_mode": key_mode}))
+                                 return_value={"key_mode": key_mode,
+                                               "credential_row": ligne}))
         avis = pile.enter_context(patch("oto_mcp.tools.apify.session_org.noter_avis"))
         inst.run.return_value = run
         inst.run_status.return_value = statut
@@ -140,6 +141,18 @@ def test_on_an_own_key_apify_bills_the_account_and_the_cost_is_still_shown():
     assert out["receipt"]["cost_usd"] == 0.0421
 
 
+@pytest.mark.parametrize("slug, attendu", [("primaire", "credits"),
+                                           ("partenaire", "apify_account")])
+def test_a_tenant_key_is_re_billed_only_when_it_is_the_primary_tenant_s(
+        monkeypatch, slug, attendu):
+    """Le prédicat unique du bord des crédits (`credits.rang_refacture`) : l'opérateur
+    paie la clé du tenant PRIMAIRE et la refacture ; un autre tenant paie la sienne."""
+    monkeypatch.setenv("OTO_TENANT_PRIMAIRE_SLUG", "primaire")
+    out, _ = _appel("apify_run_status", statut=_r("SUCCEEDED"), run_id=RUN,
+                    key_mode="tenant", ligne=("tenant", slug))
+    assert out["receipt"]["billing"] == attendu
+
+
 def test_a_platform_run_read_from_another_org_is_billed_to_its_launcher():
     with patch("oto_mcp.tools.apify._hors_du_lanceur", return_value=True):
         out, _ = _appel("apify_run_status", statut=_r("SUCCEEDED"), run_id=RUN)
@@ -151,9 +164,54 @@ def test_a_platform_run_read_from_another_org_is_billed_to_its_launcher():
 @pytest.mark.parametrize("run", [None, [], {}, {"id": 3, "status": None,
                                                  "usageTotalUsd": "x"}])
 def test_the_receipt_never_raises_on_an_unreadable_run(run):
-    r = apify_recu.recu(run, RUN, key_mode="platform", cout=float("nan"))
+    r = apify_recu.recu(run, RUN, refacturee=True, cout=float("nan"))
     assert r["run_id"] == RUN and r["cost_usd"] is None and r["billing"] == "pending"
     assert apify_recu.ligne(r).startswith("Apify receipt")
     assert set(r) == {"run_id", "dataset_id", "status", "usage_total_usd", "cost_usd",
                       "billing"}
     assert r["billing"] in apify_recu.FACTURATIONS
+
+
+def test_a_missing_dataset_is_said_null_and_no_read_again_hint():
+    r = apify_recu.recu({"id": RUN, "status": "SUCCEEDED"}, RUN, refacturee=False)
+    texte = apify_recu.ligne(r)
+    assert "dataset_id=null" in texte and "apify_dataset_items" not in texte
+
+
+# --- par le vrai montage : la ligne arrive EN TÊTE, la liste reste la sortie ----
+
+@pytest.mark.asyncio
+async def test_through_the_mount_the_receipt_heads_the_text_and_the_list_is_served(
+        monkeypatch):
+    """Pas un `noter_avis` simulé : le vrai `RappelContexteMiddleware` pose la ligne en
+    tête du canal texte, et le bloc suivant reste la LISTE d'éléments."""
+    from fastmcp import Client, FastMCP
+
+    from oto_mcp import rappel_contexte
+    from oto_mcp.middleware.rappel_contexte import (ConstatContexteMiddleware,
+                                                    RappelContexteMiddleware)
+    from oto_mcp.tools import apify
+
+    monkeypatch.setattr(rappel_contexte, "pour_l_appel", lambda outil: (None, None))
+    mcp = FastMCP("apify-recu")
+    apify.register(mcp)
+    mcp.add_middleware(RappelContexteMiddleware())
+    mcp.add_middleware(ConstatContexteMiddleware())
+    with ExitStack() as pile:
+        pile.enter_context(patch("oto_mcp.access.resolve_api_key",
+                                 return_value=("fake-key", False)))
+        inst = pile.enter_context(patch("oto.tools.apify.client.ApifyClient")).return_value
+        inst.api_key = "fake-key"
+        pile.enter_context(patch("oto_mcp.tools.apify.session_org.note_call_trace"))
+        pile.enter_context(patch("oto_mcp.tools.apify.session_org.current_call_trace",
+                                 return_value={"key_mode": "platform"}))
+        inst.run.return_value = _r("SUCCEEDED")
+        inst.dataset_items.return_value = [{"a": 1}, {"a": 2}]
+        async with Client(mcp) as c:
+            res = await c.call_tool("apify_run_sync", {"actor_id": "apify/x"})
+    textes = [b.text for b in res.content if getattr(b, "text", None) is not None]
+    assert textes[0].startswith("Apify receipt — run_id=" + RUN)
+    assert f"dataset_id={DS}" in textes[0] and "billing=credits" in textes[0]
+    import json
+    assert json.loads(textes[1]) == [{"a": 1}, {"a": 2}], "la LISTE, servie telle quelle"
+    assert len(textes) == 2

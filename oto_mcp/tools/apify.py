@@ -792,12 +792,29 @@ def _releve(out: Any, run_id: str, outil: str = "apify_run_status",
     return _Releve(cout, True)
 
 
+def _cle_refacturee() -> bool:
+    """Whether the key of this call is one the operator pays and re-bills in credits —
+    the single predicate of the credits edge (`access.credits.rang_refacture`: the
+    platform's key, the PRIMARY tenant's). An instance that does not declare its primary
+    tenant is refused at resolution already; read here, it is said, and only the
+    platform's key counts."""
+    from .. import tenancy
+    from ..access import credits as budget
+    trace = session_org.current_call_trace() or {}
+    ligne = trace.get("credential_row") or ()
+    try:
+        return budget.rang_refacture(
+            trace.get("key_mode"), ligne[1] if len(ligne) > 1 else None) is not None
+    except tenancy.TenantPrimaireNonDeclare:
+        logger.warning("apify: primary tenant not declared, the receipt counts the "
+                       "platform's key only as re-billed", exc_info=True)
+        return trace.get("key_mode") == "platform"
+
+
 def _recu(out: Any, run_id: Optional[str], releve: _Releve = _Releve()) -> dict:
     """The receipt of the run `out` answers (`apify_recu.recu`), on the key of the call."""
-    return apify_recu.recu(
-        _run_of(out), run_id,
-        key_mode=(session_org.current_call_trace() or {}).get("key_mode"),
-        cout=releve.cout, ici=releve.ici)
+    return apify_recu.recu(_run_of(out), run_id, refacturee=_cle_refacturee(),
+                           cout=releve.cout, ici=releve.ici)
 
 
 def _avec_recu(out: Any, recu: dict) -> Any:
