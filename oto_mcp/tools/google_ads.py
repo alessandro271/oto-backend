@@ -19,7 +19,25 @@ on real accounts — named refusal, an app setting, never the person's account.
 **Paging**: Google pages by 10,000 rows (fixed since v19). The agent reads at most
 `max_rows` (≤ 1,000, ~200 KB) per call; the returned `page_token` is OURS — Google's
 page token + an offset inside its page — so nothing between two slices is lost.
-Google's tokens expire after ~2 h.
+Google's tokens expire after ~2 h. The Google page behind a cursor is kept a few
+minutes in this process (`_PAGES`, per access token): the next slices of the same
+page do not ask Google again.
+
+**Operations budget** (`_debit`, 2026-11-17). Every Google request draws on ONE quota:
+the Google Cloud project of the platform's OAuth client — Explorer access = 2,880
+operations per sliding 24 h for the WHOLE platform, Basic = 15,000. One agent looping
+on GAQL would cut every other org (and hammer the audited account). So each Google
+request is counted BEFORE it leaves, in the database (`db/platform_key_rate`, shared by
+the processes):
+- per org per minute, by the common fairness of shared quotas (`access/platform_rate`,
+  F-051): its mode (`report` by default, `enforce`) and its limit (`google_ads=30` in
+  its per-carrier defaults, `OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES` above them);
+- the platform, `OTO_GOOGLE_ADS_DAILY_OPS` per UTC day (default 1,440 = half of
+  Explorer's 2,880: a fixed day can double across midnight, the sliding 24 h of
+  Google cannot be exceeded; raise it with the access level, `0` = no budget) — the
+  guard of Google's own quota, always enforced, whatever the F-051 mode.
+A broken counter never refuses: logged, the call goes through. The field catalog
+(`google_ads_fields`) is cached per API version: account-independent, it costs once.
 """
 from __future__ import annotations
 
@@ -27,6 +45,11 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
+import os
+import threading
+import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import requests
@@ -54,8 +77,126 @@ _REQUEST_FAMILIES = frozenset({"queryError", "requestError", "fieldError",
                                "fieldMaskError", "dateError", "dateRangeError"})
 
 
+logger = logging.getLogger(__name__)
+
+#: The named code of a budget refusal — tested by callers, never the sentence.
+RATE_CODE = "google_ads_rate_limited"
+DEFAULT_DAILY_OPS = 1440
+_DAY_S = 86_400
+
+# Google pages kept for the next slices of the same page (`_PAGES`).
+_PAGE_TTL_S = 600
+_PAGE_MAX_ENTRIES = 8
+_PAGE_MAX_BYTES = 4_000_000
+
+
 def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
+
+
+# --- the operations budget ---------------------------------------------------
+
+def daily_ops() -> int:
+    """`OTO_GOOGLE_ADS_DAILY_OPS`: Google requests per UTC day for the whole platform;
+    absent = 1,440, `0` = no budget. Anything but a whole number ≥ 0 raises."""
+    # Name LITERAL: the inventory (`env_inventory.py`) finds its reads by the AST.
+    lu = os.environ.get("OTO_GOOGLE_ADS_DAILY_OPS")
+    if lu is None or not lu.strip():
+        return DEFAULT_DAILY_OPS
+    try:
+        n = int(lu.strip())
+    except ValueError:
+        n = -1
+    if n < 0:
+        raise ValueError(f"OTO_GOOGLE_ADS_DAILY_OPS={lu!r}: unreadable value, expected "
+                         "a whole number (0 or more)")
+    return n
+
+
+def verifier_reglages() -> None:
+    """Startup guard: an unreadable budget refuses to start, never read as the default."""
+    daily_ops()
+
+
+def _budget_refusal(used: int, limit: int) -> McpError:
+    wait = int(_DAY_S - (time.time() % _DAY_S)) + 1
+    return McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message=(f"Google Ads read budget reached — the whole platform, per UTC day: "
+                 f"{used} Google requests, limit {limit}. Every Google Ads call of the "
+                 "platform draws on one shared Google quota, so it is capped. Retry "
+                 f"after 00:00 UTC (in about {wait // 3600 + 1} h); meanwhile send "
+                 "fewer, larger queries (ORDER BY … LIMIT, fewer segments, no paging "
+                 "through raw rows). Nothing was sent to Google."),
+        data={"code": RATE_CODE, "scope": "platform", "used": used, "limit": limit,
+              "window_s": _DAY_S}))
+
+
+def _debit(ops: int = 1) -> None:
+    """Count `ops` Google requests BEFORE they leave: for the caller's org through the
+    common fairness of shared quotas (F-051, its mode), then for the platform's day
+    (always enforced). The counter failing serves."""
+    from ..access import platform_rate
+    from ..db import platform_key_rate as db_rate
+
+    sub = access.current_user_sub_or_raise()
+    org = access.current_org(sub)
+    for _ in range(ops):
+        platform_rate.enforce(_SERVICE, sub, org, shared_quota=True)
+    limit = daily_ops()
+    if not limit:
+        return
+    used = 0
+    try:
+        for _ in range(ops):
+            used = db_rate.compter("platform", "google_ads:day", _DAY_S)
+    except Exception:
+        logger.exception("google_ads budget: platform counter failed — call served")
+        return
+    if used > limit:
+        if used - ops < limit + 1:   # once per day, not once per call
+            logger.warning("google_ads budget: the platform crossed %d requests/day",
+                           limit)
+        raise _budget_refusal(used, limit)
+
+
+# --- what is kept between two calls -------------------------------------------
+
+#: `resource` → its description, for this API version (account-independent).
+_FIELDS: dict[tuple[str, str], dict] = {}
+_FIELDS_MAX = 300
+
+#: (hashed access token, customer, login customer, query, Google token) → (expires,
+#: page as JSON text). Text, not dicts: its size is what is bounded, and parsed rows
+#: would weigh several times more. Read and written in the worker threads, hence the lock.
+_PAGES: "OrderedDict[tuple, tuple[float, str]]" = OrderedDict()
+_PAGES_LOCK = threading.Lock()
+
+
+def _page_get(key: tuple) -> Optional[dict]:
+    with _PAGES_LOCK:
+        hit = _PAGES.get(key)
+        if hit is None:
+            return None
+        if hit[0] < time.monotonic():
+            _PAGES.pop(key, None)
+            return None
+        _PAGES.move_to_end(key)
+    return json.loads(hit[1])
+
+
+def _page_put(key: tuple, data: dict) -> None:
+    """Keep a Google page only if a next slice will be read from it, and small enough."""
+    if len(data.get("results") or []) <= _DEFAULT_ROWS:
+        return
+    blob = json.dumps(data, default=str, ensure_ascii=False)
+    if len(blob) > _PAGE_MAX_BYTES:
+        return
+    with _PAGES_LOCK:
+        _PAGES[key] = (time.monotonic() + _PAGE_TTL_S, blob)
+        _PAGES.move_to_end(key)
+        while len(_PAGES) > _PAGE_MAX_ENTRIES:
+            _PAGES.popitem(last=False)
 
 
 # --- the client, per call ----------------------------------------------------
@@ -81,12 +222,17 @@ async def _client(account: Optional[str] = None) -> GoogleAdsClient:
                    "(token refresh) — try again.")
 
 
-async def _run(fn: Callable[[], Any]) -> Any:
-    """One client read, off the event loop; its refusals → what to do next."""
+async def _run(fn: Callable[[], Any], ops: int = 1) -> Any:
+    """One client read, off the event loop — its `ops` Google requests debited first,
+    in the same thread (the counter is SQL); its refusals → what to do next."""
     from oto.tools.google.ads import GoogleAdsError
 
+    def debit_then_read():
+        _debit(ops)
+        return fn()
+
     try:
-        return await asyncio.to_thread(fn)
+        return await asyncio.to_thread(debit_then_read)
     except GoogleAdsError as e:
         raise _api_error(e)
     except ValueError as e:
@@ -287,8 +433,23 @@ def register(mcp: FastMCP) -> None:
         google_token, offset = (_decode_cursor(page_token, query) if page_token
                                 else (None, 0))
         client = await _client(account)
-        data = await _run(lambda: client.search(cid, query, page_token=google_token,
-                                                login_customer_id=lcid))
+        # The next slices of a Google page come from `_PAGES` (this process): no second
+        # request. Keyed by the ACCESS TOKEN that would ask (hashed): the same Google
+        # identity and grant — another account, a reconnection, a new token: no hit. No
+        # token readable → no cache at all, never a key shared between people.
+        token = getattr(client, "_token", None)
+        key = ((hashlib.sha256(token.encode()).hexdigest(), cid, lcid, query, google_token)
+               if isinstance(token, str) and token else None)
+        data = (await asyncio.to_thread(_page_get, key)) if key and offset else None
+        if data is None:
+            def fetch() -> dict:
+                page = client.search(cid, query, page_token=google_token,
+                                     login_customer_id=lcid)
+                if key:
+                    _page_put(key, page)
+                return page
+
+            data = await _run(fetch)
         return {"customer_id": cid,
                 **_page(data, query, google_token, offset, min(max_rows, _MAX_ROWS))}
 
@@ -310,8 +471,17 @@ def register(mcp: FastMCP) -> None:
             resource: the resource name, snake_case (e.g. "campaign", "ad_group_ad").
             account: email of the Google account to use — same choice as `_account`.
         """
+        from oto.tools.google.ads import API_VERSION
+
+        cle = (API_VERSION, (resource or "").strip())
+        if cle in _FIELDS:
+            return _FIELDS[cle]
         client = await _client(account)
         try:
-            return await _run(lambda: client.describe_resource(resource))
+            # Two `googleAdsFields:search` requests (its own fields, then the linked).
+            out = await _run(lambda: client.describe_resource(resource), ops=2)
         except RuntimeError as e:
             raise _bad(str(e))
+        if len(_FIELDS) < _FIELDS_MAX:
+            _FIELDS[cle] = out
+        return out
