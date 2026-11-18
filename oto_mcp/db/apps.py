@@ -166,6 +166,34 @@ def list_granted_to(principals: list[tuple[str, str]], *, archived: bool = False
         ).fetchall()
 
 
+def visibilites(ids: list[int]) -> dict[int, dict]:
+    """Qui VOIT chacune des apps `ids`, au-delà de son propriétaire : `{"org":
+    "editor"|"viewer"|None, "people": n}` — le rôle du partage VIVANT à une org entière,
+    et le nombre de personnes ou d'équipes nommées. La forme des agents
+    (`runner_triggers.visibilites_d_agents`) : l'écran des apps dit « Vous seul » d'une
+    app que personne d'autre ne voit, comme les tableaux et les agents. UNE requête pour
+    toute une liste ; une app sans partage vaut `{"org": None, "people": 0}`."""
+    from ._partage_vivant import PARTAGE_VIVANT
+
+    out = {int(i): {"org": None, "people": 0} for i in ids}
+    if not out:
+        return out
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT resource_id, "
+            "  max(permission) FILTER (WHERE principal_type = 'org') AS org, "
+            "  count(*) FILTER (WHERE principal_type <> 'org') AS people "
+            "FROM resource_grants WHERE resource_type = 'app' "
+            f"  AND resource_id = ANY(%s) AND {PARTAGE_VIVANT} GROUP BY resource_id",
+            ([str(i) for i in out],),
+        ).fetchall()
+    for r in rows:
+        out[int(r["resource_id"])] = {
+            "org": {"write": "editor", "read": "viewer"}.get(r["org"] or ""),
+            "people": int(r["people"] or 0)}
+    return out
+
+
 def list_all() -> list[dict]:
     with _connect() as conn:
         return conn.execute(f"SELECT {_CARTE} FROM apps ORDER BY id").fetchall()

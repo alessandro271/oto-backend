@@ -123,6 +123,9 @@ class AppCard(BaseModel):
     project_ids: list[int] = Field(default_factory=list)
     # L'appelant peut-il la modifier (éditeur, gérant, propriétaire) ?
     can_edit: bool = False
+    # Qui la voit au-delà de son propriétaire (`db.apps.visibilites`) : `{"org":
+    # "editor"|"viewer"|None, "people": n}` — « Vous seul » quand personne.
+    visibility: Optional[dict] = None
     title: str
     thumbnail: Optional[dict] = None
     created_by: Optional[str] = None
@@ -287,7 +290,9 @@ def _cards(sub: str, rows: list[dict], writable: Optional[set[int]] = None) -> l
     rangees = db.apps.projects_of(r["id"] for r in rows)
     lus = _projets_lisibles(sub, rangees)
     filed = {a: [p for p in pids if p in lus] for a, pids in rangees.items()}
+    vis = db.apps.visibilites([int(r["id"]) for r in rows])
     return [{**r, "project_ids": filed.get(int(r["id"]), []),
+             "visibility": vis[int(r["id"])],
              "can_edit": (int(r["id"]) in writable if writable is not None
                           else _can(sub, r["id"], "write"))} for r in rows]
 
