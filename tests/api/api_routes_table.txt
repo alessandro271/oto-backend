@@ -69,6 +69,7 @@ GET,HEAD /api/meta_ads/oauth/callback -> callback
 GET,HEAD /api/microsoft/oauth/callback -> callback
 GET,HEAD /api/ubersuggest/oauth/callback -> callback
 GET,HEAD /api/jefacture/oauth/callback -> callback
+GET,HEAD /api/linkedin_ads/oauth/callback -> callback
 GET,HEAD /api/wordpress/connect/callback -> callback
 GET,HEAD /api/slack/oauth/callback -> callback
 POST /api/slack/events -> events

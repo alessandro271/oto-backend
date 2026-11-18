@@ -48,7 +48,11 @@ def test_linkedin_connector_is_gone():
 def test_no_tool_keeps_the_bare_linkedin_prefix(all_tools):
     """Le nom nu ne doit désigner NI l'un ni l'autre fournisseur — sinon il laisse
     croire à une surface LinkedIn canonique qui n'existe pas."""
-    fournisseurs = ("linkedin_unipile", "linkedin_aiark")
+    # `linkedin_ads` (2026-11-17) : une TROISIÈME surface, non substituable aux deux
+    # autres — Campaign Manager par l'API officielle de LinkedIn (Advertising API), que ni
+    # la session Unipile ni AI Ark n'atteignent. Nommée comme ses pairs `meta_ads` et
+    # `google_ads` (`<éditeur>_ads`), elle n'est pas le nom nu.
+    fournisseurs = ("linkedin_unipile", "linkedin_aiark", "linkedin_ads")
     bare = {t for t in all_tools
             if t.startswith("linkedin_") and t not in fournisseurs
             and not t.startswith(tuple(f"{f}_" for f in fournisseurs))}

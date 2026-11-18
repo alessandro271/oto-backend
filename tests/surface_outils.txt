@@ -464,6 +464,7 @@ linear_project	create delete get list update	991108116da84b5b
 linear_team	get list states	40292427ffc1df6a
 linear_user	get list viewer	be1e6e9058aef1d3
 linear_webhook	create delete list update	abe54b7271848af6
+linkedin_ads	account_roles analytics get_account get_campaign get_campaign_group get_creative list_accounts list_campaign_groups list_campaigns list_creatives	84958572ff197e4f
 linkedin_aiark_credits	-	99334726611ccf58
 linkedin_aiark_person	export mobile reverse	9adfa3fdba15ff01
 linkedin_aiark_search	companies people	c74775d2b65b1130

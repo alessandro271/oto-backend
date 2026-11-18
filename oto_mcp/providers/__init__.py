@@ -151,6 +151,9 @@ _DECLARATIONS: tuple[str, ...] = (
     # platform tier) before anyone can connect to it.
     "instagram_meta",
     "meta_ads",
+    # Neighbour of `meta_ads` by trade (ad accounts, read-only) and situation (the
+    # instance's LinkedIn application, consent of the person) — wired 2026-11-17.
+    "linkedin_ads",
     "cognism",
     # B2B prospecting and outbound (search, enrichment, sequences) — wired 2026-10-17.
     # Neighbour of `cognism`/`lusha` by trade; strict BYOK, the customer's own credits.
