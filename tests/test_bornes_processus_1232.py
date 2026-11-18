@@ -523,7 +523,6 @@ async def test_en_application_le_gestionnaire_de_session_de_chaque_face_est_arme
     from oto_mcp.borne_session import BorneSession
     faces = [types.SimpleNamespace(session_manager=types.SimpleNamespace(
         stateless=False, session_idle_timeout=None)) for _ in range(2)]
-    faces.append(object())                                 # face sans gestionnaire
     garde = BorneSession(_cycle_interne(), faces=faces,
                          reglages=_reglages(bp.ENFORCE, session_inactive_s=1800))
     assert "lifespan.startup.complete" in await _demarrer(garde)
@@ -531,12 +530,76 @@ async def test_en_application_le_gestionnaire_de_session_de_chaque_face_est_arme
 
 
 @pytest.mark.asyncio
-async def test_en_mesure_le_gestionnaire_n_est_pas_touche():
+async def test_en_mesure_la_borne_de_session_est_armee_aussi():
+    """En `report`, les sessions jamais fermées gardaient leur mémoire jusqu'au
+    redémarrage. La borne de session est l'hygiène mémoire du processus, pas un refus :
+    elle s'arme hors `off`."""
     from oto_mcp.borne_session import BorneSession
     face = types.SimpleNamespace(session_manager=types.SimpleNamespace(
         stateless=False, session_idle_timeout=None))
     await _demarrer(BorneSession(_cycle_interne(), faces=[face], reglages=_reglages()))
+    assert face.session_manager.session_idle_timeout == 1800.0
+
+
+@pytest.mark.asyncio
+async def test_en_off_le_gestionnaire_n_est_pas_touche():
+    from oto_mcp.borne_session import BorneSession
+    face = types.SimpleNamespace(session_manager=types.SimpleNamespace(
+        stateless=False, session_idle_timeout=None))
+    await _demarrer(BorneSession(_cycle_interne(), faces=[face],
+                                 reglages=_reglages(bp.OFF)))
     assert face.session_manager.session_idle_timeout is None
+
+
+def test_armer_trouve_le_gestionnaire_de_la_vraie_face_fastmcp():
+    """fastmcp pose le gestionnaire sur l'ASGI de la route `/mcp`, pas sur l'application :
+    avant ce correctif, la borne armait « 0 face(s) »."""
+    import anyio
+    from fastmcp import FastMCP
+    from oto_mcp.borne_session import armer
+    app = FastMCP("banc").http_app(path="/mcp")
+
+    async def demarrer_puis_armer():
+        async with app.router.lifespan_context(app):
+            return armer([app], 1800), [
+                r.app.session_manager.session_idle_timeout
+                for r in app.router.routes if hasattr(r.app, "session_manager")]
+
+    armees, delais = anyio.run(demarrer_puis_armer)
+    assert armees == 1
+    assert delais == [1800.0]
+
+
+def test_armer_descend_sous_l_enveloppe_d_auth_de_la_face_authentifiee():
+    """La face authentifiée (`mcp.http_app()` avec un fournisseur d'auth) sert `/mcp` à
+    travers `RequireAuthMiddleware` : le gestionnaire est sous `.app`. Sans cela,
+    seule la face anonyme était armée, pas la face des clients.
+    Une VRAIE face fastmcp authentifiée, pas un double : c'est un double qui cachait le
+    défaut d'origine."""
+    import anyio
+    from fastmcp import FastMCP
+    from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+    from oto_mcp.borne_session import armer
+    app = FastMCP("banc", auth=StaticTokenVerifier(
+        tokens={"t": {"client_id": "c", "scopes": []}})).http_app(path="/mcp")
+    enveloppe = next(r.app for r in app.router.routes if getattr(r, "path", "") == "/mcp")
+    assert not hasattr(enveloppe, "session_manager"), "le cas à couvrir a disparu"
+
+    async def demarrer_puis_armer():
+        async with app.router.lifespan_context(app):
+            return armer([app], 1800), enveloppe.app.session_manager.session_idle_timeout
+
+    assert anyio.run(demarrer_puis_armer) == (1, 1800.0)
+
+
+def test_une_face_sans_gestionnaire_refuse_le_demarrage():
+    """À moitié armé (une face sur deux), c'est ce que la v1 de ce correctif a donné
+    contre le vrai backend : la face des clients restait sans borne."""
+    from oto_mcp.borne_session import SdkSansBorneDeSession, armer
+    armee = types.SimpleNamespace(session_manager=types.SimpleNamespace(
+        stateless=False, session_idle_timeout=None))
+    with pytest.raises(SdkSansBorneDeSession):
+        armer([armee, object()], 1800)
 
 
 @pytest.mark.asyncio

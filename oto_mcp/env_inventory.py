@@ -619,27 +619,28 @@ _REGLAGES: tuple[Variable, ...] = (
              "#1232 : corps, délai d'outil, `statement_timeout`, inactivité des sessions "
              "MCP) : `report` les mesure, `enforce` les applique. Lue au démarrage : en "
              "changer demande un redémarrage.",
-             ("oto_mcp/limite_debit.py:179", "oto_mcp/bornes_processus.py:108")),
+             ("oto_mcp/limite_debit.py:179", "oto_mcp/bornes_processus.py:111")),
     Variable("OTO_BORNE_CORPS_OCTETS", Classe.REGLAGE, "4194304",
              "Borne du processus (#1232) : taille max (octets) du corps d'une requête "
              "HTTP hors routes d'upload. Mesurée en `report`, `413` en `enforce` "
              "(`OTO_DEBIT_MODE`) ; `0` désarme ; une valeur illisible empêche le démarrage.",
-             ("oto_mcp/bornes_processus.py:110",)),
+             ("oto_mcp/bornes_processus.py:113",)),
     Variable("OTO_BORNE_CORPS_UPLOAD_OCTETS", Classe.REGLAGE, "115343360",
              "Borne du processus (#1232) : taille max (octets) du corps sur une route "
              "d'upload (reconnue à son contrat : corps déclaré non JSON). Mesurée en "
              "`report`, `413` en `enforce` ; `0` désarme ; illisible : refus de démarrer.",
-             ("oto_mcp/bornes_processus.py:113",)),
+             ("oto_mcp/bornes_processus.py:116",)),
     Variable("OTO_BORNE_OUTIL_S", Classe.REGLAGE, "120",
              "Borne du processus (#1232) : durée max (s) d'un appel d'outil MCP, la même "
              "pour tous. Mesurée en `report`, erreur MCP `tool_timeout` en `enforce` ; "
              "`0` désarme ; illisible : refus de démarrer.",
-             ("oto_mcp/bornes_processus.py:114",)),
+             ("oto_mcp/bornes_processus.py:117",)),
     Variable("OTO_BORNE_SESSION_INACTIVE_S", Classe.REGLAGE, "1800",
-             "Borne du processus (#1232) : inactivité max (s) d'une session MCP. Mesurée "
-             "en `report` (session reprise après ce délai), fermée par l'SDK `mcp` en "
-             "`enforce` ; `0` désarme ; illisible : refus de démarrer.",
-             ("oto_mcp/bornes_processus.py:119",)),
+             "Borne du processus (#1232) : inactivité max (s) d'une session MCP, fermée "
+             "par l'SDK `mcp` dès que `OTO_DEBIT_MODE` n'est pas `off` (`report` compris : "
+             "hygiène mémoire, pas un refus) ; `0` désarme ; "
+             "illisible : refus de démarrer.",
+             ("oto_mcp/bornes_processus.py:122",)),
     Variable("OTO_DEBIT_ADRESSES_EXEMPTEES", Classe.REGLAGE, "",
              "Adresses ou CIDR (séparés par des virgules) de NOS machines, exemptés des "
              "classes de débit par adresse et du budget d'échecs ; leurs jetons paient "
@@ -691,7 +692,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "dépassent sont comptés ; en `enforce`, posée sur chaque connexion du pool "
              "(la préparation de la base au démarrage, le DDL à chaud et le travail de "
              "fond hors pool en sont exemptés). `0` désarme ; illisible : refus de démarrer.",
-             ("oto_mcp/bornes_processus.py:116",)),
+             ("oto_mcp/bornes_processus.py:119",)),
     Variable("OTO_MCP_DDL_LOCK_TIMEOUT_MS", Classe.REGLAGE, "5000",
              "`lock_timeout` du DDL à chaud (`CREATE INDEX CONCURRENTLY`).",
              ("oto_mcp/db/_conn.py:97", "oto_mcp/db/_conn.py:104")),

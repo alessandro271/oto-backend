@@ -364,13 +364,16 @@ une par limiteur, sous le même interrupteur que la limite de débit (`OTO_DEBIT
 | `corps` | `OTO_BORNE_CORPS_OCTETS` 4 Mo, `OTO_BORNE_CORPS_UPLOAD_OCTETS` 110 Mo | `defaut` \| `upload` | jeton porté, sinon adresse | `413 payload_too_large` |
 | `outil` | `OTO_BORNE_OUTIL_S` 120 s | le nom de l'outil | `user:<sub>` | erreur MCP `tool_timeout` |
 | `sql` | `OTO_MCP_DB_STATEMENT_TIMEOUT_MS` 30 s | la fonction appelante (`module:fonction`) | le texte SQL (jamais ses paramètres) | `statement_timeout` posé sur le pool |
-| `session` | `OTO_BORNE_SESSION_INACTIVE_S` 30 min | `mcp` | jeton porté, sinon adresse | `session_idle_timeout` de l'SDK `mcp` |
+| `session` | `OTO_BORNE_SESSION_INACTIVE_S` 30 min | `mcp` | jeton porté, sinon adresse | `session_idle_timeout` de l'SDK `mcp` — **armée aussi en `report`** (seul `off` la coupe) |
 
 Une route d'upload se reconnaît à son contrat (`ContratDeRoute.corps` d'un type autre que
 JSON), jamais à une liste de chemins. En `report`, `sql` compte les ordres qui ont duré
-plus que la borne sans en avoir posé une plus longue eux-mêmes ; `session` compte les
-sessions reprises après plus que la borne d'inactivité (celles que l'application aurait
-fermées). Chaque dépassement est aussi journalisé (`borne <limiteur> …`, une ligne par clé
+plus que la borne sans en avoir posé une plus longue eux-mêmes. `session` fait exception :
+elle ferme les sessions inactives dès que le mode n'est pas `off`, car une session jamais
+fermée garde sa mémoire jusqu'au redémarrage du processus. Ce n'est pas un refus : le client reçoit `404 Session not found` et rouvre la
+sienne. Le palmarès compte les sessions reprises après la borne (fermées entre-temps), et
+le démarrage journalise `borne de session MCP : … N gestionnaire(s) armé(s)` — attendu 2
+(face authentifiée + face anonyme). Chaque dépassement est aussi journalisé (`borne <limiteur> …`, une ligne par clé
 et par minute au plus, empreinte tronquée).
 
 Pas la connexion d'un connecteur, pas le `tools/list`. (Ce paragraphe disait « uniquement
