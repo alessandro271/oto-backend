@@ -115,7 +115,8 @@ def _return_to(app: "str | None", org_id: "int | None", suffix: str,
 async def hosted_auth_url(sub: str, channel: str = "linkedin",
                           force: bool = False,
                           premium: "str | None" = None,
-                          app: "str | None" = None) -> dict:
+                          app: "str | None" = None,
+                          add_account: bool = False) -> dict:
     """Generates the hosted-auth URL where the user connects THEIR account (given channel) —
     same gates as the dashboard side. Returns `{url, channel}`.
 
@@ -136,7 +137,15 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     side, oto-dashboard), we keep the old destination byte for byte
     `/console/connections`: it is a path SPECIFIC to the dashboard, which the generic
     `return_url` pattern does not know — falling back there would send the dashboard to
-    `/connectors`, a regression for the historical caller."""
+    `/connectors`, a regression for the historical caller.
+
+    `add_account=True` (several accounts per channel) = the account that the wizard
+    creates is ADDED to the channel, in a slot of its own, instead of replacing the
+    connected one. It is a new seat: the cap applies, and neither the adoption of an
+    account from another org nor the premium reconnection apply (both name the account
+    already there). Without a connected account on the channel here, it is an ordinary
+    first connection. Refused (`multi_account_unavailable`) while the database still
+    has the single-account key (`db.slots_ouverts`)."""
     provider = str(channel or "linkedin").upper()
     if provider not in CHANNELS:
         raise ConnectRefused(400, "invalid_channel",
@@ -198,6 +207,26 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # to reconnect; `force=True` for a REALLY distinct account. (Reconnection
     # in the SAME org = replacement, not concerned: filtered by `org_id`.)
     platform_seat = not byo
+    vivants = await asyncio.to_thread(db.live_unipile_accounts, sub, org_id, provider)
+    if add_account and not vivants:
+        add_account = False   # nothing to add to: an ordinary first connection
+    if (not add_account and not premium and vivants
+            and not any((v.get("slot") or "") == db.PRINCIPAL for v in vivants)):
+        # Only ADDED accounts live here (the main one was unlinked): an ordinary
+        # connection would land in the main slot and silently become the default of
+        # every call — and skip the seat cap. It is one more account: an addition.
+        add_account = True
+    if add_account:
+        if premium:
+            raise ConnectRefused(400, "premium_on_add",
+                                 "`premium` attaches a product to the connected account: it "
+                                 "does not combine with `add_account`. Add the account, "
+                                 "then activate the product on it.")
+        if not await asyncio.to_thread(db.slots_ouverts):
+            raise ConnectRefused(
+                409, "multi_account_unavailable",
+                "Connecting several accounts on one channel is not open on this instance "
+                "yet. The connected account stays as it is.")
     # OPTION gate (layer 3): hosted without the declared right = refusal. The right is
     # the org's OR a row set on the person, in the org or everywhere
     # (ADR 0070 §7); the account mark (`option_comps`) does not open it.
@@ -210,7 +239,8 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
                                                        sub, org_id))
     # Hosted seat cap (reconnecting an existing account = replacement, OK;
     # an ADOPTION below creates a binding in this org → subject to the same cap).
-    if platform_seat and db.get_unipile_account(sub, org_id, provider) is None:
+    if platform_seat and (add_account
+                          or db.get_unipile_account(sub, org_id, provider) is None):
         limit = plafond_de_comptes(org_id)
         if limit and db.count_unipile_accounts_for_org(org_id) >= limit:
             logger.info("unipile cap hit org=%s limit=%s", org_id, limit)
@@ -223,7 +253,7 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # (really different account) or `premium` (reconnection to ATTACH a
     # product) → wizard anyway.
     dead_seat_account = None  # DEAD (401) platform seat → to RECONNECT via the wizard
-    if not force and not premium and platform_seat:
+    if not force and not premium and platform_seat and not add_account:
         mine = db.seat_binding_elsewhere(sub, provider, exclude_org=org_id)
         if mine:
             # Only re-adopt if the session is ALIVE (401 probe). Re-adopting a
@@ -270,7 +300,7 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # (BYO) is NOT adoptable here (an account_id only exists on the tenant of the
     # key that created it) → reconnecting the same login would create a 2nd account (rotation
     # of the li_at cookie, silent degradation). Actionable refusal.
-    if not force:
+    if not force and not add_account:
         byo_elsewhere = [a for a in db.list_unipile_accounts(sub)
                          if a.get("provider") == provider and a.get("org_id") != org_id
                          and not a.get("platform_seat")]
@@ -299,7 +329,7 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # Reconnect (type=reconnect, NOT create) the existing account: (1) a dead seat
     # detected above, or (2) activating a premium on an already connected account.
     reconnect_account = dead_seat_account
-    if not reconnect_account and premium and platform_seat:
+    if not reconnect_account and premium and platform_seat and not add_account:
         existing = db.seat_binding_elsewhere(sub, provider, exclude_org=None) \
             or ({"account_id": db.get_unipile_account_id(sub, org_id, provider)}
                 if db.get_unipile_account_id(sub, org_id, provider) else None)
@@ -309,7 +339,8 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # that `reconcile_pending` consumes. No `notify_url`: no longer called back in v2, and the
     # route that received it is removed (#581) — sending it would point to a 404.
     nonce = secrets.token_urlsafe(24)
-    db.create_unipile_pending(nonce, sub, org_id, provider, platform_seat=platform_seat)
+    db.create_unipile_pending(nonce, sub, org_id, provider, platform_seat=platform_seat,
+                              add_account=add_account)
     ch = provider.lower()
     try:
         url = await asyncio.to_thread(
@@ -455,6 +486,14 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
     bound: list = []
     motifs: list = []
     done: set = set()   # providers linked during THIS pass
+    # ADD or REPLACE, per channel: the non-destructive intent wins. One pass binds ONE
+    # account per channel and consumes every request of that channel — an abandoned
+    # ordinary link followed by « Add another account » must not overwrite the main
+    # account with the one just added.
+    ajout: dict = {}
+    for p in pendings:
+        canal = (p.get("provider") or "LINKEDIN").upper()
+        ajout[canal] = ajout.get(canal, False) or bool(p.get("add_account"))
     for pend in pendings:
         provider = (pend.get("provider") or "LINKEDIN").upper()
         if provider in done:
@@ -555,11 +594,15 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
                            "final redirect."),
             })
             continue
+        # An ADDING request (several accounts per channel) binds into a slot of its
+        # own; any other replaces the main account, as always. Either way an account
+        # this member already holds on the channel keeps its slot (`set_unipile_account`).
+        slot = db.slot_pour_ajout(chosen["id"]) if ajout.get(provider) else db.PRINCIPAL
         issue = unipile_binding.bind_account(sub, chosen["id"], prov,
                              account_name=chosen.get("name"),
                              org_id=pend["org_id"], provider=provider,
                              platform_seat=bool(pend.get("platform_seat")),
-                             foreign=foreign)
+                             foreign=foreign, slot=slot)
         if not issue.bound:
             # Unreachable in practice (the candidate already passed the guard above) —
             # but the write is guarded AT ITS point, not at the call site: that is
@@ -596,6 +639,14 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
 
 # --- The "connect" gesture, under the common checkpoint (#300) ----------
 
+def _vrai(v) -> bool:
+    """A flow value read as a boolean: the params of a flow arrive as typed by the
+    front — `true`, `"true"`, `"1"`… A bare `bool("false")` would be true."""
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
 async def _start_flow(ctx, values: dict):
     """Starts the connection of a hosted channel — declared like any other flow.
 
@@ -629,7 +680,9 @@ async def _start_flow(ctx, values: dict):
             # `app` travels with the gesture (the front already puts it in `params`):
             # without it, the end of the wizard goes back to oto-dashboard, whichever
             # front asked for the connection.
-            app=(str(values["app"]) if values.get("app") else None))
+            app=(str(values["app"]) if values.get("app") else None),
+            # Several accounts per channel: the card's « Add another account ».
+            add_account=_vrai(values.get("add_account")))
     except ConnectRefused as e:
         raise AuthzDenied(e.status, e.code, e.message)
     if out.get("adopted"):

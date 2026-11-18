@@ -1,6 +1,6 @@
 """La SOUS-INSTANCE d'un compte de messagerie hébergée : la cible de ses règles d'accès.
 
-Un compte Unipile (`unipile_accounts`, une ligne par `(sub, org_id, provider)`) n'a pas
+Un compte Unipile (`unipile_accounts`, une ligne par `(sub, org_id, provider, slot)`) n'a pas
 de ligne de coffre : c'est un handle sous une CLÉ Unipile, plateforme ou propre à
 l'org. Il n'avait donc pas d'instance, et une règle d'accès (`connector_account_rules`,
 `db/regles_de_comptes`) n'aurait rien à viser. Ce module lui en donne une, ENFANT de
@@ -9,7 +9,9 @@ détermination, « le LinkedIn de Jane »).
 
 **La forme** : `connector = 'unipile'`, propriétaire `member` `'<org_id>:<sub>'` (le
 compte est à la personne, dans l'org où il est connecté), `account = 'canal:<provider>'`
-— le préfixe la distingue de toute ligne de coffre (`account` d'une clé Unipile est le
+pour le compte principal du canal, `'canal:<provider>:<slot>'` pour un compte ajouté
+(plusieurs comptes par canal : chacun sa cible, le principal garde la forme d'avant) —
+le préfixe la distingue de toute ligne de coffre (`account` d'une clé Unipile est le
 nom de compte du coffre, jamais préfixé ainsi), et c'est lui qui dit « sans ligne de
 coffre, par construction » à la maintenance des orphelines (`connector_instances`).
 
@@ -29,6 +31,10 @@ transaction) et la reprise des prêts (`regles_de_comptes.reprendre_les_prets`),
 pose toutes. La fusion de deux comptes les fait suivre (`suivre`).
 """
 from __future__ import annotations
+
+# Le compte de la sous-instance d'une ligne `ua` : `canal:<provider>`, suffixé de
+# l'emplacement pour un compte ajouté.
+_COMPTE = "'canal:' || ua.provider || CASE WHEN ua.slot = '' THEN '' ELSE ':' || ua.slot END"
 
 # Le parent, sur la ligne `ua` de `unipile_accounts` : un candidat UNIQUE par palier.
 _PARENT = """(CASE WHEN ua.platform_seat THEN
@@ -50,7 +56,7 @@ _PARENT = """(CASE WHEN ua.platform_seat THEN
 # instruction : l'index unique partiel des instances vivantes tient le doublon.
 _POSER = f"""
 INSERT INTO connector_instances (connector, owner_type, owner_id, account, parent_id)
-SELECT 'unipile', 'member', ua.org_id::text || ':' || ua.sub, 'canal:' || ua.provider,
+SELECT 'unipile', 'member', ua.org_id::text || ':' || ua.sub, {_COMPTE},
        {_PARENT}
   FROM unipile_accounts ua
  WHERE {{filtre}}
@@ -68,7 +74,7 @@ ARCHIVER_TOUTES = ("UPDATE connector_instances SET revoked_at = NOW(), "
 
 # La sous-instance d'une ligne `ua` (jointure de la reprise).
 JOINTURE = ("si.owner_type = 'member' AND si.owner_id = ua.org_id::text || ':' || ua.sub "
-            "AND si.connector = 'unipile' AND si.account = 'canal:' || ua.provider "
+            f"AND si.connector = 'unipile' AND si.account = {_COMPTE} "
             "AND si.revoked_at IS NULL")
 
 # Les instances TELLES QUE `poser_toutes` les laisserait, sans rien écrire : la table,
@@ -79,8 +85,8 @@ INSTANCES_SIMULEES = (
     "(SELECT id, connector, owner_type, owner_id, account, revoked_at "
     "FROM connector_instances "
     "UNION ALL "
-    "SELECT -row_number() OVER (ORDER BY ua.org_id, ua.sub, ua.provider), 'unipile', "
-    "'member', ua.org_id::text || ':' || ua.sub, 'canal:' || ua.provider, "
+    "SELECT -row_number() OVER (ORDER BY ua.org_id, ua.sub, ua.provider, ua.slot), "
+    f"'unipile', 'member', ua.org_id::text || ':' || ua.sub, {_COMPTE}, "
     "NULL::timestamptz "
     "FROM unipile_accounts ua "
     f"WHERE NOT EXISTS (SELECT 1 FROM connector_instances si WHERE {JOINTURE}))")
@@ -92,12 +98,12 @@ def _compter(cur) -> dict:
     return {"posees": posees, "reparentees": len(lignes) - posees}
 
 
-def poser(conn, sub: str, org_id: int, provider: str) -> dict:
-    """La sous-instance du compte `(sub, org_id, provider)`, posée ou reparentée, dans la
-    transaction de l'appelant. Idempotent."""
+def poser(conn, sub: str, org_id: int, provider: str, slot: str = "") -> dict:
+    """La sous-instance du compte `(sub, org_id, provider, slot)`, posée ou reparentée,
+    dans la transaction de l'appelant. Idempotent."""
     cur = conn.execute(_POSER.format(filtre="ua.sub = %s AND ua.org_id = %s "
-                                            "AND ua.provider = %s"),
-                       (sub, org_id, provider))
+                                            "AND ua.provider = %s AND ua.slot = %s"),
+                       (sub, org_id, provider, slot))
     return _compter(cur)
 
 

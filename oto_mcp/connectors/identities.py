@@ -328,16 +328,29 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
             "operable identities with oto_identity(op='list').")
     op = db.get_operated_account(sub, provider)
     if op:
-        if op["account_id"] in db.granted_accounts_for(sub, provider):
+        if op.get("owner_sub") == sub:
+            # One of MY OWN accounts chosen as the default of this channel (several
+            # accounts per channel). Operable here ⟹ it is served. Not operable here (it
+            # lives in another org, or was disconnected) ⟹ the choice does not apply in
+            # this context, and the own resolution below decides — never a third
+            # party's account: the pointer names an account of the caller, and the
+            # fallback is the caller's account too.
+            if op["account_id"] in _own_account_ids(sub, provider):
+                return op["account_id"]
+        elif op["account_id"] in db.granted_accounts_for(sub, provider):
             return op["account_id"]
-        # The pointer is NOT cleared: it's what makes the loan come back on wake-up.
-        refuser_si_preteur_en_pause(sub, provider, op["account_id"])
-        raise ValueError(
-            f"The {provider.title()} account that was granted to you is no longer operable "
-            "(authorization revoked or account disconnected by its owner). "
-            "Reselect your identity (oto_identity(op='set') or "
-            f"{_tableau_de_bord(sub)}/connectors).")
-    return _own_unipile_account_id(sub, provider)
+        else:
+            # The pointer is NOT cleared: it's what makes the loan come back on wake-up.
+            refuser_si_preteur_en_pause(sub, provider, op["account_id"])
+            raise ValueError(
+                f"The {provider.title()} account that was granted to you is no longer operable "
+                "(authorization revoked or account disconnected by its owner). "
+                "Reselect your identity (oto_identity(op='set') or "
+                f"{_tableau_de_bord(sub)}/connectors).")
+    own = _own_unipile_account_id(sub, provider)
+    if own is None:
+        refuser_si_plusieurs_sans_defaut(sub, provider)
+    return own
 
 
 def _unipile_chosen(sub: str, provider: str) -> str | None:
@@ -346,9 +359,55 @@ def _unipile_chosen(sub: str, provider: str) -> str | None:
     (an identity list must not raise on an orphaned pointer)."""
     from .. import db
     op = db.get_operated_account(sub, provider)
-    if op and op["account_id"] in db.granted_accounts_for(sub, provider):
-        return op["account_id"]
+    if op:
+        if op.get("owner_sub") == sub:
+            if op["account_id"] in _own_account_ids(sub, provider):
+                return op["account_id"]
+        elif op["account_id"] in db.granted_accounts_for(sub, provider):
+            return op["account_id"]
     return _own_unipile_account_id(sub, provider)
+
+
+# Several accounts on one channel, and nothing designates the one to serve (the main
+# account was disconnected, two added ones remain, no default chosen).
+CODE_PLUSIEURS = "several_accounts_no_default"
+
+
+class PlusieursComptesSansDefaut(ValueError):
+    """Several own accounts on this channel here, none served by default.
+
+    A `ValueError` like the other « this identity is not operable here » refusals (their
+    callers convert them, `tools/unipile._refus_identite`): picking one would send a
+    message under an identity nobody chose — irreversible."""
+
+    code = CODE_PLUSIEURS
+
+
+def comptes_du_canal_ici(sub: str, provider: str, org=None) -> list[dict]:
+    """The caller's live accounts on this channel in `org` (default: the context org),
+    main account first — read from `db.list_unipile_accounts`, the one listing every
+    surface already reads."""
+    from .. import access, db
+    o = access.current_org(sub) if org is None else org
+    p = provider.upper()
+    return [a for a in db.list_unipile_accounts(sub)
+            if a.get("org_id") == o and (a.get("provider") or "").upper() == p]
+
+
+def refuser_si_plusieurs_sans_defaut(sub: str, provider: str) -> None:
+    """Raises `PlusieursComptesSansDefaut` when the caller has SEVERAL live accounts on
+    this channel in the context org and none is served by default — naming them, and
+    the two ways to choose."""
+    comptes = comptes_du_canal_ici(sub, provider)
+    if len(comptes) < 2:
+        return
+    noms = ", ".join(f"'{c.get('account_name') or c['account_id']}' (`{c['account_id']}`)"
+                     for c in comptes)
+    raise PlusieursComptesSansDefaut(
+        f"You have several {provider.title()} accounts connected here ({noms}) and none is "
+        "the default: name the one to use for this call with `_account=<account_id>`, or "
+        "choose the default once with oto_identity(op='set') or "
+        f"{_tableau_de_bord(sub)}/connectors.")
 
 
 def _unipile_client(sub: str):
@@ -570,12 +629,25 @@ async def _unipile_select(sub: str, identity_id: str, canal: str | None = None) 
                    if r.get("owner_suspended") and r["account_id"] == identity_id), None)
     if retenu:
         raise _preteur_en_pause(retenu, retenu["provider"], identity_id)
-    # 2) Return to SELF (any mode, including resale): clears the channel's pointer.
-    own = next((a for a in db.list_unipile_accounts(sub)
-                if a["account_id"] == identity_id), None)
-    if own:
+    # 2) One of MY accounts (any mode, including resale). The one served without a
+    #    pointer (the main account of the context org, or the only one) = return to
+    #    self: clears the channel's pointer, as always. Another of my accounts on this
+    #    channel HERE (several accounts per channel) = the pointer names it, with myself
+    #    as owner — the connection rows are never touched.
+    mes_comptes = db.list_unipile_accounts(sub)
+    miens = [a for a in mes_comptes if a["account_id"] == identity_id]
+    if miens:
+        from .. import access
+        org_ici = access.current_org(sub)
+        own = next((a for a in miens if a.get("org_id") == org_ici), miens[0])
         _exige_canal(own["provider"])
-        db.clear_operated_account(sub, own["provider"])
+        voisins = [a for a in mes_comptes if a.get("org_id") == org_ici
+                   and a.get("provider") == own["provider"]]
+        if (own.get("org_id") == org_ici and len(voisins) > 1
+                and identity_id != _own_unipile_account_id(sub, own["provider"])):
+            db.set_operated_account(sub, own["provider"], identity_id, sub)
+        else:
+            db.clear_operated_account(sub, own["provider"])
         return {"id": identity_id, "channel": own["provider"], "is_default": True}
     # 3) Existing BYO path: choose an account of ITS key (switches the connection).
     cli = _unipile_client(sub)

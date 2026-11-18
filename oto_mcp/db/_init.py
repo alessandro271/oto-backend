@@ -1327,6 +1327,20 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS entitlement_lost_at TIMESTAMPTZ")
     conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS entitlement_notice_at TIMESTAMPTZ")
     conn.execute("ALTER TABLE unipile_pending ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'LINKEDIN'")
+    # Plusieurs comptes par canal (lot A, additif) : l'EMPLACEMENT du compte ('' = le
+    # principal, celui de toute ligne existante) et la demande qui en ajoute un. L'index
+    # unique à quatre colonnes est l'ARBITRE `ON CONFLICT` du code neuf ; la PK à trois
+    # colonnes reste, parce que le code en production arbitre encore dessus
+    # (`docs/live-migrations.md` § basculer l'arbitre). Tant qu'elle est là, un second
+    # emplacement ne peut pas naître : `unipile.slots_ouverts()` le dit, et l'ajout
+    # refuse. La révision `20261118_1500_unipile_slots` la remplace (lot B).
+    # Catalogue seul : colonnes à défaut constant (PG ≥ 11, aucune réécriture).
+    conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS slot TEXT NOT NULL DEFAULT ''")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_unipile_accounts_slot "
+                 "ON unipile_accounts(sub, org_id, provider, slot)")
+    conn.execute("ALTER TABLE unipile_pending ADD COLUMN IF NOT EXISTS add_account BOOLEAN NOT NULL DEFAULT FALSE")
+    conn.execute("ALTER TABLE connector_account_grants ADD COLUMN IF NOT EXISTS slot TEXT NOT NULL DEFAULT ''")
+    conn.execute("ALTER TABLE connector_account_group_grants ADD COLUMN IF NOT EXISTS slot TEXT NOT NULL DEFAULT ''")
     # ADR 0044 (B0) : l'entrée du coffre devient une INSTANCE de connecteur (config
     # possédée). Colonnes DORMANTES — non lues par la résolution avant B2/B3 (canari
     # additif). `version` = verrou optimiste (B1) ; `share_down` = ouverture au

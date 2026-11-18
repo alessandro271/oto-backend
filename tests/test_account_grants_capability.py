@@ -21,13 +21,18 @@ def _wire(monkeypatch, *, users=None, connected="OWNER_ACC"):
                         lambda email: [u for u in users.values()
                                        if u.get("email") == email])
     monkeypatch.setattr(cap.db, "get_unipile_account_id", lambda sub, org, prov: connected)
+    # The lender's accounts HERE (several accounts per channel): the connected one, as
+    # the main account of each channel.
+    monkeypatch.setattr(cap.db, "list_unipile_accounts", lambda sub: [
+        {"provider": p, "account_id": connected, "org_id": _OWNER.org_id, "slot": ""}
+        for p in ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM")] if connected else [])
 
 
 def test_grant_ok_by_sub(monkeypatch):
     _wire(monkeypatch)
     saved = {}
     monkeypatch.setattr(cap.db, "set_account_grant",
-                        lambda owner, prov, aid, grantee, granted_by:
+                        lambda owner, prov, aid, grantee, granted_by, slot='':
                         saved.update(owner=owner, prov=prov, aid=aid,
                                      grantee=grantee, by=granted_by))
     res = cap._grant(_OWNER, cap.AccountGrantInput(channel="linkedin", grantee="grantee"))
@@ -41,7 +46,7 @@ def test_grant_resolves_grantee_by_email(monkeypatch):
     _wire(monkeypatch)
     saved = {}
     monkeypatch.setattr(cap.db, "set_account_grant",
-                        lambda owner, prov, aid, grantee, granted_by:
+                        lambda owner, prov, aid, grantee, granted_by, slot='':
                         saved.update(grantee=grantee))
     res = cap._grant(_OWNER, cap.AccountGrantInput(channel="linkedin", grantee="g@x.io"))
     assert res["grantee_sub"] == "grantee" and saved["grantee"] == "grantee"
@@ -67,7 +72,7 @@ def test_grant_allows_cross_org_grantee(monkeypatch):
     _wire(monkeypatch, users={"ext": {"sub": "ext", "email": "freelance@ext.io"}})
     saved = {}
     monkeypatch.setattr(cap.db, "set_account_grant",
-                        lambda owner, prov, aid, grantee, granted_by:
+                        lambda owner, prov, aid, grantee, granted_by, slot='':
                         saved.update(grantee=grantee))
     res = cap._grant(_OWNER, cap.AccountGrantInput(channel="linkedin",
                                                    grantee="freelance@ext.io"))
@@ -132,6 +137,9 @@ def test_list_merges_nominative_and_group_grants_by_owner(monkeypatch):
 
 def _wire_group(monkeypatch, *, connected="OWNER_ACC", group=None):
     monkeypatch.setattr(cap.db, "get_unipile_account_id", lambda sub, org, prov: connected)
+    monkeypatch.setattr(cap.db, "list_unipile_accounts", lambda sub: [
+        {"provider": p, "account_id": connected, "org_id": _OWNER.org_id, "slot": ""}
+        for p in ("LINKEDIN", "WHATSAPP", "TELEGRAM", "INSTAGRAM")] if connected else [])
     monkeypatch.setattr(cap.group_store, "get_group",
                         lambda gid: group if group is not None
                         else {"id": gid, "name": "Croissance", "org_id": 3})
@@ -153,7 +161,7 @@ def test_grant_to_group(monkeypatch):
     _wire_group(monkeypatch)
     saved = {}
     monkeypatch.setattr(cap.db, "set_account_group_grant",
-                        lambda owner, prov, aid, gid, granted_by:
+                        lambda owner, prov, aid, gid, granted_by, slot='':
                         saved.update(owner=owner, prov=prov, aid=aid, gid=gid,
                                      by=granted_by))
     res = cap._grant(_OWNER, cap.AccountGrantInput(channel="linkedin", grantee="group:42"))

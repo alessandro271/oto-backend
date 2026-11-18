@@ -66,6 +66,10 @@ class UnipileConnectInput(BaseModel):
     # the product that requested the connection. The dashboard does not send it and
     # therefore falls back on its own destination, unchanged.
     app: Optional[str] = None
+    # ADD another account on this channel instead of replacing the connected one (several
+    # accounts per channel). Each added account holds its own seat, billed as one more
+    # connection. Without it: the ordinary connection, which replaces the main account.
+    add_account: bool = False
 
 
 class UnipileReconcileInput(BaseModel):
@@ -83,15 +87,31 @@ class UnipileStatusInput(BaseModel):
 class UnipileDisconnectInput(BaseModel):
     # Front-end channel ('linkedin', 'whatsapp'…); UPPERCASED for the vault.
     channel: str = "linkedin"
+    # WHICH account of the channel, when several are connected here. Absent: the one
+    # served by default (the main account, or the only one) — never all of them.
+    account_id: Optional[str] = None
 
 
 # --- Outputs ----------------------------------------------------------------
 
+class UnipileChannelAccount(BaseModel):
+    """One connected account of a channel. `is_default` = the account served when a
+    call names none (`_account=`)."""
+    account_id: str
+    account_name: Optional[str] = None
+    connected_at: Optional[str] = None
+    is_default: bool = False
+
+
 class UnipileChannel(BaseModel):
+    """The top-level fields describe the account served by default. `accounts` lists
+    EVERY account connected on the channel in this org (several accounts per channel),
+    one entry when there is a single account, empty when none."""
     connected: bool
     account_id: Optional[str] = None
     account_name: Optional[str] = None
     connected_at: Optional[str] = None
+    accounts: list[UnipileChannelAccount] = []
 
 
 class UnipileElsewhere(BaseModel):
@@ -116,6 +136,9 @@ class UnipileStatusView(BaseModel):
     byo: bool
     channels: dict[str, UnipileChannel]
     elsewhere: dict[str, UnipileElsewhere]
+    # Another account can be ADDED on a channel here (`me.unipile.connect`
+    # `add_account=true`). False until the database carries the slot key.
+    multi_account: bool = False
 
 
 class UnipileConnectView(BaseModel):
@@ -154,6 +177,7 @@ class UnipileDisconnected(BaseModel):
     nothing linked). `detail` = the sentence to show."""
     ok: bool
     channel: str
+    account_id: Optional[str] = None        # the account unlinked (absent: nothing was)
     seat: Optional[str] = None
     reason: Optional[str] = None
     detail: Optional[str] = None
@@ -172,7 +196,8 @@ async def _connect(ctx: ResolvedCtx, inp: UnipileConnectInput) -> dict:
             ctx.sub, str(inp.channel or "linkedin"),
             force=bool(inp.force),
             premium=(str(inp.premium).strip().lower() if inp.premium else None),
-            app=(str(inp.app) if inp.app else None))
+            app=(str(inp.app) if inp.app else None),
+            add_account=bool(inp.add_account))
     except unipile_connect.ConnectRefused as e:
         # ⚠️ HISTORICAL shape kept: 502 (upstream failure) and 409 (cross-org duplicate,
         # #172) carry an actionable message, served INSTEAD OF the machine code in
@@ -214,14 +239,15 @@ async def _status(ctx: ResolvedCtx, inp: UnipileStatusInput) -> dict:
     return unipile.status_for(ctx.sub)
 
 
-def _platform_seat_here(sub: str, org_id: int, provider: str) -> Optional[str]:
-    """The `account_id` of `sub`'s LIVE binding on this channel in this org when it holds
+def _platform_seat_here(sub: str, org_id: int, provider: str,
+                        account_id: str) -> Optional[str]:
+    """`account_id` when it is `sub`'s LIVE binding on this channel in this org AND holds
     a seat of the PLATFORM key, else None. A BYO account (`platform_seat` false) lives on
     the org's own Unipile subscription: never ours to delete."""
-    for a in db.list_unipile_accounts(sub):
-        if (a.get("org_id") == org_id and (a.get("provider") or "").upper() == provider
-                and a.get("platform_seat")):
-            return a.get("account_id")
+    from ..connectors import identities as connector_identities
+    for a in connector_identities.comptes_du_canal_ici(sub, provider, org=org_id):
+        if a["account_id"] == account_id and a.get("platform_seat"):
+            return account_id
     return None
 
 
@@ -292,9 +318,33 @@ def _disconnect(ctx: ResolvedCtx, inp: UnipileDisconnectInput) -> dict:
     if org_id is None:
         raise AuthzDenied(400, "no_org_context",
                           "No current org: there is no binding to unlink.")
-    seat = _platform_seat_here(ctx.sub, org_id, provider)
-    db.clear_unipile_account(ctx.sub, org_id, provider)
+    from ..connectors import identities as connector_identities
+    mine = connector_identities.comptes_du_canal_ici(ctx.sub, provider, org=org_id)
+    if inp.account_id:
+        cible = next((a for a in mine if a["account_id"] == inp.account_id), None)
+        if cible is None:
+            raise AuthzDenied(404, "account_not_connected",
+                              f"`{inp.account_id}` is not one of your {provider.lower()} "
+                              "accounts connected in this org.")
+    else:
+        cible = db.default_unipile_account(mine)
+        if cible is None and mine:
+            raise AuthzDenied(409, "account_id_required",
+                              f"Several {provider.lower()} accounts are connected here and "
+                              "none is the main one: name the one to unlink (`account_id`: "
+                              + ", ".join(f"`{a['account_id']}`" for a in mine) + ").")
     out = {"ok": True, "channel": provider.lower()}
+    if cible is None:
+        # Nothing linked here: idempotent, as before (a repeated disconnect is an `ok`).
+        db.clear_unipile_account(ctx.sub, org_id, provider)
+        return out
+    seat = _platform_seat_here(ctx.sub, org_id, provider, cible["account_id"])
+    db.clear_unipile_account(ctx.sub, org_id, provider, account_id=cible["account_id"])
+    # The member's default pointed at the account just unlinked: drop the choice.
+    op = db.get_operated_account(ctx.sub, provider)
+    if op and op.get("owner_sub") == ctx.sub and op["account_id"] == cible["account_id"]:
+        db.clear_operated_account(ctx.sub, provider)
+    out["account_id"] = cible["account_id"]
     if seat:
         out.update(_free_platform_seat(ctx.sub, org_id, seat))
     return out
@@ -302,7 +352,9 @@ def _disconnect(ctx: ResolvedCtx, inp: UnipileDisconnectInput) -> dict:
 
 _DOC_CONNECT = (
     "Starts the connection of a hosted messaging account under my org's "
-    "subscription. Returns `{url}`: the consent page to open. ⚠️ Second possible outcome — "
+    "subscription. Returns `{url}`: the consent page to open. `add_account=true` adds "
+    "another account on the channel (its own seat) instead of replacing the connected "
+    "one. ⚠️ Second possible outcome — "
     "`{adopted: true, channel, account_name}` **with no url**: the account was already "
     "connected under my identity in another org and has just been attached here, there is "
     "nothing to consent to, you must refresh. `premium` activates a LinkedIn product "
@@ -322,7 +374,8 @@ _DOC_STATUS = (
     "then says so, with what is adoptable here in one click."
 )
 _DOC_DISCONNECT = (
-    "Unlinks a channel FROM THIS ORG; the row survives as proof of ownership. An "
+    "Unlinks ONE account of a channel FROM THIS ORG (`account_id` when several are "
+    "connected; without it, the default one); the row survives as proof of ownership. An "
     "account on the PLATFORM key that no other org uses is then deleted at the "
     "provider. ⚠️ IRREVERSIBLE: reconnecting is a full new login with a new account "
     "id, and the old account's history is not carried over. `seat` says what "

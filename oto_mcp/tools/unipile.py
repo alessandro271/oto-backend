@@ -590,15 +590,30 @@ UNIPILE_CHANNELS = {
 }
 
 
-def _channels_from(accts_by_provider: dict) -> dict:
-    """Build the channels dict from the accounts indexed by DB provider."""
+def _channels_from(accts_by_provider: dict, all_by_provider: "dict | None" = None,
+                   default_by_provider: "dict | None" = None) -> dict:
+    """Build the channels dict from the accounts indexed by DB provider.
+
+    The top-level fields describe ONE account — the one served by default — as they
+    always did. `accounts` lists every account of the channel (several accounts per
+    channel), the default marked; one entry when there is a single account."""
+    all_by_provider = all_by_provider or {}
+    default_by_provider = default_by_provider or {}
+
     def _ch(provider: str) -> dict:
         a = accts_by_provider.get(provider)
+        defaut = (default_by_provider[provider] if provider in default_by_provider
+                  else (a["account_id"] if a else None))
+        tous = all_by_provider.get(provider) or ([a] if a else [])
         return {
             "connected": a is not None,
             "account_id": a["account_id"] if a else None,
             "account_name": a.get("account_name") if a else None,
             "connected_at": str(a["connected_at"]) if a else None,
+            "accounts": [{"account_id": x["account_id"],
+                          "account_name": x.get("account_name"),
+                          "connected_at": str(x["connected_at"]),
+                          "is_default": x["account_id"] == defaut} for x in tous],
         }
     return {front: _ch(prov) for front, prov in UNIPILE_CHANNELS.items()}
 
@@ -619,7 +634,28 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     byo = mode in access.BYO_MODES
     subscribed = access.option_open(sub, "unipile", org=org, group=group)  # single source (byo OR option)
     all_accts = db.list_unipile_accounts(sub)
-    accts = {a["provider"]: a for a in all_accts if a.get("org_id") == o}
+    ici: dict = {}
+    for a in all_accts:
+        if a.get("org_id") == o:
+            ici.setdefault(a["provider"], []).append(a)
+    # The account described per channel = the one served by default (several accounts per
+    # channel): the main one, or the only one left (`db.default_unipile_account`) —
+    # then the default chosen by the member, when it is one of these accounts.
+    accts = {}
+    defauts = {}
+    for prov, rows in ici.items():
+        d = db.default_unipile_account(rows)
+        op = db.get_operated_account(sub, prov) if len(rows) > 1 else None
+        if op and op.get("owner_sub") == sub:
+            d = next((r for r in rows if r["account_id"] == op["account_id"]), d)
+        if d is not None:
+            accts[prov] = d
+            defauts[prov] = d["account_id"]
+        else:
+            # Several accounts, none designated: the channel IS connected — describe
+            # the oldest, and mark none as the default.
+            accts[prov] = rows[0]
+            defauts[prov] = None
     # Adoption possible? (platform mode = same key everywhere; the option gates the connect)
     elsewhere: dict = {}
     if mode == "platform" and subscribed:
@@ -637,7 +673,12 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
         "subscribed": subscribed,   # option unlocked (BYO or admin comp) — gates "connect"
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origin of the key)
         "byo": byo,
-        "channels": _channels_from(accts),
+        "channels": _channels_from(accts, ici, defauts),
+        # Several accounts per channel can be connected HERE (`add_account`): the
+        # database has the slot key (`db.slots_ouverts`) and the option is open. The
+        # front shows « Add another account » only on this — a backend without it
+        # would REPLACE the connected account instead.
+        "multi_account": bool(subscribed) and db.slots_ouverts(),
         # per front channel: the sub's account connected ELSEWHERE, adoptable here in one click
         # (the Connect button adopts on the backend side — the UI can announce it).
         "elsewhere": {front_by_provider[p]: v for p, v in elsewhere.items()
@@ -730,6 +771,13 @@ def account_status(provider: str = "LINKEDIN",
 
     out = {"connected": account_id is not None, "account_id": account_id,
            "account_name": label, "channel": provider, "alive": alive}
+    # Several accounts on this channel here: all of them, the served one marked — an
+    # agent picks another for one call with `_account=<account_id>`.
+    mine = connector_identities.comptes_du_canal_ici(sub, provider)
+    if len(mine) > 1:
+        out["accounts"] = [{"account_id": a["account_id"],
+                            "account_name": a.get("account_name"),
+                            "is_default": a["account_id"] == account_id} for a in mine]
 
     if account_id is None and isinstance(binding, dict) and not binding.get("bound"):
         # The reason for THIS channel: a failed WhatsApp request is not reported on the
@@ -837,6 +885,15 @@ for _con in providers.REGISTRY.values():
 del _con
 
 
+def _par_canal(accts) -> dict:
+    """Accounts grouped by DB provider, in listing order — the main account first
+    (`db.list_unipile_accounts`), so `rows[0]` is the one an admin sheet describes."""
+    out: dict = {}
+    for a in accts:
+        out.setdefault(a["provider"], []).append(a)
+    return out
+
+
 def admin_status_by_org(sub: str, orgs: list) -> list:
     """Messaging state **per org** for the admin sheet (a user can be in N orgs;
     the option is PER ORG). `orgs` = `org_store.list_orgs_for_user(sub)`.
@@ -849,12 +906,13 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
         oid = o["org_id"]
         mode = access.credential_mode_for(sub, "unipile", org=oid)
         byo = mode in access.BYO_MODES
-        by = {a["provider"]: a for a in accts if a.get("org_id") == oid}
+        tous = _par_canal(a for a in accts if a.get("org_id") == oid)
+        by = {p: rows[0] for p, rows in tous.items()}
         out.append({
             "org_id": oid, "org_name": o.get("name"), "is_active": bool(o.get("is_active")),
             "subscribed": access.option_open(sub, "unipile", org=oid),  # single source
             "mode": mode, "byo": byo,
-            "channels": _channels_from(by),
+            "channels": _channels_from(by, tous),
             # Through the seam, never through the sources. `org_comp` = the org's declared
             # right (any source). `user_comp` = the person's account mark,
             # shown for the record — it opens nothing. `subscribed` also counts a
@@ -865,12 +923,13 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
             },
         })
     member = {o["org_id"] for o in orgs}
-    orphans = {a["provider"]: a for a in accts if a.get("org_id") not in member}
+    tous_orphelins = _par_canal(a for a in accts if a.get("org_id") not in member)
+    orphans = {p: rows[0] for p, rows in tous_orphelins.items()}
     if orphans:
         out.append({
             "org_id": None, "org_name": "(outside their orgs)", "is_active": False,
             "subscribed": None, "mode": None, "byo": None,
-            "channels": _channels_from(orphans), "option_source": None,
+            "channels": _channels_from(orphans, tous_orphelins), "option_source": None,
         })
     return out
 
@@ -998,8 +1057,13 @@ def unipile_client(provider: str = "LINKEDIN"):
             api_key=rc.key, dsn=(None if rc.is_platform else rc.config.get("dsn")),
             account_id=_project_operated_account(anon, provider), provider=provider)
     sub = access.current_user_sub_or_raise()
+    sans_defaut = None
     try:
         account_id = connector_identities.resolve_operated_account_id(sub, provider)
+    except connector_identities.PlusieursComptesSansDefaut as e:
+        # Several own accounts, none by default: a project that pins one of them
+        # designates it (below) — the refusal only stands when nothing does.
+        account_id, sans_defaut = None, e
     except ValueError as e:  # operated pointer revoked/disconnected → explicit error
         raise McpError(_refus_identite(e))
     # Project pin (#57): if the active project pins an unipile account, it takes precedence over the
@@ -1028,6 +1092,8 @@ def unipile_client(provider: str = "LINKEDIN"):
             connector_identities.refuser_si_preteur_en_pause(sub, provider, pinned)
         except ValueError as e:
             raise McpError(_refus_identite(e))
+    if not account_id and sans_defaut is not None:
+        raise McpError(_refus_identite(sans_defaut))
     if not account_id:
         # #1342 (option C of 27/10/2026): the caller's OWN account of this channel is
         # linked in another of their orgs and adoptable here → say so, with the gesture.
@@ -1189,7 +1255,8 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     async def unipile_connect_start(channel: str = "linkedin",
                                     force: bool = False,
-                                    premium: Optional[str] = None) -> dict:
+                                    premium: Optional[str] = None,
+                                    add_account: bool = False) -> dict:
         """Start the connection of a hosted messaging account (LinkedIn by
         default) and return an Unipile auth **`url`** to pass on to the user.
 
@@ -1228,13 +1295,20 @@ def register(mcp: FastMCP) -> None:
                 "sales_navigator" (exclusive, only one per account). Only request it
                 if the person really has the matching LinkedIn seat. Also adds
                 the cookie connection to the wizard (recommended for these products).
+            add_account: ADD another account on this channel (a second LinkedIn, a
+                second WhatsApp number…) instead of replacing the connected one. Each
+                added account is one more seat. The person must log in with the OTHER
+                account in the wizard. Calls then pick it with `_account=<account_id>`
+                (list them: `oto_identity(op='list')`), or it becomes the default via
+                `oto_identity(op='set')`.
         """
         from .. import unipile_connect
 
         sub = access.current_user_sub_or_raise()
         try:
             out = await unipile_connect.hosted_auth_url(sub, channel, force=force,
-                                                        premium=premium)
+                                                        premium=premium,
+                                                        add_account=bool(add_account))
         except unipile_connect.ConnectRefused as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=e.message))
         if out.get("adopted"):

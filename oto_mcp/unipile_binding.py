@@ -83,7 +83,7 @@ def account_claimable(sub: str, account_id: str, provenance: Provenance, *,
 def bind_account(sub: str, account_id: str, provenance: Provenance, *,
                  org_id: "int | None", provider: str = "LINKEDIN",
                  platform_seat: bool = False, account_name: "str | None" = None,
-                 foreign: "set | None" = None) -> BindOutcome:
+                 foreign: "set | None" = None, slot: str = "") -> BindOutcome:
     """Écrire la liaison `(sub, org, canal) → account_id`, **gardée**.
 
     Le seul chemin d'écriture, et c'est le point : #559 n'était pas une garde oubliée
@@ -95,5 +95,5 @@ def bind_account(sub: str, account_id: str, provenance: Provenance, *,
         return BindOutcome(False, "account_not_claimable")
     db.set_unipile_account(sub, account_id, account_name=account_name,
                            org_id=org_id, provider=provider,
-                           platform_seat=platform_seat)
+                           platform_seat=platform_seat, slot=slot)
     return BindOutcome(True)
