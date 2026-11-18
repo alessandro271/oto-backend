@@ -282,6 +282,19 @@ def _projets_lisibles(sub: str, filed: dict[int, list[int]]) -> set[int]:
     return {int(pid) for pid, ok in lus.items() if ok}
 
 
+def _orgs_des_apps(rows: list[dict]) -> dict[int, Optional[int]]:
+    """L'org où vit chaque app (`org_de_l_app`), lue une fois par propriétaire : une
+    liste d'apps d'une même équipe ne relit pas l'équipe à chaque carte."""
+    vues: dict[tuple, Optional[int]] = {}
+    out: dict[int, Optional[int]] = {}
+    for r in rows:
+        cle = (r.get("owner_type"), r.get("owner_id"), r.get("context_org_id"))
+        if cle not in vues:
+            vues[cle] = org_de_l_app(r)
+        out[int(r["id"])] = vues[cle]
+    return out
+
+
 def _cards(sub: str, rows: list[dict], writable: Optional[set[int]] = None) -> list[dict]:
     """Les cartes servies : de quoi dessiner la tuile, où l'app est rangée (parmi les
     projets que l'appelant lit), et s'il peut la modifier. `writable` : les apps que la
@@ -290,7 +303,7 @@ def _cards(sub: str, rows: list[dict], writable: Optional[set[int]] = None) -> l
     rangees = db.apps.projects_of(r["id"] for r in rows)
     lus = _projets_lisibles(sub, rangees)
     filed = {a: [p for p in pids if p in lus] for a, pids in rangees.items()}
-    vis = db.apps.visibilites([int(r["id"]) for r in rows])
+    vis = db.apps.visibilites(_orgs_des_apps(rows))
     return [{**r, "project_ids": filed.get(int(r["id"]), []),
              "visibility": vis[int(r["id"])],
              "can_edit": (int(r["id"]) in writable if writable is not None

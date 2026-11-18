@@ -60,8 +60,8 @@ def seams(monkeypatch):
     monkeypatch.setattr(db.apps, "projects_of",
                         lambda ids: {int(i): rec["filed"].get(int(i), []) for i in ids})
     rec["vis"] = {}
-    monkeypatch.setattr(db.apps, "visibilites", lambda ids: {
-        int(i): rec["vis"].get(int(i), {"org": None, "people": 0}) for i in ids})
+    monkeypatch.setattr(db.apps, "visibilites", lambda orgs: {
+        int(i): rec["vis"].get(int(i), {"org": None, "people": 0}) for i in orgs})
     monkeypatch.setattr(db.apps, "file", lambda a, p, by: rec["filed"].setdefault(a, []).append(p))
     monkeypatch.setattr(db.apps, "unfile", lambda a, p: rec["filed"].get(a, []).remove(p) or True)
     rec["grants"] = []

@@ -269,10 +269,17 @@ def test_qui_voit_chaque_app(projet, pg_module_dsn):
                      "WHERE resource_type = 'app' AND resource_id = %s", (str(c),))
     # Un partage d'un AUTRE type au même id ne compte pas.
     db.grant_resource("runner_trigger", str(d), "user", "z", role="viewer")
-    assert db.apps.visibilites([a, b, c, d]) == {
+    # Un partage à une AUTRE org que celle de l'app n'est pas « toute l'org ».
+    e = nouvelle("E")
+    db.grant_resource("app", str(e), "org", "9999", role="editor")
+    orgs = {a: 8311, b: 8311, c: 8311, d: 8311, e: 8311}
+    assert db.apps.visibilites(orgs) == {
         a: {"org": "viewer", "people": 2},
         b: {"org": "editor", "people": 0},
         c: {"org": None, "people": 0},   # échu : ne donne plus rien
         d: {"org": None, "people": 0},
+        e: {"org": None, "people": 0},   # partagée à une autre org
     }
-    assert db.apps.visibilites([]) == {}
+    # Une app sans org connue : aucun partage d'org ne compte.
+    assert db.apps.visibilites({b: None}) == {b: {"org": None, "people": 0}}
+    assert db.apps.visibilites({}) == {}
