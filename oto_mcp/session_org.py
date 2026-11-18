@@ -304,6 +304,43 @@ def current_call_account() -> Optional[str]:
     return _CALL_ACCOUNT.get()
 
 
+# ── Comptes des ÉTAPES d'une cascade (`waterfall_*`) ─────────────────────────
+# Une cascade appelle PLUSIEURS connecteurs : un `_account` unique y serait lu par
+# chacun d'eux (`resolve_credential` lit `_CALL_ACCOUNT`), donc jamais posé là. Ces
+# deux-là ne sont lus que par la cascade (`waterfall/comptes.py`), qui passe à chaque
+# étape le compte de SON connecteur, en argument de l'appel de l'étape.
+_CALL_STEP_ACCOUNTS: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "oto_call_step_accounts", default=None)
+_CALL_CASCADE_ACCOUNT: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "oto_call_cascade_account", default=None)
+
+
+def set_call_step_accounts(accounts: dict) -> contextvars.Token:
+    return _CALL_STEP_ACCOUNTS.set(dict(accounts))
+
+
+def reset_call_step_accounts(token: contextvars.Token) -> None:
+    _CALL_STEP_ACCOUNTS.reset(token)
+
+
+def current_call_step_accounts() -> Optional[dict]:
+    """`{connecteur: compte}` posé par `_accounts=` sur une cascade, ou None."""
+    return _CALL_STEP_ACCOUNTS.get()
+
+
+def set_call_cascade_account(account: str) -> contextvars.Token:
+    return _CALL_CASCADE_ACCOUNT.set(account)
+
+
+def reset_call_cascade_account(token: contextvars.Token) -> None:
+    _CALL_CASCADE_ACCOUNT.reset(token)
+
+
+def current_call_cascade_account() -> Optional[str]:
+    """Le `_account=` passé à une cascade (jamais posé en `_CALL_ACCOUNT`), ou None."""
+    return _CALL_CASCADE_ACCOUNT.get()
+
+
 # ── Relevé de résolution de l'appel (« ce que le SERVEUR a résolu ») ─────────
 # Sens inverse des axes ci-dessus : ceux-là portent ce que l'APPELANT a fourni,
 # celui-ci ce que le serveur a résolu PENDANT l'appel — aujourd'hui le `ns_id` d'un

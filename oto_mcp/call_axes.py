@@ -690,10 +690,88 @@ INSTANCE = CallAxis(
 )
 
 
+# ── Axes compte d'une CASCADE (`waterfall_*`, `waterfall_*_act`) ──────────────
+# Une cascade appelle plusieurs connecteurs, chacun sous SA clé : l'axe `_account`
+# ordinaire (`ACCOUNT`, lu par `resolve_credential` à chaque résolution) y serait lu par
+# toutes les étapes, et chacune chercherait ce nom chez elle. Les cascades portent donc
+# deux axes à elles, posés dans des ContextVars que seule la cascade lit
+# (`waterfall/comptes.py`) : elle passe à chaque étape le compte de SON connecteur.
+
+def _is_cascade_tool(name: str) -> bool:
+    """Un outil d'une cascade (les six connecteurs `waterfall_*` et leurs `_act`)."""
+    con = providers.connector_for_namespace(namespace_of(name))
+    return con is not None and "waterfall" in (getattr(con, "modules", None) or ())
+
+
+def step_accounts_of(value: object) -> dict[str, str]:
+    """`{connecteur: compte}` — la forme seule est gardée ici ; quel connecteur est une
+    étape de CETTE cascade, et si le compte existe, la cascade le juge avant de payer.
+    `{}` = rien de nommé."""
+    if value is None or value == {}:
+        return {}
+    if not isinstance(value, dict) or not all(
+            isinstance(k, str) and k.strip() and isinstance(v, str) and v.strip()
+            for k, v in value.items()):
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"Paramètre `_accounts` invalide : {value!r}. Attendu "
+                     "{\"<connecteur>\": \"<compte>\"}, ex. {\"lemlist\": \"<compte>\"} — "
+                     "les comptes : oto_identity(op='list').")))
+    return {k.strip().lower(): v.strip() for k, v in value.items()}
+
+
+async def _pin_step_accounts(value: object) -> list[UndoEntry]:
+    accounts = step_accounts_of(value)
+    if not accounts:
+        return []
+    return [(session_org.reset_call_step_accounts,
+             session_org.set_call_step_accounts(accounts))]
+
+
+async def _pin_cascade_account(value: object) -> list[UndoEntry]:
+    if value is None or value == "":
+        return []
+    return [(session_org.reset_call_cascade_account,
+             session_org.set_call_cascade_account(str(value)))]
+
+
+STEP_ACCOUNTS = CallAxis(
+    param="_accounts",
+    schema={
+        "type": "object",
+        "additionalProperties": {"type": "string"},
+        "title": "Accounts",
+        "description": (
+            "Compte à OPÉRER par connecteur des étapes, ex. {\"lemlist\": \"<compte>\"}. "
+            "`oto_identity(op='list')`."
+        ),
+    },
+    applies=_is_cascade_tool,
+    pin=_pin_step_accounts,
+)
+
+# Même nom que `ACCOUNT` : sur une cascade, c'est lui qui le lit (`axes_for_call`
+# n'ajoute `ACCOUNT` que si aucun axe du tool ne porte déjà `_account`).
+CASCADE_ACCOUNT = CallAxis(
+    param="_account",
+    schema={
+        "type": "string",
+        "title": "Account",
+        "description": (
+            "Compte à OPÉRER si les étapes n'ont qu'UN connecteur, sinon `_accounts`. "
+            "`oto_identity(op='list')`."
+        ),
+    },
+    applies=_is_cascade_tool,
+    pin=_pin_cascade_account,
+)
+
+
 # Axes exposés sur les tools plats (chacun via les 3 mécanismes : advertise / strip+pose / seam).
 # ⚠️ Ordre = ordre de pose : GROUP après ORG pour que son org co-posée prime (plus
 # spécifique) ; INSTANCE en dernier (le jeton le plus spécifique de tous).
-AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT, RUN, ORG, GROUP, INSTANCE)
+AXES: tuple[CallAxis, ...] = (ACCOUNT, PROJECT, RUN, ORG, GROUP, INSTANCE,
+                              STEP_ACCOUNTS, CASCADE_ACCOUNT)
 
 
 def axes_for(name: str) -> list[CallAxis]:

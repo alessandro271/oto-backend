@@ -3,6 +3,7 @@ use — and the verdict on what it returned; the collect loop of an asynchronous
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import re
 import time
 from typing import Optional
@@ -10,6 +11,7 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from ..mcp_errors import McpError
+from . import comptes
 from .etape import Step, _bills, _payload
 
 #: An asynchronous step polls for at most this long, first poll after `POLL_FIRST_S`.
@@ -26,6 +28,8 @@ async def _poll(mcp: FastMCP, sub, step: Step, submitted, deadline: float):
     args = step.collect.args(submitted)
     if not args:
         return None, None, True
+    # On the account it was submitted on — and so is the collect call of the receipt.
+    args = comptes.avec_compte(step.collect.tool, args)
     tool = await meta.resoudre_outil(mcp, step.collect.tool)
     if tool is None:
         return None, args, False
@@ -54,8 +58,8 @@ async def collect_once(mcp: FastMCP, sub, step: Step, args: dict):
     if tool is None:
         return None
     try:
-        return await meta.executer_cible(tool, sub, step.collect.tool,
-                                         step.collect.tool, dict(args))
+        return await meta.executer_cible(tool, sub, step.collect.tool, step.collect.tool,
+                                         comptes.avec_compte(step.collect.tool, args))
     except McpError:
         return None
 
@@ -69,7 +73,8 @@ async def _call(mcp: FastMCP, sub, tool_name: str, args: dict, attempt: dict):
                        message=f"`{tool_name}` is not mounted on this instance")
         return None
     try:
-        return await meta.executer_cible(tool, sub, tool_name, tool_name, dict(args))
+        issue = await meta.executer_cible(tool, sub, tool_name, tool_name,
+                                          comptes.avec_compte(tool_name, args))
     except McpError as e:
         # A GUARD refusal (connector not activated for this org/team, outside the
         # hosted job's tool list, access level): the caller's fault for a direct call,
@@ -79,6 +84,12 @@ async def _call(mcp: FastMCP, sub, tool_name: str, args: dict, attempt: dict):
         attempt.update(status="skipped", code=code or "refused",
                        message=(e.error.message or "")[:300])
         return None
+    if not issue.ok and issue.code == meta.CODE_COMPTE_A_NOMMER:
+        # Two accounts of this connector and none named (or one that is gone): the way
+        # to name it is the waterfall's `_accounts`, not the step's `_account`.
+        issue = dataclasses.replace(issue, message=comptes.conseil_cascade(
+            tool_name, issue.message))
+    return issue
 
 
 #: A step refused because the caller's own account is not linked (measured: "Connect
