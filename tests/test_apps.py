@@ -171,6 +171,21 @@ def test_manifeste_trop_lourd():
     assert problems and "characters" in problems[0]
 
 
+def test_une_app_porte_jusqu_a_100_tableaux_et_100_agents():
+    """Une seule app qui couvre tous les cas d'usage d'une org : 100 tableaux et
+    100 agents passent, le 101ᵉ est refusé."""
+    tables = {f"t{i}": {"table": str(i)} for i in range(M.MAX_TABLES)}
+    agents = {f"a{i}": i + 1 for i in range(M.MAX_AGENTS)}
+    assert M.MAX_TABLES == 100 and M.MAX_AGENTS == 100
+    _, problems = M.forme({"tables": tables, "agents": agents})
+    assert not [p for p in problems if p.startswith("At most")]
+    tables["trop"] = {"table": "999"}
+    agents["trop"] = 999
+    _, problems = M.forme({"tables": tables, "agents": agents})
+    assert f"At most {M.MAX_TABLES} tables." in problems
+    assert f"At most {M.MAX_AGENTS} agents." in problems
+
+
 # ── La capacité ─────────────────────────────────────────────────────────────
 
 def test_create_a_qui_la_cree_dans_l_org_active_et_privee(seams):
