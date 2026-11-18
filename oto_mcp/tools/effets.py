@@ -1287,7 +1287,10 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
 LOTS: dict[str, Lot] = {
     "mailpool_mailboxes:create": Lot("mailboxes"),
     "mailpool_mailboxes:export": Lot("mailbox_ids"),
-    # `update` edits ONE mailbox (`mailbox_id`): `mailboxes` is refused there.
+    # `update` edits ONE mailbox (`mailbox_id`) and refuses `mailboxes`: this lot never
+    # counts anything. It stays because the guard (`test_effets_declares`) wants a lot on
+    # every writing op of a tool with a batch list, and `PAS_UN_LOT` is per tool —
+    # `mailboxes` is the batch of `create`, so it cannot be declared "not a batch" here.
     "mailpool_mailboxes:update": Lot("mailboxes"),
     "lemlist_contact:list_create": Lot("contact_ids"),
     "lemlist_inbox:messages": Lot("cc"),

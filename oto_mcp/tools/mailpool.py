@@ -551,6 +551,10 @@ def register(mcp: FastMCP) -> None:
           `avatar` on google/outlook mailboxes (null removes it). A field left
           out is kept; only a field that differs is sent. Address, type and
           domain cannot be changed; warmup settings are not mailbox fields.
+          ⚠️ `forwardTo` redirects ALL incoming mail of the mailbox, prospects'
+          replies included; on a Microsoft 365 tenant an external forward can
+          get the warmup paused. A signature heavy with links or images can
+          hurt deliverability.
           `dry_run=True` (the default) returns the before/after diff and sends
           nothing. On error reason `mailbox_update_outcome_unknown` or
           `mailbox_update_not_kept` the mailbox may have changed: `op="get"`
