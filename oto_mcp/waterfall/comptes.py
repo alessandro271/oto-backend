@@ -45,7 +45,7 @@ def _connecteurs(steps: Iterable[Step]) -> dict[str, tuple[str, bool]]:
     """`{name a caller may write: (vault carrier, identities?)}` for the steps whose call
     takes an account: a keyed connector that reads `_account` — not open data (`fr_get`
     resolves no key, `Step.keyless`). The connector's name and its carrier are both
-    accepted (`linkedin` and `unipile` name the same accounts). `identities`: the
+    accepted (`linkedin_unipile` and `unipile` name the same accounts). `identities`: the
     carrier's accounts are operated identities (`Connector.personal_cross_org`, unipile),
     resolved by the step itself, not by the key cascade."""
     from .. import call_axes, providers

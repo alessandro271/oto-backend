@@ -258,3 +258,47 @@ async def test_le_middleware_pose_les_comptes_de_cascade_jamais_le_compte_de_l_a
     assert vu["compte_de_l_appel"] is None and vu["seul"] == "espace-a"
     assert session_org.current_call_step_accounts() is None
     assert session_org.current_call_cascade_account() is None
+
+
+# --- la vérification, sur le VRAI résolveur (coffre simulé) --------------------------
+
+class _Lemlist:
+    """Connecteur multi-compte org-partageable, comme lemlist (clé d'API)."""
+    auth_multi_account = True
+    auth_modes = ("byo", "byo_org")
+    personal_cross_org = False
+    name = "lemlist"
+
+
+@pytest.fixture
+def org_a_deux_espaces(monkeypatch):
+    """L'org tient deux espaces lemlist, la personne aucun (harnais de
+    `tests/test_reprise_399_review.py`) — c'est `resolve_credential` qui tranche."""
+    monkeypatch.setattr(access, "current_org", lambda sub: 7)
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    monkeypatch.setattr(access.providers, "connector_for_provider", lambda p: _Lemlist())
+    monkeypatch.setattr(access.providers, "is_byo_user", lambda p: True)
+    monkeypatch.setattr(access, "project_pinned_identity", lambda prov, project_id=None: None)
+    monkeypatch.setattr(access, "ORG_SHAREABLE_PROVIDERS", {"lemlist"})
+    monkeypatch.setattr(access.db, "insert_tool_call", lambda payload: None)
+    monkeypatch.setattr(access.db, "get_member_api_key", lambda *a, **k: None)
+    rows = [{"account": n, "meta": {}} for n in ("espace-a", "espace-b")]
+    monkeypatch.setattr(access.credentials_store, "list_accounts",
+                        lambda et, eid, con: rows if et == "org" else [])
+    monkeypatch.setattr(access.org_store, "get_org_secret",
+                        lambda oid, prov, account="": {"espace-a": "K-A",
+                                                       "espace-b": "K-B"}.get(account))
+
+
+def test_le_vrai_resolveur_refuse_le_compte_absent_et_laisse_passer_l_existant(
+        org_a_deux_espaces):
+    from oto_mcp.waterfall import comptes
+    # Le harnais sert bien l'espace nommé — le passage n'est pas un refus avalé.
+    assert access.resolve_credential("lemlist", sub="u1", account="espace-b",
+                                     emit_on_failure=False, check_usage=False).key == "K-B"
+    comptes._verifier("u1", "lemlist", "espace-b")          # existe : rien à dire
+    with pytest.raises(McpError) as e:
+        comptes._verifier("u1", "lemlist", "espace-z")
+    assert e.value.error.data["code"] == "account_not_found"
+    assert "`espace-z`" in e.value.error.message
+    assert session_org.current_call_trace() is None         # rien laissé sur l'appel

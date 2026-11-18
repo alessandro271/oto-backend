@@ -476,7 +476,7 @@ La règle (`oto_mcp/waterfall/comptes.py`) :
   `waterfall_person` a deux étapes lemlist (`lemlist_db`, `lemlist`) et
   `waterfall_company` une complétion (`lemlist_linkedin`) ; toutes partent sous le compte
   nommé pour lemlist. Le nom du connecteur ou de son porteur au coffre est accepté
-  (`linkedin` ou `unipile`). Chaque appel d'une étape de ce connecteur — la recherche, ses
+  (`linkedin_unipile` ou `unipile`). Chaque appel d'une étape de ce connecteur — la recherche, ses
   pages, la révélation, la relève d'une étape asynchrone (et l'appel de relève rendu dans
   `pending`) — porte `_account`, que `meta.executer_cible` lit comme pour tout appel ;
   les étapes des autres connecteurs n'en reçoivent aucun. La ligne de l'étape dans
