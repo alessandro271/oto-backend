@@ -71,7 +71,7 @@ apify_run_sync	-	434bbdbbb0304469
 apify_store_search	-	004753210a0c87e8
 apify_website_contacts	-	9e71eecdb2beadea
 apify_website_crawl	-	f9f005f7f1242536
-apify_welcome_to_the_jungle_jobs	-	f19daefe24a5ea99
+apify_welcome_to_the_jungle_jobs	-	97acb577bda1ffc6
 apollo_act	send_email	eec04b0567b0dd19
 apollo_bulk_enrich_organizations	-	6d0cc5b001c7fa68
 apollo_bulk_match	-	8aa2e56316a5e889
