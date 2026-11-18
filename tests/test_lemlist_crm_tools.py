@@ -163,12 +163,14 @@ def _reponse_lemlist(monkeypatch, status, body):
 def test_une_valeur_absente_de_la_liste_est_une_reponse_par_le_vrai_client(monkeypatch, op, arg):
     """La route v1 `GET /unsubscribes/{email}` n'est plus servie ; le client épinglé
     lit `GET /v2/unsubscribes/variables/{email}`, et son 404 « Variable not found »
-    devient `unsubscribed: false`."""
+    devient `unsubscribed: false` — après avoir lu aussi le domaine de l'adresse
+    (`@example.test`), absent lui aussi."""
     sent = _reponse_lemlist(monkeypatch, 404, {"error": "Variable not found"})
     with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)):
         out = _tool("lemlist_unsubscribe").fn(op=op, **{arg: "a@example.test"})
-    ((method, url),) = sent
-    assert method == "GET" and url.endswith("/v2/unsubscribes/variables/a@example.test")
+    assert [m for m, _ in sent] == ["GET", "GET"]
+    assert sent[0][1].endswith("/v2/unsubscribes/variables/a@example.test")
+    assert sent[1][1].endswith("/v2/unsubscribes/variables/@example.test")
     assert out == {"value": "a@example.test", "unsubscribed": False}
 
 
