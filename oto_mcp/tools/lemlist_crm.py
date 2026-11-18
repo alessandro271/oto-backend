@@ -514,7 +514,9 @@ def register(mcp: FastMCP) -> None:
         To check ONE value, use `get` or `var_get`: a listing can hold
         thousands of rows. Both answer `unsubscribed: true` (with the record)
         or `unsubscribed: false` when the value is not on the list — never an
-        error for that. `list` and `var_list` are paged: 100 rows when `limit`
+        error for that. ⚠️ The match is EXACT: an address whose DOMAIN is
+        unsubscribed reads false on the address — before contacting someone,
+        check `@<their domain>` too. `list` and `var_list` are paged: 100 rows when `limit`
         is omitted (lemlist caps them at 100 anyway), and `next_offset` says
         where the next page starts (null on the last one).
 
