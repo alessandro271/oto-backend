@@ -40,6 +40,7 @@ from oto.tools.common.errors import UpstreamHTTPError
 
 from .. import access, session_org
 from ..connectors import verify as connector_verify
+from . import apify_recu
 from .lecture import LECTURE
 
 if TYPE_CHECKING:
@@ -722,8 +723,15 @@ def _dire_plafond_atteint(run: dict, run_id: str, cout: float) -> None:
             "ceiling per run), or split the work into smaller runs.")
 
 
+class _Releve(NamedTuple):
+    """What `_releve` traced: the run's FINAL cost when known (else None), and whether
+    THIS call traced it as the job — read by the receipt (`apify_recu`)."""
+    cout: Optional[float] = None
+    ici: bool = False
+
+
 def _releve(out: Any, run_id: str, outil: str = "apify_run_status",
-            palier: Callable[[], Optional[str]] = _sans_palier) -> None:
+            palier: Callable[[], Optional[str]] = _sans_palier) -> _Releve:
     """Record a FINISHED run's real cost on the current call's trace: `quantity` in
     micro-dollars, and the run as the JOB of the line (`apify_run_id`, served as
     `job_id` by the billing lens) — a finished run polled N times traces N times the
@@ -746,22 +754,24 @@ def _releve(out: Any, run_id: str, outil: str = "apify_run_status",
     ⚠️ A platform-key run belongs to the org that LAUNCHED it: read from another org
     (a platform operator looking at it), or when its launch record cannot be read, it
     traces 0 without the job, and the settlement bills the launcher
-    (`_hors_du_lanceur`, `apify_releve.py`)."""
+    (`_hors_du_lanceur`, `apify_releve.py`).
+
+    Returns what was traced (`_Releve`), for the run's receipt."""
     run = _run_of(out)
     if run is None:
         logger.warning("%s %s: unreadable response (%s), cost not recorded",
                        outil, run_id, type(out).__name__)
         _gratuit()
-        return
+        return _Releve()
     status = run.get("status")
     if not isinstance(status, str):
         logger.warning("%s %s: unreadable status (%s), cost not recorded",
                        outil, run_id, type(status).__name__)
         _gratuit()
-        return
+        return _Releve()
     if status not in _TERMINAL:
         _gratuit()
-        return
+        return _Releve()
     cout = _cout(run, run_id, outil, palier)
     if cout is None:
         # Not final: `_cout` said why. Unreadable: said here.
@@ -770,15 +780,32 @@ def _releve(out: Any, run_id: str, outil: str = "apify_run_status",
                            "recorded", outil, run_id, status,
                            type(run.get("usageTotalUsd")).__name__)
         _gratuit()
-        return
+        return _Releve()
     rid = run.get("id")
     _dire_plafond_atteint(run, run_id, cout)
     if _hors_du_lanceur(run_id, status, cout):
         _gratuit()
-        return
+        return _Releve(cout, False)
     session_org.note_call_trace(
         quantity=_microdollars(cout),
         apify_run_id=rid if isinstance(rid, str) and rid else run_id)
+    return _Releve(cout, True)
+
+
+def _recu(out: Any, run_id: Optional[str], releve: _Releve = _Releve()) -> dict:
+    """The receipt of the run `out` answers (`apify_recu.recu`), on the key of the call."""
+    return apify_recu.recu(
+        _run_of(out), run_id,
+        key_mode=(session_org.current_call_trace() or {}).get("key_mode"),
+        cout=releve.cout, ici=releve.ici)
+
+
+def _avec_recu(out: Any, recu: dict) -> Any:
+    """`out` with its receipt ADDED under `receipt` — a dict answer only (additive: the
+    rest of the answer is Apify's, unchanged)."""
+    if isinstance(out, dict):
+        return {**out, "receipt": recu}
+    return out
 
 
 _LIMITS_URL = "https://api.apify.com/v2/users/me/limits"
@@ -866,8 +893,9 @@ def lancer_acteur(
 
     The body of `apify_run_sync`, shared with the dedicated actor tools
     (`tools/apify_actors.py`): `outil` is the tool that answers, named in the cost
-    warnings. Returns the LIST of items — or `{error, run_id, status, items}` for a
-    run that ended other than SUCCEEDED, or whose output could not be read.
+    warnings. Returns the LIST of items, its receipt (`apify_recu`) in the line that
+    heads the text channel — or `{error, run_id, status, dataset_id, items, receipt}`
+    for a run that ended other than SUCCEEDED, or whose output could not be read.
     """
     # Not the synchronous endpoint: it answers with the items only — no run id,
     # no cost — so a run through it could never be billed. Start the run, wait
@@ -909,7 +937,7 @@ def lancer_acteur(
     # read must not leave a finished run unbilled. Only an ANSWERED call is billed
     # (`tool_calls.ok`), so from here nothing is raised: a failed run or an
     # unreadable dataset is answered, with the run, never thrown.
-    _releve(out, run_id, outil=outil, palier=_palier_de(client))
+    recu = _recu(out, run_id, _releve(out, run_id, outil=outil, palier=_palier_de(client)))
     status = run.get("status")
     dataset_id = run.get("defaultDatasetId")
     try:
@@ -922,11 +950,14 @@ def lancer_acteur(
                          f"`apify_dataset_items(dataset_id=\"{dataset_id}\")` — the "
                          "run is billed, do not launch it again.",
                 "run_id": run_id, "status": status, "dataset_id": dataset_id,
-                "items": None}
+                "items": None, "receipt": recu}
     if status != "SUCCEEDED":
         return {"error": f"Apify run {run_id} ({actor_id}) ended {status}. Its log: "
                          f"`apify_run_status(run_id=\"{run_id}\")`.",
-                "run_id": run_id, "status": status, "items": items}
+                "run_id": run_id, "status": status, "dataset_id": dataset_id,
+                "items": items, "receipt": recu}
+    # The item LIST is a served contract: the receipt heads the text channel instead.
+    session_org.noter_avis(apify_recu.ligne(recu))
     return items
 
 
@@ -1006,7 +1037,9 @@ def register(mcp: FastMCP) -> None:
         `apify_dataset_items`. For a scrape you know is long, use `apify_run`.
 
         Returns: the LIST of dataset items — or, for a run that ended FAILED, TIMED-OUT
-        or ABORTED, `{error, run_id, status, items}` (that run is billed too).
+        or ABORTED, `{error, run_id, status, dataset_id, items, receipt}` (that run is
+        billed too). The run's receipt (`run_id`, `dataset_id`, `status`, `cost_usd`,
+        `usage_total_usd`, `billing`) heads the text of the answer.
 
         Args:
             actor_id: `username/actor-name` or id.
@@ -1045,8 +1078,11 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Start an actor WITHOUT waiting for it — for scrapes longer than 300 s.
 
-        Returns — `{data: {id, status, defaultDatasetId, …}}` — keep `id` for
-            `apify_run_status` and `defaultDatasetId` for `apify_dataset_items`.
+        Returns — `{data: {id, status, defaultDatasetId, …}, receipt}` — keep `id`
+            for `apify_run_status` and `defaultDatasetId` for `apify_dataset_items`.
+            `receipt`: `{run_id, dataset_id, status, usage_total_usd, cost_usd,
+            billing}` — `cost_usd` null and `billing` "pending" until the run is read
+            finished.
 
         Args:
             max_items / max_total_charge_usd: as in `apify_run_sync`.
@@ -1062,22 +1098,29 @@ def register(mcp: FastMCP) -> None:
                 max_total_charge_usd=plafond,
                 wait_for_finish=wait_for_finish)
         run = _run_of(out)
-        if run and isinstance(run.get("id"), str) and run["id"]:
-            _noter_lancement(run["id"], actor_id, "apify_run", plafond)
+        run_id = run.get("id") if run else None
+        if isinstance(run_id, str) and run_id:
+            _noter_lancement(run_id, actor_id, "apify_run", plafond)
         # Launching is free; the cost comes from `apify_run_status`, or the settlement.
         _gratuit()
-        return out
+        return _avec_recu(out, _recu(out, run_id if isinstance(run_id, str) else None))
 
     @mcp.tool(annotations=LECTURE)
     def apify_run_status(run_id: str, wait_for_finish: Optional[int] = None) -> dict:
         """Check a run: `status` (READY, RUNNING, SUCCEEDED, FAILED, TIMED-OUT,
         ABORTED), `defaultDatasetId` (where the output is) and `usageTotalUsd`
-        (what it cost so far)."""
+        (what it cost so far).
+
+        Returns — `{data: {…}, receipt}`; `receipt` = `{run_id, dataset_id, status,
+            usage_total_usd, cost_usd, billing}`: `cost_usd` is the run's final cost
+            (null while running or not final yet), `billing` who pays it — `credits`
+            (billed on this call), `apify_account` (your own key), `pending`,
+            `launching_org`."""
         with _upstream():
             client = _client()
             out = client.run_status(run_id, wait_for_finish=wait_for_finish)
-        _releve(out, run_id, palier=_palier_de(client))
-        return out
+        releve = _releve(out, run_id, palier=_palier_de(client))
+        return _avec_recu(out, _recu(out, run_id, releve))
 
     @mcp.tool()
     def apify_abort_run(run_id: str, gracefully: Optional[bool] = None) -> dict:
@@ -1091,7 +1134,7 @@ def register(mcp: FastMCP) -> None:
             out = _client().abort_run(run_id, gracefully=gracefully)
         # Aborting is free; the run's final cost is recorded by `apify_run_status`.
         _gratuit()
-        return out
+        return _avec_recu(out, _recu(out, run_id))
 
     # --- read the output ----------------------------------------------------
 

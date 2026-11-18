@@ -163,6 +163,12 @@ def _statut(reponse, run_id=RUN, **kwargs):
     return out, [c.kwargs for c in trace.call_args_list]
 
 
+def _sans_recu(out):
+    """La réponse sans le reçu que l'outil AJOUTE à un dict (`apify_recu`)."""
+    return ({k: v for k, v in out.items() if k != "receipt"} if isinstance(out, dict)
+            else out)
+
+
 @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"])
 def test_a_finished_run_traces_its_cost_in_microdollars_and_its_run(status):
     """Un run en échec, coupé ou arrêté a coûté aussi : les quatre états terminaux."""
@@ -170,7 +176,8 @@ def test_a_finished_run_traces_its_cost_in_microdollars_and_its_run(status):
                         "defaultDatasetId": "ds1"}}
     out, traces = _statut(reponse)
     assert traces == [{"quantity": 42100, "apify_run_id": RUN}]
-    assert out == reponse, "la réponse est servie telle quelle"
+    assert _sans_recu(out) == reponse, \
+        "la réponse est servie telle quelle, son reçu AJOUTÉ (`apify_recu`)"
 
 
 @pytest.mark.parametrize("status", ["READY", "RUNNING", "TIMING-OUT", "ABORTING",
@@ -249,7 +256,7 @@ def test_a_flat_answer_is_read_like_the_enveloped_one():
 def test_an_unreadable_answer_traces_0_says_so_and_does_not_break_the_call(reponse, caplog):
     with caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
         out, traces = _statut(reponse)
-    assert traces == [{"quantity": 0}] and out == reponse
+    assert traces == [{"quantity": 0}] and _sans_recu(out) == reponse
     assert len(caplog.records) == 1 and RUN in caplog.records[0].getMessage()
 
 

@@ -8,7 +8,8 @@ LinkedIn posts, Google Maps — cover most needs. Each gets a tool here: a name 
 says what it does, typed arguments, and the actor's input built for you.
 
 Every tool runs through `apify.lancer_acteur` — the same start → wait → bill → read
-path as `apify_run_sync`, so the run's real cost is traced the same way, once per run.
+path as `apify_run_sync`, so the run's real cost is traced the same way, once per run,
+and the answer carries the same receipt (`apify_recu`: run id, dataset id, status, cost).
 Every tool also caps the run: `max_items` (billed results) and `max_total_charge_usd`
 (hard ceiling, $5 by default, refused above the bound of the launch — `apify._plafond`,
 the one check of every launch, `apify_run_sync` included) — raise them for a big batch,
@@ -89,7 +90,7 @@ def register(mcp: FastMCP) -> None:
         $10 with the email search.
 
         Returns — the LIST of profiles, one per URL found (or `{error, run_id, status,
-            items}` for a run that did not succeed — billed too).
+            items, receipt}` for a run that did not succeed — billed too).
 
         Args:
             urls: profile URLs (`https://www.linkedin.com/in/<id>`) or bare public
@@ -129,7 +130,7 @@ def register(mcp: FastMCP) -> None:
         Keep only rows whose `currentPosition[0].companyUniversalName` is the target:
         LinkedIn search can return people from namesakes.
 
-        Returns — the LIST of employee profiles (or `{error, run_id, status, items}`).
+        Returns — the LIST of employee profiles (or `{error, run_id, status, items, receipt}`).
 
         Args:
             companies: company page URLs (`https://www.linkedin.com/company/<slug>`).
@@ -172,7 +173,7 @@ def register(mcp: FastMCP) -> None:
         returns the best match, which can be a namesake: check the returned
         `website` against the company's domain. harvestapi/linkedin-company.
 
-        Returns — the LIST of company pages (or `{error, run_id, status, items}`).
+        Returns — the LIST of company pages (or `{error, run_id, status, items, receipt}`).
 
         Args:
             urls: company page URLs (`https://www.linkedin.com/company/<slug>`).
@@ -209,7 +210,7 @@ def register(mcp: FastMCP) -> None:
         Benchmark what performs on a topic, watch what a competitor or a prospect
         posts, or find who talks about a subject.
 
-        Returns — the LIST of posts (or `{error, run_id, status, items}`).
+        Returns — the LIST of posts (or `{error, run_id, status, items, receipt}`).
 
         Args:
             queries: searches, as typed in LinkedIn's search bar (`"revops agency"`).
@@ -261,7 +262,7 @@ def register(mcp: FastMCP) -> None:
         structured, deduplicated postings across boards, try `theirstack_jobs_search`
         first.
 
-        Returns — the LIST of jobs (or `{error, run_id, status, items}`).
+        Returns — the LIST of jobs (or `{error, run_id, status, items, receipt}`).
 
         Args:
             keywords: job title or skills (`"head of growth"`).
@@ -301,7 +302,7 @@ def register(mcp: FastMCP) -> None:
         """Live job postings from Indeed — title, company, location, salary, date,
         description. Very cheap per job. valig/indeed-jobs-scraper.
 
-        Returns — the LIST of jobs (or `{error, run_id, status, items}`).
+        Returns — the LIST of jobs (or `{error, run_id, status, items, receipt}`).
 
         Args:
             title: the job title to search (`"sales manager"`).
@@ -339,7 +340,7 @@ def register(mcp: FastMCP) -> None:
         company, contract, remote policy, salary, full description.
         bebity/welcome-to-the-jungle-jobs-scraper.
 
-        Returns — the LIST of jobs (or `{error, run_id, status, items}`).
+        Returns — the LIST of jobs (or `{error, run_id, status, items, receipt}`).
 
         Args:
             query: free-text search (`"business developer"`).
@@ -385,7 +386,7 @@ def register(mcp: FastMCP) -> None:
         `apify_dataset_items` (the error names the run).
 
         Returns — the LIST of sites with `emails`, `phones`, `linkedIns`… (or
-            `{error, run_id, status, items}`).
+            `{error, run_id, status, items, receipt}`).
 
         Args:
             urls: website URLs (`https://www.example.com`).
@@ -423,7 +424,7 @@ def register(mcp: FastMCP) -> None:
         One page only? `web_read` is free and faster.
 
         Returns — the LIST of pages with `url`, `markdown`, `metadata` (or
-            `{error, run_id, status, items}`).
+            `{error, run_id, status, items, receipt}`).
 
         Args:
             urls: start URLs; the crawl stays under each one's path.
@@ -466,7 +467,7 @@ def register(mcp: FastMCP) -> None:
         For a quick look, `serper_maps_sample` is cheaper; use this one for full
         place records or a whole city/region (it splits big areas for you).
 
-        Returns — the LIST of places (or `{error, run_id, status, items}`).
+        Returns — the LIST of places (or `{error, run_id, status, items, receipt}`).
 
         Args:
             search_terms: what to search (`["bakery", "pastry shop"]`).
@@ -505,7 +506,7 @@ def register(mcp: FastMCP) -> None:
         """Google Maps reviews of given places — text, rating, date, owner reply.
         compass/Google-Maps-Reviews-Scraper.
 
-        Returns — the LIST of reviews (or `{error, run_id, status, items}`).
+        Returns — the LIST of reviews (or `{error, run_id, status, items, receipt}`).
 
         Args:
             place_urls: Google Maps place URLs (containing `/maps/place/`).
