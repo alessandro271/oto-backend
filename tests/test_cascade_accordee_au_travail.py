@@ -25,7 +25,9 @@ from oto_mcp.connectors import access_level_gate, activation_gate
 from oto_mcp.connectors import health as connector_health
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.tools import meta
+from oto_mcp.datastore import par_reference as pr
 from oto_mcp.tools import waterfall as outils
+from oto_mcp.tools import waterfall_lignes
 from oto_mcp.waterfall import appel, moteur, ordre
 
 LINKEDIN = "https://www.linkedin.com/in/jane-doe/"
@@ -142,6 +144,40 @@ def test_le_mode_tableau_couvre_ses_etapes_par_son_propre_nom(harnais):
     _cascade("waterfall_person", outil_en_cours="waterfall_person_act",
              linkedin_url=LINKEDIN, providers=["lemlist_db"])
     assert harnais["faits"] == ["lemlist_database"]
+
+
+def test_le_vrai_mode_tableau_couvre_ses_etapes_ligne_par_ligne(harnais, monkeypatch):
+    """Le chemin vécu : `waterfall_company_act(op="update_rows")` seul dans la liste, une
+    cascade par ligne (tâches parallèles de `fill_rows`), l'étape lemlist appelée par le
+    vrai `executer_cible` pour chaque recherche."""
+    harnais["tools"] = ["waterfall_company_act"]
+    lignes = [{"_id": "r1", "website": "acme.com"}, {"_id": "r2", "website": "beta.io"}]
+    store = types.SimpleNamespace(
+        dernier_tableau={"ns_id": 42, "namespace": "t"}, patches=[],
+        get_schema=lambda adresse: {"fields": [{"key": "website"}, {"key": "company"}]},
+        patch_schema=lambda adresse, fields: None, count_rows=lambda *a, **k: 0)
+    monkeypatch.setattr(pr, "ouvrir", lambda datastore, **k: pr.Lot(
+        store, "t", lignes, [], {}, [{"field": "company_status", "op": "empty",
+                                      "value": True}]))
+    monkeypatch.setattr(pr, "colonnes_inconnues", lambda lot, cols: [])
+    monkeypatch.setattr(pr, "ecrire", lambda lot, rid, patch: None)
+    monkeypatch.setattr(pr, "tenue_ailleurs", lambda ligne: False)
+    monkeypatch.setattr(pr.identite, "numero", lambda t: {"datastore": 42})
+    m = FastMCP("t")
+    waterfall_lignes.register(m)
+    fn = asyncio.run(m.get_tool("waterfall_company_act")).fn
+
+    async def _go():
+        jeton = verrou_org.poser_outil("waterfall_company_act")
+        try:
+            return await fn(op="update_rows", datastore="42", inputs={"domain": "website"},
+                            output={"name": "company"}, status_column="company_status",
+                            providers=["lemlist"])
+        finally:
+            verrou_org.lever_outil(jeton)
+    out = asyncio.run(_go())
+    assert harnais["faits"] == ["lemlist_database", "lemlist_database"]
+    assert "missing_tools" not in out and not out.get("skipped_tool_not_in_job")
 
 
 # ── ce que la cascade n'ouvre pas ────────────────────────────────────────────
