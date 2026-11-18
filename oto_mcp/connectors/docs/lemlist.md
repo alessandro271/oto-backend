@@ -24,7 +24,7 @@ the connector mirrors the **141 documented routes**, without exception. by famil
 - ⚠️ a **contact** is not a **lead**: the lead is a person's copy INSIDE a campaign, the contact is the person themselves. this is the most costly confusion here.
 
 **inbox** — `lemlist_inbox` (conversations, drafts, labels) and `lemlist_act` (the direct sends, and the personas of the shared base)
-**unsubscribes** — `lemlist_unsubscribe`: ⚠️ **three distinct lists** (v1 emails/domains, v2 variables, a contact's do-not-contact flag); writing to one does not write to the others
+**unsubscribes** — `lemlist_unsubscribe`: ⚠️ **two distinct lists** (values: emails, domains written `@example.com`, LinkedIn URLs, phones — `get`/`add`/… and `var_*` are the same list; a contact's do-not-contact flag); writing to one does not write to the other. `get`/`var_get` answer `unsubscribed: false` for a value not on the list, not an error
 **signals** — `lemlist_watchlist`: companies that are hiring, fundraising, job changes, visiting your website… (website visitors: section below)
 **the rest** — `lemlist_task`, `lemlist_database` (shared base, read-only: people, companies, filters, personas — pass `compact=True` on people/companies, section below; saving or deleting a persona is `lemlist_act`), `lemlist_team`, `lemlist_mailbox` (SMTP/IMAP connection + lemwarm), `lemlist_deliverability`, `lemlist_webhook`, `lemlist_get_activities` (pass `compact=True`, section below)
 
