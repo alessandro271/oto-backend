@@ -59,6 +59,9 @@ def seams(monkeypatch):
     rec["filed"] = {5: [7]}
     monkeypatch.setattr(db.apps, "projects_of",
                         lambda ids: {int(i): rec["filed"].get(int(i), []) for i in ids})
+    rec["vis"] = {}
+    monkeypatch.setattr(db.apps, "visibilites", lambda orgs: {
+        int(i): rec["vis"].get(int(i), {"org": None, "people": 0}) for i in orgs})
     monkeypatch.setattr(db.apps, "file", lambda a, p, by: rec["filed"].setdefault(a, []).append(p))
     monkeypatch.setattr(db.apps, "unfile", lambda a, p: rec["filed"].get(a, []).remove(p) or True)
     rec["grants"] = []
@@ -417,6 +420,23 @@ def test_list_sans_projet_rend_les_apps_de_l_org(seams, monkeypatch):
     assert {a["id"]: a["can_edit"] for a in out["apps"]} == {3: False, 1: True, 2: True, 4: True}
     assert all("permission" not in a for a in out["apps"])
     assert vus == {"owners": [("org", "42")], "createur": ("u1", 42, False)}
+
+
+def test_chaque_carte_dit_qui_la_voit_en_une_lecture(seams, monkeypatch):
+    """L'écran des apps dit « Vous seul » d'une app que personne d'autre ne voit, comme
+    les tableaux et les agents : chaque carte porte `visibility`, lue UNE fois pour
+    toute la liste."""
+    lus = []
+    seams["vis"] = {59: {"org": "viewer", "people": 0}}
+    monkeypatch.setattr(db.apps, "visibilites", lambda ids: lus.append(sorted(ids)) or {
+        int(i): seams["vis"].get(int(i), {"org": None, "people": 0}) for i in ids})
+    monkeypatch.setattr(ownership, "can_access", lambda sub, t, rid, want="read": True)
+    out = A._app(CTX, A.AppInput(op="list", project_ids=[7, 8, 9]))
+    assert {a["id"]: a["visibility"] for a in out["apps"]} == {
+        57: {"org": None, "people": 0}, 59: {"org": "viewer", "people": 0}}
+    assert lus == [[57, 59]]
+    # Et l'app ouverte le dit aussi (`op=get`, la même carte).
+    assert A._app(CTX, A.AppInput(op="get", app_id=5))["app"]["visibility"] == {"org": None, "people": 0}
 
 
 def test_vignette_image_seulement_sur_notre_stockage(seams, monkeypatch):

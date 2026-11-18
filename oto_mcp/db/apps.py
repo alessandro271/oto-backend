@@ -166,6 +166,39 @@ def list_granted_to(principals: list[tuple[str, str]], *, archived: bool = False
         ).fetchall()
 
 
+def visibilites(orgs: dict[int, Optional[int]]) -> dict[int, dict]:
+    """Qui VOIT chacune des apps, au-delà de son propriétaire : `{"org":
+    "editor"|"viewer"|None, "people": n}` — le rôle du partage VIVANT à l'org OÙ VIT
+    l'app (`orgs` : id de l'app → son org, `apps_manifeste.org_de_l_app`), et le nombre
+    de personnes ou d'équipes nommées. Un partage à une AUTRE org ne compte pas : il
+    n'est pas « toute l'org », et le dire en révélerait l'existence. La forme des agents
+    (`runner_triggers.visibilites_d_agents`) : l'écran des apps dit « Vous seul » d'une
+    app que personne d'autre ne voit, comme les tableaux et les agents. UNE requête pour
+    toute une liste ; une app sans partage vaut `{"org": None, "people": 0}`."""
+    from ._partage_vivant import PARTAGE_VIVANT
+
+    out = {int(i): {"org": None, "people": 0} for i in orgs}
+    if not out:
+        return out
+    ids = [str(i) for i in out]
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT resource_id, "
+            "  max(permission) FILTER (WHERE principal_type = 'org' "
+            "                            AND principal_id = o.org) AS org, "
+            "  count(*) FILTER (WHERE principal_type <> 'org') AS people "
+            "FROM resource_grants JOIN unnest(%s::text[], %s::text[]) AS o(id, org) "
+            "  ON o.id = resource_id "
+            f"WHERE resource_type = 'app' AND {PARTAGE_VIVANT} GROUP BY resource_id",
+            (ids, [None if orgs[int(i)] is None else str(orgs[int(i)]) for i in ids]),
+        ).fetchall()
+    for r in rows:
+        out[int(r["resource_id"])] = {
+            "org": {"write": "editor", "read": "viewer"}.get(r["org"] or ""),
+            "people": int(r["people"] or 0)}
+    return out
+
+
 def list_all() -> list[dict]:
     with _connect() as conn:
         return conn.execute(f"SELECT {_CARTE} FROM apps ORDER BY id").fetchall()

@@ -247,3 +247,39 @@ def test_l_origine_d_un_fichier_s_ajoute_sans_reecrire_le_fragment_joue():
     assert rev.FICHIERS_ORIGINE is schema_apps.FICHIERS_ORIGINE
     # Une app supprimée laisse ses fichiers à la purge, jamais d'orphelin.
     assert "ON DELETE SET NULL" in schema_apps.FICHIERS
+
+
+def test_qui_voit_chaque_app(projet, pg_module_dsn):
+    """`visibilites` : UNE requête pour toute la liste des apps — le rôle du partage
+    VIVANT à une org, et le nombre de personnes ou d'équipes nommées. L'écran des apps
+    en tire « Vous seul », comme les tableaux et les agents."""
+    import psycopg
+
+    def nouvelle(titre):
+        return db.apps.create(("user", MOI), None, project_id=projet, title=titre,
+                              manifest={}, html="", thumbnail=None, by=MOI)["id"]
+    a, b, c, d = nouvelle("A"), nouvelle("B"), nouvelle("C"), nouvelle("D")
+    db.grant_resource("app", str(a), "org", "8311", role="viewer")
+    db.grant_resource("app", str(a), "user", "x", role="viewer")
+    db.grant_resource("app", str(a), "group", "9", role="editor")
+    db.grant_resource("app", str(b), "org", "8311", role="editor")
+    db.grant_resource("app", str(c), "user", "y", role="viewer")
+    with psycopg.connect(pg_module_dsn, autocommit=True) as conn:
+        conn.execute("UPDATE resource_grants SET expires_at = NOW() - interval '1 day' "
+                     "WHERE resource_type = 'app' AND resource_id = %s", (str(c),))
+    # Un partage d'un AUTRE type au même id ne compte pas.
+    db.grant_resource("runner_trigger", str(d), "user", "z", role="viewer")
+    # Un partage à une AUTRE org que celle de l'app n'est pas « toute l'org ».
+    e = nouvelle("E")
+    db.grant_resource("app", str(e), "org", "9999", role="editor")
+    orgs = {a: 8311, b: 8311, c: 8311, d: 8311, e: 8311}
+    assert db.apps.visibilites(orgs) == {
+        a: {"org": "viewer", "people": 2},
+        b: {"org": "editor", "people": 0},
+        c: {"org": None, "people": 0},   # échu : ne donne plus rien
+        d: {"org": None, "people": 0},
+        e: {"org": None, "people": 0},   # partagée à une autre org
+    }
+    # Une app sans org connue : aucun partage d'org ne compte.
+    assert db.apps.visibilites({b: None}) == {b: {"org": None, "people": 0}}
+    assert db.apps.visibilites({}) == {}
