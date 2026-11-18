@@ -89,14 +89,16 @@ def _au_moins_un(**listes: Optional[list]) -> None:
 _WTTJ_CLES = ("reference", "wttj_reference", "objectID", "publicUrl")
 _WTTJ_LOCALE = re.compile(r"^(https?://[^/]+)/[a-z]{2}(?:-[a-z]{2})?/", re.I)
 
-# Each body ships three times: one is kept, the most readable present.
+# Each body ships three times: one is kept, the most readable present, under its own
+# key — `<body>_text`, else `<body>_markdown`, else `<body>` (the HTML).
 _WTTJ_CORPS = ("description", "profile", "recruitment_process")
 # Dropped from the default row — denylist: a key not named here passes through.
 _WTTJ_RETIRES = frozenset({
     # the company's presentation, in three renderings: `organization` is summarised
     "company_description", "company_description_markdown", "company_description_text",
     # labels in five languages, kept as one label below or redundant with a code
-    "contract_type_names", "profession_name", "sectors_name", "sectors",
+    # (`sectors` and `sectors_name` go only when `organization` takes them over)
+    "contract_type_names", "profession_name",
     # media, page furniture and the application form
     "logo", "cover_image", "social_image", "videos", "cta_content", "urls",
     "featured_page", "application_fields", "ats_questions", "benefits", "_geoloc",
@@ -186,6 +188,9 @@ def _wttj_societe(org: Any, job: dict) -> Any:
         "linkedin": org.get("media_linkedin"),
         "nb_employees": org.get("nb_employees"),
         "size": _libelle(org.get("size")),
+        "creation_year": org.get("creation_year"),
+        "revenue": org.get("revenue"),
+        "jobs_count": org.get("jobs_count"),
         "industry": org.get("industry"),
         "sectors": secteurs,
         "headquarter": ({k: siege[k] for k in ("city", "country_code") if siege.get(k)}
@@ -202,11 +207,11 @@ def _wttj_allege(job: Any) -> Any:
         return job
     out = {k: v for k, v in job.items() if k not in _WTTJ_RETIRES}
     for corps in _WTTJ_CORPS:
-        rendus = [out.pop(f"{corps}_text", None), out.pop(f"{corps}_markdown", None),
-                  out.pop(corps, None)]
-        garde = next((r for r in rendus if r), None)
+        rendus = [(cle, out.pop(cle, None))
+                  for cle in (f"{corps}_text", f"{corps}_markdown", corps)]
+        cle, garde = next(((c, r) for c, r in rendus if r), (None, None))
         if garde:
-            out[f"{corps}_text"] = garde
+            out[cle] = garde
     for index, detail in _WTTJ_DOUBLONS:
         if index in out and out.get(detail) == out[index]:
             del out[index]
@@ -225,6 +230,9 @@ def _wttj_allege(job: Any) -> Any:
     if "organization" in out:
         out["organization"] = _wttj_societe(out["organization"], job)
         out.pop("companyUrl", None)   # now `organization.url`
+        if isinstance(out["organization"], dict) and out["organization"].get("sectors"):
+            out.pop("sectors", None)        # now `organization.sectors`
+            out.pop("sectors_name", None)
     return {k: v for k, v in out.items() if not _vide(v)}
 
 
@@ -520,10 +528,11 @@ def register(mcp: FastMCP) -> None:
 
         Each offer comes back once (by its WTTJ `reference`), so a run can return
         fewer jobs than `max_items`. The default row keeps one rendering of each text
-        (`description_text`, `profile_text`, `recruitment_process_text`), one label per
-        field, and the company as a summary in `organization` (name, slug, url,
-        website, size, sectors, headquarter); `full=True` returns the actor's rows
-        whole, the company's full profile included.
+        (`description_text`, else `description_markdown`, else the HTML `description`;
+        same for `profile`, `recruitment_process`), one label per field, and the
+        company as a summary in `organization` (name, slug, url, website, size,
+        creation_year, revenue, jobs_count, sectors, headquarter); `full=True` returns
+        the actor's rows whole, the company's full profile included.
 
         Returns — the LIST of jobs (or `{error, run_id, status, items, receipt}`).
 

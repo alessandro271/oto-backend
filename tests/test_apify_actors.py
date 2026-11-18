@@ -367,6 +367,7 @@ def test_wttj_default_row_summarises_the_company_and_keeps_the_job():
         "url": "https://www.welcometothejungle.com/fr/companies/acme-robotics",
         "website": "https://acme.example.test", "linkedin": "acme-robotics",
         "nb_employees": 120, "size": "Between 50 and 250 employees",
+        "creation_year": 2019, "revenue": "12 M€", "jobs_count": 14,
         "industry": "Robotics, Software, Logistics",
         "sectors": ["Tech / Robotics", "Tech / Software"],
         "headquarter": {"city": "Paris", "country_code": "FR"}}
@@ -385,6 +386,27 @@ def test_wttj_default_row_summarises_the_company_and_keeps_the_job():
     assert job["skills"] == ["Python", "Robotics"] and job["tools"] == ["Python", "ROS"]
     assert job["office"] == {"address": "1 rue de l'Exemple, 75000 Paris, France",
                              "city": "Paris", "zip_code": "75000", "country_code": "FR"}
+
+
+def test_wttj_sectors_stay_on_a_row_whose_company_does_not_take_them_over():
+    sectors = [{"name": {"en": "Robotics"}, "parent": {"en": "Tech"}}]
+    sectors_name = {"en": [{"Tech": "Robotics"}]}
+    for org in ({}, {"organization": None}):
+        row = {"reference": "R1", "sectors": sectors, "sectors_name": sectors_name, **org}
+        out, _ = _wttj([row])
+        assert out[0]["sectors"] == sectors and out[0]["sectors_name"] == sectors_name
+    out, _ = _wttj([{"reference": "R1", "sectors": sectors, "sectors_name": sectors_name,
+                     "organization": {"name": "Acme"}}])
+    assert out[0]["organization"]["sectors"] == ["Tech / Robotics"]
+    assert "sectors" not in out[0] and "sectors_name" not in out[0]
+
+
+def test_wttj_a_body_keeps_the_name_of_the_rendering_it_comes_in():
+    out, _ = _wttj([{"reference": "R1", "description": "<p>html</p>",
+                     "profile": "<p>html</p>", "profile_markdown": "md",
+                     "recruitment_process": "<p>html</p>", "recruitment_process_text": "txt"}])
+    assert out == [{"reference": "R1", "description": "<p>html</p>",
+                    "profile_markdown": "md", "recruitment_process_text": "txt"}]
 
 
 def test_wttj_default_row_is_a_fraction_of_the_raw_row():
