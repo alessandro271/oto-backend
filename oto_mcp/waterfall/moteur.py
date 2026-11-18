@@ -8,8 +8,9 @@ from typing import Optional
 from fastmcp import FastMCP
 from starlette.concurrency import run_in_threadpool
 
+from .. import session_org
 from ..auth.hooks import current_user_sub_from_token
-from . import appel, ordre, qualification, vivier
+from . import appel, comptes, ordre, qualification, vivier
 from .etape import Step, _bills, _missing, _payload, _runnable
 from .valeurs import _bad
 
@@ -207,6 +208,54 @@ async def _run_cascade(mcp: FastMCP, ns: str, kind: str, steps: tuple[Step, ...]
         # Table mode: an asynchronous step would be paid now and answer after the
         # call has written its row — its find would be lost (`waterfall_lignes.py`).
         order = [s for s in order if s.collect is None]
+    # The account named per connector (`_accounts`, or a plain `_account` when only one
+    # connector runs), judged before any step is called; carried to every step call.
+    choix = await run_in_threadpool(comptes.choisir, sub, steps, order)
+    jeton = comptes.poser(choix)
+    try:
+        return await _cascade(mcp, sub, ns, kind, order, ignored, source, modes, inputs,
+                              dry_run, limits, qualify, deadline_at)
+    finally:
+        comptes.lever(jeton)
+
+
+async def juger_comptes(ns: str, steps: tuple[Step, ...], providers_arg: Optional[list[str]],
+                        synchronous_only: bool = False) -> None:
+    """The accounts the call names (`comptes.choisir`), judged on its plan without
+    calling anything — a table pass asks it ONCE, before reading a row: inside the pass,
+    the refusal would fail every row in turn. Nothing named = nothing read."""
+    if not (session_org.current_call_step_accounts()
+            or session_org.current_call_cascade_account()):
+        return
+    sub = await run_in_threadpool(current_user_sub_from_token)
+    order = (await run_in_threadpool(ordre._plan, ns, steps, providers_arg, sub))[0]
+    if synchronous_only:
+        order = [s for s in order if s.collect is None]
+    await run_in_threadpool(comptes.choisir, sub, steps, order)
+
+
+def _attempt(step: Step, modes: dict, **extra) -> dict:
+    """A step's line on the receipt, with the account it runs on when one was named."""
+    compte = comptes.compte_de(step.tool)
+    return {"provider": step.key, "tool": step.tool,
+            "key": modes.get(step.tool, "unknown"),
+            **({"account": compte} if compte else {}), **extra}
+
+
+def _compte_refuse(attempt: dict) -> bool:
+    """The step ran on an account the caller NAMED, and its connector did not have it:
+    the cascade stops there — the next providers are not paid for the caller's typo.
+    (Checked before the first step, `comptes.choisir`; this is the backstop.)"""
+    from ..tools.meta import CODE_COMPTE_A_NOMMER
+    return bool(attempt.get("account")) and any(
+        a.get("code") == CODE_COMPTE_A_NOMMER for a in [attempt, *attempt.get("tried", [])])
+
+
+async def _cascade(mcp: FastMCP, sub, ns: str, kind: str, order: list[Step],
+                   ignored: list[str], source: str, modes: dict, inputs: dict,
+                   dry_run: bool, limits: Optional[dict], qualify: Optional[dict],
+                   deadline_at: Optional[float]) -> dict:
+    """The cascade proper, on its plan (`_run_cascade`)."""
     if not any(_runnable(s, inputs) for s in order):
         raise _bad(
             f"No provider of this {kind} waterfall can run on these inputs. Each needs: "
@@ -226,17 +275,20 @@ async def _run_cascade(mcp: FastMCP, ns: str, kind: str, steps: tuple[Step, ...]
     tally = qualification._Tally()
     found, winner = None, None
     deja_juge = False
+    compte_refuse = False   # a named account its connector lacks: nothing more is paid
     fallback, fallback_step = None, None
     for step in order:
         if step.fills:
             continue
         if found is not None or pending:
             break       # the receipt ends at the winner — or at the step still coming
-        attempt = {"provider": step.key, "tool": step.tool,
-                   "key": modes.get(step.tool, "unknown")}
+        attempt = _attempt(step, modes)
         attempts.append(attempt)
         got = await _run_step(mcp, sub, step, attempt["key"], inputs, dry_run,
                               deadline, attempt, pending, budget)
+        if got is None and _compte_refuse(attempt):
+            compte_refuse = True
+            break
         if (got is not None and step.weak is not None and step.weak(got) and step.reveal
                 and qualify and not dry_run):
             # Masked names, but titles: judged for free, then only the ones that pass
@@ -281,7 +333,7 @@ async def _run_cascade(mcp: FastMCP, ns: str, kind: str, steps: tuple[Step, ...]
             if report.get("status") == "done" and not found["people"]:
                 found, winner = None, None
     for step in order:
-        if not step.fills or pending:
+        if not step.fills or pending or compte_refuse:
             continue
         if isinstance(found, dict) and found.get(step.fills):
             continue    # the field is there: nothing to fill, nothing to say
@@ -289,11 +341,12 @@ async def _run_cascade(mcp: FastMCP, ns: str, kind: str, steps: tuple[Step, ...]
                                 and a.get("status") in ("found", "no_match")
                                 for a in attempts):
             continue    # the same question was already answered
-        attempt = {"provider": step.key, "tool": step.tool,
-                   "key": modes.get(step.tool, "unknown"), "fills": step.fills}
+        attempt = _attempt(step, modes, fills=step.fills)
         attempts.append(attempt)
         extra = await _run_step(mcp, sub, step, attempt["key"], inputs, dry_run,
                                 deadline, attempt, pending, budget)
+        if extra is None and _compte_refuse(attempt):
+            compte_refuse = True
         if extra:
             found = {**(found or {}), **{k: v for k, v in extra.items()
                                           if not (found or {}).get(k)}}

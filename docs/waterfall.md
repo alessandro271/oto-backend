@@ -461,6 +461,57 @@ optionnels, sur chacun des outils, pour l'agent qui veut une limite :
 Restent les bornes de forme, pas de dépense : la réponse (`limit` des gens, jusqu'à 100),
 le délai de la cascade (40 s, la route REST coupe à 45 s) et celui d'une exécution Apify.
 
+## Plusieurs comptes d'un même fournisseur : `_accounts`
+
+Le besoin : une org qui tient DEUX comptes d'un même fournisseur (deux espaces lemlist)
+appelait `lemlist_database(_account=…)` sans peine, mais une cascade n'avait aucun moyen
+de dire sous lequel ses étapes lemlist devaient partir. L'axe `_account` ordinaire ne
+convient pas : il pose le compte de L'APPEL (`session_org._CALL_ACCOUNT`), que lit la
+résolution de clé de CHAQUE étape — une cascade qui traverse lemlist, Apollo, AI Ark
+chercherait ce nom chez chacun.
+
+La règle (`oto_mcp/waterfall/comptes.py`) :
+
+- **`_accounts={"lemlist": "<compte>"}`** — un compte par CONNECTEUR, jamais par étape :
+  `waterfall_person` a deux étapes lemlist (`lemlist_db`, `lemlist`) et
+  `waterfall_company` une complétion (`lemlist_linkedin`) ; toutes partent sous le compte
+  nommé pour lemlist. Le nom du connecteur ou de son porteur au coffre est accepté
+  (`linkedin` ou `unipile`). Chaque appel d'une étape de ce connecteur — la recherche, ses
+  pages, la révélation, la relève d'une étape asynchrone (et l'appel de relève rendu dans
+  `pending`) — porte `_account`, que `meta.executer_cible` lit comme pour tout appel ;
+  les étapes des autres connecteurs n'en reçoivent aucun. La ligne de l'étape dans
+  `attempts` dit `account`.
+- **`_account` simple** : accepté seulement quand les étapes qui VONT tourner (après
+  `providers`, le réglage, le mode tableau) ne s'appuient que sur UN connecteur à compte
+  (`providers=["lemlist_db", "lemlist"]`). Sinon il nommerait le même compte chez tous :
+  refusé, en nommant `_accounts`. Les deux ensemble : refusé. Règle STATIQUE, jugée sur
+  le plan et non sur le contenu du coffre — qu'un autre connecteur reçoive demain un
+  compte du même nom ne change pas le sens d'un appel d'hier.
+- **Jugé avant de payer**, `dry_run` compris : un nom qui n'est pas un connecteur des
+  étapes (l'open data, `fr_get`, n'en prend aucun) est refusé en listant les bons ; un
+  compte que le connecteur n'a pas est refusé (`account_not_found`). La vérification
+  résout la clé nommée (`resolve_credential(account=…, check_usage=False)`) sous un relevé
+  d'appel JETABLE : ce que la résolution y note (`key_mode`, la ligne du coffre) facture
+  et nomme le payeur de l'appel. Un connecteur sans clé du tout n'est pas refusé ici :
+  son étape le dit (`no_key`), comme avant. Les comptes de messagerie (`unipile`) sont
+  des identités opérées, jugées par l'étape elle-même. En mode tableau, le refus tombe
+  une fois, avant de lire une ligne (`moteur.juger_comptes`).
+- **Le filet** : si le connecteur répond quand même « compte à nommer »
+  (`account_required`) pour un compte nommé, la cascade s'ARRÊTE là — la faute de frappe
+  de l'appelant ne fait pas payer les fournisseurs suivants.
+- **Rien de nommé = rien ne change** : aucun appel ne porte `_account`, le coffre n'est
+  pas lu. Deux comptes sans défaut et rien de nommé : l'étape échoue `account_required`
+  et passe la main, comme avant — son message nomme désormais `_accounts`, plus le
+  `_account` d'un appel direct.
+
+Les deux axes (`call_axes.STEP_ACCOUNTS`, `CASCADE_ACCOUNT`) ne s'annoncent que sur les
+douze outils des cascades et se posent dans des ContextVars que seule la cascade lit.
+Reste approché : le mode de clé (`key`) d'une étape et donc l'ordre par défaut se lisent
+sans le compte (`ordre._key_modes`), un compte nommé au palier de l'org quand la
+personne en tient un autre peut s'y lire `user`. Un compte épinglé par le projet
+(`_project=`, identité préfaite par connecteur) servait déjà les cascades : il se lit
+connecteur par connecteur, sans cette ambiguïté.
+
 ## Qualifier par Jev avant de dépenser
 
 `waterfall_company`, `waterfall_person` et `waterfall_people` prennent `qualify` (une

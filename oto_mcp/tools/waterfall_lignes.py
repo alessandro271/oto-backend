@@ -43,7 +43,7 @@ from ..datastore import par_reference as pr
 from ..mcp_errors import McpError
 from ..waterfall import entrees, qualification
 from ..waterfall.etape import _runnable
-from ..waterfall.moteur import _limits, _run_cascade
+from ..waterfall.moteur import _limits, _run_cascade, juger_comptes
 from ..waterfall.plan import STEPS_BY_NAMESPACE
 from .lecture import ACTE, documente
 
@@ -285,6 +285,8 @@ async def fill_rows(mcp: FastMCP, ns: str, *, datastore, inputs: dict, output: d
         # Jev unusable: refused before a row is read — never rows written unjudged.
         sub = await run_in_threadpool(current_user_sub_from_token)
         await run_in_threadpool(qualification._require_qualification, sub, ns)
+    # The accounts named per connector (`_accounts` / `_account`): refused once, here.
+    await juger_comptes(ns, steps, providers, synchronous_only=True)
     # The table is read (and the write right checked) off the loop: it is the database.
     lot = await run_in_threadpool(pr.ouvrir, datastore, row_ids=row_ids, filter=filter,
                                   colonne_etat=status_column, limite=batch_size)
@@ -472,6 +474,8 @@ _DOC = """Run the {label} waterfall over a TABLE's rows, on the server — op `u
         that runs out of time says `stopped: "time_budget"` and leaves the rest pending.
         ⚠️ The asynchronous steps ({asynchrones}) are left out here — they would answer
         after the row is written; the one-contact tool collects them.
+        `_accounts` (one account per connector) / `_account`: as on `{ns}`, for every
+        row — an account its connector lacks is refused before a row is read.
         The answer is counts plus `errors: [{{row_id, code}}]`; `dry_run` reads the rows,
         counts the lookups and returns the first one's plan, calling nothing.
         From a hosted agent, a step whose tool the agent may not call is skipped and

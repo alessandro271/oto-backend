@@ -28,7 +28,15 @@ _ORDER_DOC = """**Order**: your `steps` setting on this connector's card if set 
         uses THAT provider's key and is billed by it, exactly as a direct call of its
         tool — the waterfall adds no cost. A step whose inputs are missing, or whose
         connector is not activated for this org, is skipped too. Give every input you
-        have. One contact per call; for a list, run it from a recipe (`for_each`)."""
+        have. One contact per call; for a list, run it from a recipe (`for_each`).
+
+        **Accounts**: holding several accounts of one connector (two lemlist
+        workspaces), name the one each connector runs on with `_accounts={"lemlist":
+        "<account>"}` — by CONNECTOR, so every step of it uses that account (names:
+        `oto_identity(op='list')`). Checked before anything is called: a connector that
+        is not one of these steps, or an account it does not have, is refused. A plain
+        `_account` is taken only when the steps that run sit on ONE connector (e.g.
+        `providers=["lemlist"]`). Omitted = each step picks its key as a direct call."""
 
 _RECEIPT_DOC = """`attempts` says, step by step, what happened (found / no_match /
         skipped / failed / withheld / pending, with the code, the message and the key

@@ -35,7 +35,8 @@ def _schema(*props: str) -> dict:
 
 def test_every_axis_is_namespaced():
     """Aucun jeton ne doit reprendre un nom nu : c'est ce qui a causé les deux incidents."""
-    assert AXIS_NAMES == {"_account", "_project", "_run_id", "_org", "_group", "_instance"}
+    assert AXIS_NAMES == {"_account", "_accounts", "_project", "_run_id", "_org", "_group",
+                          "_instance"}
     for name in AXIS_NAMES:
         assert name.startswith("_"), name
 
