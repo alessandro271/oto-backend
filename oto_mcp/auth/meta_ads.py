@@ -9,11 +9,11 @@ of `instagram_meta`'s:
    (`api/meta_ads.py`); the code becomes a token there;
 3. the token goes to the vault, MEMBER tier.
 
-**No renewal.** The expected configuration on the Meta side issues a system-user
-token (BISU), with no expiry. If it issues a token with a lifetime,
-the expiry is stored in `meta.expires_at` and the card goes "to reconnect" at the
-first rejection — we do not clone `instagram_meta`'s daily pass for a case
-we discourage.
+**No renewal.** On standard access the configuration issues a USER token (~60 days):
+a system-user token (BISU) gets no permission until the app has advanced access.
+The expiry is stored in `meta.expires_at` and the card goes "to reconnect" at the
+first rejection. Once the app passes App Review, the BISU configuration (no
+expiry) takes over — we do not clone `instagram_meta`'s daily pass meanwhile.
 
 ⚠️ The Meta application's coordinates are set by the operator: App ID and configuration
 at the PLATFORM scope of `connector_settings`, the secret in the vault, encrypted
