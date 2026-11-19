@@ -49,10 +49,19 @@ def bureau(monkeypatch):
     # sans préférence de langue.
     monkeypatch.setattr(O, "org_front", lambda org: (None, None))
     monkeypatch.setattr(U, "get_user", lambda sub: {"sub": sub, "locale": None})
-    # `_envoyer` passe `to, subject, html` en POSITION, comme `_send` le déclare.
-    monkeypatch.setattr(E, "_send", lambda to, subject, html, **kw: envois.append(
+    # `_envoyer` passe `to, subject, html` en POSITION, comme `_send` le déclare. Le
+    # courriel d'ÉQUIPE (`alertes_equipe`) est rangé à part, dans `EQUIPE_VUS`.
+    monkeypatch.setenv("OTO_ALERTES_EQUIPE_DESTINATAIRES", EQUIPE)
+    monkeypatch.setattr(O, "get_org", lambda org: {"id": org, "name": f"org {org}"})
+    EQUIPE_VUS.clear()
+    monkeypatch.setattr(E, "_send", lambda to, subject, html, **kw: (
+        EQUIPE_VUS if to == EQUIPE else envois).append(
         {"to": to, "subject": subject, "html": html, **kw}) or True)
     return envois, marques
+
+
+EQUIPE = "equipe@exemple.invalid"
+EQUIPE_VUS: list = []
 
 
 def test_ferme_par_defaut_rien_ne_part(bureau, monkeypatch):
@@ -355,3 +364,120 @@ def test_un_retrait_nomme_les_agents_qui_en_dependent_encore(bureau, monkeypatch
     html = envois[0]["html"]
     assert "Clé Slack retirée" in html and "digest hebdo" in html
     assert "3 agent(s)" not in html, "des agents nommés remplacent leur nombre"
+
+
+def test_chaque_admin_client_est_prevenu_jamais_l_operateur(bureau, monkeypatch):
+    """L'alerte de clé partait au premier admin par date d'arrivée — souvent l'opérateur
+    qui avait monté l'org. Elle part désormais à chaque admin client ; un retrait relève
+    de l'org : le titulaire d'un agent touché, simple membre, ne le reçoit pas."""
+    envois, marques = bureau
+    from oto_mcp import org_store as O
+    from oto_mcp.db import runner_triggers as T
+    from oto_mcp.db import users as U
+    monkeypatch.setattr(O, "list_org_members", lambda org: [
+        {"sub": "u-op", "org_role": "org_admin"},
+        {"sub": "u-admin", "org_role": "org_admin"},
+        {"sub": "u-membre", "org_role": "org_member"}])
+    monkeypatch.setattr(U, "emails_by_subs",
+                        lambda subs: {s: f"{s}@exemple.invalid" for s in subs})
+    monkeypatch.setattr(U, "get_user", lambda sub: {
+        "sub": sub, "locale": None, "role": "super_admin" if sub == "u-op" else "member"})
+    monkeypatch.setattr(T, "triggers_actifs_utilisant", lambda org, c: [
+        {"id": 5, "label": "veille", "sub": "u-membre", "enabled": True}])
+    monkeypatch.setenv(M._ENV_ALERTE, "1")
+    out = M.alertes_credential()
+    assert [e["to"] for e in envois] == ["u-admin@exemple.invalid"]
+    assert out["envoyes"] == 1 and marques == [1, 2]
+
+
+# ── Un membre ne reçoit que SA clé sous SES agents ; l'équipe, un courriel séparé ─────
+
+@pytest.fixture()
+def org_mixte(bureau, monkeypatch):
+    """L'org 7 : un admin client, deux membres. En panne : une clé d'ORG (sous l'agent
+    de m1 et celui de m2), la clé PERSONNELLE de m1 (sous son agent et sous celui de
+    m2, qui tourne sur la clé de m2), et un retrait."""
+    envois, marques = bureau
+    from oto_mcp import org_store as O
+    from oto_mcp.db import alertes_credential as A
+    from oto_mcp.db import runner_triggers as T
+    from oto_mcp.db import users as U
+    monkeypatch.setattr(O, "list_org_members", lambda org: [
+        {"sub": "adm", "org_role": "org_admin"},
+        {"sub": "m1", "org_role": "org_member"},
+        {"sub": "m2", "org_role": "org_member"}])
+    monkeypatch.setattr(U, "emails_by_subs",
+                        lambda subs: {s: f"{s}@exemple.invalid" for s in subs})
+    lignes = [_rouge(connector="snitcher"),
+              {**_rouge(connector="lemlist"), "entity_type": "member",
+               "entity_id": "7:m1"}]
+    annoncees: list = []
+    monkeypatch.setattr(A, "cles_ko_a_annoncer", lambda: lignes)
+    monkeypatch.setattr(A, "marquer_cles_annoncees",
+                        lambda ls: annoncees.extend(ls) or len(ls))
+    agents = {"snitcher": [{"id": 1, "label": "veille de m1", "sub": "m1"},
+                           {"id": 2, "label": "veille de m2", "sub": "m2"}],
+              "lemlist": [{"id": 3, "label": "relance de m1", "sub": "m1"},
+                          {"id": 4, "label": "relance de m2", "sub": "m2"}],
+              "slack": [{"id": 5, "label": "digest de m2", "sub": "m2"}]}
+    monkeypatch.setattr(T, "triggers_actifs_utilisant", lambda org, c: agents.get(c, []))
+    monkeypatch.setenv(M._ENV_ALERTE, "1")
+    return envois, marques, annoncees
+
+
+def test_un_membre_ne_recoit_que_sa_cle_sous_ses_agents(org_mixte):
+    envois, _marques, _annoncees = org_mixte
+    M.alertes_credential()
+    par_qui = {e["to"]: e["html"] for e in envois}
+    assert set(par_qui) == {"m1@exemple.invalid", "adm@exemple.invalid"}, (
+        "m2 n'a ni clé personnelle en panne ni droit sur ce qui relève de l'org")
+    m1 = par_qui["m1@exemple.invalid"]
+    assert "relance de m1" in m1
+    assert "relance de m2" not in m1, "l'agent de m2 tourne sur la clé de m2"
+    assert "veille de m1" not in m1 and "Snitcher" not in m1, "clé d'org : admins seuls"
+    assert "Slack" not in m1, "un retrait relève de l'org : admins seuls"
+
+
+def test_un_admin_recoit_tout(org_mixte):
+    envois, marques, annoncees = org_mixte
+    out = M.alertes_credential()
+    adm = next(e["html"] for e in envois if e["to"] == "adm@exemple.invalid")
+    for nom in ("veille de m1", "veille de m2", "relance de m1", "relance de m2",
+                "digest de m2"):
+        assert nom in adm
+    assert out["envoyes"] == 1 and marques == [1, 2] and len(annoncees) == 2
+
+
+def test_l_equipe_recoit_un_courriel_separe_par_org(org_mixte):
+    envois, _marques, _annoncees = org_mixte
+    out = M.alertes_credential()
+    (e,) = EQUIPE_VUS
+    assert e["subject"].startswith("[équipe] ")
+    assert "org 7" in e["html"] and "(#7)" in e["html"]
+    for nom in ("veille de m1", "relance de m2", "digest de m2"):
+        assert nom in e["html"]
+    assert all(c["to"] != EQUIPE and EQUIPE not in c["html"]
+               and "Copie pour l'équipe" not in c["html"] for c in envois)
+    assert out["equipe"] == 1 and out["equipe_rates"] == 0
+
+
+def test_sans_reglage_d_equipe_l_envoi_ouvert_refuse_avant_tout_envoi(bureau, monkeypatch):
+    from oto_mcp import alertes_equipe
+    envois, marques = bureau
+    monkeypatch.delenv("OTO_ALERTES_EQUIPE_DESTINATAIRES")
+    monkeypatch.setenv(M._ENV_ALERTE, "1")
+    with pytest.raises(alertes_equipe.AlertesEquipeNonReglees):
+        M.alertes_credential()
+    assert envois == [] and marques == []
+    # Le travail refuse, et la maintenance sort en 1 même sans `--strict`.
+    assert M.run(["alertes-credential"]) == 1
+
+
+def test_sans_reglage_d_equipe_un_passage_qui_n_envoie_pas_passe(bureau, monkeypatch):
+    monkeypatch.delenv("OTO_ALERTES_EQUIPE_DESTINATAIRES")
+    monkeypatch.delenv(M._ENV_ALERTE, raising=False)
+    assert M.alertes_credential()["actif"] is False
+    assert M.run(["alertes-credential"]) == 0
+    monkeypatch.setenv(M._ENV_ALERTE, "1")
+    assert M.alertes_credential(dry_run=True)["envoyes"] == 0
+    assert M.run(["alertes-credential"], dry_run=True) == 0

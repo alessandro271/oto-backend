@@ -3076,11 +3076,34 @@ escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'an
   `runner_triggers.echec_annonce_at` est posé après l'envoi, et l'épisode suivant ne
   s'ouvre qu'après un succès. Aucune remise à zéro à écrire. La marque ne date pas
   l'agent (`updated_at`).
-- **Le courriel** : un par org, à son premier admin joignable (la même règle que
-  `alertes-credential`, `destinataire_admin`), par le courrier de plateforme sous la
-  marque de l'org (`org_store.org_front` → `email_templates._envoyer`), hors des heures
-  calmes par défaut (`scheduler.DEFAULT_QUIET_HOURS`, 20 h–8 h à Paris : un épisode vu
-  la nuit part au premier passage du matin). Un envoi raté ne marque rien.
+- **Le courriel** : écrit à CHAQUE destinataire de l'org, dans sa langue
+  (`alerte_agents_bloques.destinataires`, la même règle que `alertes-credential`) : le
+  titulaire de chaque agent bloqué encore membre de l'org, puis tous ses admins. ⚠️ **Le
+  personnel de la plateforme est écarté** (`access.is_operator_role`), comme un compte
+  suspendu : un opérateur est admin de nombreuses orgs clientes, et c'est le client qui
+  répare. Une org sans client joignable garde son premier admin, opérateur compris.
+  Par le courrier de plateforme sous la marque de l'org (`org_store.org_front` →
+  `email_templates._envoyer`), hors des heures calmes par défaut
+  (`scheduler.DEFAULT_QUIET_HOURS`, 20 h–8 h à Paris : un épisode vu la nuit part au
+  premier passage du matin).
+- **Ce que chacun reçoit** : un admin de l'org, tous ses agents bloqués ; un membre, les
+  seuls agents qu'il a le droit de voir (`alerte_agents_bloques.agents_visibles`, la
+  règle d'accès des agents `capabilities/_acces_agent.niveaux` : les siens, ceux qu'on
+  lui partage). Chaque courriel est composé pour son destinataire ; sans rien à lui
+  montrer, rien ne lui part.
+- **La marque** reste par agent : posée dès qu'UN courriel client est parti (rejouer pour
+  celui qu'un envoi a raté renverrait le message à tous les autres). Aucun courriel
+  client parti : rien n'est marqué, l'épisode est rejoué au passage suivant, et l'équipe
+  n'est pas écrite. Un agent dont le titulaire a quitté l'org, dans une org où les seuls
+  autres destinataires sont des membres qui ne le voient pas, est marqué sans qu'un
+  client l'ait lu : seule l'équipe le reçoit.
+- **Le courriel d'équipe** (`alertes_equipe.py`) : après les courriels clients d'une org,
+  un courriel SÉPARÉ à chaque adresse de l'équipe de la plateforme — jamais une copie
+  visible du client. Il reprend tous les agents de l'org, la nomme (« Copie pour
+  l'équipe — org « nom » (#id), N courriel(s) envoyé(s) dans l'org. »), sous la marque
+  de l'instance, objet préfixé `[équipe]`. Un envoi d'équipe raté est journalisé et
+  compté (`equipe_rates`), jamais rejoué. Même courriel d'équipe pour l'alerte de clé
+  (`maintenance.alertes_credential`, voir plus bas).
 - **Où** : une boucle de fond déclarée `tiers=True` (`boucles_de_fond.py`,
   `alerte_agents_bloques`, un passage par quart d'heure) — ⚠️ **éteinte par défaut** :
   elle n'écrit que sur une instance qui déclare `OTO_ALERTE_AGENTS_ENABLED=1`, toute
@@ -3097,6 +3120,53 @@ escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'an
   `OTO_ALERTE_CREDENTIAL`.
 - Bancs : `tests/test_alerte_agents_bloques.py` (sans base), `tests/test_alertes_agents_db.py`
   (l'épisode en SQL), `tests/test_migration_20261023_echec_annonce.py`.
+
+#### Le réglage du courriel d'équipe : `OTO_ALERTES_EQUIPE_DESTINATAIRES` (19/11/2026)
+
+L'alerte de clé (`maintenance.alertes_credential`) suit la même règle de destinataires :
+un admin reçoit tout ; un membre ne reçoit que SA clé personnelle (palier `member`,
+`<org>:<sub>`) en panne sous SES agents (`maintenance._cles_du_membre`) — les clés d'org
+ou d'équipe, les retraits et leurs gestes relèvent des admins. L'équipe en reçoit un
+courriel séparé par org, comme ci-dessus.
+
+- **Nom** : `OTO_ALERTES_EQUIPE_DESTINATAIRES` (inventaire : `env_inventory.py`,
+  `.env.example`).
+- **Forme** : une adresse, ou plusieurs séparées par des virgules ; les blancs autour de
+  chacune sont ignorés, les doublons retirés. Chaque entrée doit avoir la forme
+  `x@domaine.tld` (ni blanc, ni `;`, ni `<>`) ; une valeur vide, faite de virgules, ou
+  une entrée qui n'est pas une adresse lève.
+- **Où** : une variable d'environnement de l'UNITÉ (le `.env` de l'instance, lu par
+  `oto-mcp.service` et `oto-mcp-maintenance.service`), jamais un réglage en base : elle
+  doit être lisible avant la base (`boucles_de_fond.composer` précède
+  `_prepare_database`), et c'est une propriété de l'exploitation de l'instance.
+- **Quand elle est exigée** : seulement là où un courriel va réellement partir.
+  - La boucle `alerte_agents_bloques` EFFECTIVEMENT retenue par
+    `boucles_de_fond.composer()` — après son filtre : production déclarée (`OTO_ENV`) et
+    `OTO_ALERTE_AGENTS_ENABLED=1` (`Boucle.exige`). Sinon le démarrage refuse. Une
+    préprod, une instance sans boucles (transport non HTTP), une couleur où la boucle
+    est éteinte démarrent sans elle.
+  - Le travail `maintenance alertes-credential` quand il va envoyer :
+    `OTO_ALERTE_CREDENTIAL` posé et hors `--dry-run`. Sinon le travail refuse avant
+    toute lecture d'épisode, les travaux suivants de `all` tournent, et la maintenance
+    sort en **1**, `--strict` ou non (le timer quotidien passe en échec).
+- **Le refus** : l'exception `oto_mcp.alertes_equipe.AlertesEquipeNonReglees`
+  (`RuntimeError`), avec, réglage absent ou vide :
+
+  ```
+  AlertesEquipeNonReglees: OTO_ALERTES_EQUIPE_DESTINATAIRES n'est pas posée : une alerte d'agents ou de clés va écrire à des clients, et l'équipe de la plateforme en reçoit un courriel séparé. Posez une adresse, ou plusieurs séparées par des virgules, dans l'environnement de l'unité ; ou éteignez l'alerte (OTO_ALERTE_AGENTS_ENABLED=0, OTO_ALERTE_CREDENTIAL vide).
+  ```
+
+  et, une entrée illisible :
+
+  ```
+  AlertesEquipeNonReglees: OTO_ALERTES_EQUIPE_DESTINATAIRES : « <entrée> » n'est pas une adresse de courriel (attendu : une adresse, ou plusieurs séparées par des virgules).
+  ```
+
+  Côté maintenance, le journal écrit
+  `maintenance alertes-credential : REFUS — AlertesEquipeNonReglees: <message>`.
+- **À la montée** : à poser AVANT la bascule sur toute instance où
+  `OTO_ALERTE_AGENTS_ENABLED=1` en production, sinon le service refuse de démarrer
+  (geste `poser OTO_ALERTES_EQUIPE_DESTINATAIRES ; avant ; non`).
 
 ### Soigner un agent avant qu'on le remarque (27/10/2026)
 

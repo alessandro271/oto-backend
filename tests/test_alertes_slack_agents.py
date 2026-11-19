@@ -385,6 +385,7 @@ def test_eteint_le_courriel_ne_consulte_pas_slack(eteint, monkeypatch):
     monkeypatch.setattr(alerte_agents_bloques, "_annonces_sur_slack", _interdit)
     monkeypatch.setattr(alerte_agents_bloques, "_heures_calmes", lambda m: False)
     monkeypatch.setattr(alertes_agents, "agents_bloques", lambda seuil: [])
+    monkeypatch.setenv("OTO_ALERTES_EQUIPE_DESTINATAIRES", "equipe@exemple.invalid")
     alerte_agents_bloques.balayer()
 
 
