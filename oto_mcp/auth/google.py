@@ -13,6 +13,12 @@ chooses the account by the common resolution (`access.resolve_credential`:
 `account`/`_account=` > project pin > single > default), transparently refreshes
 if expired, returns a valid `google.oauth2.credentials.Credentials`.
 
+**The access token is kept in memory, per process** — like Microsoft, HubSpot,
+LinkedIn Ads: the vault row holds the refresh token (encrypted) and the non-secret
+satellites (`scopes`, `is_default`, `client_id`…), never the access token. Each
+process draws its own by refresh at first use, then reuses it until a minute before
+it expires (`_JETONS`).
+
 Setup ops:
 - Env `GOOGLE_WORKSPACE_CLIENT_ID` + `GOOGLE_WORKSPACE_CLIENT_SECRET` —
   OAuth client of type **Web application** in Google Cloud Console. The backend
@@ -64,9 +70,9 @@ import base64
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Optional
 
 from .. import credentials_store, db
@@ -532,9 +538,10 @@ def persist_token(sub: str, org_id: int, token_response: dict,
             "Google did not issue a refresh_token despite prompt=consent. "
             "Check the OAuth client configuration in GCP."
         )
+    # The exchange access token only serves to read the address (`_fetch_email`): it is
+    # not kept. It carries the UNION of the holder's rights (`include_granted_scopes`);
+    # the first use draws one by refresh, bounded to the row's recorded scopes.
     access_token = token_response.get("access_token")
-    expires_in = int(token_response.get("expires_in", 0) or 0)
-    expires_at = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc).isoformat() if expires_in else None
     # What enters the vault: the scopes the token CARRIES (the union, through
     # `include_granted_scopes`), bounded to those we know — never those of another
     # product of the same client. An exchange response WITHOUT `scope` is not "everything":
@@ -556,8 +563,7 @@ def persist_token(sub: str, org_id: int, token_response: dict,
         # their PERSONAL rights included: sharing Drive must not hand the whole
         # org the Gmail mailbox they only authorized for themselves (review of #1081). The
         # shared row only keeps what THIS consent requests, plus what it
-        # already shared; and not the exchange access token, which carries the union: the
-        # first use draws one by refresh, bounded to the row's scopes.
+        # already shared.
         deja = next((a.get("scopes") or "" for a in db.list_shared_google_accounts(scope, target)
                      if a.get("google_email") == email), "")
         app = app_for(sub)
@@ -566,7 +572,7 @@ def persist_token(sub: str, org_id: int, token_response: dict,
         db.set_shared_google_oauth(
             scope, target, set_by=sub,
             google_email=email, refresh_token=refresh_token, scopes=scopes,
-            access_token=None, expires_at=None, client_id=client_id or app.client_id)
+            client_id=client_id or app.client_id)
         logger.info("shared Google account connected: %s=%s account=%s by=%s scopes=%s",
                     scope, target, email, sub, scopes)
         return email
@@ -577,8 +583,6 @@ def persist_token(sub: str, org_id: int, token_response: dict,
         google_email=email,
         refresh_token=refresh_token,
         scopes=scopes,
-        access_token=access_token,
-        expires_at=expires_at,
         client_id=emetteur,
     )
     return email
@@ -831,6 +835,39 @@ def _refuse_two_names(account: Optional[str]) -> None:
             data={"code": "account_conflict", "retryable": False}))
 
 
+# --- the access token: in memory, per process ----------------------------------
+#
+# {opaque key: (access_token, epoch expiry)} — never in the database. The key binds
+# the vault row (entity AND account), its refresh token and its recorded scopes,
+# hashed: a reconnection (new refresh token) or a change of the recorded rights draws
+# a new token instead of serving one bounded to the previous scopes.
+_JETONS: dict[str, tuple[str, float]] = {}
+_VERROU = threading.Lock()
+# Renewed when less than this remains: a token must not expire in the middle of a call.
+_MARGE_S = 60
+
+
+def _cle(ligne: tuple, refresh_token: str, scopes: Optional[str]) -> str:
+    return hashlib.sha256(
+        "|".join((*ligne, refresh_token, scopes or "")).encode()).hexdigest()
+
+
+def _jeton_garde(ligne: tuple, refresh_token: str, scopes: Optional[str]) -> Optional[str]:
+    """The access token this process holds for the row, if it is still valid for a
+    minute; `None` otherwise."""
+    with _VERROU:
+        garde = _JETONS.get(_cle(ligne, refresh_token, scopes))
+    if garde and garde[1] - time.time() >= _MARGE_S:
+        return garde[0]
+    return None
+
+
+def _garder(ligne: tuple, refresh_token: str, scopes: Optional[str],
+            access_token: str, expire_a: float) -> None:
+    with _VERROU:
+        _JETONS[_cle(ligne, refresh_token, scopes)] = (access_token, expire_a)
+
+
 def _resolved_row(rc) -> Optional[dict]:
     """The vault row that the resolution designated, in the shape the refresh reads:
     the secret is the refresh token, the satellites live in its meta (no second
@@ -840,7 +877,6 @@ def _resolved_row(rc) -> Optional[dict]:
     if meta is None:
         return None
     return {"google_email": rc.account or None, "refresh_token": rc.key,
-            "access_token": meta.get("access_token"), "expires_at": meta.get("expires_at"),
             "scopes": meta.get("scopes"), "client_id": meta.get("client_id")}
 
 
@@ -864,7 +900,8 @@ def credentials_for(sub: str, account: Optional[str] = None,
     call (an attachment, `file_source`) — it may differ from the call's `_account=`
     (send from one mailbox a file of another account's Drive).
 
-    Transparent refresh if access_token is missing or expired. Raises an actionable
+    Transparent refresh when this process holds no valid access token for the row
+    (`_JETONS`: in memory, never in the vault). Raises an actionable
     RuntimeError (no account, unknown account, service not authorized) or a
     McpError (ambiguity, conflicting names, refused instance).
     """
@@ -895,19 +932,6 @@ def credentials_for(sub: str, account: Optional[str] = None,
 
     from google.oauth2.credentials import Credentials
 
-    access_token = row.get("access_token")
-    expires_at = row.get("expires_at")
-    needs_refresh = not access_token
-    if not needs_refresh and expires_at:
-        try:
-            exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-            # 60s of margin to avoid blowing up mid-call
-            if exp.timestamp() - time.time() < 60:
-                needs_refresh = True
-        # noqa: SILENT — unreadable credential ⇒ forced refresh, never a stale token served
-        except Exception:
-            needs_refresh = True
-
     # ONE read of the app per call (vault + decryption for a tenant account):
     # it serves the issuer check, the refresh and the returned object.
     app = app_for(sub)
@@ -918,7 +942,7 @@ def credentials_for(sub: str, account: Optional[str] = None,
     if _emis_par_un_autre_client(row, app):
         # The served app has changed since the connection (set, changed or removed): this
         # token will no longer refresh. We say so before any network call — and before
-        # a still-valid access_token masks the failure for an hour.
+        # a token held in memory masks the failure for an hour.
         connector_health.mark_rejected(
             et, eid, "google", email,
             "token issued by an OAuth client other than the served app")
@@ -927,9 +951,11 @@ def credentials_for(sub: str, account: Optional[str] = None,
             "app than the one served today (your organization's app has changed): "
             f"reconnect this account at {_reconnecter(sub)}. Nothing was done.")
 
-    if needs_refresh:
+    ligne = (et, eid, email)
+    access_token = _jeton_garde(ligne, row["refresh_token"], row.get("scopes"))
+    if access_token is None:
         account = email
-        scope = (et, eid, account)
+        scope = ligne
         try:
             resp = _refresh_access_token(row["refresh_token"], sub, app,
                                          scopes=row.get("scopes"))
@@ -957,14 +983,12 @@ def credentials_for(sub: str, account: Optional[str] = None,
                 f"{_reconnecter(sub)}. Nothing was done.") from e
         access_token = resp["access_token"]
         expires_in = int(resp.get("expires_in", 0) or 0)
-        new_exp = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc).isoformat()
-        credentials_store.update_meta(et, eid, "google", email,
-                                      {"access_token": access_token, "expires_at": new_exp})
-        # `update_meta` MERGES the meta (JSONB ||):
-        # a `health_ko` set by an earlier dead refresh would never be
-        # cleared by this path without this explicit call (oto#25 lot b3, same
-        # reason as the Salesforce rotation — unlike atlassian/folk, whose
-        # refresh REPLACES the whole meta and already unmarks by that fact alone).
+        # Kept in THIS process only: two concurrent refreshes each get a valid token
+        # (Google does not rotate the refresh token), the last one kept wins.
+        _garder(ligne, row["refresh_token"], row.get("scopes"), access_token,
+                time.time() + expires_in)
+        # A successful refresh clears a `health_ko` set by an earlier dead refresh
+        # (oto#25 lot b3, same reason as the Salesforce rotation).
         connector_health.record_health("google", scope, True, None)
 
     # The Google client also refreshes ON ITS OWN (googleapiclient): it needs

@@ -2120,8 +2120,8 @@ OAuth Google per-user (Gmail + Tasks ; scopes Sheets/Drive latents pour l'export
   `account=email`, `is_default` dans meta). Les tools `gmail_*`/`tasks_*`
   sans param `account` utilisent le compte par défaut (cf. `db.set_google_oauth`,
   `docs/connector-vault.md`).
-- Refresh token **chiffré** (`secret_enc`) dans le coffre. access_token reste en
-  clair dans `meta` (bearer ~1h, dérivé).
+- Refresh token **chiffré** (`secret_enc`) dans le coffre. Le jeton d'accès (~1h,
+  dérivé) n'est pas rangé : il vit en mémoire, par processus (`docs/connector-vault.md`).
 
 **Pourquoi un client OAuth séparé du connecteur Logto Google** : Logto
 gère l'**identité** (scopes `openid email profile`), pas la délégation

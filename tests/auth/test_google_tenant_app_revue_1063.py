@@ -192,6 +192,9 @@ def cablage(registre, monkeypatch):
     row = env.coffre.meta("a@b.com")
     env.coffre.lignes[("member", "7:nu-sub", "a@b.com")] = env.coffre.lignes[
         ("member", "7:tulina:abc", "a@b.com")]
+    # Le jeton d'accès est gardé en mémoire PAR LIGNE : celle de l'autre sujet aussi.
+    google_oauth._garder(("member", "7:nu-sub", "a@b.com"), "RT", "s1", "at-valide",
+                         4_102_444_800)
     appels = {"mark": [], "post": []}
     monkeypatch.setattr(connector_health, "mark_rejected",
                         lambda et, eid, prov, acct, err: appels["mark"].append(acct))
@@ -321,7 +324,8 @@ def test_le_secret_de_l_app_n_apparait_pas_dans_son_repr(registre, monkeypatch):
 
 def test_credentials_for_ne_lit_l_app_qu_une_fois(cablage, monkeypatch):
     row, _ = cablage
-    row.update(client_id="cid-tulina", access_token=None, expires_at=None)
+    row.update(client_id="cid-tulina")
+    google_oauth._JETONS.clear()      # aucun jeton gardé : l'appel renouvelle
 
     class _OK:
         status_code, text = 200, ""

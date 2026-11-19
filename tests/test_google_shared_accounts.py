@@ -139,7 +139,7 @@ def test_partager_drive_ne_livre_pas_le_gmail_perso_du_titulaire(monkeypatch):
     (k,) = ecrits
     assert gmail not in k["scopes"].split()
     assert G.services_granted(k["scopes"]) == ["drive"]
-    assert k["access_token"] is None and k["expires_at"] is None
+    assert "access_token" not in k and "expires_at" not in k
 
 
 def test_un_partage_incremental_garde_ce_quil_partageait_deja(monkeypatch):
@@ -258,7 +258,8 @@ def test_le_refresh_et_la_sante_secrivent_sur_lentite_partagee(monkeypatch):
     monkeypatch.setattr(requests, "post", lambda *a, **k: _OK())
     creds = G.credentials_for("u", service="gmail")
     assert creds.token == "AT-NEUF"
-    assert coffre.meta("hello@x.test", ("org", str(ORG)))["access_token"] == "AT-NEUF"
+    assert coffre.jeton("hello@x.test", ("org", str(ORG))) == "AT-NEUF"
+    assert "access_token" not in coffre.meta("hello@x.test", ("org", str(ORG)))
     assert sante == [("org", str(ORG), "hello@x.test")]
 
 

@@ -59,6 +59,14 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                             défaut ; jamais les credentials sans
                                             `--credentials --preavis-echu AAAA-MM-JJ`
                                             échu — PAS un travail : voir plus bas
+    oto-mcp maintenance jetons-en-meta [--appliquer] [--connecteur NOM ...]
+                                            retire de `connector_credentials.meta` les
+                                            clés de forme jeton (liste fermée
+                                            `BEARER_META_KEYS`) des connecteurs google,
+                                            memento, atlassian, folkmcp — À BLANC par
+                                            défaut ; pour google, APRÈS le déploiement
+                                            du code qui n'y range plus le jeton — PAS
+                                            un travail : voir plus bas
     oto-mcp maintenance copies-du-coffre
                                             copie le coffre d'un connecteur renommé
                                             sous son nouveau nom — l'étape que le
@@ -884,6 +892,48 @@ def orphelins(argv: list[str]) -> int:
     return ORPHELINS_RESTE if on.reste(rapport) else ORPHELINS_FAIT
 
 
+# Codes de sortie de `jetons-en-meta`, alignés sur ceux d'`orphelins` : un geste
+# d'exploitant joué une fois depuis le commit, hors `all` et hors timer.
+JETONS_FAIT = 0
+JETONS_REFUS = 1       # connecteur hors de la liste fermée : rien n'est lu ni écrit
+JETONS_ERREUR = 2      # base injoignable, écriture en échec (rien n'est écrit : une transaction)
+JETONS_RESTE = 3       # appliqué, mais la relecture trouve encore une clé : relancer
+
+
+def jetons_en_meta(argv: list[str]) -> int:
+    """`oto-mcp maintenance jetons-en-meta` : retire de `connector_credentials.meta` les
+    clés de forme jeton (`connectors/jetons_en_meta.py`). À blanc par défaut."""
+    from .connectors import jetons_en_meta as jm
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance jetons-en-meta",
+        description=(
+            "Retire de connector_credentials.meta les clés de forme jeton ("
+            + ", ".join(jm.cles()) + ") des connecteurs " + ", ".join(jm.CONNECTEURS)
+            + ". Ne supprime aucune ligne, n'imprime aucune valeur. À blanc par défaut. "
+            "Pour google : seulement APRÈS le déploiement du code qui ne range plus le "
+            "jeton dans meta, l'ancienne couleur arrêtée (elle l'y réécrirait)."))
+    p.add_argument("--appliquer", action="store_true",
+                   help="écrit ; sans lui, imprime ce qui serait retiré et ne touche à rien")
+    p.add_argument("--connecteur", action="append", metavar="NOM",
+                   help=("restreint à ce connecteur (répétable) ; parmi : "
+                         + ", ".join(jm.CONNECTEURS) + " — tous par défaut"))
+    args = p.parse_args(argv)
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    try:
+        rapport = jm.nettoyer(appliquer=args.appliquer,
+                              connecteurs=args.connecteur or jm.CONNECTEURS)
+    except jm.ConnecteurHorsListe as e:
+        print(f"REFUS : {e}", file=sys.stderr)
+        return JETONS_REFUS
+    except Exception:
+        logger.error("jetons-en-meta : ERREUR — rien n'est à tenir pour retiré ; relancer "
+                     "à blanc pour voir ce qui reste", exc_info=True)
+        return JETONS_ERREUR
+    print("\n".join(jm.lignes_du_rapport(rapport)))
+    return JETONS_RESTE if jm.reste(rapport) else JETONS_FAIT
+
 
 # ── Les copies du coffre des connecteurs renommés ─────────────────────────────────────
 # Un connecteur renommé garde son coffre par une COPIE re-chiffrée (l'AAD porte le nom du
@@ -944,6 +994,8 @@ def main(argv: list[str] | None = None) -> int:
         return index_concurrents(argv[1:])
     if argv and argv[0] == "orphelins":
         return orphelins(argv[1:])
+    if argv and argv[0] == "jetons-en-meta":
+        return jetons_en_meta(argv[1:])
     if argv and argv[0] == "copies-du-coffre":
         return copies_du_coffre(argv[1:])
     p = argparse.ArgumentParser(

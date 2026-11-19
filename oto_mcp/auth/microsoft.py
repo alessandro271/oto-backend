@@ -745,7 +745,10 @@ def persist_grant(sub: str, org_id: int, grant, tenant: Optional[str] = None,
     if partage:
         scopes = " ".join(sorted(_normalises(scopes)
                                  & _borne_partagee(ancien.get("scopes"), connector)))
-    meta = {**{k: v for k, v in ancien.items()
+    # The previous row's satellites follow, never its secret keys
+    # (`credentials_store.public_meta`: a token stays in memory, a sealed satellite
+    # stays with its row).
+    meta = {**{k: v for k, v in credentials_store.public_meta(ancien).items()
                if not k.startswith("health_") and k != "tenant"},
             "email": adresse,
             "name": me.get("displayName"),
