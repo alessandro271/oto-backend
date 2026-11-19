@@ -3,8 +3,8 @@
 #   — modifier là puis recopier ici (/opt/deploy/oto-backend.sh sur oto-platform).
 # Déploiement build-serveur d'oto-backend PROD (oto-mcp), exécuté par le runner
 # self-hosted via `sudo /opt/deploy/oto-backend.sh <tag>` (sudoers NOPASSWD scope).
-# Modèle de release : push sur `main` -> PRÉPROD (oto-backend-canari.sh) ; TAG
-# vX.Y.Z -> PROD (CE script). Le tag est passé en argument par le workflow
+# Modèle de release : seul un TAG vX.Y.Z déploie, en PROD (CE script) ; `main` n'est
+# que le tronc, jugé par la CI sans rien servir (plus de préproduction, 19/11/2026). Le tag est passé en argument par le workflow
 # (github.ref_name) ; pas de défaut (prod = acte explicite, aucun fallback branche).
 # Cf. ADR 0020. Endpoints : mcp.oto.cx, les hôtes des tenants tiers, *.mcp.oto.cx, *.share.oto.cx.
 #

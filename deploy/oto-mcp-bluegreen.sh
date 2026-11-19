@@ -2,7 +2,6 @@
 # ============================================================================
 # Bibliothèque bleu/vert du backend oto — SOURCÉE par chaque déploiement :
 #   /opt/deploy/oto-backend.sh         (notre PROD,     oto-mcp@blue|green)
-#   /opt/deploy/oto-backend-canari.sh  (notre PRÉPROD,  oto-mcp-canari@blue|green)
 #   deploy/cible/deployer.sh           (une instance tierce, chargée depuis l'arbre
 #                                       du tag qu'elle déploie — docs/instance-cible.md)
 #
@@ -33,13 +32,13 @@
 # Variables attendues AVANT le `source` — TOUTES déclarées par le wrapper, aucune n'a
 # de défaut ici (#967) : une cible qui en oublie une est refusée au chargement, en
 # nommant ce qui manque, plutôt que de déployer avec une valeur qui serait la nôtre.
-#   BG_ENV            libellé de l'environnement (prod | canari | <rôle d'une cible>)
-#   BG_UNIT           gabarit systemd, sans @ (oto-mcp | oto-mcp-canari | …)
+#   BG_ENV            libellé de l'environnement (prod | <rôle d'une cible>)
+#   BG_UNIT           gabarit systemd, sans @ (oto-mcp | …)
 #   BG_TREE           préfixe des arbres : l'arbre d'une couleur est <BG_TREE>-<couleur>
 #   BG_PORT_blue      port de la couleur bleue
 #   BG_PORT_green     port de la couleur verte
 #   BG_UPSTREAM       fichier d'amont Caddy GÉNÉRÉ (ex. /etc/caddy/upstream-oto-prod.conf)
-#   BG_SNIPPET        préfixe des snippets Caddy (oto_prod | oto_canari | …)
+#   BG_SNIPPET        préfixe des snippets Caddy (oto_prod | …)
 #   BG_DOCSHARE_HOST  Host forcé pour le snippet doc-share (/p/d/*)
 #   BG_ASK            1 si l'env porte le `ask` de l'on-demand TLS, sinon VIDE (déclaré)
 #   BG_ACTIVE         fichier pointeur de couleur (blue | green)
@@ -53,8 +52,8 @@
 #   BG_DRAIN          script de vidange différée (chemin STABLE : il tourne après nous)
 #   BG_DRAIN_UNIT     nom de l'unité transitoire de vidange (une par environnement)
 #   BG_LANCEUR        versionne — le lanceur est celui DU TAG (deploy/lanceur_secrets.py),
-#                                rien n'est propagé d'une couleur à l'autre. Notre prod et
-#                                notre préprod y sont depuis le 30/09/2026 (#967, lot 5) ;
+#                                rien n'est propagé d'une couleur à l'autre. Notre prod y
+#                                est depuis le 30/09/2026 (#967, lot 5) ;
 #                     propage  — mode HISTORIQUE, gardé jusqu'au lot 5b (retour arrière du
 #                                lot 5) : le lanceur `start-encrypted.sh` vit hors git dans
 #                                l'arbre et passe de la couleur en service à la nouvelle.

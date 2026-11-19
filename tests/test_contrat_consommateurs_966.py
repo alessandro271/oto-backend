@@ -3,7 +3,7 @@
 Jusqu'au 25/09/2026 le mécanisme était écrit au singulier : un dépôt, un chemin, un
 secret en dur. Un second consommateur aurait été invisible — jamais lu, jamais jugé,
 jamais rouge. Ce banc tient la liste déclarée et le verdict nommé ; la matrice elle-même
-(une jambe par consommateur, `fail-fast: false`) se lit dans `deploy-canari.yml`.
+(une jambe par consommateur, `fail-fast: false`) se lit dans `ci.yml`.
 """
 from __future__ import annotations
 
@@ -58,18 +58,19 @@ def test_un_partenaire_ne_se_declare_jamais_en_clair():
             assert c["nom"].startswith("partenaire-"), c["nom"]
 
 
-def test_les_deux_jobs_de_contrat_tournent_sur_toute_la_liste():
-    wf = yaml.safe_load((_RACINE / ".github" / "workflows" / "deploy-canari.yml").read_text())
+def test_le_job_de_contrat_tourne_sur_toute_la_liste():
+    wf = yaml.safe_load((_RACINE / ".github" / "workflows" / "ci.yml").read_text())
     jobs = wf["jobs"]
     # `liste_code` : la liste entière, sauf sur une PR de fork où les consommateurs à
     # secret en sont retirés et annoncés (test_workflow_secret_absent_rougit.py).
-    for nom, sortie in (("contrat-front", "liste"), ("contrat-front-code", "liste_code")):
-        strat = jobs[nom]["strategy"]
-        assert strat["fail-fast"] is False, f"{nom} : un rouge masquerait les suivants"
-        assert f"fromJSON(needs.consommateurs.outputs.{sortie})" in strat["matrix"]["consommateur"]
-        assert "consommateurs" in jobs[nom]["needs"]
-    assert "contrat-front-code" in jobs["deploy-preprod"]["needs"], \
-        "la garde d'avant déploiement doit bloquer la préproduction"
+    strat = jobs["contrat-front-code"]["strategy"]
+    assert strat["fail-fast"] is False, "un rouge masquerait les suivants"
+    assert "fromJSON(needs.consommateurs.outputs.liste_code)" in strat["matrix"]["consommateur"]
+    assert "consommateurs" in jobs["contrat-front-code"]["needs"]
+    # Le tronc ne déploie rien : la garde bloque la production par la conclusion du run,
+    # que `scripts/garde_tronc_vert.py` exige verte au sha du tag.
+    assert not [j for j in jobs.values() if "self-hosted" in str(j.get("runs-on"))], \
+        "le workflow du tronc ne doit rien exécuter sur la machine de production"
 
 
 _LECTEUR = _RACINE / "scripts" / "lire-contrat-consommateur.sh"

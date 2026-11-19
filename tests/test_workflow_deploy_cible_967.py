@@ -41,8 +41,8 @@ _RUNS = [s.get("run", "") for s in _ETAPES]
 # Ce qui désignerait un AUTRE déploiement que celui de la cible : nos workflows et leurs
 # noms, l'API des runs, nos gardes de mise en production, nos hôtes et notre machine.
 _AUTRE_CHAINE = re.compile(
-    r"deploy\.yml|deploy-canari|release\.yml|Deploy (prod|preprod)|actions/runs|"
-    r"garde_preprod|workflow_run|oto-platform|/opt/deploy|oto-backend\.sh|"
+    r"deploy\.yml|workflows/ci\.yml|release\.yml|Deploy prod|actions/runs|"
+    r"garde_tronc|workflow_run|oto-platform|/opt/deploy|oto-backend\.sh|"
     r"oto\.cx|oto\.ninja|oto-mcp-canari|active-(prod|canari)")
 
 
@@ -195,7 +195,7 @@ def test_ne_consulte_aucun_autre_deploiement():
 
 def test_le_garde_fou_reconnait_une_reference_a_une_autre_chaine():
     """Le motif mord : un appel à notre garde de production serait vu."""
-    assert _AUTRE_CHAINE.search('run: python3 scripts/garde_preprod_verte.py "$TAG"')
+    assert _AUTRE_CHAINE.search('run: python3 scripts/garde_tronc_vert.py "$TAG"')
     assert _AUTRE_CHAINE.search("gh api repos/x/y/actions/runs?branch=main")
 
 

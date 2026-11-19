@@ -12,9 +12,6 @@
 # s'ajoute — l'écraser depuis ici ferait disparaître ces ajouts en silence. Ce fichier
 # est donc un MIROIR à tenir à jour, pas une source qu'on déploie.
 #
-# Le canari a SON PROPRE fichier (start-encrypted-canari.sh), volontairement
-# différent : pas de clé Pennylane, et le secret Mollie est celui de test.
-#
 # #967 — CE FICHIER EST LA DÉCLARATION DE SECRETS PROPRE À NOTRE PRODUCTION : les
 # identifiants de secrets de NOTRE projet Scaleway, Mollie, Pennylane. Il n'est pas le
 # lanceur générique. Une autre instance démarre par `deploy/lanceur_secrets.py`, versionné
