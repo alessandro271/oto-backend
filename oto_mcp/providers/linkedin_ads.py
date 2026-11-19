@@ -9,8 +9,9 @@ from __future__ import annotations
 from ._model import _c
 
 # Same situation as `meta_ads` and `jefacture`: the instance's LinkedIn application
-# (Developer Portal, Advertising API product approved by LinkedIn), its `client_id` /
-# `client_secret` at PLATFORM scope of `connector_settings`, the flow hosted by oto
+# (Developer Portal, Advertising API product approved by LinkedIn), its `client_id` at
+# PLATFORM scope of `connector_settings` and its `client_secret` in the vault
+# (`auth/app_instance`), the flow hosted by oto
 # (`auth/linkedin_ads.py`). ON BEHALF OF THE PERSON: each one signs in with their own
 # LinkedIn account, and the token reads the ad accounts on which THEY hold a Campaign
 # Manager role — an agency auditing a prospect's account asks the prospect for a

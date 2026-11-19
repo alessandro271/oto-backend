@@ -1056,6 +1056,49 @@ consentement.
 - ⚠️ Rangée au palier plateforme, elle **ne part pas** avec un export de périmètre de son
   org (`export_perimetre` ne prend jamais `platform`) : l'org importée la repose.
 
+### Secrets de l'application de l'INSTANCE — l'app d'éditeur sans région (19/11/2026)
+
+Les connecteurs dont l'application OAuth est celle de l'instance, enregistrée une fois par
+l'exploitant chez le fournisseur — `microsoft` (et ses services, dont `sharepoint`),
+`jefacture`, `instagram_meta`, `hubspot`, `slack`, `linkedin_ads`, `meta_ads` — rangent les
+secrets de cette application comme l'app d'éditeur : au coffre, chiffrés par la clé maître.
+Leurs réglages publics restent des réglages.
+
+- **Partage public / secret, par le NOM de la clé** : `connector_settings.a_la_forme_d_un_secret`,
+  liste FERMÉE de motifs (`secret`, `password`, `token`, `api_key`, `private_key`…). Une
+  clé de cette forme (`client_secret`, `app_secret`, `user_client_secret`,
+  `signing_secret`) va au coffre ; les autres (`client_id`, `app_id`, `config_id`) restent
+  au palier plateforme de `connector_settings` — elles voyagent de toute façon dans chaque
+  URL d'autorisation. Le `client_id` ne suit pas le secret, contrairement au blob de l'app
+  d'éditeur : celle-ci se pose en un geste (`client_id` + `client_secret` ensemble), ces
+  coordonnées se posent clé par clé par la console, et une clé publique n'a rien à gagner au
+  chiffrement.
+- **Rangement** : scope `PLATFORM`, `entity_id = app:instance` (préfixe `app:` des apps
+  dédiées, propriétaire `instance` qu'aucune app dédiée ne peut porter, absent de
+  `list_editor_apps`), **une ligne par secret**, la clé du réglage en `account` (donc dans
+  l'AAD). Accesseurs `credentials_store.{set_app_secret, get_app_secrets, app_secrets_set,
+  clear_app_secret}` ; `app_secrets_set` dit la présence sans déchiffrer, mémoïsée par
+  appel (une lecture pour toutes les cartes d'une liste).
+- **Même invariant que l'app d'éditeur** : aucun de ces connecteurs ne déclare
+  `auth_modes ∋ 'platform'` ⟹ `walk_cascade` ne sert jamais ces lignes comme credential
+  d'appel (`tests/test_editor_app.py`).
+- **Un lecteur** : `auth/app_instance.{reglages, manquantes}`, appelé par chaque module
+  `auth/*` concerné. Un secret ne se lit QU'au coffre : une ligne en clair de la même clé
+  n'est jamais lue, un secret absent est dit manquant par le refus nommé du connecteur
+  (« not configured… missing client_secret… sets them with `oto_admin_connector_setting` »).
+  Un déchiffrement en échec lève.
+- **Pose** : la console admin, inchangée pour l'exploitant — `oto_admin_connector_setting
+  op=set connector=<c> key=<clé> value=…` (REST `POST /api/admin/connectors/settings`) —
+  route une clé de forme secret au coffre, au palier plateforme seulement (`org_id` refusé) ;
+  `op=clear` la retire du coffre ; `op=list` la rend « posé », jamais sa valeur.
+- **Garde** : `db/connector_settings.set_connector_setting`, écrivain unique de la table,
+  REFUSE une clé de forme secret (`ReglageSecretRefuse`), et la copie entre cartes
+  (`copy_platform_settings`) aussi. Une exception nommée : `planity` / `firebase_api_key`,
+  clé publique par conception (servie au navigateur par le site du fournisseur). Sonde sur
+  le code : `tests/test_connector_settings_sans_secret.py`.
+- **Les lignes d'avant** se scellent par `oto-mcp maintenance secrets-d-application`
+  (`docs/commands.md`), qui demande la clé maître — une révision Alembic ne le peut pas.
+
 ### Grant mort : marquer, plus jamais purger (oto#25 lot a, 2026-09-04)
 
 Un refresh token révoqué (`invalid_grant`) n'efface plus la ligne du coffre — ça la

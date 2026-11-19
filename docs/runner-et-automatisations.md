@@ -2112,8 +2112,9 @@ comme `api/hooks.py`), logique dans `slack_events.py`, sans HTTP.
   demande le scope `app_mentions:read`, posé dans `auth/slack.BOT_SCOPES` : un espace
   installé avant se réinstalle une fois. Un DM ne demande que `im:history`.
 - **Preuve** : la signature Slack (`X-Slack-Signature`, HMAC-SHA256 sur
-  `v0:{ts}:{corps brut}`) avec le **secret de signature de l'app**, réglage plateforme
-  `connector_settings(slack, signing_secret)` — pas un secret par agent. Fenêtre de
+  `v0:{ts}:{corps brut}`) avec le **secret de signature de l'app**, secret de
+  l'application de l'instance rangé au coffre (`slack` / `signing_secret`,
+  `auth/app_instance`) — pas un secret par agent. Fenêtre de
   5 min, jugée après la signature. Pas de secret posé = 503 (Slack retente), journalisé.
 - **Accuser d'abord** : Slack attend un 200 sous 3 s, et `users.info` seul peut dépasser
   (délai de lecture du client : 60 s). La route vérifie et lit l'événement, répond

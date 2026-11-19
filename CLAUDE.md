@@ -63,7 +63,8 @@ ayant la sienne (`docs/auth-logto.md`, `docs/tenants.md`).
 Paliers `member < admin < super_admin` ; clé résolue à chaque appel par le **walker unique** `access.walk_cascade`
 (`perso > cross-org > équipe active > org > tenant > plateforme`), jamais recopié ; un credential qui se **pose** est
 **multi-compte** · ⚠️ compte nommé introuvable ⇒ « introuvable », **jamais un repli plateforme silencieux**
-(`docs/roles-and-resolution.md`, `docs/connector-vault.md`).
+(`docs/roles-and-resolution.md`, `docs/connector-vault.md`) · ⚠️ `connector_settings` est en clair et **refuse toute clé
+de forme secret** : un secret d'application OAuth de l'instance va au coffre (`auth/app_instance`, `docs/connector-vault.md`).
 **Mettre un compte en pause** (03/09/2026) : le cran qui manquait entre « vivant » et « supprimé » — et **la
 suppression n'existe pas** comme geste de produit, le seul `DELETE FROM users` étant l'étape 4 de `migrate_sub`. Un
 compte en pause ne peut plus rien faire **dès la requête suivante, jeton déjà émis compris** (les deux branches

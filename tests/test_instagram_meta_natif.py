@@ -26,6 +26,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
+
+from _app_instance_simule import coffre_depuis_les_reglages
 from _modules_recharges import oublier_module
 
 from oto_mcp import providers
@@ -157,6 +159,7 @@ def env(monkeypatch):
                             {"scope_type": "platform", "scope_id": "platform",
                              "connector": CONNECTEUR, "key": k, "value": v}
                             for k, v in _COORDONNEES.items()])
+    coffre_depuis_les_reglages(monkeypatch)
     coffre = _Coffre()
     monkeypatch.setattr(credentials_store, "get_credential_with_meta", coffre.get)
     monkeypatch.setattr(credentials_store, "set_credential", coffre.set)
@@ -604,20 +607,15 @@ def test_le_secret_de_l_application_ne_ressort_pas_de_la_console_admin():
     assert lignes[2]["value"] == ""                    # absente reste absente
 
 
-def test_la_convention_de_nommage_du_secret_est_tenue():
-    """La redaction va par SUFFIXE, pas par liste de clés — une liste indexée par
-    nom serait à tenir à jour au prochain connecteur, et l'oubli ne casserait rien :
-    il publierait le secret. Ce test est la contrepartie : la convention doit être
-    respectée par les clés que CE connecteur pose."""
+def test_le_secret_est_reconnu_comme_tel():
+    """Le partage public / coffre se fait sur le NOM de la clé
+    (`connector_settings.a_la_forme_d_un_secret`) : `app_secret` va au coffre, `app_id`
+    reste un réglage public."""
     from oto_mcp.auth import instagram_meta as ig_auth
-    from oto_mcp.capabilities import platform_connectors as pc
+    from oto_mcp.db import connector_settings as store
 
-    secretes = [k for k in ig_auth._REGLAGES if "secret" in k]
+    secretes = [k for k in ig_auth._REGLAGES if store.a_la_forme_d_un_secret(CONNECTEUR, k)]
     assert secretes == ["app_secret"]
-    for k in secretes:
-        assert k.endswith(pc._SUFFIXE_SECRET), (
-            f"{k} porte un secret sans le suffixe `{pc._SUFFIXE_SECRET}` : "
-            "la console admin le rendrait en clair.")
 
 
 # ── Retour de consentement : le refus de Meta (oto-app#11) ──────────────────

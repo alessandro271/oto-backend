@@ -67,6 +67,12 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                             défaut ; pour google, APRÈS le déploiement
                                             du code qui n'y range plus le jeton — PAS
                                             un travail : voir plus bas
+    oto-mcp maintenance secrets-d-application [--appliquer] [--sans-effacer]
+                                            scelle au coffre les secrets d'application
+                                            OAuth de l'instance encore en clair dans
+                                            `connector_settings`, puis efface le clair —
+                                            À BLANC par défaut — PAS un travail : voir
+                                            plus bas
     oto-mcp maintenance copies-du-coffre
                                             copie le coffre d'un connecteur renommé
                                             sous son nouveau nom — l'étape que le
@@ -935,6 +941,56 @@ def jetons_en_meta(argv: list[str]) -> int:
     return JETONS_RESTE if jm.reste(rapport) else JETONS_FAIT
 
 
+# Codes de sortie de `secrets-d-application` — ceux d'`orphelins`. Un geste d'exploitant
+# joué depuis le commit (la clé maître est requise : une révision ne peut pas chiffrer).
+SECRETS_FAIT = 0
+SECRETS_REFUS = 1      # un écart (le coffre porte une autre valeur) ou un secret hors palier
+                       # plateforme : rien n'est touché pour ces lignes, à trancher à la main
+SECRETS_ERREUR = 2     # clé maître absente, base injoignable, relecture en échec (les lignes
+                       # déjà traitées le restent ; la ligne en échec est intacte)
+SECRETS_RESTE = 3      # à blanc : il y a à faire ; appliqué : relancer
+
+
+def secrets_d_application(argv: list[str]) -> int:
+    """`oto-mcp maintenance secrets-d-application` : scelle au coffre les secrets
+    d'application OAuth de l'instance encore en clair dans `connector_settings`
+    (`auth/app_instance_rangement.py`). À blanc par défaut."""
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance secrets-d-application",
+        description=("Scelle au coffre les secrets d'application OAuth de l'instance "
+                     "encore en clair dans connector_settings, vérifie leur relecture, "
+                     "puis efface le clair. À blanc par défaut ; n'imprime jamais une "
+                     "valeur."))
+    p.add_argument("--appliquer", action="store_true",
+                   help="écrit ; sans lui, imprime ce qui serait fait et ne touche à rien")
+    p.add_argument("--sans-effacer", action="store_true",
+                   help=("scelle et vérifie, mais garde la ligne en clair (1re phase : le "
+                         "code servi lit encore connector_settings)"))
+    args = p.parse_args(argv)
+    if args.sans_effacer and not args.appliquer:
+        p.error("--sans-effacer ne vaut qu'avec --appliquer")
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from . import crypto
+    from .auth import app_instance_rangement as rangement
+    if not crypto.encryption_enabled():
+        print("REFUS : OTO_MCP_MASTER_KEY absente — rien ne peut être scellé (lancer la "
+              "commande sous le lanceur de l'instance)", file=sys.stderr)
+        return SECRETS_ERREUR
+    try:
+        rapport = rangement.ranger(appliquer=args.appliquer, effacer=not args.sans_effacer)
+    except Exception:
+        logger.error("secrets-d-application : ERREUR — les lignes déjà traitées le restent, "
+                     "la ligne en échec est intacte ; relancer à blanc pour voir ce qui "
+                     "reste", exc_info=True)
+        return SECRETS_ERREUR
+    print("\n".join(rangement.lignes_du_rapport(rapport)))
+    if rangement.refus(rapport):
+        return SECRETS_REFUS
+    return SECRETS_RESTE if rangement.reste(rapport) else SECRETS_FAIT
+
+
 # ── Les copies du coffre des connecteurs renommés ─────────────────────────────────────
 # Un connecteur renommé garde son coffre par une COPIE re-chiffrée (l'AAD porte le nom du
 # connecteur : la clé maîtresse est requise, une révision Alembic ne peut pas la faire).
@@ -996,6 +1052,8 @@ def main(argv: list[str] | None = None) -> int:
         return orphelins(argv[1:])
     if argv and argv[0] == "jetons-en-meta":
         return jetons_en_meta(argv[1:])
+    if argv and argv[0] == "secrets-d-application":
+        return secrets_d_application(argv[1:])
     if argv and argv[0] == "copies-du-coffre":
         return copies_du_coffre(argv[1:])
     p = argparse.ArgumentParser(

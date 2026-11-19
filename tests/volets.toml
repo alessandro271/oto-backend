@@ -159,6 +159,9 @@ chemins = [
   "oto_mcp/auth/platform_worker.py",
   "oto_mcp/auth/service_identity.py",
   "oto_mcp/auth/token_scopes.py",
+  # lecteur et migration des secrets d'application de l'instance : sept connecteurs
+  "oto_mcp/auth/app_instance.py",
+  "oto_mcp/auth/app_instance_rangement.py",
   "oto_mcp/middleware/**",
   "oto_mcp/org_store/**",
   "oto_mcp/org_created_hook.py",

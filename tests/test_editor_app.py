@@ -29,6 +29,37 @@ def test_zoho_has_no_platform_auth_mode():
             "qui n'a pas consenti). Relire credentials_store §app d'éditeur.")
 
 
+#: The connectors whose instance-app SECRETS live in the vault, PLATFORM scope
+#: (`credentials_store.set_app_secret`, `entity_id = app:instance`): same invariant.
+_APP_INSTANCE = ("microsoft", "sharepoint", "jefacture", "instagram_meta", "hubspot",
+                 "slack", "linkedin_ads", "meta_ads")
+
+
+@pytest.mark.parametrize("name", _APP_INSTANCE)
+def test_instance_app_connectors_have_no_platform_auth_mode(name):
+    """Ce que le rangement des secrets d'application de l'instance suppose : ces
+    connecteurs n'acceptent PAS de credential plateforme d'accès — sinon la cascade
+    servirait un `client_secret` comme clé d'appel."""
+    con = providers.REGISTRY.get(name)
+    assert con is not None, name
+    assert "platform" not in con.auth_modes, (
+        f"{name} a gagné le mode 'platform' : les secrets de l'application de "
+        "l'instance (app:instance) deviendraient résolvables comme credential d'appel. "
+        "Relire credentials_store §secrets de l'application OAuth de l'INSTANCE.")
+
+
+@pytest.mark.parametrize("name", _APP_INSTANCE)
+def test_cascade_never_yields_platform_for_instance_app(name):
+    yes = access.CascadeProbe(
+        member=lambda s, o, p: (True, ""), member_cross=lambda s, o, p: True,
+        legacy_user=lambda s, p: True,
+        group=lambda g, p: True, org=lambda o, p: True, tenant=lambda t, p: True,
+        platform=lambda s, p, o: {"secret": "x", "label": "app:instance"})
+    modes = [r.mode for r in access.walk_cascade(
+        "sub-x", name, org=1, group=2, probe=yes, want="auto")]
+    assert "platform" not in modes, (name, modes)
+
+
 def test_cascade_never_yields_platform_for_zoho():
     """Le walker lui-même : même en `want='auto'` et avec une sonde qui dit OUI à tous
     les barreaux, aucun barreau plateforme pour zoho. Sonde stubbée = test pur (le

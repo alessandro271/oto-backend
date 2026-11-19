@@ -12,7 +12,8 @@ Ce que ce banc prouve, sur PostgreSQL :
   retiré sous `microsoft` ;
 - un compte ajouté sous `sharepoint` après la copie (par le code d'avant) est copié au
   démarrage suivant ;
-- les coordonnées de l'application sont copiées une fois, jamais réécrites ensuite ;
+- les coordonnées PUBLIQUES de l'application sont copiées une fois, jamais réécrites
+  ensuite ; le secret, jamais en clair ;
 - les scopes d'avant le porteur donnent `services_granted == ["sharepoint"]`.
 
 `pg_dsn` (conftest) : `OTO_TEST_PG_DSN`, sinon un conteneur jetable, sinon skip.
@@ -162,19 +163,27 @@ def test_une_ligne_deja_presente_sous_le_porteur_n_est_pas_ecrasee(live):
 
 
 def test_les_coordonnees_de_l_application_sont_copiees_une_fois(live):
+    """Seules les coordonnées PUBLIQUES passent par `connector_settings` : le secret
+    d'une ancienne carte, ligne en clair d'avant, n'est pas recopié en clair — il se
+    scelle au coffre du porteur (`maintenance secrets-d-application`)."""
+    from oto_mcp import credentials_store
     from oto_mcp.auth import microsoft as ms_auth
     from oto_mcp.db import connector_settings as store
+    # Les lignes d'AVANT la garde : posées en SQL, l'écrivain refuse désormais un secret.
     for cle, valeur in (("client_id", "app-id"), ("client_secret", "app-secret"),
                         ("autre", "x")):
-        store.set_connector_setting("platform", "platform", "sharepoint", cle, valeur)
-    assert _copier()["settings"] == 2
-    assert ms_auth.app() == {"client_id": "app-id", "client_secret": "app-secret"}
+        _exec("INSERT INTO connector_settings (scope_type, scope_id, connector, key, value) "
+              "VALUES ('platform', 'platform', 'sharepoint', %s, %s)", (cle, valeur))
+    assert _copier()["settings"] == 1
     assert not [r for r in store.list_connector_settings()
-                if r["connector"] == "microsoft" and r["key"] == "autre"]
-    # L'opérateur gère désormais le porteur : un démarrage ne réécrit rien.
-    store.clear_connector_setting("platform", "platform", "microsoft", "client_secret")
-    assert _copier()["settings"] == 0
+                if r["connector"] == "microsoft" and r["key"] in ("autre", "client_secret")]
     assert ms_auth.coordonnees_manquantes() == ["client_secret"]
+    credentials_store.set_app_secret("microsoft", "client_secret", "app-secret")
+    assert ms_auth.app() == {"client_id": "app-id", "client_secret": "app-secret"}
+    # L'opérateur gère désormais le porteur : un démarrage ne réécrit rien.
+    store.clear_connector_setting("platform", "platform", "microsoft", "client_id")
+    assert _copier()["settings"] == 0
+    assert ms_auth.coordonnees_manquantes() == ["client_id"]
 
 
 def test_les_scopes_d_avant_le_porteur_donnent_sharepoint(live):
