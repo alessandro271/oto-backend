@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import pytest
 
+# Publier scelle le jeton du lien (`db/jetons_de_lien.py`) : il faut la clé maître.
+pytestmark = pytest.mark.usefixtures("cle_maitre")
+
 from oto_mcp import access, db, group_store, org_store, ownership
 from oto_mcp.capabilities import media_and_files as F
 from oto_mcp.capabilities import projects as P

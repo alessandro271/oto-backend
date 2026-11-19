@@ -122,6 +122,12 @@ CREATE TABLE IF NOT EXISTS docs (
     -- de lien public en lecture seule (/api/public/docs/{token}). Index unique créé
     -- dans `_init` après l'ADD COLUMN (jamais ici — table docs préexistante).
     public_token TEXT,
+    -- Le même lien, rangé chiffré (`db/jetons_de_lien.py`) : l'enveloppe (clé maître,
+    -- AAD de la ligne) pour le réafficher, l'empreinte pour résoudre un lien entrant.
+    -- `public_token` n'est plus écrit ; sa révision de retrait viendra. Index unique
+    -- de l'empreinte dans `_init`, après l'ADD COLUMN.
+    public_token_enc TEXT,
+    public_token_hash TEXT,
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

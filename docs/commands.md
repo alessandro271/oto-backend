@@ -397,6 +397,56 @@ orphelins --appliquer     # écrit ; relancer à blanc ensuite : « aucun » par
 orphelins --credentials --preavis-echu <date> --connecteur <nom>   # les clés d'UN orphelin
 ```
 
+### Sceller les jetons de lien — `oto-mcp maintenance jetons-de-lien`
+
+Le lien public d'une page et le lien d'une procédure partagée sont rangés chiffrés
+(`oto_mcp/db/jetons_de_lien.py`) : l'enveloppe `*_enc` (clé maître, AAD de la ligne) pour
+réafficher le lien, l'empreinte `*_hash` pour résoudre un lien entrant. Le code ne lit et
+n'écrit que cette forme. Une base d'avant porte encore des jetons dans la colonne en clair
+(`docs.public_token`, `process_shares.token`) : la commande les scelle. Pour chaque ligne,
+UNE transaction courte (15 s / 5 s de verrou) scelle l'enveloppe et l'empreinte, relit et
+vérifie que l'enveloppe se rouvre sur le même jeton (comparé, jamais affiché), puis vide le
+clair — un échec annule la ligne entière. Avec l'effacement, elle retire aussi les deux
+autres copies en clair d'un jeton : `acquired_via.token` sur la fiche d'un compte né d'un
+partage (remplacé par `share_id`) et `public_token` dans `nodes.props`. **À blanc par
+défaut**, `--appliquer` pour écrire, `--appliquer --sans-effacer` pour sceller en gardant le
+clair. Idempotente. N'imprime **jamais un jeton** : table, id, état. Clé maître requise, et
+les colonnes chiffrées (posées par le démarrage du code neuf) — sinon refus, code 2.
+Sorties : 0 fait, 1 refus (un écart : l'enveloppe porte un autre jeton — la ligne n'est pas
+touchée), 2 erreur (la ligne en échec reste intacte), 3 il reste à faire.
+
+**Ordre de mise en prod.** La base est partagée prod/préprod ; le code d'avant lit et écrit
+le clair, celui d'après l'enveloppe seule, sans repli :
+
+1. **Fusion** : la préprod démarre le code neuf, son démarrage pose `*_enc` et `*_hash`
+   (et lève le `NOT NULL` de `process_shares.token`). La prod, sur le code d'avant, n'est
+   pas touchée.
+2. **Tag**, bascule de la prod.
+3. **Aussitôt la bascule faite**, depuis l'arbre actif (celui du tag) : à blanc,
+   `--appliquer`, puis à blanc encore (« aucun jeton de lien en clair », code 0).
+
+Entre 2 et 3, un lien émis avant ne répond pas (404) ; la commande le rouvre, sous le même
+jeton. On ne scelle **pas avant la bascule** (comme le ferait `--sans-effacer`) : tant que
+le code d'avant sert, il peut retirer un lien public en vidant le seul clair, et
+l'enveloppe scellée plus tôt rouvrirait ce lien retiré après la bascule. Une instance cible
+joue l'étape 3 après sa montée.
+
+```bash
+A=/opt/oto-mcp-$(cat /etc/oto-mcp/active-prod)
+jetons() {
+  sudo systemd-run --pipe --wait --quiet --collect -p WorkingDirectory="$A" \
+    -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
+    "$A/.venv/bin/python" "$A/deploy/lanceur_secrets.py" maintenance jetons-de-lien "$@"
+}
+jetons                # à blanc
+jetons --appliquer    # scelle, vérifie, vide le clair
+jetons                # « aucun jeton de lien en clair », code 0
+```
+
+La colonne en clair, vide, est retirée par une révision d'une PR suivante, une fois l'étape
+3 jouée sur toutes les bases vivantes.
+
 ## Pin oto-core — une version déployée = une coordonnée reproductible
 
 - **`oto-core` PINNÉ sur un tag git** (`oto-core[anonymize] @ git+…@vX.Y.Z` dans `pyproject.toml` — l'extra est `anonymize`, `browser` a été retiré côté backend et n'est resté que sur le CLI local ; plus `@main` flottant ni dép `oto-cli`) : une version déployée = coordonnée reproductible. ⚠️ **`pip` ne réinstalle PAS une dép VCS déjà présente** (`oto-core` "satisfait" quelle que soit sa version) → `pip install -e .` seul ne monte JAMAIS oto-core au tag bumpé. Le deploy installe **par le verrou** (`uv sync --frozen`, #932) : oto-core au commit que `uv.lock` désigne, plus de force-reinstall. Bump connecteurs = tag oto-core + édit du pin **+ `uv lock` dans le même commit** (le verrou est versionné, la CI installe par lui et refuse un verrou en retard — `docs/verrou-dependances.md`) + deploy (PAS de `git pull` box). Cf. ADR 0020. ⚠️ **Symptôme trompeur en LOCAL** : des tests rouges peuvent être un venv en retard sur le pin, pas du code cassé (05/08 : 17 rouges sur un connecteur neuf ; 26/08 : 48 ; 01/09 : 28) → **sous-section ci-dessous**, qui porte la trace exacte à reconnaître et la recette. (⚠️ box `otomata-0` a un VIEUX oto-mcp décommissionné/stoppé avec un editable legacy `oto-cli` pré-split — ne pas s'y fier, le runtime live est la box dédiée.) ⚠️ **Le pin est un champ que TOUTES les sessions // éditent → régressions silencieuses récurrentes** : vécu 2026-07-07, un commit concurrent a réécrit le pin `v1.18.0→v1.17.0` et **cassé un tool déployé SANS erreur** (le tool était enregistré, sa méthode absente de l'ancien oto-core → `AttributeError` seulement à l'appel). Toujours bumper en **superset** (tag haut ⊇ tags bas) ; à la moindre divergence de pin en merge/rebase, **garder la version haute**.

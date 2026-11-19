@@ -607,6 +607,24 @@ ainsi ne le lirait plus.
 ⚠️ `can_access` ne change pas : la règle déplace la propriété, elle n'invente pas d'état
 « à l'org mais caché ».
 
+## Lien public d'une page — le jeton est rangé chiffré (2026-11-19)
+
+`oto_doc op=set_public public=true` ouvre UNE page au web par un lien `/p/d/<jeton>`
+(lecture publique : `db.get_doc_by_public_token`, servie par `/api/public/docs/{token}` et
+`/p/d/{token}`). Le jeton n'est pas rangé en clair (`oto_mcp/db/jetons_de_lien.py`) :
+
+- `docs.public_token_enc` : le jeton chiffré par la clé maître, sous l'AAD de la ligne
+  (`docs:<id>:public_token`) — il sert à réafficher le lien (`public_url` d'`op=get`) ;
+- `docs.public_token_hash` : son empreinte (`_hash_token`, celle des invitations), unique —
+  un lien entrant se résout par elle, sans rien déchiffrer.
+
+Rien ne change côté produit : `set_public` rend le même lien tant que la page reste
+publique, `op=get` rend `public_url`. L'export de périmètre rechiffre l'enveloppe pour
+l'instance cible (`export_perimetre/rechiffrement.py`) et emporte l'empreinte : le lien
+continue de répondre là-bas. La colonne d'avant `public_token` n'est plus écrite ;
+`oto-mcp maintenance jetons-de-lien` scelle ce qu'elle porte encore et la vide
+(`docs/commands.md`), une révision la retirera.
+
 ## Dossier d'affichage d'un projet — `folder` (2026-10-16)
 
 **Le besoin.** Une org de conseil tient un projet par client ; à quinze projets, la

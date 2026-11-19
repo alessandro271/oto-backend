@@ -145,7 +145,7 @@ CLASSEMENT: dict[str, Table] = {
     "project_links": indirecte(_PROJETS),
     "project_files": indirecte(_PROJETS, hors_base=("s3_key", "public_url")),
     "project_file_texts": indirecte(Via("project_files", ("file_id",))),
-    "docs": indirecte(_PROJETS),
+    "docs": indirecte(_PROJETS, secrets=("public_token_enc",)),
     "doc_revisions": indirecte(_DOCS),
     "apps": possedee(ParEntite()),
     "app_projects": indirecte(_APPS),
@@ -339,7 +339,7 @@ CLASSEMENT: dict[str, Table] = {
     "signal_digest_optouts": possedee(ParSub()),
     # Partage d'une procédure par lien : le lien est à l'org de la procédure, ses
     # lecteurs suivent leur lien, le refus du résumé est à la personne.
-    "process_shares": possedee(ParOrg()),
+    "process_shares": possedee(ParOrg(), secrets=("token_enc",)),
     "procedure_comments": indirecte(Via("org_instructions", ("instruction_id",), fk=False)),
     "process_share_readers": indirecte(Via("process_shares", ("share_id",)),
                                        "un lecteur part avec le lien qu'il a lu"),

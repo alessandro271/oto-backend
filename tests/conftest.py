@@ -264,6 +264,18 @@ def _palmares_neufs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(top, "PALMARES_CREDITS", top.Palmares(top.CREDITS))
 
 
+#: La clé maître d'un banc qui scelle des jetons de lien (`db/jetons_de_lien.py`).
+CLE_MAITRE_DE_BANC = "5" * 64
+
+
+@pytest.fixture
+def cle_maitre(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Pose une clé maître de banc : publier une page ou une procédure scelle le jeton
+    du lien, et sans clé, sceller lève (aucun lien en clair de repli)."""
+    monkeypatch.setenv("OTO_MCP_MASTER_KEY", CLE_MAITRE_DE_BANC)
+    return CLE_MAITRE_DE_BANC
+
+
 @pytest.fixture(autouse=True)
 def _cle_perso_permise_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sans base, aucune org n'interdit la clé perso. La traversée lit la politique

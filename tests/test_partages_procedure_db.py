@@ -11,6 +11,9 @@ import uuid
 
 import pytest
 
+# Publier scelle le jeton du lien (`db/jetons_de_lien.py`) : il faut la clé maître.
+pytestmark = pytest.mark.usefixtures("cle_maitre")
+
 _CORPS = ("# Relance\n\nÉtape secrète : écrire au client avec <tool:serper_search>.\n"
           "Deuxième phrase confidentielle.")
 _FORME = {"v": 1, "trigger": {"kind": "schedule"},
@@ -94,6 +97,33 @@ def test_publier_est_idempotent_et_le_lien_vit_sur_le_front(monde):
     assert a["token"] == b["token"] and len(a["token"]) >= 10
     assert a["url"] == f"https://front.example.test/p/{a['token']}"
     assert a["show_readers"] is True and a["shape_fresh"] is False
+
+
+def test_le_jeton_est_range_chiffre_jamais_en_clair(monde):
+    from oto_mcp import crypto
+    from oto_mcp.capabilities import partages_procedure as P
+    from oto_mcp.db import jetons_de_lien
+    from oto_mcp.db._conn import _connect
+    m = monde
+    token = _publier(m)["token"]
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM process_shares WHERE token_hash = %s",
+                           (jetons_de_lien.empreinte(token),)).fetchone()
+    assert row["token"] is None and token not in str(list(row.values()))
+    assert crypto.decrypt(row["token_enc"], f"process_shares:{row['id']}:token") == token
+    vue = P._share_get(_ctx(m["owner"], m["org_a"]), P.ShareSlugInput(slug=m["slug"]))
+    assert vue["share"]["token"] == token, "le lien se réaffiche au propriétaire"
+
+
+def test_un_jeton_inconnu_ne_mene_a_rien(monde):
+    from oto_mcp.capabilities._types import AuthzDenied
+    m = monde
+    _publier(m)
+    for geste in (_lire, _copier):
+        with pytest.raises(AuthzDenied) as e:
+            geste(m, m["lecteurs"][0], "jeton-inconnu-0000000")
+        assert e.value.code == "not_found"
+    assert _client().get("/api/public/process-shares/jeton-inconnu-0000000").status_code == 404
 
 
 def test_retirer_puis_republier_change_de_jeton_et_l_ancien_meurt(monde):
@@ -260,7 +290,11 @@ def test_lire_connecte_rend_le_corps_et_note_le_lecteur(monde):
     assert row["reads"] == 2
     profil = db.get_account_profile(lecteur)["profile"]
     assert profil["acquired_via"]["kind"] == "process_share"
-    assert profil["acquired_via"]["token"] == token
+    from oto_mcp import org_store
+    from oto_mcp.db import partages_procedure as db_partages
+    instr = org_store.get_instruction("org", m["org_a"], m["slug"])
+    assert "token" not in profil["acquired_via"], "le jeton n'est recopié nulle part"
+    assert profil["acquired_via"]["share_id"] == db_partages.actif(instr["id"])["id"]
 
 
 def test_un_compte_deja_accueilli_qui_lit_n_est_pas_acquis_par_le_partage(monde):

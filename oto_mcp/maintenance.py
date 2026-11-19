@@ -59,6 +59,12 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                             défaut ; jamais les credentials sans
                                             `--credentials --preavis-echu AAAA-MM-JJ`
                                             échu — PAS un travail : voir plus bas
+    oto-mcp maintenance jetons-de-lien [--appliquer] [--sans-effacer]
+                                            scelle les jetons de lien (page publique,
+                                            procédure partagée) encore en clair :
+                                            enveloppe et empreinte, relecture vérifiée,
+                                            puis clair vidé — À BLANC par défaut —
+                                            PAS un travail : voir plus bas
     oto-mcp maintenance copies-du-coffre
                                             copie le coffre d'un connecteur renommé
                                             sous son nouveau nom — l'étape que le
@@ -885,6 +891,58 @@ def orphelins(argv: list[str]) -> int:
 
 
 
+# Codes de sortie de `jetons-de-lien` — ceux d'`orphelins`. Un geste d'exploitant joué
+# depuis le commit (la clé maître est requise : une révision ne peut pas chiffrer).
+JETONS_FAIT = 0
+JETONS_REFUS = 1       # un écart (l'enveloppe porte un autre jeton) : la ligne n'est pas
+                       # touchée, à trancher à la main
+JETONS_ERREUR = 2      # clé maître absente, colonnes absentes, base injoignable, relecture
+                       # en échec (les lignes déjà traitées le restent ; celle en échec est
+                       # intacte)
+JETONS_RESTE = 3       # à blanc : il y a à faire ; appliqué : relancer
+
+
+def jetons_de_lien(argv: list[str]) -> int:
+    """`oto-mcp maintenance jetons-de-lien` : scelle les jetons de lien encore rangés en
+    clair (`jetons_de_lien_rangement.py`). À blanc par défaut."""
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance jetons-de-lien",
+        description=("Scelle les jetons de lien (page publique, procédure partagée) encore "
+                     "rangés en clair : enveloppe chiffrée et empreinte, relecture "
+                     "vérifiée, puis clair vidé. À blanc par défaut ; n'imprime jamais un "
+                     "jeton."))
+    p.add_argument("--appliquer", action="store_true",
+                   help="écrit ; sans lui, imprime ce qui serait fait et ne touche à rien")
+    p.add_argument("--sans-effacer", action="store_true",
+                   help="scelle et vérifie, mais garde le clair")
+    args = p.parse_args(argv)
+    if args.sans_effacer and not args.appliquer:
+        p.error("--sans-effacer ne vaut qu'avec --appliquer")
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from . import crypto
+    from . import jetons_de_lien_rangement as rangement
+    if not crypto.encryption_enabled():
+        print("REFUS : OTO_MCP_MASTER_KEY absente — rien ne peut être scellé (lancer la "
+              "commande sous le lanceur de l'instance)", file=sys.stderr)
+        return JETONS_ERREUR
+    try:
+        rapport = rangement.ranger(appliquer=args.appliquer, effacer=not args.sans_effacer)
+    except rangement.ColonnesAbsentes as e:
+        print(f"REFUS : {e}", file=sys.stderr)
+        return JETONS_ERREUR
+    except Exception:
+        logger.error("jetons-de-lien : ERREUR — les lignes déjà traitées le restent, la "
+                     "ligne en échec est intacte ; relancer à blanc pour voir ce qui reste",
+                     exc_info=True)
+        return JETONS_ERREUR
+    print("\n".join(rangement.lignes_du_rapport(rapport)))
+    if rangement.refus(rapport):
+        return JETONS_REFUS
+    return JETONS_RESTE if rangement.reste(rapport) else JETONS_FAIT
+
+
 # ── Les copies du coffre des connecteurs renommés ─────────────────────────────────────
 # Un connecteur renommé garde son coffre par une COPIE re-chiffrée (l'AAD porte le nom du
 # connecteur : la clé maîtresse est requise, une révision Alembic ne peut pas la faire).
@@ -944,6 +1002,8 @@ def main(argv: list[str] | None = None) -> int:
         return index_concurrents(argv[1:])
     if argv and argv[0] == "orphelins":
         return orphelins(argv[1:])
+    if argv and argv[0] == "jetons-de-lien":
+        return jetons_de_lien(argv[1:])
     if argv and argv[0] == "copies-du-coffre":
         return copies_du_coffre(argv[1:])
     p = argparse.ArgumentParser(

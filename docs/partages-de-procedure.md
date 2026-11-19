@@ -24,6 +24,17 @@ org par un lien. Le lien sert trois publics :
 Le code : `capabilities/partages_procedure.py` (règles et formes servies),
 `db/partages_procedure.py` (store), `digest_lecteurs.py` (résumé quotidien).
 
+## Le jeton est rangé chiffré
+
+Le jeton du lien n'est pas rangé en clair (`oto_mcp/db/jetons_de_lien.py`) :
+`process_shares.token_enc` le porte chiffré par la clé maître, sous l'AAD de la ligne
+(`process_shares:<id>:token`), pour le réafficher au propriétaire (`share.token`,
+`share.url`) ; `process_shares.token_hash`, son empreinte (`_hash_token`, celle des
+invitations), unique, résout un lien entrant sans rien déchiffrer. Les faces ne changent
+pas. L'export de périmètre rechiffre l'enveloppe pour la cible. La colonne d'avant `token`
+n'est plus écrite (ni `NOT NULL`) ; `oto-mcp maintenance jetons-de-lien` scelle ce qu'elle
+porte encore et la vide (`docs/commands.md`), une révision la retirera.
+
 ## Ce qui reste caché
 
 - **La vitrine ne sert jamais le corps ni un texte d'étape.** Les vitrines anonymes de la
@@ -49,7 +60,7 @@ La liste du propriétaire agrège tous les liens de la procédure (un lien retir
 republié porte un autre jeton, pas une autre procédure), et exclut aussi les membres
 devenus membres depuis.
 
-La première lecture d'un compte pose `acquired_via = {kind: "process_share", token, at}`
+La première lecture d'un compte pose `acquired_via = {kind: "process_share", share_id, at}`
 sur sa fiche (`user_account_profile.profile`) si elle est vide — c'est ce qui mesure les
 comptes nés d'un partage.
 

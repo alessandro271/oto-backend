@@ -4,8 +4,8 @@ Le rapport : « partager un document partage en réalité tout le PROJET qui le
 contient », avec pour conséquence l'abandon du geste (contournement : recopier le
 corps dans un e-mail) alors qu'il fait exactement ce qu'on lui demandait.
 
-Ce que le code fait vraiment, et que rien ne testait : `set_public` pose un
-`public_token` SUR LA LIGNE de la page, et la lecture publique
+Ce que le code fait vraiment, et que rien ne testait : `set_public` pose le jeton
+(chiffré, et son empreinte) SUR LA LIGNE de la page, et la lecture publique
 (`get_doc_by_public_token`, servie par `/api/public/docs/{token}` et `/p/d/{token}`)
 sélectionne PAR CE TOKEN — jamais par projet. Le voisinage n'est donc pas joignable.
 
@@ -23,6 +23,9 @@ import os
 import uuid
 
 import pytest
+
+# Publier scelle le jeton du lien (`db/jetons_de_lien.py`) : il faut la clé maître.
+pytestmark = pytest.mark.usefixtures("cle_maitre")
 
 
 @pytest.fixture(scope="module")
@@ -62,13 +65,40 @@ def test_le_token_n_ouvre_QUE_cette_page(arbre):
     token = db.set_doc_public(arbre["partagee"], True)
     with _connect() as conn:
         porteuses = conn.execute(
-            "SELECT id FROM docs WHERE project_id = %s AND public_token IS NOT NULL",
+            "SELECT id FROM docs WHERE project_id = %s AND public_token_hash IS NOT NULL",
             (arbre["projet"],)).fetchall()
     assert [r["id"] for r in porteuses] == [arbre["partagee"]]
     # …et le contenu servi ne cite ni l'une ni l'autre.
     lu = db.get_doc_by_public_token(token)
     assert "une autre mission" not in lu["body_md"]
     assert "l'annexe" not in lu["body_md"]
+
+
+def test_le_jeton_est_range_chiffre_jamais_en_clair(arbre):
+    """L'enveloppe (clé maître, AAD de la ligne) et l'empreinte, jamais le jeton : la
+    ligne ne le porte nulle part, et le lien reste le même tant que la page est publique."""
+    from oto_mcp import crypto, db
+    from oto_mcp.db import jetons_de_lien
+    from oto_mcp.db._conn import _connect
+    token = db.set_doc_public(arbre["partagee"], True)
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM docs WHERE id = %s",
+                           (arbre["partagee"],)).fetchone()
+    assert row["public_token"] is None
+    assert token not in str(list(row.values()))
+    assert row["public_token_hash"] == jetons_de_lien.empreinte(token)
+    assert crypto.decrypt(row["public_token_enc"],
+                          f"docs:{arbre['partagee']}:public_token") == token
+    with pytest.raises(crypto.EnveloppeIndechiffrable):
+        crypto.decrypt(row["public_token_enc"], f"docs:{arbre['voisine']}:public_token")
+    assert db.get_doc_by_id(arbre["partagee"])["public_token"] == token
+    assert db.set_doc_public(arbre["partagee"], True) == token, "le lien ne change pas"
+
+
+def test_un_jeton_inconnu_n_ouvre_rien(arbre):
+    from oto_mcp import db
+    db.set_doc_public(arbre["partagee"], True)
+    assert db.get_doc_by_public_token("jeton-inconnu") is None
 
 
 def test_retirer_le_partage_ferme_la_lecture(arbre):

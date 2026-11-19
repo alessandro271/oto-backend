@@ -22,6 +22,7 @@ import psycopg
 import pytest
 
 from oto_mcp import credentials_store, runner_hook, transcription_worker
+from oto_mcp.db import jetons_de_lien
 from oto_mcp.crypto import encrypt_with_key
 
 A, B = "A7d1e", "B9f3c"
@@ -286,5 +287,22 @@ def semer(c, m: str, *, cle: bytes | None = None) -> dict:
                   (projet, alice, audio, f"a {m}.mp3",
                    encrypt_with_key(cle, SECRET.format(m, "transcription"),
                                     transcription_worker._aad(audio))))
+        # Les jetons de lien, chiffrés sous l'AAD de LEUR ligne : le lien public de la
+        # page, et le lien de la procédure de l'org.
+        c.execute("UPDATE docs SET public_token_enc = %s, public_token_hash = %s "
+                  "WHERE id = %s",
+                  (encrypt_with_key(cle, SECRET.format(m, "page"),
+                                    jetons_de_lien.aad_page(page)),
+                   jetons_de_lien.empreinte(SECRET.format(m, "page")), page))
+        instr = c.execute("SELECT id FROM org_instructions WHERE org_id = %s AND slug = %s",
+                          (o, f"proc-{m}")).fetchone()["id"]
+        partage = c.execute(
+            "INSERT INTO process_shares (instruction_id, org_id, token_hash, created_by) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            (instr, o, jetons_de_lien.empreinte(SECRET.format(m, "lien")), alice)
+        ).fetchone()["id"]
+        c.execute("UPDATE process_shares SET token_enc = %s WHERE id = %s",
+                  (encrypt_with_key(cle, SECRET.format(m, "lien"),
+                                    jetons_de_lien.aad_partage(partage)), partage))
     return {"org": o, "tenant": tid, "slug": slug, "projet": projet, "page": page,
             "alice": alice, "bob": bob, "objets": objets}
