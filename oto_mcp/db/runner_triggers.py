@@ -1183,3 +1183,49 @@ def noter_reparation_pour_le_client(trigger_id: int, org_id: int, what: str) -> 
             "  'what', %s::text) WHERE id = %s AND org_id = %s",
             ((what or "")[:300], int(trigger_id), int(org_id)))
         return (cur.rowcount or 0) > 0
+
+
+# --- Les outils qu'une personne a RETIRÉS après le médecin -------------------------
+# Posée par la révision `20261119_1600_repar_consentie` ET par le démarrage, sous
+# garde de catalogue — même DDL. `{outil: jusqu_a}` (noms canoniques, date ISO UTC) :
+# quelqu'un qui peut modifier l'agent a défait l'ajout du médecin
+# (`POST /api/orgs/{id}/agent-health/undo`), et le médecin ne lui redonne pas cet outil
+# (`add_tool` → 409 `repair_undone`) jusqu'à `jusqu_a` — `OUTILS_ANNULES_DUREE` après
+# l'annulation. Passé ce terme, la marque est ignorée à la lecture et réécrite à la
+# prochaine annulation. Aucune personne n'y est nommée : l'auteur du geste vit sur
+# l'épisode. Hors de `_COLS` : ce n'est pas la configuration de l'agent.
+COLONNE_OUTILS_ANNULES = "repair_undone_tools"
+DDL_COLONNE_OUTILS_ANNULES = (f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS "
+                              f"{COLONNE_OUTILS_ANNULES} JSONB")
+
+#: Combien de temps le médecin ne redonne pas un outil qu'une personne a retiré.
+OUTILS_ANNULES_DUREE_JOURS = 90
+
+
+def outils_annules(trigger_id: int, org_id: int) -> set[str]:
+    """Les outils que le médecin ne donne pas à cet agent : ceux dont la marque n'a pas
+    encore expiré."""
+    with _connect() as conn:
+        r = conn.execute(
+            f"SELECT COALESCE(array_agg(k), '{{}}') AS o FROM runner_triggers, "
+            f"jsonb_each_text(COALESCE({COLONNE_OUTILS_ANNULES}, '{{}}'::jsonb)) AS m(k, v) "
+            "WHERE id = %s AND org_id = %s AND v::timestamptz > NOW()",
+            (int(trigger_id), int(org_id))).fetchone()
+    return {str(o) for o in ((r or {}).get("o") or [])}
+
+
+def effacer_reparation_pour_le_client(conn, trigger_id: int, org_id: int, *, depuis: Any,
+                                      jusqu_a: Any = None) -> bool:
+    """Retire la note `{at, what}` de l'agent quand elle date de cet épisode (posée entre
+    `depuis`, son ouverture, et `jusqu_a`, sa clôture) : une réparation défaite ne se dit
+    plus réparée. Une note plus récente — la réparation d'un épisode suivant — reste.
+    Joué dans la transaction de l'appelant (`conn`). Rend True si elle a été retirée."""
+    cur = conn.execute(
+        f"UPDATE runner_triggers SET {COLONNE_REPARATION} = NULL "
+        f"WHERE id = %s AND org_id = %s AND {COLONNE_REPARATION} IS NOT NULL "
+        f"  AND ({COLONNE_REPARATION}->>'at')::timestamptz "
+        "      >= date_trunc('second', %s::timestamptz) "
+        f"  AND (%s::timestamptz IS NULL OR ({COLONNE_REPARATION}->>'at')::timestamptz "
+        "      <= %s::timestamptz)",
+        (int(trigger_id), int(org_id), depuis, jusqu_a, jusqu_a))
+    return (cur.rowcount or 0) > 0
