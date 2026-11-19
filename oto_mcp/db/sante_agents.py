@@ -11,15 +11,17 @@ from ._conn import _connect
 
 
 def episodes_vivants(org_id: int) -> list[dict[str, Any]]:
-    """Les épisodes vivants des agents ALLUMÉS de l'org, avec le modèle de l'agent — de
-    quoi dire au client ce qui l'attend."""
+    """Les épisodes vivants des agents ALLUMÉS de l'org, avec le modèle de l'agent et la
+    copie de leur cause approuvée — de quoi dire au client ce qui l'attend."""
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
             """
             SELECT e.id, e.org_id, e.trigger_id, e.classe, e.cote, e.statut, e.motif,
-                   e.message_client, e.ouvert_at, e.empreinte, t.model AS modele
+                   e.message_client, e.ouvert_at, e.empreinte, t.model AS modele,
+                   c.copie AS cause_copie, c.cote AS cause_cote
               FROM agent_episodes e
               JOIN runner_triggers t ON t.id = e.trigger_id AND t.enabled
+              LEFT JOIN agent_causes c ON c.cle = e.empreinte AND c.statut = 'approuvee'
              WHERE e.org_id = %s AND e.statut <> 'clos'
              ORDER BY e.ouvert_at
             """, (int(org_id),)).fetchall()]

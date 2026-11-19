@@ -3,7 +3,8 @@
 Les propriétés qui font que ce passage répare quelque chose : un courriel PAR ORG, sous
 la marque de l'org ; la marque posée APRÈS l'envoi, et seulement s'il est parti ; rien
 pour une org d'un tenant tiers (comptée) ; rien aux heures calmes ; rien hors production
-(la boucle se déclare `tiers=True`)."""
+(la boucle se déclare `tiers=True`). Sous le réglage des alertes d'agents, le courriel
+parle comme Slack : un bloc par problème, le texte du client, jamais le motif brut."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ def bureau(monkeypatch):
     etat = {"lettres": [], "equipe": [], "marques": [], "envoi_ok": True,
             "agents": [_agent(1, 7), _agent(2, 7), _agent(3, 9), _agent(4, 11)]}
     monkeypatch.setattr(M, "_ECARTEES_DITES", set())
+    monkeypatch.delenv("OTO_ALERTES_SLACK_AGENTS_ENABLED", raising=False)
     etat["soignes"] = set()
     etat["fenetres"] = []
 
@@ -414,3 +416,217 @@ def test_une_lecture_ratee_des_attentes_laisse_partir_les_echecs(bureau, monkeyp
         raise RuntimeError("base indisponible")
     monkeypatch.setattr(alertes_agents, "agents_sans_forfait", _casse)
     assert M.balayer(_JOUR)["envoyes"] == 1
+
+
+# ── Sous le réglage des alertes : le courriel parle comme Slack ─────────────────
+
+_COPIE = {"fr": {"headline": "La clé de l'outil d'emailing a été refusée.",
+                 "todo": "Recréez-la et collez-la dans Connecteurs.",
+                 "action": "connectors"}}
+
+
+def _episode(tid, **kw):
+    return {"id": 100 + tid, "org_id": 7, "trigger_id": tid, "classe": "cle_refusee",
+            "cote": "proprietaire", "statut": "ouvert", "motif": "HTTP 403 <Access denied>",
+            "message_client": None, "cause_copie": None, "cause_cote": None, **kw}
+
+
+@pytest.fixture()
+def comme_slack(bureau, monkeypatch):
+    from oto_mcp import links
+    from oto_mcp.db import sante_agents
+    monkeypatch.setenv("OTO_ALERTES_SLACK_AGENTS_ENABLED", "1")
+    monkeypatch.setattr(M, "_annonces_sur_slack", lambda ids: set())
+    bureau["vivants"] = {7: []}
+
+    def _vivants(org):
+        if bureau["vivants"] is None:
+            raise RuntimeError("base indisponible")
+        return list(bureau["vivants"].get(org, []))
+    monkeypatch.setattr(sante_agents, "episodes_vivants", _vivants)
+    base = "https://app.acme.test"
+    monkeypatch.setattr(links, "link_for", lambda kind, sub=None, **p: (
+        base if kind == "home" else f"{base}/{kind}/{p.get('id', '')}".rstrip("/")))
+    return bureau
+
+
+def test_les_agents_d_un_meme_probleme_forment_un_bloc_sans_le_motif(comme_slack):
+    comme_slack["vivants"][7] = [
+        _episode(1, cause_copie=_COPIE, cause_cote="proprietaire"),
+        _episode(2, cause_copie=_COPIE, cause_cote="proprietaire")]
+    M.balayer(_JOUR)
+    (to, sujet, html), = comme_slack["lettres"]
+    assert (to, sujet) == ("a@acme.test", "2 agents sont arrêtés")
+    assert "Access denied" not in html and "HTTP 403" not in html, "jamais le motif brut"
+    # Le preheader (caché, la ligne d'aperçu) reprend le premier problème : le corps,
+    # lui, ne le dit qu'une fois.
+    corps = html.split("</div>", 1)[1]
+    assert corps.count("La clé de l'outil") == 1, "un problème = un bloc, le texte une fois"
+    assert "agent 1" in html and "agent 2" in html
+    assert 'href="https://app.acme.test/agent/1"' in html, "chaque agent mène à sa page"
+    assert "https://app.acme.test/connectors" in html, "le bouton du geste"
+    assert comme_slack["marques"] == [1, 2], "marqués après l'envoi, comme avant"
+
+
+def test_deux_problemes_deux_blocs_et_le_lien_du_medecin_hors_produit_est_omis(comme_slack):
+    comme_slack["vivants"][7] = [
+        _episode(1, cause_copie=_COPIE, cause_cote="proprietaire"),
+        _episode(2, classe="inconnu", message_client={
+            "headline": "Le compte de l'agent n'a plus accès au tableur.",
+            "todo": "Partagez de nouveau le tableur avec lui.",
+            "link": "https://ailleurs.test/piege"})]
+    M.balayer(_JOUR)
+    html = comme_slack["lettres"][0][2]
+    assert "Le compte de l" in html and "Partagez de nouveau" in html
+    assert "La clé de l" in html
+    assert "ailleurs.test" not in html, "un lien qui mène hors du produit est omis"
+    assert "Access denied" not in html
+
+
+def test_un_agent_sans_episode_lisible_recoit_la_phrase_par_defaut(comme_slack):
+    comme_slack["vivants"] = None          # lecture des épisodes en échec : ouvert
+    M.balayer(_JOUR)
+    html = comme_slack["lettres"][0][2]
+    assert "Il s'est arrêté avant la fin de son travail." in html
+    assert "Access denied" not in html
+    assert comme_slack["marques"] == [1, 2]
+
+
+def test_le_texte_du_medecin_est_echappe(comme_slack):
+    comme_slack["vivants"][7] = [_episode(1, message_client={
+        "headline": "<script>x</script> refusé", "todo": None, "link": None})]
+    M.balayer(_JOUR)
+    html = comme_slack["lettres"][0][2]
+    assert "<script>" not in html and "&lt;script&gt;" in html
+
+
+def test_en_anglais_le_courriel_par_probleme(comme_slack, monkeypatch):
+    from oto_mcp.db import users as U
+    monkeypatch.setattr(U, "get_user", lambda s: {"locale": "en"})
+    M.balayer(_JOUR)
+    sujet, html = comme_slack["lettres"][0][1:]
+    assert sujet == "2 agents stopped"
+    assert "It stopped before finishing its work." in html
+    assert "Failing since" in html and "Oct 20, 06:00 UTC" in html
+
+
+def test_une_panne_pas_encore_comprise_ne_dit_pas_que_c_est_au_client(comme_slack):
+    """Côté `inconnu`, sans texte du médecin : la phrase de l'onglet Santé, jamais celle
+    d'une classe qui dirait au client de reconnecter quoi que ce soit."""
+    comme_slack["vivants"][7] = [_episode(1, classe="cle_refusee", cote="inconnu")]
+    M.balayer(_JOUR)
+    html = comme_slack["lettres"][0][2]
+    assert "Nous cherchons pourquoi il s" in html
+    assert "Reconnectez" not in html and "https://app.acme.test/connectors" not in html
+
+
+def test_le_courriel_par_probleme_dit_qu_il_part_a_l_admin(comme_slack, monkeypatch):
+    M.balayer(_JOUR)
+    assert "en tant qu'administrateur de cet espace" in comme_slack["lettres"][0][2]
+    from oto_mcp.db import users as U
+    monkeypatch.setattr(U, "get_user", lambda s: {"locale": "en"})
+    comme_slack["lettres"].clear()
+    comme_slack["marques"].clear()
+    M.balayer(_JOUR)
+    assert "as an administrator of this workspace" in comme_slack["lettres"][0][2]
+
+
+def test_la_phrase_d_une_panne_pas_comprise_est_celle_de_l_onglet_sante(comme_slack):
+    from oto_mcp.capabilities.agent_health import A_NOUS_INCONNU
+    pb = M.probleme_de_l_agent(7, {}, _episode(1, cote="inconnu"), "fr", marque="Acme",
+                               sub="a")
+    assert pb == {"type": "echec", "headline": A_NOUS_INCONNU["fr"], "todo": None,
+                  "action": None, "link": None}
+
+
+def test_un_type_de_probleme_sans_phrase_leve_au_lieu_de_dire_un_echec(comme_slack,
+                                                                      monkeypatch):
+    """Un agent sans épisode reçoit la phrase de SON type ; un type qui n'en a pas ne
+    retombe pas sur celle d'un échec."""
+    monkeypatch.setattr(M, "type_de_probleme", lambda agent: "autre")
+    with pytest.raises(ValueError):
+        M.probleme_de_l_agent(7, {}, None, "fr", marque="Acme", sub="a")
+
+
+def test_chaque_destinataire_recoit_ce_qu_il_voit(comme_slack, monkeypatch):
+    """`destinataires_de_l_alerte` décide qui reçoit et ce que chacun voit : un courriel
+    par destinataire, sur SES agents ; rien à voir, rien ne part. L'org se marque dès
+    qu'un client l'a reçu."""
+    agents = {int(a["trigger_id"]): a for a in comme_slack["agents"]}
+    monkeypatch.setattr(M, "destinataires_de_l_alerte", lambda org, ags, equipe=(): [
+        {"sub": "a", "adresse": "a@acme.test", "agents": [agents[1]], "qualite": "admin"},
+        {"sub": "b", "adresse": "b@acme.test", "agents": [], "qualite": "admin"}]
+        if org == 7 else [])
+    bilan = M.balayer(_JOUR)
+    assert [l[0] for l in comme_slack["lettres"]] == ["a@acme.test"]
+    assert "agent 2" not in comme_slack["lettres"][0][2]
+    assert comme_slack["marques"] == [1, 2]
+    assert bilan["envoyes"] == 1
+
+
+def test_le_courriel_par_probleme_dit_depuis_quand(comme_slack):
+    comme_slack["vivants"][7] = [_episode(1), _episode(2)]
+    M.balayer(_JOUR)
+    html = comme_slack["lettres"][0][2]
+    assert "En échec depuis" in html and "20 oct., 06:00 UTC" in html
+
+
+def test_un_seul_agent_est_nomme_dans_le_sujet(comme_slack, bureau):
+    bureau["agents"] = bureau["agents"][:1]
+    comme_slack["vivants"][7] = [_episode(1)]
+    M.balayer(_JOUR)
+    sujet = comme_slack["lettres"][0][1]
+    assert sujet.endswith(" est arrêté") and "1" in sujet
+
+
+def test_le_connecteur_et_la_reponse_du_fournisseur_sont_dits_jamais_notre_texte(
+        comme_slack, bureau):
+    """Le connecteur que le motif nomme, sous son libellé, et ce que le fournisseur a
+    répondu ; un motif interne ne sort pas."""
+    bureau["agents"][0]["motif"] = ("BadRequestError : HTTP 400 invalid_request_error — "
+                                    "Your credit balance is too low to access the "
+                                    "Anthropic API.")
+    bureau["agents"][1]["motif"] = "RuntimeError : run_start : `x_y` refusé, voir oto_list"
+    comme_slack["vivants"][7] = [
+        _episode(1, cause_copie=_COPIE, cause_cote="proprietaire",
+                 motif="pas de clé `anthropic` déposée"),
+        _episode(2, classe="inconnu", message_client={"headline": "Autre chose.", "todo": None})]
+    M.balayer(_JOUR)
+    html = comme_slack["lettres"][0][2]
+    assert "HTTP 400 : Your credit balance is too low" in html, "la réponse du fournisseur"
+    assert ">Connecteur<" in html and ">Anthropic<" in html, "le connecteur, sous son libellé"
+    assert "RuntimeError" not in html and "oto_list" not in html, "jamais notre texte"
+    assert "passages en échec" in html
+
+
+def test_par_probleme_un_membre_un_admin_et_l_equipe_lisent_chacun_leur_titre(
+        comme_slack, monkeypatch):
+    """La ligne de fin dit à quel titre on reçoit : « administrateur » pour un admin
+    seulement ; un membre, par son accès aux agents ; l'équipe, sa copie séparée."""
+    _org_avec_operateur(monkeypatch, roles={"op": "super_admin"})
+    _acces(monkeypatch)
+    comme_slack["agents"] = [{**_agent(1, 7), "proprietaire": "m1"}]
+    M.balayer(_JOUR)
+    par_qui = {to: html for to, _s, html in comme_slack["lettres"]}
+    assert "en tant qu'administrateur" not in par_qui["m1@acme.test"]
+    assert "vous avez accès à ces agents" in par_qui["m1@acme.test"]
+    assert "en tant qu'administrateur" in par_qui["a1@acme.test"]
+    (_to, sujet, equipe), = comme_slack["equipe"]
+    assert sujet.startswith("[équipe] ") and "(#7)" in equipe
+    assert "Copie pour l'équipe de la plateforme" in equipe
+    assert "en tant qu'administrateur" not in equipe
+
+
+def test_par_probleme_l_attente_d_abonnement_est_un_probleme_a_part(comme_slack):
+    """Un agent qui attend un abonnement : son type (`forfait`), sa phrase, le geste de
+    reconnexion, jamais la phrase d'un échec ; sa marque propre."""
+    comme_slack["agents"] = [_agent(1, 7)]
+    comme_slack["attente"] = [_attente(5, 7)]
+    M.balayer(_JOUR)
+    (_to, _s, html), = comme_slack["lettres"]
+    assert "Il attend que son abonnement Claude soit reconnecté." in html
+    assert "reconnecte dans Connecteurs" in html
+    assert "Ne tourne plus depuis" in html and "En échec depuis" in html, \
+        "deux problèmes, deux blocs"
+    assert "https://app.acme.test/connectors" in html
+    assert comme_slack["marques"] == [1] and comme_slack["marques_forfait"] == [5]

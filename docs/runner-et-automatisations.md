@@ -3104,6 +3104,31 @@ escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'an
   de l'instance, objet préfixé `[équipe]`. Un envoi d'équipe raté est journalisé et
   compté (`equipe_rates`), jamais rejoué. Même courriel d'équipe pour l'alerte de clé
   (`maintenance.alertes_credential`, voir plus bas).
+- **Ce qu'il dit** : sous le réglage des alertes d'agents
+  (`OTO_ALERTES_SLACK_AGENTS_ENABLED`), il parle comme Slack. Le TYPE de problème d'un
+  agent se décide en UN endroit (`alerte_agents_bloques.type_de_probleme` : `echec`,
+  ou `forfait` pour un agent qui attend un abonnement à reconnecter — sa phrase et le
+  geste de reconnexion, jamais ceux d'un échec), son texte en un autre
+  (`probleme_de_l_agent`) : pour un échec, le texte du
+  problème de son épisode vivant (`alertes_slack_agents.message_du_probleme` : la copie
+  de la cause approuvée, sinon le texte du médecin, sinon la phrase de la classe ; une
+  lecture d'épisodes par org, `sante_agents.episodes_vivants`) ; une panne pas encore
+  comprise (`cote = inconnu`) que le médecin n'a pas dite reçoit la phrase de l'onglet
+  Santé (`agent_health.A_NOUS_INCONNU`), jamais celle d'une classe. Les agents dont le
+  client lirait exactement le même problème (titre, geste, lien) forment UN bloc qui les
+  nomme — chacun lien vers sa page (`agent`) quand l'instance la déclare — avec le geste
+  une fois et son bouton (lien du tableau de bord seulement, `links`), depuis quand, et
+  la ligne de détails de l'onglet Santé (`agent_health.details` : connecteur, réponse du
+  fournisseur passée par la liste blanche). ⚠️ Le motif BRUT n'y entre jamais : un agent
+  sans épisode lisible (lecture en échec — ouvert, dit au journal) reçoit la phrase par
+  défaut. Tout texte est échappé. Qui reçoit, ce que chacun voit et à quel titre se
+  décident en un seul endroit (`destinataires_de_l_alerte`, qui applique
+  `destinataires` et `agents_visibles` ci-dessus) : `qualite` = `admin`, `membre` ou
+  `equipe`, et la ligne de fin le dit — « en tant qu'administrateur de cet espace »
+  pour un admin seulement, l'accès à ces agents pour un membre, la copie séparée pour
+  l'équipe (dont le courriel garde son en-tête et son objet `[équipe]`). Marques et
+  rejeu : comme ci-dessus. Réglage éteint : le courriel d'avant, mot pour mot. Un
+  agent sans épisode reçoit la phrase de SON type ; un type sans phrase lève.
 - **Où** : une boucle de fond déclarée `tiers=True` (`boucles_de_fond.py`,
   `alerte_agents_bloques`, un passage par quart d'heure) — ⚠️ **éteinte par défaut** :
   elle n'écrit que sur une instance qui déclare `OTO_ALERTE_AGENTS_ENABLED=1`, toute
@@ -3301,6 +3326,33 @@ passe AVANT l'alerte.
   au-delà : un verdict de la regex n'est pas défait, une classe posée à la main non plus,
   et une cause ne donne jamais une classe que la boucle relance (`CLASSES_RELANCEES`) —
   relancer reste décidé par la regex seule.
+- **Ce que lit le client, et combien de fois** (sous `OTO_ALERTES_SLACK_AGENTS_ENABLED`) :
+  le problème servi sur un agent (`problem` de la file), l'alerte Slack, le courriel et
+  l'onglet Santé prennent, dans cet ordre, la copie de la CAUSE approuvée de l'épisode
+  dans la langue de l'espace — si la cause est du même côté que l'épisode —, sinon le
+  texte que l'agent médecin a écrit pour CET épisode (`diagnose`, `client_*`), sinon la
+  phrase de la classe (`alertes_slack_agents.message_du_probleme`). `{marque}` y devient
+  le nom de la marque ; l'action `credits` mène à `billing`, `connectors` aux
+  connecteurs. Le texte du médecin se juge comme une copie (`copie_refusee` : ni
+  adresse, ni nom d'outil, ni code, ni identifiant — 400 `client_copy_refused`) et part
+  TOUT DE SUITE à l'org de l'épisode. Il devient aussi la copie PROPOSÉE de la cause de
+  l'épisode, dans la langue de l'org, si elle n'en a pas encore (sans le lien, propre à
+  l'org), avec son origine (l'org et l'épisode, `copie_origine` sur l'écran Admin des
+  causes) ; elle ne parle aux autres orgs qu'une fois la cause approuvée par un
+  opérateur. Une cause approuvée ou refusée ne prend jamais ce texte, même devenue telle
+  entre la lecture et l'écriture (`causes_agents.decider(si_statut=)`). **Le moment** :
+  un texte du médecin alerte tout de suite ; la copie d'une cause approuvée n'alerte
+  tout de suite que sous `OTO_CATALOGUE_CAUSES_DECIDE` — en ombre, elle donne le texte
+  après `ATTENTE_MIN`, comme une classe (`alertes_slack.a_annoncer(copie_immediate=)`).
+  **Un message par problème, pas par agent** (`grouper`) : les alertes d'une org dont
+  le client lirait exactement le même problème (titre, geste, lien) partent en UN
+  message qui nomme les agents (cinq, puis « et N autres »), avec le bouton du geste et,
+  si l'instance déclare la vue `agent_health`, celui de la santé des agents — chaque
+  agent nommé est un lien vers sa page (`agent`) ; les retours d'un passage partent
+  ensemble ; une réparation part seule. Chaque épisode du paquet est marqué après
+  l'envoi. ⚠️ Tout texte interpolé dans un message Slack (libellé d'agent, copie, texte
+  du médecin, erreur du fournisseur) est échappé (`&`, `<`, `>`) : il ne forme ni lien
+  ni mention. Les GESTES (relancer, escalader) restent décidés par la regex.
 - **L'onglet Santé d'une org, en lecture** (`capabilities/agent_health.py`) :
   `GET /api/orgs/{id}/agent-health` (membres d'une org vivante, `ORG_MEMBER_OF_LIVE` :
   409 `org_archived` sur une org archivée ; 404 `agent_alerts_off` sous le réglage des
