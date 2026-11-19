@@ -3118,8 +3118,29 @@ escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'an
   signal — une clé refusée en 401/403 — est aussi lu par l'autre canal, la clé marquée
   rouge à l'appel (`alertes-credential`, `maintenance.py`), fermé par
   `OTO_ALERTE_CREDENTIAL`.
+- **Un agent qui ATTEND un abonnement à reconnecter** (`alertes_agents.agents_sans_forfait`) :
+  sous un abonnement personnel `needs_login` ou `disconnected`, la réservation SAUTE ses
+  travaux — ils attendent puis expirent, aucun ne meurt, l'épisode ci-dessus ne s'ouvre
+  jamais. Il est annoncé dans le même courriel (sa ligne dit « ne tourne plus » et nomme
+  l'abonnement par le libellé de sa famille, `runner_models.LIBELLES_ABONNEMENT` ; le
+  geste est de le reconnecter dans Connecteurs) quand un de ses travaux d'après son
+  dernier succès attend depuis `ATTENTE_FORFAIT_MIN` (30 min) et que l'abonnement est à
+  reconnecter depuis aussi longtemps, que l'agent déclare toujours un modèle de cette
+  famille, et que le travail ne passe PAS par le pool de l'org (`runner_jobs._par_le_pool`,
+  l'expression de la réservation). `paused_limit` n'en est pas : il repart seul. La
+  lecture sort d'emblée quand aucun abonnement personnel n'est à reconnecter. Même règle
+  de visibilité : un membre ne reçoit que les agents qu'il a le droit de voir.
+- ⚠️ **Deux marques, une par épisode** : `echec_annonce_at` pour les travaux morts,
+  `forfait_annonce_at` (révision `20261119_1530_forfait_annonce`) pour l'attente
+  d'abonnement, réarmée par un succès de l'agent OU par la preuve que l'abonnement tenait
+  (`last_ok_at`). Une marque commune ferait taire l'un quand l'autre a été annoncé : un
+  agent annoncé « à reconnecter », reconnecté, puis en échec trois fois sans jamais
+  réussir ne serait plus jamais annoncé (`agents_bloques` ne se réarme qu'après un
+  succès). Un agent présent dans les deux relevés est nommé une fois, et ses deux marques
+  sont posées.
 - Bancs : `tests/test_alerte_agents_bloques.py` (sans base), `tests/test_alertes_agents_db.py`
-  (l'épisode en SQL), `tests/test_migration_20261023_echec_annonce.py`.
+  (l'épisode et l'attente en SQL), `tests/test_migration_20261023_echec_annonce.py`,
+  `tests/test_migration_20261119_forfait_annonce.py`.
 
 #### Le réglage du courriel d'équipe : `OTO_ALERTES_EQUIPE_DESTINATAIRES` (19/11/2026)
 

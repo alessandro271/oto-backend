@@ -135,6 +135,19 @@ FAMILLES_PERSONNELLES = frozenset(f for f in FAMILLES if f.endswith("_subscripti
 #: retouche confronte au modèle STOCKÉ, sans relire le déclencheur (`update_trigger`).
 MODELES_PERSONNELS = tuple(m.id for m in MODELES if m.family in FAMILLES_PERSONNELLES)
 
+#: Le nom de chaque famille d'ABONNEMENT personnel tel que son titulaire le lit
+#: (Connecteurs, courriels), par langue. Une famille personnelle sans nom ici fait
+#: rougir `tests/test_alerte_agents_bloques.py` : jamais un nom deviné à l'envoi.
+LIBELLES_ABONNEMENT: dict[str, dict[str, str]] = {
+    "claude_subscription": {"fr": "abonnement Claude", "en": "Claude plan"},
+}
+
+
+def libelle_abonnement(famille: str, *, en: bool) -> str:
+    """Le nom d'une famille d'abonnement personnel (`LIBELLES_ABONNEMENT`) ; une famille
+    inconnue lève (`KeyError`)."""
+    return LIBELLES_ABONNEMENT[famille]["en" if en else "fr"]
+
 
 #: OÙ TOURNE un modèle (12/11/2026) : ce que l'écran dit au client — le pays des
 #: serveurs qui reçoivent chaque tour (la consigne, les lignes lues, les résultats
