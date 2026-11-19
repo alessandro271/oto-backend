@@ -45,3 +45,21 @@ def test_toutes_les_entites_qui_portent_le_compte(coffre):
         ("member", f"{AUTRE_ORG}:usr_a", None),
     ])
     assert db.google_grant_holders("personne@x.test") == []
+
+
+def test_la_pose_d_un_compte_ne_range_aucun_jeton_dans_meta(coffre):
+    """Le jeton d'accès vit en mémoire, par processus : la ligne d'un compte Google, membre
+    ou partagé, ne porte en `meta` aucune clé de forme jeton."""
+    db.set_google_oauth("usr_pose", ORG, google_email="pose@x.test", refresh_token="RT",
+                        scopes="openid", client_id="cid-env")
+    db.set_shared_google_oauth("org", ORG, set_by="usr_pose", google_email="partage@x.test",
+                               refresh_token="RT", scopes="openid", client_id="cid-env")
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        metas = [r["meta"] for r in conn.execute(
+            "SELECT meta FROM connector_credentials WHERE connector = 'google' "
+            "AND account IN ('pose@x.test', 'partage@x.test')").fetchall()]
+    assert len(metas) == 2
+    for meta in metas:
+        assert not set(cs.BEARER_META_KEYS) & set(meta)
+        assert "expires_at" not in meta and meta["client_id"] == "cid-env"

@@ -185,3 +185,18 @@ def test_les_scopes_d_avant_le_porteur_donnent_sharepoint(live):
     et, eid = _membre()
     (compte,) = credentials_store.list_accounts(et, eid, "microsoft")
     assert ms_auth.services_granted(compte["meta"]["scopes"]) == ["sharepoint"]
+
+
+def test_la_copie_ne_relaie_aucune_cle_secrete_du_meta(live):
+    """Une clé de la liste fermée des secrets (jeton en clair, satellite scellé) ne suit
+    pas la ligne copiée ; les satellites non secrets, si."""
+    from oto_mcp import credentials_store
+    secrets = {cle: "VALEUR-" + cle for cle in credentials_store._SECRET_META_KEYS}
+    _poser_ancienne("jane@contoso.example", "RT-JANE", {**secrets, "is_default": True})
+    assert _copier()["copied"] == 1
+    et, eid = _membre()
+    copie = credentials_store.get_credential_with_meta(et, eid, "microsoft",
+                                                       account="jane@contoso.example")
+    assert not set(secrets) & set(copie["meta"])
+    assert copie["meta"]["is_default"] is True
+    assert copie["secret"] == "RT-JANE"

@@ -393,6 +393,38 @@ orphelins                 # à blanc : comparer au constat servi
 orphelins --appliquer     # écrit ; relancer à blanc ensuite : « aucun » partout
 ```
 
+### Retirer les jetons rangés dans `meta` — `oto-mcp maintenance jetons-en-meta`
+
+`connector_credentials.meta` ne porte aucune clé de forme jeton (liste fermée
+`credentials_store.BEARER_META_KEYS` : `access_token`, `refresh_token`, `id_token`) ; des
+lignes d'avant en portent encore — le jeton d'accès Google, et des connecteurs retirés que
+plus aucun code ne lit. La commande retire ces clés (`meta - 'clé'`) pour une liste FERMÉE
+de connecteurs : `google`, `memento`, `atlassian`, `folkmcp` (tous par défaut,
+`--connecteur NOM` répétable pour une partie ; un autre nom est refusé, code 1). Elle ne
+supprime aucune ligne, ne touche ni au secret, ni aux autres satellites (un satellite
+scellé comme `session_jar_enc` n'est pas une clé de la liste), ni à `set_at`.
+**À blanc par défaut**, `--appliquer` pour écrire ; une transaction bornée (15 s / 5 s de
+verrou), relue après coup, idempotente. Le rapport ne dit que connecteur, clé et nombre de
+lignes, **jamais une valeur**. Sorties : 0 fait, 1 refus, 2 erreur, 3 une clé reste à la
+relecture (relancer).
+
+⚠️ **Pour `google` : seulement APRÈS le déploiement du code qui ne range plus le jeton
+dans `meta`, l'ancienne couleur arrêtée.** Le code d'avant, tant qu'il sert, réécrit
+`access_token` à son prochain refresh. Depuis le commit, comme `orphelins` (§précédent,
+même extraction de l'arbre, une seule exécution : la base est partagée prod/preprod) :
+
+```bash
+jetons() {
+  sudo systemd-run --pipe --wait --quiet --collect -p WorkingDirectory="$T" \
+    -p Environment=PYTHONPATH="$T" \
+    -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
+    "$T/.venv/bin/python" "$T/deploy/lanceur_secrets.py" maintenance jetons-en-meta "$@"
+}
+jetons                 # à blanc : par connecteur, les clés et leur nombre de lignes
+jetons --appliquer     # écrit ; relancer à blanc ensuite : « aucune » partout
+```
+
 ## Pin oto-core — une version déployée = une coordonnée reproductible
 
 - **`oto-core` PINNÉ sur un tag git** (`oto-core[anonymize] @ git+…@vX.Y.Z` dans `pyproject.toml` — l'extra est `anonymize`, `browser` a été retiré côté backend et n'est resté que sur le CLI local ; plus `@main` flottant ni dép `oto-cli`) : une version déployée = coordonnée reproductible. ⚠️ **`pip` ne réinstalle PAS une dép VCS déjà présente** (`oto-core` "satisfait" quelle que soit sa version) → `pip install -e .` seul ne monte JAMAIS oto-core au tag bumpé. Le deploy installe **par le verrou** (`uv sync --frozen`, #932) : oto-core au commit que `uv.lock` désigne, plus de force-reinstall. Bump connecteurs = tag oto-core + édit du pin **+ `uv lock` dans le même commit** (le verrou est versionné, la CI installe par lui et refuse un verrou en retard — `docs/verrou-dependances.md`) + deploy (PAS de `git pull` box). Cf. ADR 0020. ⚠️ **Symptôme trompeur en LOCAL** : des tests rouges peuvent être un venv en retard sur le pin, pas du code cassé (05/08 : 17 rouges sur un connecteur neuf ; 26/08 : 48 ; 01/09 : 28) → **sous-section ci-dessous**, qui porte la trace exacte à reconnaître et la recette. (⚠️ box `otomata-0` a un VIEUX oto-mcp décommissionné/stoppé avec un editable legacy `oto-cli` pré-split — ne pas s'y fier, le runtime live est la box dédiée.) ⚠️ **Le pin est un champ que TOUTES les sessions // éditent → régressions silencieuses récurrentes** : vécu 2026-07-07, un commit concurrent a réécrit le pin `v1.18.0→v1.17.0` et **cassé un tool déployé SANS erreur** (le tool était enregistré, sa méthode absente de l'ancien oto-core → `AttributeError` seulement à l'appel). Toujours bumper en **superset** (tag haut ⊇ tags bas) ; à la moindre divergence de pin en merge/rebase, **garder la version haute**.

@@ -558,6 +558,20 @@ def test_reconnecter_le_meme_compte_remplace_sa_ligne_meme_renommee(env):
     assert env.coffre.meta("client-a")["is_default"] is False, "le défaut ne bouge pas"
 
 
+def test_reconnecter_ne_recopie_aucune_cle_secrete_de_l_ancien_meta(env):
+    """La reconnexion repasse les satellites de l'ancienne ligne, jamais une clé de la
+    liste fermée des secrets (`credentials_store._SECRET_META_KEYS`)."""
+    from oto_mcp import credentials_store
+    _connecter(env, JANE, "RT-JANE")
+    env.coffre.meta("jane@contoso.example").update(
+        {cle: "VALEUR-" + cle for cle in credentials_store._SECRET_META_KEYS},
+        etiquette="gardee")
+    _connecter(env, JANE, "RT-JANE-2")
+    meta = env.coffre.meta("jane@contoso.example")
+    assert not set(credentials_store._SECRET_META_KEYS) & set(meta)
+    assert meta["etiquette"] == "gardee", "les satellites non secrets suivent"
+
+
 def test_reconnecter_un_compte_par_son_nom_vise_son_adresse_et_son_annuaire(env):
     """« Reconnecter » sur la ligne d'un compte KO : le dialogue est pré-rempli de SON
     adresse, sur SON annuaire (un invité revient chez son client) ; le retour retrouve sa

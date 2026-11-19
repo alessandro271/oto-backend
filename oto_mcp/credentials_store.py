@@ -714,16 +714,17 @@ def clear_dedicated_app(owner_type: str, owner_id: int, connector: str) -> bool:
                        connector, "")
 
 
-# `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :
-# l'`access_token` bearer dérivé d'OAuth (google) y vit en clair (le
-# refresh_token, lui, est chiffré dans `secret_enc`). Les surfaces « statut /
-# listing » (credential_status, list_accounts, list_credentials) sont consommées
-# par /api/me, le listing d'org/groupe, etc. → elles ne doivent JAMAIS sérialiser
-# un bearer vers le front. On le retire À LA SOURCE (defense-in-depth, un seul
-# point) : les accesseurs qui ont VRAIMENT besoin du token (get_credential_with_meta,
-# access_token_for) gardent `meta` entier ; les surfaces de statut servent le
-# `meta` public.
-_SECRET_META_KEYS = ("access_token", "refresh_token", "id_token")
+# Les clés de forme JETON, en clair : `meta` n'en porte plus aucune. Un jeton
+# d'accès OAuth vit en mémoire, par processus (Google, Microsoft, HubSpot…), le
+# refresh_token chiffré dans `secret_enc`. Des lignes d'avant en portent encore
+# (`oto-mcp maintenance jetons-en-meta` les retire). Liste FERMÉE, la même pour trois
+# usages : les surfaces « statut / listing » (credential_status, list_accounts,
+# list_credentials, servies à /api/me et aux listings d'org/groupe) ne les
+# sérialisent jamais, un relais qui recopie `meta` d'une ligne à l'autre
+# (`copy_connector_rows`, reconnexion Microsoft) ne les recopie pas, et la commande
+# de nettoyage ne retire qu'elles.
+BEARER_META_KEYS = ("access_token", "refresh_token", "id_token")
+_SECRET_META_KEYS = BEARER_META_KEYS
 # Les satellites SCELLÉS (`seal_satellite`) : un état propre au compte, secret, qui
 # change à l'usage et non à la pose — le jar de cookies du mode `session` du connecteur
 # `api`. Rangé chiffré dans `meta` sous `<nom>_enc` (pas dans `secret_enc`, que seule la
@@ -735,8 +736,10 @@ _SECRET_META_KEYS += tuple(f"{nom}_enc" for nom in SEALED_SATELLITES)
 
 
 def _public_meta(meta: Optional[dict]) -> dict:
-    """`meta` débarrassé des satellites secrets (bearers OAuth) — pour les surfaces
-    de statut/listing qui le sérialisent vers le front."""
+    """`meta` débarrassé des satellites secrets (jetons, satellites scellés) — pour les
+    surfaces de statut/listing qui le sérialisent vers le front, et pour un relais qui
+    recopie `meta` sur une autre ligne (un satellite scellé est lié par son AAD à SA
+    ligne : recopié ailleurs, il ne se relirait pas)."""
     return {k: v for k, v in (meta or {}).items() if k not in _SECRET_META_KEYS}
 
 
@@ -1227,8 +1230,8 @@ def clear_call_health(entity_type: str, entity_id: str, connector: str,
 def update_meta(entity_type: str, entity_id: str, connector: str, account: str,
                 patch: dict, conn=None) -> bool:
     """Merge `patch` dans `meta` (JSONB ||) SANS toucher secret/secret_enc — pour
-    les satellites mutables (access_token/expires_at Google sur refresh,
-    is_default…), sans re-chiffrer le refresh_token. False si ligne absente."""
+    les satellites mutables (is_default, scopes, santé…), sans re-chiffrer le
+    refresh_token. False si ligne absente."""
     def _do(c) -> bool:
         cur = c.execute(
             "UPDATE connector_credentials SET meta = meta || %s::jsonb "
@@ -2110,7 +2113,9 @@ def copy_connector_rows(old: str, new: str, *, renamed: bool = False) -> dict:
 
     The AAD binds the ciphertext to its connector: decrypt with `old`'s, re-encrypt with
     `new`'s (`_upsert`, the single INSERT funnel — the instance is born with the row).
-    `meta`, `set_by` follow as they are.
+    `set_by` follows as it is; `meta` follows WITHOUT its secret keys (`_public_meta`:
+    a clear-text token is not relayed, a sealed satellite would not unseal under
+    another connector).
 
     Idempotent BY A MARK, not by the target's presence: each source row handled gets
     `meta.copied_to = new` (also when `new` already has a row for that account). A
@@ -2145,7 +2150,7 @@ def copy_connector_rows(old: str, new: str, *, renamed: bool = False) -> dict:
                 bilan["unreadable"] += 1
                 continue
             meta = r["meta"] if isinstance(r["meta"], dict) else json.loads(r["meta"] or "{}")
-            _upsert(conn, etype, eid, new, account, secret, r["set_by"], meta)
+            _upsert(conn, etype, eid, new, account, secret, r["set_by"], _public_meta(meta))
             if renamed:
                 conn.execute(
                     "UPDATE connector_credentials n SET share_mode = o.share_mode, "

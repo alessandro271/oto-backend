@@ -290,7 +290,7 @@ connector_credentials(entity_type, entity_id, connector, account, secret_enc,
 ```
 - `entity_type` ∈ {`member`, `user`, `org`, `group`, `tenant`, `platform`} ; `entity_id` = `org:sub` (member, ADR 0033) | `sub` (user, résidu OAuth) | `org_id::text` | `group_id::text` | **slug du tenant** (L-clés PR 1, 2026-08-29 — façade `tenant_vault`) | label de la clé (platform, ADR 0044 §F). Toujours requêter `(entity_type, entity_id)` ENSEMBLE. ⚠️ Cette ligne a dit `{user, org}` du 2026-06 au 2026-08-29 alors que quatre valeurs de plus étaient servies.
 - `account` = discriminant **multi-compte** ('' = mono ; ex. email Google). 1 ligne par compte connecté.
-- `secret_enc` = enveloppe chiffrée (pas de colonne plaintext). `meta` = satellites NON-secrets (user_agent linkedin/crunchbase, access_token/expires_at/scopes/is_default google).
+- `secret_enc` = enveloppe chiffrée (pas de colonne plaintext). `meta` = satellites NON-secrets (user_agent linkedin/crunchbase, scopes/is_default/client_id google). Aucune clé de forme jeton (`credentials_store.BEARER_META_KEYS` : `access_token`, `refresh_token`, `id_token`) : un jeton d'accès vit en mémoire, par processus, un satellite secret qui doit durer se scelle (`seal_satellite`, §Le jar de session). Cette liste fermée sert trois fois : les surfaces de statut la masquent, les relais qui recopient `meta` sur une autre ligne (`copy_connector_rows`, reconnexion Microsoft) ne la recopient pas, et `oto-mcp maintenance jetons-en-meta` la retire des lignes d'avant (`docs/commands.md`).
 
 Store = `credentials_store.py` (calqué sur le palier org, réutilise `db._connect`, jamais d'import circulaire) :
 `get_credential` / `get_credential_with_meta` (secret+meta+set_at, déchiffre) / `credential_status` (présence+meta SANS déchiffrer, pour /api/me) / `has_credential` / `set_credential` (chiffre) / `clear_credential` / `update_meta` (merge JSONB sans re-chiffrer) / `list_accounts`.
@@ -319,7 +319,7 @@ Tables `orgs`/`org_members`(index partiel `org_members_one_active`)/`org_entitle
 ## Folds des secrets de session (cible : coffre unique)
 
 - **LinkedIn / Crunchbase** : cookie chiffré dans `secret_enc`, UA dans `meta` ; `db.set/get/clear_linkedin_cookie`/`crunchbase_session` sur le coffre ; statut /api/me via `credential_status` (sans déchiffrer).
-- **Google OAuth multi-compte** : `connector='google'`, `account=email` ; refresh_token chiffré, access_token/expires_at/scopes/is_default/granted_at dans `meta`. Les fns db (`set/get/list/set_default/delete_google_oauth`) sur le coffre ; le refresh écrit par `credentials_store.update_meta` sur la ligne du compte résolu (merge, sans re-chiffrer), quelle que soit son entité (membre, équipe, org). Le compte d'un appel se choisit par la résolution commune `access.resolve_credential` (`account`/`_account=` > épinglage projet > compte unique > défaut, oto-backend#1160). Flow OAuth `auth/google.py` inchangé (seule la couche stockage change). ⚠️ access_token reste en **clair dans `meta`** (bearer ~1h, dérivé) ; seul le refresh_token (`secret_enc`) est chiffré.
+- **Google OAuth multi-compte** : `connector='google'`, `account=email` ; refresh_token chiffré, scopes/is_default/granted_at/client_id dans `meta`. Les fns db (`set/get/list/set_default/delete_google_oauth`) sur le coffre. **Le jeton d'accès n'est pas rangé dans le coffre** (hygiène du coffre, comme Microsoft, HubSpot, LinkedIn Ads) : chaque processus le tire par refresh au premier usage et le garde en mémoire jusqu'à une minute de son terme (`auth/google._JETONS`, clé = la ligne du compte résolu, quelle que soit son entité, son refresh_token et ses scopes enregistrés — une reconnexion ou un changement de droits en tire un neuf). Coût : un refresh de plus par processus et par heure et par compte servi ; deux refreshs simultanés rendent chacun un jeton valide (Google ne fait pas tourner le refresh_token), le dernier gardé l'emporte. Le jeton d'échange du consentement ne sert qu'à lire l'adresse : il n'est pas gardé, le premier usage en tire un borné aux scopes de la ligne. Le compte d'un appel se choisit par la résolution commune `access.resolve_credential` (`account`/`_account=` > épinglage projet > compte unique > défaut, oto-backend#1160). Les lignes posées avant ce changement portent encore `access_token`/`expires_at` dans `meta` : plus rien ne les lit ; `oto-mcp maintenance jetons-en-meta` retire la clé `access_token`, APRÈS le déploiement du code qui ne l'écrit plus (le code d'avant l'y réécrit à son prochain refresh).
 
 ## Connecteurs remote — bridges (ADR 0003, pilote : un bridge back-office client)
 
@@ -1110,7 +1110,8 @@ sur `invalid_grant` (`GoogleReauthRequired`, même règle `oauth_flow.grant_is_d
 puis **relève toujours** — contrairement à atlassian/folk (alors encore au catalogue,
 retirés le 2026-09-09, ADR 0069), `credentials_for` n'a
 jamais rendu de `None` muet et ce lot ne change pas ce contrat. Démarque
-explicitement au refresh réussi : le refresh MERGE le meta
+explicitement au refresh réussi (depuis que le jeton d'accès vit en mémoire, le refresh
+n'écrit plus rien dans `meta` : l'appel explicite est le seul démarquage) : le refresh MERGEAIT le meta
 (`credentials_store.update_meta`, JSONB `||`), donc un `health_ko` posé plus tôt n'aurait jamais
 disparu tout seul (même raison que le point 3 ci-dessous pour Salesforce —
 contrairement à atlassian/folk, dont le remplacement total du meta démarquait déjà
