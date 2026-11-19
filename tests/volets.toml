@@ -113,6 +113,7 @@ chemins = [
   "oto_mcp/hang_watch.py",
   "oto_mcp/loop_watch.py",
   "oto_mcp/boucles_de_fond.py",
+  "oto_mcp/db/verrou_de_boucle.py",
   "oto_mcp/maintenance.py",
   # Jetons de lien : pages publiques, partages de procédure et export de périmètre.
   "oto_mcp/db/jetons_de_lien.py",

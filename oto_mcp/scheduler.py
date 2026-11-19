@@ -19,6 +19,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from . import credentials_store, db, email
+from .db import verrou_de_boucle
 
 log = logging.getLogger("oto_mcp.scheduler")
 
@@ -144,11 +145,16 @@ def _process_due_batch() -> int:
 
 async def run_scheduler_loop(interval: int = _POLL_INTERVAL_S) -> None:
     """Boucle de fond : envoie les emails dus toutes `interval` secondes. Isolée en
-    thread pour ne pas bloquer l'event loop. Ne meurt jamais sur une erreur de tick."""
+    thread pour ne pas bloquer l'event loop. Ne meurt jamais sur une erreur de tick.
+
+    Chaque tour tient le verrou de boucle (`db/verrou_de_boucle.py`) : le claim laisse la
+    ligne `pending` jusqu'au marquage, donc deux processus sur la même base (bleu/vert)
+    reprenaient le même email et l'envoyaient deux fois. Un seul joue le tour."""
     log.info("scheduler d'email démarré (intervalle %ss)", interval)
     while True:
         try:
-            n = await asyncio.to_thread(_process_due_batch)
+            n = await asyncio.to_thread(verrou_de_boucle.sous_verrou, "scheduler",
+                                        _process_due_batch, si_saute=0)
             if n:
                 log.info("scheduler : %d email(s) traité(s)", n)
         except asyncio.CancelledError:

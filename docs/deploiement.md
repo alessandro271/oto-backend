@@ -108,6 +108,38 @@ dans le même souffle ; vérifier juste avant de commiter, pas cinq minutes plus
 `pull --rebase` refuse à cause d'un travail en cours, **ne pas remiser le checkout
 partagé** : commiter ses fichiers nommément d'abord.
 
+## Deux processus sur une même base : une boucle de fond à la fois
+
+Deux processus du serveur branchés sur la même base composent les mêmes boucles de fond :
+les deux couleurs du bleu/vert pendant la vidange, ou plusieurs processus qui servent la
+même instance. La composition (`boucles_de_fond.py`) écarte la préprod ; entre deux
+processus de **production**, c'est la base qui tranche. **Aucune boucle qui agit vers
+l'extérieur ne joue deux fois le même travail**, par l'un de deux mécanismes :
+
+- **le verrou de boucle** (`oto_mcp/db/verrou_de_boucle.py`) : un verrou consultatif
+  PostgreSQL de session, sur une connexion dédiée hors pool, en autocommit, tenu le temps
+  d'UN tour et rendu dans un `finally` (puis par la fermeture de la connexion). Le second
+  processus ne l'attend pas : il **saute son tour**, dit une fois en INFO
+  (« boucle X : tour sauté, un autre processus la tient »), puis en DEBUG. Une base
+  injoignable reste une erreur du tour. Boucles couvertes : `scheduler` (emails
+  programmés : le claim laisse la ligne `pending`), `alerte_agents_bloques` et
+  `alertes_slack_agents` (marque après l'envoi), `medecin_agents` (escalade lue puis
+  écrite), `billing_runner` (réconciliation, rattrapages, factures ; les échéances
+  gardent en plus leur réservation `db/billing_reservation.py`) ;
+- **une réservation ligne à ligne** qui sort le travail de la file dans le même `UPDATE` :
+  `transcription_worker` (`pending → running`, `FOR UPDATE SKIP LOCKED`),
+  `jev_jobs_worker` (bail en base), `runner_tick` (compare-and-swap sur `next_due`).
+
+Les boucles qui n'écrivent qu'en base (`embed_worker`, `file_extract_worker`,
+`rank_backfill`, `formula_backfill`, `credits_echeances`) et le chien de garde local
+`hang_watch` n'ont ni l'un ni l'autre : en double, elles refont un travail idempotent, sans
+effet chez personne. Une boucle tierce neuve choisit l'un des deux mécanismes ;
+`tests/test_verrou_de_boucle.py` le vérifie.
+
+⚠️ Ce que le verrou ne fait pas : un processus **gelé** en plein tour (boucle d'événements
+bloquée, appel réseau sans fin) garde la boucle, et l'autre saute ses tours tant que la
+connexion vit. Un processus **tué** la rend aussitôt (fin de session PostgreSQL).
+
 ## Les domaines servis
 
 Mesurés le 03/09/2026 (jusque-là, la doc nommait les *hostnames de transition* du cutover
