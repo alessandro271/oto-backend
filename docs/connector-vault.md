@@ -22,7 +22,7 @@ adr:
 # Connector vault — registre + coffre chiffré + résolution
 
 Substrat unique des connecteurs, credentials et accès d'oto-mcp. Déployé en prod (2026-06).
-Chiffrement **obligatoire** : tous les secrets vivent chiffrés (`secret_enc`), plus aucune colonne plaintext ni dual-write (purge legacy 2026-06-11). Un serveur sans `OTO_MCP_MASTER_KEY` boote mais tout write de credential échoue fort.
+Chiffrement **obligatoire** : tous les secrets vivent chiffrés (`secret_enc`), plus aucune colonne plaintext ni dual-write (purge legacy 2026-06-11). Un serveur sans aucune clé déclarée refuse de démarrer (`crypto.charger_trousseau`, §Les modes de clé) ; un autre processus sans clé (script, maintenance) échoue fort au premier chiffrement ou déchiffrement.
 
 ## Registre — source unique (package `providers/`)
 
@@ -303,10 +303,87 @@ Store = `credentials_store.py` (calqué sur le palier org, réutilise `db._conne
 Enveloppe **AES-256-GCM**, **obligatoire** (`set_credential`/`_pk_encrypt` chiffrent toujours ; `crypto.encrypt`/`decrypt` lèvent si master key absente — pas de stockage ni lecture plaintext). Master key **hors-DB** (env `OTO_MCP_MASTER_KEY`, hex64 ou base64-32o ; en prod fetchée de Scaleway Secret Manager au boot, cible KMS unwrap, cf. `ADR 0002 (meta privé otomata-private/docs/adr)`). AAD = `connector_credentials:{entity_type}:{entity_id}:{connector}[:{account}]` (anti-transplant ; segment account omis si vide → compat ascendante mono-compte). Envelope = `key_ref(1o)‖nonce(12o)‖ct`.
 - Déchiffrement **JIT** dans `resolve_api_key`/`get_credential` uniquement, jamais loggé ; `status_for` lit la présence (`has_credential`/`credential_status`), ne déchiffre pas. Échec de déchiffrement = LÈVE (pas de fallback silencieux).
 - `platform_keys` : secret dans `api_key_enc` (même pattern, AAD `platform_keys:{provider}:{label}`).
-- **Le trousseau et `key_ref`** : le premier octet de l'enveloppe (`key_ref`) nomme la clé qui l'a scellée. `crypto.trousseau()` rend `{key_ref: clé}`, les clés que l'instance sait ouvrir ; `decrypt` lit `key_ref` et y prend sa clé (`cle_du_trousseau`), `encrypt` écrit sous `KEY_REF_ECRITURE`. Aujourd'hui une seule clé : `0x01` (`CLE_PLATE`) = `OTO_MCP_MASTER_KEY`, que portent toutes les enveloppes. Un `key_ref` absent du trousseau lève `crypto.CleInconnue`, distincte d'une enveloppe qui ne s'ouvre pas (`EnveloppeIndechiffrable`, clé périmée ou AAD fausse) : un appelant qui jette un cache illisible ne l'avale pas. `key_ref` n'entre pas dans l'AAD : changer la clé d'une ligne ne change pas son identité. Personne d'autre ne lit la clé : l'export de périmètre aussi passe par le trousseau (`cle_d_ecriture` pour l'import).
+- **Le trousseau et `key_ref`** : le premier octet de l'enveloppe (`key_ref`) nomme la clé qui l'a scellée. `crypto.trousseau()` rend `{key_ref: clé}`, les clés que l'instance sait ouvrir ; `decrypt` lit `key_ref` et y prend sa clé (`cle_du_trousseau`), `encrypt` écrit sous le `key_ref` d'écriture déclaré (`key_ref_d_ecriture`, `OTO_MCP_CLE_ECRITURE`, `01` par défaut = `KEY_REF_ECRITURE`). `0x01` (`CLE_PLATE`) = `OTO_MCP_MASTER_KEY`, que portent toutes les enveloppes écrites avant le mode Key Manager ; les autres `key_ref` sont des clés de données enveloppées par Key Manager (§Les modes de clé). Un `key_ref` absent du trousseau lève `crypto.CleInconnue`, distincte d'une enveloppe qui ne s'ouvre pas (`EnveloppeIndechiffrable`, clé périmée ou AAD fausse) : un appelant qui jette un cache illisible ne l'avale pas. `key_ref` n'entre pas dans l'AAD : changer la clé d'une ligne ne change pas son identité. Personne d'autre ne lit la clé : l'export de périmètre aussi passe par le trousseau (l'import vérifie la clé `0x01` de la cible, §Les modes de clé).
 - **La liste des valeurs chiffrées** est `export_perimetre/rechiffrement.COLONNES_CHIFFREES` (colonne et AAD de la ligne) : `connector_credentials.secret_enc` (clés d'instance comprises), les satellites `meta.<nom>_enc`, `runner_triggers.hook_signing_secret_enc`, `transcription_jobs.api_key_enc`, `docs.public_token_enc`, `process_shares.token_enc`. `tests/export_perimetre/test_colonnes_chiffrees.py` refuse une colonne `*_enc` du schéma ou un appel à `crypto.encrypt` qu'elle ne couvre pas.
 - **`oto_admin_vault_health`** (`GET /api/admin/vault/health`) : en plus des lignes du coffre qui ne se déchiffrent pas, `by_key_ref` compte, pour chaque valeur de `COLONNES_CHIFFREES`, les lignes par `key_ref` (premier octet lu en base, rien d'autre ; « illisible » si l'enveloppe n'a pas la forme base64).
 - Dump Postgres = **ciphertext only**. Perte de master key = perte totale → Secret Manager versionné + escrow.
+
+
+### Les modes de clé : plate et Key Manager
+
+Le mode est **déclaré**, jamais deviné : `crypto.declaration()` lit l'environnement, et
+`crypto.charger_trousseau()`, au démarrage du serveur (`server.main`, avant la base),
+refuse de démarrer sur toute incohérence, avec un message qui la nomme.
+
+| mode | variables | clés du trousseau |
+| --- | --- | --- |
+| **plate** | `OTO_MCP_MASTER_KEY` seule (`OTO_MCP_CLE_ECRITURE` absente ou `01`) | `0x01` |
+| **Key Manager, transition** | `OTO_MCP_MASTER_KEY` + `OTO_MCP_TROUSSEAU` + `OTO_MCP_KMS_CLE` + `OTO_MCP_KMS_REGION`, écriture `01` puis `02` | `0x01` et `0x02` |
+| **Key Manager seul** (après le rechiffrement de fond et le retrait de la clé plate) | les trois variables Key Manager, écriture `02` | `0x02` |
+
+- `OTO_MCP_TROUSSEAU` (secret, tiré du Secret Manager par le lanceur comme les autres,
+  déclaré dans `OTO_SECRETS_OPTIONNELS`) : `{"02": "<ciphertext rendu par GenerateDataKey>"}`.
+  Le `key_ref` s'écrit en deux chiffres hexadécimaux, `01` y est interdit (c'est la clé
+  plate). `OTO_MCP_KMS_CLE` (l'id de la clé Key Manager qui enveloppe) et
+  `OTO_MCP_KMS_REGION` ne sont pas secrets : ils vont dans le `.env`.
+- **Le déchiffrement** se fait dans `crypto`, une fois par processus et par clé :
+  `POST https://api.scaleway.com/key-manager/v1alpha1/regions/{region}/keys/{id}/decrypt`,
+  corps `{"ciphertext": …}`, réponse `{"plaintext": <base64>}`, en-tête `X-Auth-Token`
+  (`urllib`, comme `deploy/lanceur_secrets.py`). Délai de 15 s par essai, 3 essais sur une
+  panne réseau, un 429 ou un 5xx ; un autre refus (403, 404, 400) ne se rejoue pas. La clé
+  de données ne vit qu'en RAM : ni disque, ni environnement, ni journal. Le lanceur ne
+  déchiffre rien : la clé en clair ne passe jamais par `/proc/<pid>/environ`.
+- **La clé d'API** de `Decrypt` (une application IAM dont la seule permission est
+  `KeyManagerKeyDecrypt`, dans le projet Scaleway dédié à la clé) arrive par
+  `LoadCredential=scw-kms` : un fichier `/etc/credstore/scw-kms` (0600, root), lu dans
+  `$CREDENTIALS_DIRECTORY/scw-kms`. La ligne est **sans chemin** : systemd cherche le
+  fichier dans `/etc/credstore/` et son absence n'est pas fatale, alors qu'un chemin absolu
+  absent empêcherait l'unité de démarrer. Les unités du dépôt la portent toutes (service,
+  maintenance, archive du journal, unités d'une instance cible, `systemd-run` documentés) :
+  sans fichier posé, rien ne change.
+- **Au démarrage**, le journal dit, pour chaque clé, son `key_ref`, son origine et une
+  empreinte courte (`crypto.empreinte_cle`, 12 caractères), puis le mode et le `key_ref`
+  d'écriture. Jamais la clé, jamais le jeton.
+- **Les autres processus** (maintenance, scripts par `lanceur_secrets.py --script`,
+  `oto-mcp perimetre`) passent par le même `crypto.trousseau()`, qui ouvre les clés
+  enveloppées à leur premier usage.
+
+**Refus nommés** (le serveur ne démarre pas) :
+
+- aucune clé déclarée (ni `OTO_MCP_MASTER_KEY`, ni `OTO_MCP_TROUSSEAU`) ;
+- `OTO_MCP_CLE_ECRITURE` qui nomme un `key_ref` absent du trousseau (`02` sans trousseau,
+  `01` sans clé plate) ou qui n'est pas un `key_ref` ;
+- `OTO_MCP_TROUSSEAU` illisible ou vide, qui porte `01`, un `key_ref` mal écrit ou une
+  valeur vide ; trousseau sans `OTO_MCP_KMS_CLE` ou sans `OTO_MCP_KMS_REGION` ;
+  `OTO_MCP_KMS_CLE` ou `OTO_MCP_KMS_REGION` sans trousseau ;
+- clé d'API absente (`LoadCredential=scw-kms`), Key Manager qui refuse (HTTP 4xx), clé
+  ouverte qui ne fait pas 32 octets ;
+- « Key Manager injoignable : clé <id>, région <r> — démarrage refusé » après 3 essais.
+  En bleu/vert, la couleur qui sert garde son trousseau en RAM : la bascule échoue
+  proprement, rien ne s'arrête.
+
+**L'ordre de bascule** (chaque étape est réversible jusqu'au retrait de la clé plate) :
+
+1. Infra pose la clé Key Manager, l'application IAM `Decrypt` et `/etc/credstore/scw-kms` ;
+   puis le secret `OTO_MCP_TROUSSEAU` (`/prod` et `/preprod`), qu'elle ajoute à
+   `OTO_SECRETS_OPTIONNELS`, et `OTO_MCP_KMS_CLE`, `OTO_MCP_KMS_REGION` dans le `.env`.
+   L'unité du service reçoit `LoadCredential=scw-kms`.
+2. Redémarrage (un déploiement) **en restant en écriture `01`** : le journal doit montrer
+   `key_ref=0x01` et `key_ref=0x02` chargées, avec leurs empreintes. Rien n'est encore écrit
+   sous `0x02`.
+3. Vérifier : `oto_admin_vault_health` sain, aucune erreur au journal.
+4. Passer `OTO_MCP_CLE_ECRITURE=02` dans le `.env`, redéployer : toute écriture neuve est
+   sous `0x02` (`by_key_ref` de `oto_admin_vault_health` le montre).
+5. Retour arrière : remettre `OTO_MCP_CLE_ECRITURE=01` suffit tant que la clé plate reste au
+   trousseau ; les lignes déjà en `0x02` restent lisibles tant que le trousseau est posé.
+6. Ensuite (hors de ce mode) : le rechiffrement de fond des lignes `0x01`, puis le retrait
+   de `OTO_MCP_MASTER_KEY`.
+
+**Export de périmètre** : l'export rechiffre chaque secret sous la clé **plate** de la cible
+(`OTO_EXPORT_CLE_CIBLE`, `key_ref 0x01`) ; l'import compare l'empreinte du manifeste à la
+clé `0x01` de son trousseau, qu'elle soit ou non la clé d'écriture. Une cible en transition
+importe donc normalement. Une cible sous Key Manager seul ne peut pas recevoir d'export
+chiffré : sa clé de données n'existe en clair nulle part, l'import refuse nommément.
 
 ## Résolution + accès (`access/`)
 

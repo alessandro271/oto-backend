@@ -1162,6 +1162,13 @@ def main():
     from . import identite_instance
     identite_instance.verifier()
 
+    # Le trousseau du coffre : les modes de clé sont DÉCLARÉS (plate, Key Manager) ; une
+    # déclaration incohérente, aucune clé, ou Key Manager injoignable refuse le démarrage
+    # ICI, avant d'avoir rien écrit. Les clés enveloppées sont ouvertes une fois, en RAM ;
+    # le journal nomme chaque `key_ref` et son empreinte, jamais la clé. Cf. `crypto`.
+    from . import crypto
+    crypto.charger_trousseau()
+
     # Les boucles de fond, composées AVANT de préparer la base : un process qui ne sait
     # pas s'il est la production refuse de démarrer ICI, sans avoir rien écrit (plus
     # loin, un démarrage avorté a déjà joué init_db et les backfills). Hors production,

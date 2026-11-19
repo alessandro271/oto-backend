@@ -33,6 +33,10 @@ Environment=HOME=/var/lib/@UNITE@-%i
 Environment=OTO_FUNCTIONS_ISOLATION=bwrap
 StateDirectory=@UNITE@-%i
 LoadCredential=scw:@CLE_SCW@
+# La clé d'API de `Decrypt` de Key Manager (mode Key Manager du coffre, `oto_mcp/crypto.py`).
+# Sans chemin : systemd la cherche dans /etc/credstore/scw-kms, et son absence n'est PAS
+# fatale (mode plate : rien à poser). Un chemin absolu absent, lui, empêcherait de démarrer.
+LoadCredential=scw-kms
 ExecStart=@ARBRE@-%i/.venv/bin/python @ARBRE@-%i/deploy/lanceur_secrets.py
 Restart=on-failure
 RestartSec=5

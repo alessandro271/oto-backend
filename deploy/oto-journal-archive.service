@@ -19,6 +19,10 @@ Type=oneshot
 EnvironmentFile=/opt/oto-mcp/.env
 EnvironmentFile=/etc/oto-mcp/lanceur-prod.env
 LoadCredential=scw:/etc/oto-mcp/scw.key
+# La clé d'API de `Decrypt` de Key Manager (mode Key Manager du coffre, `oto_mcp/crypto.py`).
+# Sans chemin : systemd la cherche dans /etc/credstore/scw-kms, et son absence n'est PAS
+# fatale (mode plate : rien à poser). Un chemin absolu absent, lui, empêcherait de démarrer.
+LoadCredential=scw-kms
 ExecStart=/opt/oto-mcp/.venv/bin/python /opt/oto-mcp/deploy/lanceur_secrets.py --script deploy/archive_tool_calls.py
 # Un export volumineux ne doit pas concurrencer le service qui répond aux utilisateurs.
 Nice=10

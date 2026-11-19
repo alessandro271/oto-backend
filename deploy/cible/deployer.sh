@@ -39,7 +39,7 @@ lanceur_de() {
   local arbre=$1
   echo "systemd-run --pipe --wait --quiet --collect -p WorkingDirectory=$arbre" \
        "-p EnvironmentFile=$ETC_ROLE/app.env -p EnvironmentFile=$ETC_ROLE/lanceur.env" \
-       "-p LoadCredential=scw:$CLE_SCW $arbre/.venv/bin/python $arbre/deploy/lanceur_secrets.py"
+       "-p LoadCredential=scw:$CLE_SCW -p LoadCredential=scw-kms $arbre/.venv/bin/python $arbre/deploy/lanceur_secrets.py"
 }
 
 # --- la garde des migrations (#1163, #1195), appelée par la bibliothèque bleu/vert dans

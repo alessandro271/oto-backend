@@ -33,14 +33,13 @@ le porterait (`crypto.decrypt` et `decrypt_with_key` lèvent sans le citer).
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .. import credentials_store, runner_hook, transcription_worker
 from ..db import jetons_de_lien
 from .. import crypto
-from ..crypto import decrypt_with_key, encrypt_with_key
+from ..crypto import decrypt_with_key, empreinte_cle, encrypt_with_key  # noqa: F401 — empreinte_cle : rendue aux lecteurs du module
 
 #: table → (colonne chiffrée, AAD de la ligne).
 AAD: dict[str, tuple[str, Callable[[dict], str]]] = {
@@ -106,12 +105,6 @@ def compter_key_refs(conn) -> dict[str, dict[str, int]]:
 
 class RechiffrementImpossible(RuntimeError):
     pass
-
-
-def empreinte_cle(cle: bytes) -> str:
-    """Ce qui désigne une clé maîtresse sans la révéler : un haché à séparation de domaine
-    (la clé est 256 bits d'aléa : rien à deviner à partir de son haché)."""
-    return hashlib.sha256(b"oto-export-perimetre/cle:" + cle).hexdigest()
 
 
 def rechiffrer(table: str, source: dict, cible: dict, cle_cible: bytes) -> str | None:

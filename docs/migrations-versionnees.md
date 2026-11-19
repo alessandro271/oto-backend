@@ -450,7 +450,7 @@ d'environnement et la clé d'API de l'unité de prod (`oto-mcp@.service`), depui
 couleur qui sert — celui qui porte le registre déployé :
 
 ```bash
-A=/opt/oto-mcp-$(cat /etc/oto-mcp/active-prod) && systemd-run --pipe --wait --quiet --collect -p WorkingDirectory=$A -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env -p LoadCredential=scw:/etc/oto-mcp/scw.key $A/.venv/bin/python $A/deploy/lanceur_secrets.py migrer upgrade head
+A=/opt/oto-mcp-$(cat /etc/oto-mcp/active-prod) && systemd-run --pipe --wait --quiet --collect -p WorkingDirectory=$A -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env -p LoadCredential=scw:/etc/oto-mcp/scw.key -p LoadCredential=scw-kms $A/.venv/bin/python $A/deploy/lanceur_secrets.py migrer upgrade head
 ```
 
 `migrer current`, `migrer upgrade head --sql` : même ligne, autres arguments. Le fichier de
