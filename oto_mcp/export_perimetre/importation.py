@@ -57,7 +57,7 @@ from pathlib import Path
 
 import psycopg
 
-from ..crypto import _load_master_key
+from ..crypto import cle_d_ecriture
 from .classement import CLASSEMENT, EXPORTEES, Table, sans_journal
 from .cles_du_primaire import ConversionRefusee, convertir
 from .decouverte import lire_schema, verifier_classement
@@ -213,10 +213,10 @@ def verser_archive(archive: Path | None, manifeste: dict, stockage, cle) -> None
 
 def cle_de_l_instance(manifeste: dict) -> bytes | None:
     """La clé de CETTE instance, si le fichier porte des secrets ou des objets — et c'est
-    la leur."""
+    la leur : la clé sous laquelle elle écrit (`crypto.cle_d_ecriture`)."""
     if not manifeste["secrets"] and not manifeste["objets"]["liste"]:
         return None
-    cle = _load_master_key()
+    cle = cle_d_ecriture()
     if cle is None:
         raise ImportRefuse(f"le fichier porte des secrets {manifeste['secrets']} ou des "
                            "objets, et cette instance n'a pas de clé maîtresse "
