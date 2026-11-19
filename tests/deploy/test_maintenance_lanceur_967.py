@@ -31,7 +31,7 @@ def test_la_maintenance_demarre_par_le_lanceur_avec_la_cle_d_api_en_credential()
     assert u["ExecStart"] == [
         "@ARBRE@/.venv/bin/python @ARBRE@/deploy/lanceur_secrets.py maintenance all"]
     assert u["WorkingDirectory"] == ["@ARBRE@"]
-    assert u["LoadCredential"] == ["scw:/etc/oto-mcp/scw.key", "scw-kms"]
+    assert u["LoadCredential"] == ["scw:/etc/oto-mcp/scw.key"]
     assert u["EnvironmentFile"] == ["/opt/oto-mcp/.env", "/etc/oto-mcp/lanceur-prod.env"]
 
 
@@ -40,7 +40,7 @@ def test_l_archive_du_journal_demarre_le_script_versionne_par_le_lanceur():
     assert u["ExecStart"] == [
         "/opt/oto-mcp/.venv/bin/python /opt/oto-mcp/deploy/lanceur_secrets.py"
         " --script deploy/archive_tool_calls.py"]
-    assert u["LoadCredential"] == ["scw:/etc/oto-mcp/scw.key", "scw-kms"]
+    assert u["LoadCredential"] == ["scw:/etc/oto-mcp/scw.key"]
     assert (DEPLOY / "archive_tool_calls.py").is_file()
 
 

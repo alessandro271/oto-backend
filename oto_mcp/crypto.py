@@ -87,7 +87,7 @@ KMS_DELAI_S = 15
 KMS_ESSAIS = 3
 KMS_PAUSE_S = 2.0
 #: Le nom du credential systemd qui porte la clé d'API de `Decrypt`
-#: (`LoadCredential=scw-kms`, fichier `/etc/credstore/scw-kms`).
+#: (`LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key`, posée à la main).
 CREDENTIAL_KMS = "scw-kms"
 
 
@@ -233,15 +233,15 @@ def _jeton_key_manager() -> str:
     if not dossier:
         raise TrousseauRefuse(
             "Key Manager : aucune clé d'API — l'unité doit passer "
-            f"LoadCredential={CREDENTIAL_KMS} (fichier /etc/credstore/{CREDENTIAL_KMS}) — "
+            f"LoadCredential={CREDENTIAL_KMS}:/etc/oto-mcp/{CREDENTIAL_KMS}.key — "
             "démarrage refusé")
     try:
         jeton = (Path(dossier) / CREDENTIAL_KMS).read_text(encoding="utf-8").strip()
     except OSError as erreur:
         raise TrousseauRefuse(
             f"Key Manager : clé d'API illisible ({type(erreur).__name__}) — l'unité doit "
-            f"passer LoadCredential={CREDENTIAL_KMS} (fichier "
-            f"/etc/credstore/{CREDENTIAL_KMS}) — démarrage refusé") from None
+            f"passer LoadCredential={CREDENTIAL_KMS}:/etc/oto-mcp/{CREDENTIAL_KMS}.key "
+            "— démarrage refusé") from None
     if not jeton:
         raise TrousseauRefuse("Key Manager : clé d'API vide — démarrage refusé")
     return jeton

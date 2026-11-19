@@ -76,8 +76,8 @@ est **dans le tag** : ni propagé, ni édité sur la machine.
 - **La clé d'API** arrive par `LoadCredential=scw:…` de l'unité, lisible du seul service.
 - **Le coffre sous Key Manager** ne passe pas par le lanceur : le serveur ouvre lui-même ses
   clés enveloppées (`crypto`, docs/connector-vault.md §Les modes de clé), avec une seconde
-  clé d'API, `LoadCredential=scw-kms` (fichier `/etc/credstore/scw-kms`). Le lanceur ne
-  fait que tirer `OTO_MCP_TROUSSEAU` comme tout secret facultatif.
+  clé d'API, `LoadCredential=scw-kms:<fichier>`, posée à la main au passage à Key Manager
+  (§3 bis). Le lanceur ne fait que tirer `OTO_MCP_TROUSSEAU` comme tout secret facultatif.
 - **Le `.env` ne porte que le non-secret** : un secret trouvé dans l'environnement
   refuse le démarrage.
 
@@ -219,7 +219,7 @@ lanceur de l'arbre voulu :
 ```bash
 systemd-run --pipe --wait --quiet --collect -p WorkingDirectory=/opt/<i>/<r>-<couleur> \
   -p EnvironmentFile=/etc/<i>/<r>/app.env -p EnvironmentFile=/etc/<i>/<r>/lanceur.env \
-  -p LoadCredential=scw:/etc/<i>/scw.key -p LoadCredential=scw-kms \
+  -p LoadCredential=scw:/etc/<i>/scw.key \
   /opt/<i>/<r>-<couleur>/.venv/bin/python /opt/<i>/<r>-<couleur>/deploy/lanceur_secrets.py migrer current
 ```
 
@@ -371,11 +371,20 @@ credential**, rien d'autre : ni la bibliothèque bleu/vert ni le lanceur ne chan
   protégée (`ProtectKey`) ; une application IAM dont la seule permission sur ce projet est
   `KeyManagerKeyDecrypt`, et sa clé d'API. La clé de données se crée par un humain
   (`GenerateDataKey` sans clair), jamais par la machine.
-- [ ] **Credential** : la clé d'API de l'application IAM dans `/etc/credstore/scw-kms`
-  (`install -d -m 0700 /etc/credstore`, fichier 0600, root). L'unité la reçoit par
-  `LoadCredential=scw-kms` (déjà dans le gabarit `deploy/cible/instance@.service` : sans
-  fichier, elle n'empêche rien). Un seul fichier par machine : deux instances sur la même
-  machine partageraient cette clé.
+- [ ] **Credential** : la clé d'API de l'application IAM dans `/etc/<i>/scw-kms.key`
+  (0600, root), à côté de `scw.key`. PUIS, le fichier en place (un chemin absent fait
+  échouer l'unité), un complément à la main pour l'unité du rôle et sa maintenance — le
+  gabarit `deploy/cible/instance@.service` ne porte pas la ligne, et l'amorce le réécrit à
+  chaque déploiement, alors qu'elle ne touche pas aux compléments :
+  ```
+  # /etc/systemd/system/<i>-<r>@.service.d/scw-kms.conf
+  # /etc/systemd/system/<i>-<r>-maintenance.service.d/scw-kms.conf
+  [Service]
+  LoadCredential=scw-kms:/etc/<i>/scw-kms.key
+  ```
+  puis `systemctl daemon-reload`. Les commandes `systemd-run` du lanceur (migrations jouées
+  par la montée, `deploy/cible/deployer.sh`) ne la portent pas ; une commande lancée à la main
+  qui doit ouvrir le coffre ajoute `-p LoadCredential=scw-kms:/etc/<i>/scw-kms.key`.
 - [ ] **Secret** : `OTO_MCP_TROUSSEAU` sous le chemin de chaque rôle, valeur
   `{"02": "<ciphertext rendu par GenerateDataKey>"}`, ajouté aux `secrets_optionnels` de la
   déclaration.
@@ -464,7 +473,7 @@ Pour une cible qui reçoit des données, la séquence est donc, par rôle, sur s
    ```bash
    systemd-run --pipe --wait --quiet --collect -p WorkingDirectory=/opt/<i>/<r>-<couleur> \
      -p EnvironmentFile=/etc/<i>/<r>/app.env -p EnvironmentFile=/etc/<i>/<r>/lanceur.env \
-     -p LoadCredential=scw:/etc/<i>/scw.key -p LoadCredential=scw-kms \
+     -p LoadCredential=scw:/etc/<i>/scw.key \
      /opt/<i>/<r>-<couleur>/.venv/bin/python /opt/<i>/<r>-<couleur>/deploy/lanceur_secrets.py perimetre naitre
    ```
 2. **Importer** — `oto-mcp perimetre import perimetre.jsonl` (et les tranches du

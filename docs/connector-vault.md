@@ -335,12 +335,24 @@ refuse de démarrer sur toute incohérence, avec un message qui la nomme.
   déchiffre rien : la clé en clair ne passe jamais par `/proc/<pid>/environ`.
 - **La clé d'API** de `Decrypt` (une application IAM dont la seule permission est
   `KeyManagerKeyDecrypt`, dans le projet Scaleway dédié à la clé) arrive par
-  `LoadCredential=scw-kms` : un fichier `/etc/credstore/scw-kms` (0600, root), lu dans
-  `$CREDENTIALS_DIRECTORY/scw-kms`. La ligne est **sans chemin** : systemd cherche le
-  fichier dans `/etc/credstore/` et son absence n'est pas fatale, alors qu'un chemin absolu
-  absent empêcherait l'unité de démarrer. Les unités du dépôt la portent toutes (service,
-  maintenance, archive du journal, unités d'une instance cible, `systemd-run` documentés) :
-  sans fichier posé, rien ne change.
+  `LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key` : un fichier 0600, root, lu dans
+  `$CREDENTIALS_DIRECTORY/scw-kms`. **Aucune unité du dépôt ne porte cette ligne** : elle se
+  pose À LA MAIN, au passage à Key Manager, et seulement une fois le fichier en place, car
+  un chemin absent fait échouer l'unité. On garde la forme avec chemin, portable : la forme
+  sans chemin (recherche dans `/etc/credstore/`) n'existe qu'à partir de systemd 250. La
+  ligne se pose par un **fichier de complément** (drop-in), pas dans l'unité elle-même :
+  `oto-mcp-maintenance.service` est reposée à chaque déploiement de prod
+  (`install_timers`), et les unités d'une instance cible à chaque amorce ; un complément
+  survit à ces reposes :
+  ```
+  # /etc/systemd/system/<unité>.d/scw-kms.conf, puis systemctl daemon-reload
+  [Service]
+  LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key
+  ```
+  Unités concernées : le service bleu/vert de chaque rôle (`oto-mcp@.service`,
+  `oto-mcp-canari@.service`), `oto-mcp-maintenance.service`, `oto-journal-archive.service`.
+  Un `systemd-run` qui lance le lanceur à la main ajoute
+  `-p LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key` (docs/commands.md §mode Key Manager).
 - **Au démarrage**, le journal dit, pour chaque clé, son `key_ref`, son origine et une
   empreinte courte (`crypto.empreinte_cle`, 12 caractères), puis le mode et le `key_ref`
   d'écriture. Jamais la clé, jamais le jeton.
@@ -364,10 +376,12 @@ refuse de démarrer sur toute incohérence, avec un message qui la nomme.
 
 **L'ordre de bascule** (chaque étape est réversible jusqu'au retrait de la clé plate) :
 
-1. Infra pose la clé Key Manager, l'application IAM `Decrypt` et `/etc/credstore/scw-kms` ;
-   puis le secret `OTO_MCP_TROUSSEAU` (`/prod` et `/preprod`), qu'elle ajoute à
-   `OTO_SECRETS_OPTIONNELS`, et `OTO_MCP_KMS_CLE`, `OTO_MCP_KMS_REGION` dans le `.env`.
-   L'unité du service reçoit `LoadCredential=scw-kms`.
+1. Infra pose la clé Key Manager, l'application IAM `Decrypt` et
+   `/etc/oto-mcp/scw-kms.key` (0600, root) ; PUIS, le fichier en place, le complément
+   `LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key` de chaque unité (ci-dessus) et
+   `systemctl daemon-reload` ; puis le secret `OTO_MCP_TROUSSEAU` (`/prod` et `/preprod`),
+   qu'elle ajoute à `OTO_SECRETS_OPTIONNELS`, et `OTO_MCP_KMS_CLE`, `OTO_MCP_KMS_REGION` dans
+   le `.env`.
 2. Redémarrage (un déploiement) **en restant en écriture `01`** : le journal doit montrer
    `key_ref=0x01` et `key_ref=0x02` chargées, avec leurs empreintes. Rien n'est encore écrit
    sous `0x02`.

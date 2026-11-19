@@ -34,8 +34,6 @@ def test_naissance_d_un_role_sur_machine_nue(banc):
     assert "User=oto-exemple" in unite and "User=root" not in unite
     assert re.search(r"^TimeoutStopSec=150$", unite, re.M)  # le `drain_max` du rôle + la marge
     assert f"LoadCredential=scw:{banc.racine}/etc/exemple/scw.key" in unite
-    # la clé de Key Manager, sans chemin : absente, elle n'empêche pas de démarrer
-    assert re.search(r"^LoadCredential=scw-kms$", unite, re.M)
     assert (f"ExecStart={banc.racine}/opt/exemple/prod-%i/.venv/bin/python "
             f"{banc.racine}/opt/exemple/prod-%i/deploy/lanceur_secrets.py") in unite
     # l'amont initial pointe la couleur de naissance

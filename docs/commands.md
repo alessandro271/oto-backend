@@ -269,9 +269,11 @@ Depuis que notre box est passée au lanceur générique (30/09/2026), le `.env` 
 reçoit de lui, comme le service, et non d'un `.env` qu'on sourcerait. Le lanceur lit la clé
 d'API du Secret Manager dans `$CREDENTIALS_DIRECTORY/scw` : hors d'une unité, c'est
 `systemd-run` qui la présente (`LoadCredential`), à la façon des unités de maintenance.
-`LoadCredential=scw-kms` présente aussi, si elle est posée (`/etc/credstore/scw-kms`), la clé
-d'API de `Decrypt` de Key Manager : en mode Key Manager du coffre, le processus ouvre lui-même
-son trousseau (docs/connector-vault.md) ; absente, elle n'empêche rien.
+**Mode Key Manager du coffre** (docs/connector-vault.md §Les modes de clé) : un script qui
+chiffre ou déchiffre ouvre lui-même son trousseau, avec la clé d'API de `Decrypt`. Une fois
+`/etc/oto-mcp/scw-kms.key` posé, ajouter à la ligne `systemd-run` ci-dessous
+`-p LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key` ; jamais avant (un chemin absent fait
+échouer la commande). En mode plate, la recette reste telle quelle.
 
 ```bash
 # Sur la box (prod ; pour la préprod : /opt/oto-mcp-canari et lanceur-canari.env).
@@ -281,7 +283,7 @@ lanceur() {
   sudo systemd-run --pipe --wait --quiet --collect \
     -p WorkingDirectory="$A" \
     -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
-    -p LoadCredential=scw:/etc/oto-mcp/scw.key -p LoadCredential=scw-kms \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
     "$A/.venv/bin/python" "$A/deploy/lanceur_secrets.py" "$@"
 }
 lanceur maintenance retention --dry-run                    # le serveur (`oto-mcp …`)
@@ -392,7 +394,7 @@ orphelins() {   # le lanceur de l'arbre extrait ; PYTHONPATH : `oto_mcp` est cel
   sudo systemd-run --pipe --wait --quiet --collect -p WorkingDirectory="$T" \
     -p Environment=PYTHONPATH="$T" \
     -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
-    -p LoadCredential=scw:/etc/oto-mcp/scw.key -p LoadCredential=scw-kms \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
     "$T/.venv/bin/python" "$T/deploy/lanceur_secrets.py" maintenance orphelins "$@"
 }
 orphelins                 # à blanc : comparer au constat servi
@@ -425,7 +427,7 @@ jetons() {
   sudo systemd-run --pipe --wait --quiet --collect -p WorkingDirectory="$T" \
     -p Environment=PYTHONPATH="$T" \
     -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
-    -p LoadCredential=scw:/etc/oto-mcp/scw.key -p LoadCredential=scw-kms \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
     "$T/.venv/bin/python" "$T/deploy/lanceur_secrets.py" maintenance jetons-en-meta "$@"
 }
 jetons                 # à blanc : par connecteur, les clés et leur nombre de lignes
@@ -479,7 +481,7 @@ secrets_app() {   # le lanceur de l'arbre extrait ; PYTHONPATH : `oto_mcp` est c
   sudo systemd-run --pipe --wait --quiet --collect -p WorkingDirectory="$T" \
     -p Environment=PYTHONPATH="$T" \
     -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
-    -p LoadCredential=scw:/etc/oto-mcp/scw.key -p LoadCredential=scw-kms \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
     "$T/.venv/bin/python" "$T/deploy/lanceur_secrets.py" maintenance secrets-d-application "$@"
 }
 secrets_app                               # à blanc
@@ -526,7 +528,7 @@ A=/opt/oto-mcp-$(cat /etc/oto-mcp/active-prod)
 jetons() {
   sudo systemd-run --pipe --wait --quiet --collect -p WorkingDirectory="$A" \
     -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
-    -p LoadCredential=scw:/etc/oto-mcp/scw.key -p LoadCredential=scw-kms \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
     "$A/.venv/bin/python" "$A/deploy/lanceur_secrets.py" maintenance jetons-de-lien "$@"
 }
 jetons                # à blanc

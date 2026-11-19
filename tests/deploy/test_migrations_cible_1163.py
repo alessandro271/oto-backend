@@ -257,7 +257,7 @@ def test_chaine_refus_de_la_garde_ne_demarre_rien_et_dit_comment_lire(banc, code
     assert "ne peut pas porter v1.2.3" in sortie and "rien n'a basculé" in sortie
     assert ("systemd-run --pipe --wait --quiet --collect -p WorkingDirectory=/opt/exemple/prod-green "
             "-p EnvironmentFile=/etc/exemple/prod/app.env -p EnvironmentFile=/etc/exemple/prod/lanceur.env "
-            "-p LoadCredential=scw:/etc/exemple/scw.key -p LoadCredential=scw-kms /opt/exemple/prod-green/.venv/bin/python "
+            "-p LoadCredential=scw:/etc/exemple/scw.key /opt/exemple/prod-green/.venv/bin/python "
             "/opt/exemple/prod-green/deploy/lanceur_secrets.py migrer current") in sortie
     assert "upgrade head" not in fini.stderr
     _rien_n_a_demarre(banc)

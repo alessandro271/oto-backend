@@ -1005,8 +1005,8 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("CREDENTIALS_DIRECTORY", Classe.REGLAGE, "",
              "Posée par systemd, jamais à la main : le dossier des credentials de l'unité. "
              "Le coffre y lit `scw-kms`, la clé d'API de `Decrypt` de Key Manager "
-             "(`LoadCredential=scw-kms`, fichier `/etc/credstore/scw-kms`), en mode Key "
-             "Manager seulement.",
+             "(`LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key`, ligne ajoutée à l'unité au passage à Key "
+             "Manager), en mode Key Manager seulement.",
              ("oto_mcp/crypto.py:232",)),
     Variable("OTO_EXPORT_CLE_CIBLE", Classe.REGLAGE, None,
              "Clé maîtresse (hex 64 ou base64) de l'instance CIBLE d'un export par "

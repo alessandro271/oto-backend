@@ -222,7 +222,7 @@ def test_aucune_cle_refuse_de_demarrer(kms, monkeypatch):
 def test_sans_credential_scw_kms_refus_nomme(kms, monkeypatch, tmp_path):
     _mode_kms(monkeypatch)
     (tmp_path / "scw-kms").unlink()
-    with pytest.raises(crypto.TrousseauRefuse, match=r"LoadCredential=scw-kms.*/etc/credstore"):
+    with pytest.raises(crypto.TrousseauRefuse, match=r"LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key"):
         crypto.charger_trousseau()
     monkeypatch.delenv("CREDENTIALS_DIRECTORY")
     with pytest.raises(crypto.TrousseauRefuse, match=r"aucune clé d'API"):
