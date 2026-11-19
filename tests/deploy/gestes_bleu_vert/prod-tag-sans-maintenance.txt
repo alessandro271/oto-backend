@@ -5,7 +5,7 @@ flock -w 900 9
 flock -w 600 8
 date +%H:%M:%S
 date +%H:%M:%S
-systemctl stop oto-mcp-drain-prod.service
+systemctl is-active --quiet oto-mcp-drain-prod.service
 systemctl stop oto-mcp@green
 date +%H:%M:%S
 git fetch --tags --force origin
@@ -40,7 +40,7 @@ systemctl enable oto-mcp@green
 systemctl disable oto-mcp@blue
 systemctl disable oto-mcp
 ss -Htn state established ( sport = :9103 )
-systemd-run --collect --quiet --unit=oto-mcp-drain-prod --description=Vidange de la couleur blue du backend oto prod /opt/deploy/oto-mcp-drain.sh oto-mcp blue 9103 120
+systemd-run --collect --quiet --unit=oto-mcp-drain-prod --description=Vidange de la couleur blue du backend oto prod /opt/deploy/oto-mcp-drain.sh oto-mcp blue 9103 240
 date +%H:%M:%S
 date +%H:%M:%S
 journalctl -u oto-mcp@green -n 10 --no-pager
@@ -56,7 +56,7 @@ journalctl -u oto-mcp@green -n 10 --no-pager
 [12:00:00] tls-check répond sur :9107 (code 404 sur un domaine bidon — l'endpoint est là)
 [12:00:00] amont basculé sur green (9107) — reload caddy gracieux
 [12:00:00] trafic public OK sur https://mcp.oto.cx/.well-known/oauth-protected-resource
-[12:00:00] vidange de blue (:9103) confiée à oto-mcp-drain-prod — 0 connexion(s) au moment de la bascule, plafond 120s (journalctl -u oto-mcp-drain-prod)
+[12:00:00] vidange de blue (:9103) confiée à oto-mcp-drain-prod — 0 connexion(s) au moment de la bascule, plafond 240s (journalctl -u oto-mcp-drain-prod)
 [12:00:00] === prod OK : blue -> green en Ns (démarrage Ns) — déploiement TERMINÉ, la vidange continue en fond ===
 maintenance : oto-mcp-maintenance.service absent de /opt/oto-mcp-green (tag antérieur au lot 0) — ignoré
 ### erreurs

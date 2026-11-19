@@ -50,7 +50,9 @@ case " $* " in
 esac
 for a in "$@"; do case "$a" in --short) echo 0123456; exit 0 ;; HEAD) echo "$BANC_SHA"; exit 0 ;; esac; done''',
     "caddy": "exit 0",
-    "systemctl": r'''[ "$1" = is-active ] && [ -n "${BANC_DEMARRAGE_KO:-}" ] && exit 3; exit 0''',
+    # Aucune vidange ne tourne (unité `*-vidange`) : la montée n'a rien à attendre.
+    "systemctl": r'''case "$1 $3" in "is-active "*-vidange*) exit 3 ;; esac
+[ "$1" = is-active ] && [ -n "${BANC_DEMARRAGE_KO:-}" ] && exit 3; exit 0''',
     "curl": r'''
 url=""; for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
 case "$url" in
