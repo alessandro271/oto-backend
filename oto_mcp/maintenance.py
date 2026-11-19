@@ -859,6 +859,9 @@ def orphelins(argv: list[str]) -> int:
                          "instances) — exige --preavis-echu"))
     p.add_argument("--preavis-echu", type=date.fromisoformat, metavar="AAAA-MM-JJ",
                    help="fin du préavis aux propriétaires des clés, antérieure à aujourd'hui")
+    p.add_argument("--connecteur", action="append", metavar="NOM",
+                   help=("ne traite que cet orphelin (répétable) ; les autres orphelins "
+                         "ne sont ni lus ni touchés"))
     args = p.parse_args(argv)
     if args.preavis_echu is not None and not args.credentials:
         p.error("--preavis-echu ne vaut qu'avec --credentials")
@@ -868,8 +871,9 @@ def orphelins(argv: list[str]) -> int:
     from .connectors import orphelins_nettoyage as on
     try:
         rapport = on.nettoyer(appliquer=args.appliquer, credentials=args.credentials,
-                              preavis_echu=args.preavis_echu)
-    except on.PreavisNonEchu as e:
+                              preavis_echu=args.preavis_echu,
+                              seuls=frozenset(args.connecteur) if args.connecteur else None)
+    except (on.PreavisNonEchu, on.ConnecteurServi) as e:
         print(f"REFUS : {e}", file=sys.stderr)
         return ORPHELINS_REFUS
     except Exception:

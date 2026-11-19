@@ -195,3 +195,27 @@ def test_credentials_apres_preavis_echu_passent_par_le_coffre(live):
             "SELECT connector FROM connector_credentials WHERE entity_type = 'org' "
             "AND entity_id = %s", (str(org),)).fetchall()}
     assert restants == {CONNU, f"{fantome}_pont"}
+
+
+def test_connecteur_servi_refuse_avant_toute_ecriture(monkeypatch):
+    monkeypatch.setattr(on, "_lire", lambda *a, **k: pytest.fail("aucune lecture"))
+    with pytest.raises(on.ConnecteurServi):
+        on.nettoyer(appliquer=True, seuls=frozenset({CONNU}))
+    assert maintenance.main(["orphelins", "--connecteur", CONNU]) == maintenance.ORPHELINS_REFUS
+
+
+def test_borne_a_un_connecteur_les_autres_orphelins_restent(live, capsys):
+    vise, garde = "disparu_vise_905", "disparu_garde_905"
+    _seme(vise)
+    _seme(garde)
+    rapport = on.nettoyer(appliquer=True, credentials=True,
+                          preavis_echu=AUJOURD_HUI - timedelta(days=1),
+                          aujourd_hui=AUJOURD_HUI, seuls=frozenset({vise}))
+    (cles,) = [t for t in rapport["tables"] if t["table"] == orphelins.CREDENTIALS]
+    assert cles["retire"] == {vise: 1} and cles["reste"] == {}
+    assert _compte(orphelins.CREDENTIALS, vise) == 0
+    # L'orphelin non nommé garde ses clés ET ses autres références.
+    assert _compte(orphelins.CREDENTIALS, garde) == 1
+    assert _compte("user_selected_connectors", garde) == 2
+    assert all(garde not in t.get("retire", {}) for t in rapport["tables"])
+    assert "borné à : " + vise in "\n".join(on.lignes_du_rapport(rapport))
