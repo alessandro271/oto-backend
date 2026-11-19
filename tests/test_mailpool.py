@@ -866,9 +866,11 @@ def test_update_not_kept_carries_the_previous_values_without_credentials(client)
     assert not [k for k in _keys(e.data) if SECRET.search(k)]
 
 
-def test_update_through_the_real_client_sends_only_what_differs(monkeypatch):
+def test_update_through_the_real_client_sends_the_current_text_fields(monkeypatch):
     """End to end with oto-core's client: the tool's `changes` reach Mailpool's PUT
-    body as Mailpool names them, and only the fields that differ."""
+    body as Mailpool names them, on top of the box's CURRENT text fields (sender
+    names, signature, forwarding), so a PUT that replaces the whole box erases
+    nothing; the avatar is sent only when it changes."""
     from oto.tools.mailpool import client as mpc
 
     box = dict(MAILBOX, type="google", lastName="Lee", signature="Anna")
@@ -899,5 +901,9 @@ def test_update_through_the_real_client_sends_only_what_differs(monkeypatch):
     assert [(a, b.rsplit("/", 2)[-2:]) for a, b, _ in seen] == [
         ("GET", ["mailboxes", "5301"]), ("GET", ["mailboxes", "5301"]),
         ("PUT", ["mailboxes", "5301"])]
-    assert seen[-1][2] == {"signature": "Anna Lee"}
+    expected = {k: box[k] for k in ("firstName", "lastName", "signature", "forwardTo")
+                if box.get(k) is not None}
+    expected["signature"] = "Anna Lee"
+    assert seen[-1][2] == expected
+    assert "avatar" not in seen[-1][2] and "avatarUrl" not in seen[-1][2]
     assert "password" not in json.dumps(res.structured_content or {})
