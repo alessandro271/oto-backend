@@ -45,6 +45,47 @@ from .lecture_d_appel import lecture_d_appel
 # `guides.owner_id` et `grants.grantor_id`.
 PLATFORM_SCOPE_ID = "platform"
 
+# ── Aucun secret dans cette table ─────────────────────────────────────────────────
+# `value` est un TEXT en clair. Un secret (le `client_secret` d'une application OAuth de
+# l'instance, un secret de signature…) se range au coffre, chiffré par la clé maître :
+# `credentials_store.set_app_secret`, et la console admin y route d'elle-même les clés de
+# cette forme (`capabilities/platform_connectors`). Ici, la garde : une clé dont le NOM a
+# la forme d'un secret est refusée, sur une liste FERMÉE de motifs — l'écrivain unique
+# de la table ne la pose pas, quel que soit l'appelant. Figé par
+# `tests/test_connector_settings_sans_secret.py`.
+
+#: Les motifs qui font d'un nom de clé un secret (sous-chaîne, casse ignorée).
+MOTIFS_SECRET = ("secret", "password", "passwd", "token", "api_key", "apikey",
+                 "private_key", "privatekey", "credential")
+
+#: Les seules exceptions, nommées. Chacune dit pourquoi sa valeur n'est pas un secret.
+EXCEPTIONS_PUBLIQUES: dict[tuple[str, str], str] = {
+    # La clé d'API Firebase de l'application web Planity est PUBLIQUE par conception :
+    # Planity la sert à chaque navigateur qui ouvre son site (`tools/planity_session`).
+    ("planity", "firebase_api_key"): "clé publique servie au navigateur",
+}
+
+
+class ReglageSecretRefuse(ValueError):
+    """Une clé de forme secret présentée à `connector_settings` : elle va au coffre."""
+
+
+def a_la_forme_d_un_secret(connector: str, key: str) -> bool:
+    """La clé `key` du connecteur `connector` est-elle un secret (donc interdite ici) ?"""
+    if (connector, key) in EXCEPTIONS_PUBLIQUES:
+        return False
+    k = (key or "").lower()
+    return any(m in k for m in MOTIFS_SECRET)
+
+
+def refuser_un_secret(connector: str, key: str) -> None:
+    """Lève `ReglageSecretRefuse` si `key` a la forme d'un secret — le refus nommé."""
+    if a_la_forme_d_un_secret(connector, key):
+        raise ReglageSecretRefuse(
+            f"connector_settings refuse la clé {connector}.{key} : son nom a la forme "
+            f"d'un secret, qui se range au coffre (credentials_store.set_app_secret, ou "
+            f"oto_admin_connector_setting op=set, qui l'y route).")
+
 
 @lecture_d_appel
 def list_connector_settings(key: Optional[str] = None, conn=None) -> list[dict]:
@@ -80,7 +121,11 @@ def set_connector_setting(scope_type: str, scope_id: str, connector: str, key: s
                           value: str, set_by: Optional[str] = None) -> None:
     """Pose ou remplace une surcharge. Ne valide NI le scope NI la valeur : le CHECK
     de la table ferme le vocabulaire de scope, et le sens de `value` appartient au
-    module qui la lit — la valider ici en ferait un second domicile."""
+    module qui la lit — la valider ici en ferait un second domicile.
+
+    Une seule exception à cette neutralité : une clé de forme secret est REFUSÉE
+    (`ReglageSecretRefuse`) — la table est en clair, un secret va au coffre."""
+    refuser_un_secret(connector, key)
     with _connect() as conn:
         conn.execute(
             "INSERT INTO connector_settings "
@@ -98,7 +143,10 @@ def copy_platform_settings(old: str, new: str, keys: tuple[str, ...]) -> int:
 
     Only to a `new` that has NONE of these keys: once the operator manages them under
     `new` (sets, changes, clears one), a boot never rewrites them from `old`. Returns
-    the number of rows copied."""
+    the number of rows copied. A secret-shaped key is refused (`ReglageSecretRefuse`):
+    secrets move with the vault, never through this table."""
+    for k in keys:
+        refuser_un_secret(new, k)
     with _connect() as conn:
         cur = conn.execute(
             "INSERT INTO connector_settings (scope_type, scope_id, connector, key, value, set_by) "

@@ -14,8 +14,9 @@ as `jefacture`:
 `rw_ads`): the token itself cannot change an ad account.
 
 ⚠️ **The application is the platform's**: its `client_id` and `client_secret` (LinkedIn
-Developer Portal, app with the Advertising API product) live at PLATFORM scope of
-`connector_settings`, connector `linkedin_ads`, set by the operator. Missing, « connect »
+Developer Portal, app with the Advertising API product) are set by the operator under
+the connector `linkedin_ads`: `client_id` at PLATFORM scope of `connector_settings`,
+`client_secret` in the vault, encrypted (`auth/app_instance`). Missing, « connect »
 refuses NAMING what is missing, and so does a renewal.
 
 **Two shapes of the same row**, said by `meta.token_shape`:
@@ -55,7 +56,7 @@ CONNECTOR = "linkedin_ads"
 _AUD = "linkedin_ads"
 CALLBACK_PATH = "/api/linkedin_ads/oauth/callback"
 
-#: `client_secret` carries the `_secret` suffix that the admin console masks.
+#: `client_id` is a public setting, `client_secret` lives in the vault (`auth/app_instance`).
 _REGLAGES = ("client_id", "client_secret")
 
 _COMMANDE = ('oto_admin_connector_setting(op="set", connector="linkedin_ads", '
@@ -109,17 +110,15 @@ def _coeur():
 def _reglages() -> dict:
     """Database read: at the start of a flow, on return from a consent, and at the
     RENEWAL of an access token (once per 60 days per person and process)."""
-    from ..db import connector_settings as store
+    from . import app_instance
 
-    return {r["key"]: (r["value"] or "").strip()
-            for r in store.list_connector_settings()
-            if r["scope_type"] == "platform" and r["connector"] == CONNECTOR
-            and r["key"] in _REGLAGES}
+    return app_instance.reglages(CONNECTOR, _REGLAGES)
 
 
 def coordonnees_manquantes() -> list[str]:
-    poses = _reglages()
-    return [nom for nom in _REGLAGES if not poses.get(nom)]
+    from . import app_instance
+
+    return app_instance.manquantes(CONNECTOR, _REGLAGES)
 
 
 def app() -> tuple[str, str]:

@@ -15,8 +15,8 @@ from ._model import _c
 # ON BEHALF OF THE PERSON: each one signs in with their own jefacture.com account
 # (OAuth 2.0 authorization code, `auth/jefacture.py`) and the token reads what THEY
 # reach — possibly several spaces (companies). The OAuth application is the
-# platform's: `client_id` and `client_secret` at PLATFORM scope of
-# `connector_settings`, set by the operator. No credential field: the stored
+# platform's: `client_id` at PLATFORM scope of `connector_settings` and
+# `client_secret` in the vault (`auth/app_instance`), set by the operator. No credential field: the stored
 # secret is the refresh token. The host is fixed: no egress guard to set.
 CONNECTOR = _c(
     "jefacture", ["jefacture"],

@@ -12,6 +12,8 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 
+from _app_instance_simule import coffre_depuis_les_reglages
+
 from oto_mcp.auth import flow as oauth_flow
 from oto_mcp.auth import slack as slack_auth
 
@@ -59,6 +61,7 @@ def env(monkeypatch):
                             {"scope_type": "platform", "scope_id": "platform",
                              "connector": "slack", "key": k, "value": v}
                             for k, v in reglages.items()])
+    coffre_depuis_les_reglages(monkeypatch)
     monkeypatch.setattr(access, "current_org", lambda sub: ORG)
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: True)
     coffre = _Coffre()

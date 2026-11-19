@@ -30,8 +30,8 @@ This fact, and this fact alone, explains the two renewal mechanisms:
   ask the user to prevent.
 
 ⚠️ **The Meta application's coordinates (App ID, secret) are not in the
-code**: they live in the database, at the PLATFORM scope of `connector_settings`, and
-the instance operator sets them. This repository is public, and a Meta
+code**: the instance operator sets them — `app_id` at the PLATFORM scope of
+`connector_settings`, `app_secret` in the vault, encrypted (`auth/app_instance`). This repository is public, and a Meta
 application belongs to whoever created it — who answers for what it requests and
 for whom it invites as a tester.
 
@@ -61,17 +61,12 @@ CONNECTOR = "instagram_meta"
 _AUD = "instagram_meta"
 _CALLBACK_PATH = "/api/instagram_meta/oauth/callback"
 
-#: The Meta application's coordinates, under this connector in
-#: `connector_settings`, platform scope.
-#:
-#: ⚠️ Unlike the three of `planity`, **`app_secret` is a real one**: it
-#: signs the code exchange and the switch to a long-lived token. It is not in the vault for
-#: all that, and for the opposite reason to the one that keeps a user's secret:
-#: the vault stores what belongs to a PERSON or an ORG, and its cascade
-#: would fetch it on someone's behalf. This one belongs to nobody in the
-#: product — it is an instance setting, like a service key. It is
-#: never returned by an API: `oto_admin_connector_setting` is reserved for the platform
-#: admin, and nothing in this module writes it into a message or a log.
+#: The Meta application's coordinates (`auth/app_instance`): `app_id` in
+#: `connector_settings`, platform scope; `app_secret` — a real secret, it signs the code
+#: exchange and the switch to a long-lived token — in the vault, encrypted, at the
+#: publisher app's storage (PLATFORM scope, never served by the cascade). It is never
+#: returned by an API: the admin console says set / not set, and nothing in this module
+#: writes it into a message or a log.
 _REGLAGES = ("app_id", "app_secret")
 
 #: The command that sets them. It lives IN the refusal message: a diagnostic that
@@ -109,25 +104,23 @@ def _coeur():
 # --- the application's coordinates, set by the operator ------------------------
 
 def _reglages() -> dict:
-    """The coordinates set in the database, platform scope. `{}` if the database is silent.
+    """The coordinates that are set (`auth/app_instance`). `{}` if nothing is.
 
     COLD read and off-loop: it only happens at the start of a connection
     flow (a human click) or on return from a consent, never on the path
     of a tool call — that is the property `db/connector_settings` asks us to
     hold. What it buys: one write, and every deployed color
     sees it at the next flow, without a restart or per-process reload."""
-    from ..db import connector_settings as store
+    from . import app_instance
 
-    return {r["key"]: (r["value"] or "").strip()
-            for r in store.list_connector_settings()
-            if r["scope_type"] == "platform" and r["connector"] == CONNECTOR
-            and r["key"] in _REGLAGES}
+    return app_instance.reglages(CONNECTOR, _REGLAGES)
 
 
 def coordonnees_manquantes() -> list[str]:
-    """Those of the two keys that are missing from the database. Empty = all present."""
-    poses = _reglages()
-    return [nom for nom in _REGLAGES if not poses.get(nom)]
+    """Those of the two keys that are not set. Empty = all present."""
+    from . import app_instance
+
+    return app_instance.manquantes(CONNECTOR, _REGLAGES)
 
 
 def app():

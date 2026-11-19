@@ -13,8 +13,9 @@ shape as `ubersuggest`, with the application of `meta_ads`:
    (`get_me().email`) in `meta`: the agent reads what THAT person reaches.
 
 ⚠️ **The application is the platform's**: its `client_id` (the API key of the
-application on the Banqup developer portal) and `client_secret` live at PLATFORM
-scope of `connector_settings`, connector `jefacture`, set by the operator. Missing,
+application on the Banqup developer portal) at PLATFORM scope of `connector_settings`
+and its `client_secret` in the vault, encrypted (`auth/app_instance`), connector
+`jefacture`, set by the operator. Missing,
 « connect » refuses NAMING what is missing, and so does a renewal.
 
 **Renewal.** `access_token_for` asks for a fresh access token with the refresh
@@ -52,7 +53,7 @@ CONNECTOR = "jefacture"
 _AUD = "jefacture"
 CALLBACK_PATH = "/api/jefacture/oauth/callback"
 
-#: `client_secret` carries the `_secret` suffix that the admin console masks.
+#: `client_id` is a public setting, `client_secret` lives in the vault (`auth/app_instance`).
 _REGLAGES = ("client_id", "client_secret")
 
 _COMMANDE = ('oto_admin_connector_setting(op="set", connector="jefacture", '
@@ -102,17 +103,15 @@ def _coeur():
 def _reglages() -> dict:
     """Database read: at the start of a flow, on return from a consent, and at the
     RENEWAL of an access token (once per hour per person)."""
-    from ..db import connector_settings as store
+    from . import app_instance
 
-    return {r["key"]: (r["value"] or "").strip()
-            for r in store.list_connector_settings()
-            if r["scope_type"] == "platform" and r["connector"] == CONNECTOR
-            and r["key"] in _REGLAGES}
+    return app_instance.reglages(CONNECTOR, _REGLAGES)
 
 
 def coordonnees_manquantes() -> list[str]:
-    poses = _reglages()
-    return [nom for nom in _REGLAGES if not poses.get(nom)]
+    from . import app_instance
+
+    return app_instance.manquantes(CONNECTOR, _REGLAGES)
 
 
 def app() -> tuple[str, str]:

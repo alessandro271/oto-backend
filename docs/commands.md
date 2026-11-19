@@ -397,6 +397,57 @@ orphelins --appliquer     # écrit ; relancer à blanc ensuite : « aucun » par
 orphelins --credentials --preavis-echu <date> --connecteur <nom>   # les clés d'UN orphelin
 ```
 
+### Sceller les secrets d'application — `oto-mcp maintenance secrets-d-application`
+
+Les secrets de l'application OAuth de l'instance (`client_secret`, `app_secret`,
+`user_client_secret`, `signing_secret` de microsoft, jefacture, instagram_meta, hubspot,
+slack, linkedin_ads, meta_ads) sont rangés au coffre (`docs/connector-vault.md` §Secrets de
+l'application de l'INSTANCE) ; une base d'avant les porte encore en clair dans
+`connector_settings`. La commande les scelle : pour chaque ligne de forme secret au palier
+plateforme, UNE transaction courte (15 s / 5 s de verrou) qui scelle au coffre, relit et
+vérifie le déchiffrement (comparé, jamais affiché), puis efface la ligne en clair — un échec
+annule la ligne entière. **À blanc par défaut**, `--appliquer` pour écrire,
+`--appliquer --sans-effacer` pour sceller et vérifier en gardant le clair. Idempotente :
+un secret déjà au coffre à l'identique est « déjà au coffre » (son clair effacé avec
+`--appliquer`). Une ancienne carte (`sharepoint`) va sous son porteur (`microsoft`) si
+celui-ci n'a pas de valeur, sinon sa ligne est une copie périmée, effacée. N'imprime
+**jamais une valeur** : connecteur, clé, état (`à déplacer`, `déplacé`, `copié au coffre,
+clair conservé`, `déjà au coffre`…). Clé maître requise (sinon refus, code 2).
+Sorties : 0 fait, 1 refus (un écart — le coffre porte une autre valeur — ou un secret hors
+palier plateforme : ces lignes ne sont pas touchées, à trancher à la main), 2 erreur (la
+ligne en échec reste intacte), 3 il reste à faire (à blanc : il y a des lignes à sceller).
+
+**Ordre de mise en prod — aucune fenêtre où une connexion OAuth échoue.** Le code d'avant
+lit le clair, le code d'après lit le coffre seul ; la base est partagée prod/préprod :
+
+1. **Avant la fusion**, depuis l'arbre extrait du commit de tête de la PR : à blanc, puis
+   `--appliquer --sans-effacer`, puis à blanc encore (tout « déjà au coffre », code 0).
+   Le coffre porte les secrets ET le clair reste : les deux codes lisent.
+2. **Fusion** (la préprod passe au code neuf, qui lit le coffre), puis **tag** (la prod).
+3. **Après la bascule de la prod**, depuis l'arbre du tag : `--appliquer` (efface le
+   clair, chaque ligne « déjà au coffre, clair effacé »), puis à blanc : « aucun secret
+   dans connector_settings », code 0.
+
+⚠️ Entre 1 et 3, **aucune rotation** d'un de ces secrets : posée par le code d'avant, elle
+irait au clair seul ; l'étape 3 la verrait en écart (code 1) et n'effacerait rien. Une
+instance cible qui a sa propre base joue les mêmes étapes avant de monter le tag.
+
+```bash
+SHA=<commit> A=/opt/oto-mcp-$(cat /etc/oto-mcp/active-prod) T=/tmp/secrets-app-$SHA
+sudo git -C "$A" fetch -q origin && sudo mkdir -p "$T" \
+  && sudo git -C "$A" archive "$SHA" | sudo tar -x -C "$T" && sudo ln -sfn "$A/.venv" "$T/.venv"
+secrets_app() {   # le lanceur de l'arbre extrait ; PYTHONPATH : `oto_mcp` est celui du commit
+  sudo systemd-run --pipe --wait --quiet --collect -p WorkingDirectory="$T" \
+    -p Environment=PYTHONPATH="$T" \
+    -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
+    "$T/.venv/bin/python" "$T/deploy/lanceur_secrets.py" maintenance secrets-d-application "$@"
+}
+secrets_app                               # à blanc
+secrets_app --appliquer --sans-effacer    # étape 1 : scelle, garde le clair
+secrets_app --appliquer                   # étape 3, après la bascule : efface le clair
+```
+
 ## Pin oto-core — une version déployée = une coordonnée reproductible
 
 - **`oto-core` PINNÉ sur un tag git** (`oto-core[anonymize] @ git+…@vX.Y.Z` dans `pyproject.toml` — l'extra est `anonymize`, `browser` a été retiré côté backend et n'est resté que sur le CLI local ; plus `@main` flottant ni dép `oto-cli`) : une version déployée = coordonnée reproductible. ⚠️ **`pip` ne réinstalle PAS une dép VCS déjà présente** (`oto-core` "satisfait" quelle que soit sa version) → `pip install -e .` seul ne monte JAMAIS oto-core au tag bumpé. Le deploy installe **par le verrou** (`uv sync --frozen`, #932) : oto-core au commit que `uv.lock` désigne, plus de force-reinstall. Bump connecteurs = tag oto-core + édit du pin **+ `uv lock` dans le même commit** (le verrou est versionné, la CI installe par lui et refuse un verrou en retard — `docs/verrou-dependances.md`) + deploy (PAS de `git pull` box). Cf. ADR 0020. ⚠️ **Symptôme trompeur en LOCAL** : des tests rouges peuvent être un venv en retard sur le pin, pas du code cassé (05/08 : 17 rouges sur un connecteur neuf ; 26/08 : 48 ; 01/09 : 28) → **sous-section ci-dessous**, qui porte la trace exacte à reconnaître et la recette. (⚠️ box `otomata-0` a un VIEUX oto-mcp décommissionné/stoppé avec un editable legacy `oto-cli` pré-split — ne pas s'y fier, le runtime live est la box dédiée.) ⚠️ **Le pin est un champ que TOUTES les sessions // éditent → régressions silencieuses récurrentes** : vécu 2026-07-07, un commit concurrent a réécrit le pin `v1.18.0→v1.17.0` et **cassé un tool déployé SANS erreur** (le tool était enregistré, sa méthode absente de l'ancien oto-core → `AttributeError` seulement à l'appel). Toujours bumper en **superset** (tag haut ⊇ tags bas) ; à la moindre divergence de pin en merge/rebase, **garder la version haute**.

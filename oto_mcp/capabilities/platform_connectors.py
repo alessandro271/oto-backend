@@ -35,7 +35,8 @@ from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, StrictBool, StrictInt
 
-from .. import access, db, entitlements_catalogue as catalogue, org_store, providers
+from .. import (access, credentials_store, db, entitlements_catalogue as catalogue,
+               org_store, providers)
 from . import _facturation_externe as facturation_externe
 from . import _quota_d_octroi as quota_d_octroi
 from ..connectors import activation as connector_activation
@@ -501,32 +502,53 @@ class ConnectorSettingView(BaseModel):
     changed: Optional[bool] = None           # set / clear
 
 
-#: Suffix of the keys whose VALUE is not read back. The table first held
-#: settings that are public by design (the three coordinates of the Planity application,
-#: which every browser receives); `instagram_meta.app_secret` on 2026-09-09 is the
-#: first REAL secret stored there, and `op="list"` until then returned every value
-#: as is — to a caller who is often an AGENT, hence into a transcript.
-#:
-#: Redaction by SUFFIX, not by key list: a list indexed by name would have to
-#: be kept up to date with each new connector, and forgetting would fail nowhere — it
-#: would publish the secret. A trailing `_secret` is a convention we can require of
-#: the author of a setting, and that a test verifies.
-_SUFFIXE_SECRET = "_secret"
+#: What `op="list"` shows in place of a secret's value. A secret-shaped key
+#: (`connector_settings.a_la_forme_d_un_secret`, a closed list of name patterns) is never
+#: stored in `connector_settings`: `op="set"` routes it to the vault, encrypted
+#: (`credentials_store.set_app_secret`), and the listing says PRESENCE only — never the
+#: value, even truncated: knowing that a key is set is what the admin needs to
+#: diagnose; reading it back brings them nothing they did not already have when they
+#: set it, and the caller is often an AGENT, hence a transcript.
+_POSE = "(set in the vault — value not shown)"
 
 
 def _sans_les_secrets(lignes: list[dict]) -> list[dict]:
-    """The rows, with the values of secret keys replaced by a marker.
+    """The rows, with the value of any secret-shaped key replaced by a marker — the
+    plain rows the migration has not erased yet (`oto-mcp maintenance
+    secrets-d-application`) included."""
+    from ..db import connector_settings as store
 
-    We return the PRESENCE, never the value — even truncated: knowing that a key is
-    set is what the admin needs to diagnose; reading it back brings them
-    nothing they did not already have when they set it."""
     out = []
     for r in lignes:
         ligne = dict(r)
-        if str(ligne.get("key", "")).endswith(_SUFFIXE_SECRET):
+        if store.a_la_forme_d_un_secret(str(ligne.get("connector", "")),
+                                        str(ligne.get("key", ""))):
             ligne["value"] = "(set — value not shown)" if ligne.get("value") else ""
         out.append(ligne)
     return out
+
+
+def _secrets_au_coffre(key: Optional[str]) -> list[dict]:
+    """The vault's instance-app secrets, as listing rows (presence, no value)."""
+    return [{"scope_type": "platform", "scope_id": "platform", "connector": r["connector"],
+             "key": r["key"], "value": _POSE, "set_by": r["set_by"], "set_at": r["set_at"]}
+            for r in credentials_store.app_secrets_set()
+            if key is None or r["key"] == key]
+
+
+def _secret(ctx: ResolvedCtx, inp: "ConnectorSettingInput", actives) -> dict:
+    """`set` / `clear` of a secret-shaped key: the vault, platform-wide only."""
+    if inp.org_id is not None:
+        raise AuthzDenied(400, "invalid_setting",
+                          f"`{inp.key}` is a secret of the instance's application: set "
+                          "platform-wide only (omit `org_id`).")
+    if inp.op == "clear":
+        ok = credentials_store.clear_app_secret(inp.connector, inp.key)
+        return {"op": "clear", "changed": ok, "active": actives()}
+    if not (inp.value or "").strip():
+        raise AuthzDenied(400, "invalid_setting", f"`{inp.key}`: empty value.")
+    credentials_store.set_app_secret(inp.connector, inp.key, str(inp.value), set_by=ctx.sub)
+    return {"op": "set", "changed": True, "active": actives()}
 
 
 def _connector_setting(ctx: ResolvedCtx, inp: ConnectorSettingInput) -> dict:
@@ -539,7 +561,8 @@ def _connector_setting(ctx: ResolvedCtx, inp: ConnectorSettingInput) -> dict:
 
     if inp.op == "list":
         return {"op": "list",
-                "rows": _sans_les_secrets(store.list_connector_settings(inp.key)),
+                "rows": (_sans_les_secrets(store.list_connector_settings(inp.key))
+                         + _secrets_au_coffre(inp.key)),
                 "active": _actives()}
     if inp.op == "reload":
         # No fallback: if the read fails, the caller must KNOW — a reload
@@ -555,6 +578,8 @@ def _connector_setting(ctx: ResolvedCtx, inp: ConnectorSettingInput) -> dict:
                           + providers.refus_renomme(inp.connector))
     scope_type, scope_id = (("org", str(inp.org_id)) if inp.org_id is not None
                             else ("platform", "platform"))
+    if inp.op in ("set", "clear") and store.a_la_forme_d_un_secret(inp.connector, inp.key):
+        return _secret(ctx, inp, _actives)
     if inp.op == "clear":
         ok = store.clear_connector_setting(scope_type, scope_id, inp.connector, inp.key)
         return {"op": "clear", "changed": ok, "active": _actives()}
@@ -615,6 +640,9 @@ CAPABILITIES += [
             "`forager`, platform-wide: what the shared key serves, comma-separated "
             "`tool:op` or `tool` (default `forager_person:phone_numbers`, read at each "
             "call); the same key on `elevenlabs` (default `elevenlabs_act:create_speech`). "
+            "A secret of the instance's OAuth application (`client_secret`, "
+            "`app_secret`, `signing_secret`…) is stored in the vault, encrypted, "
+            "platform-wide only, and listed as set without its value. "
             "⚠️ Overrides are held in "
             "MEMORY, so a row takes effect only after `reload` — and reload is "
             "PER-PROCESS: reloading preprod does not reload prod."),

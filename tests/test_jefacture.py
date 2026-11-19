@@ -23,6 +23,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from _app_instance_simule import coffre_depuis_les_reglages
+
 from oto_mcp import providers
 from oto_mcp.mcp_errors import McpError
 
@@ -123,6 +125,7 @@ def env(monkeypatch):
     monkeypatch.setattr(store, "list_connector_settings", lambda *a, **k: [
         {"scope_type": "platform", "scope_id": "platform", "connector": CONNECTEUR,
          "key": k_, "value": v} for k_, v in reglages.items()])
+    coffre_depuis_les_reglages(monkeypatch)
     coffre = _Coffre()
     monkeypatch.setattr(credentials_store, "get_credential_with_meta", coffre.get_with_meta)
     monkeypatch.setattr(credentials_store, "get_credential", coffre.get)

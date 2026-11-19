@@ -16,6 +16,8 @@ import types
 from unittest.mock import MagicMock
 
 import pytest
+
+from _app_instance_simule import coffre_depuis_les_reglages
 from _modules_recharges import oublier_module
 import requests
 
@@ -94,6 +96,7 @@ def env(monkeypatch):
                             {"scope_type": "platform", "scope_id": "platform",
                              "connector": CONNECTEUR, "key": k, "value": v}
                             for k, v in _COORDONNEES.items()])
+    coffre_depuis_les_reglages(monkeypatch)
     coffre = _Coffre()
     monkeypatch.setattr(credentials_store, "get_credential_with_meta", coffre.get)
     monkeypatch.setattr(credentials_store, "set_credential", coffre.set)

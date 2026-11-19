@@ -267,13 +267,13 @@ def list_all_platform_instances() -> dict[str, list[dict]]:
     `list_platform_instances` (pas de garantie inter-provider)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT connector, entity_id AS label, share_mode, share_down, "
+            "SELECT connector, entity_id AS label, account, share_mode, share_down, "
             "share_side, meta FROM connector_credentials WHERE entity_type=%s "
             "ORDER BY connector, set_at DESC", (PLATFORM,)).fetchall()
     out: dict[str, list[dict]] = {}
     for r in rows:
         out.setdefault(r["connector"], []).append(
-            {"label": r["label"], "share_mode": r["share_mode"],
+            {"label": r["label"], "account": r["account"], "share_mode": r["share_mode"],
              "share_down": r["share_down"] or [], "share_side": r["share_side"] or [],
              "meta": r["meta"] or {}})
     return out
@@ -712,6 +712,83 @@ def clear_dedicated_app(owner_type: str, owner_id: int, connector: str) -> bool:
     with _connect() as conn:
         return _delete(conn, PLATFORM, dedicated_app_label(owner_type, owner_id),
                        connector, "")
+
+
+# --- secrets de l'application OAuth de l'INSTANCE --------------------------------
+#
+# L'app d'éditeur, sous la forme que prennent les connecteurs dont l'application est
+# celle de l'instance, sans région ni tenant (microsoft, jefacture, instagram_meta,
+# hubspot, slack, linkedin_ads, meta_ads) : leurs secrets (`client_secret`,
+# `app_secret`, `user_client_secret`, `signing_secret`…) sont rangés ICI, chiffrés par
+# la clé maître ; leurs réglages publics (`client_id`, `app_id`, `config_id`) restent
+# dans `connector_settings`, qui refuse toute clé de forme secret
+# (`db/connector_settings.refuser_un_secret`).
+#
+# Même rangement et même invariant que l'app d'éditeur : scope `PLATFORM`, `entity_id`
+# `app:instance` — préfixe `app:` des apps dédiées, propriétaire `instance` qu'aucune
+# app dédiée ne peut porter (`DEDICATED_APP_OWNERS`), absent de `list_editor_apps` — et
+# `walk_cascade` ne propose le palier plateforme qu'aux connecteurs `auth_modes ∋
+# 'platform'`, ce qu'aucun de ces connecteurs ne déclare (figé par
+# `tests/test_editor_app.py`) : jamais servi comme credential d'appel. Une ligne par
+# secret, la clé du réglage en `account` (dans l'AAD) : poser, roter ou retirer un
+# secret ne relit ni ne réécrit les autres. Seuls les flux d'autorisation de ces
+# connecteurs les lisent, par `auth/app_instance`.
+
+INSTANCE_APP_LABEL = "app:instance"
+
+
+def set_app_secret(connector: str, key: str, value: str, set_by: Optional[str] = None,
+                   conn=None) -> None:
+    """Pose/rote un secret de l'application de l'instance, chiffré. `conn` : écrire
+    dans la transaction de l'appelant (la migration depuis `connector_settings`)."""
+    if not (key or "").strip():
+        raise ValueError("clé du secret requise")
+    if not (value or "").strip():
+        raise ValueError(f"{connector}.{key} : valeur vide")
+    if conn is not None:
+        _upsert(conn, PLATFORM, INSTANCE_APP_LABEL, connector, key, value.strip(),
+                set_by, None)
+        return
+    with _connect() as c:
+        _upsert(c, PLATFORM, INSTANCE_APP_LABEL, connector, key, value.strip(), set_by, None)
+
+
+def get_app_secrets(connector: str, keys: Sequence[str], conn=None) -> dict[str, str]:
+    """`{clé: secret en clair}` des secrets POSÉS parmi `keys` (absent = non posé). Un
+    déchiffrement en échec LÈVE : un secret illisible n'est pas un secret absent."""
+    sql = ("SELECT account, secret_enc FROM connector_credentials WHERE entity_type=%s "
+           "AND entity_id=%s AND connector=%s AND account = ANY(%s)")
+    params = (PLATFORM, INSTANCE_APP_LABEL, connector, list(keys))
+    if conn is not None:
+        rows = conn.execute(sql, params).fetchall()
+    else:
+        with _connect() as c:
+            rows = c.execute(sql, params).fetchall()
+    return {r["account"]: _reveal(r, PLATFORM, INSTANCE_APP_LABEL, connector, r["account"])
+            for r in rows}
+
+
+@lecture_d_appel
+def app_secrets_set(connector: Optional[str] = None) -> list[dict]:
+    """Les secrets posés (`connector`, `key`, `set_by`, `set_at`), **sans valeur et sans
+    déchiffrer** — la présence, pour la console admin et les cartes. Mémorisée par
+    appel : une liste de cartes la lit une fois pour tous ses connecteurs."""
+    sql = ("SELECT connector, account AS key, set_by, set_at FROM connector_credentials "
+           "WHERE entity_type=%s AND entity_id=%s")
+    params: tuple = (PLATFORM, INSTANCE_APP_LABEL)
+    if connector is not None:
+        sql += " AND connector=%s"
+        params += (connector,)
+    with _connect() as conn:
+        rows = conn.execute(sql + " ORDER BY connector, account", params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_app_secret(connector: str, key: str) -> bool:
+    """Retire un secret de l'application de l'instance (par `_delete` : son instance
+    s'archive, comme celle d'une app d'éditeur)."""
+    with _connect() as conn:
+        return _delete(conn, PLATFORM, INSTANCE_APP_LABEL, connector, key)
 
 
 # `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :

@@ -15,8 +15,9 @@ the expiry is stored in `meta.expires_at` and the card goes "to reconnect" at th
 first rejection — we do not clone `instagram_meta`'s daily pass for a case
 we discourage.
 
-⚠️ The Meta application's coordinates (App ID, secret, configuration) live in the
-database, PLATFORM scope of `connector_settings`, set by the operator.
+⚠️ The Meta application's coordinates are set by the operator: App ID and configuration
+at the PLATFORM scope of `connector_settings`, the secret in the vault, encrypted
+(`auth/app_instance`).
 """
 from __future__ import annotations
 
@@ -37,8 +38,7 @@ _AUD = "meta_ads"
 _CALLBACK_PATH = "/api/meta_ads/oauth/callback"
 
 #: `config_id` = the Facebook Login for Business configuration (permissions + token
-#: type). Only `app_secret` is secret — and it carries the `_secret` suffix that the
-#: admin console masks.
+#: type). Only `app_secret` is secret — it lives in the vault (`auth/app_instance`).
 _REGLAGES = ("app_id", "app_secret", "config_id")
 
 _COMMANDE = ('oto_admin_connector_setting(op="set", connector="meta_ads", '
@@ -66,17 +66,15 @@ def _coeur():
 def _reglages() -> dict:
     """COLD read, never on the path of a tool call: only at
     the start of a flow or on return from a consent."""
-    from ..db import connector_settings as store
+    from . import app_instance
 
-    return {r["key"]: (r["value"] or "").strip()
-            for r in store.list_connector_settings()
-            if r["scope_type"] == "platform" and r["connector"] == CONNECTOR
-            and r["key"] in _REGLAGES}
+    return app_instance.reglages(CONNECTOR, _REGLAGES)
 
 
 def coordonnees_manquantes() -> list[str]:
-    poses = _reglages()
-    return [nom for nom in _REGLAGES if not poses.get(nom)]
+    from . import app_instance
+
+    return app_instance.manquantes(CONNECTOR, _REGLAGES)
 
 
 def app():

@@ -18,9 +18,9 @@ on the common pattern (`connectors/flow` + `auth/flow`):
 workspace id (`meta.team_id`) — a reinstall of the same workspace REPLACES its row,
 a second workspace adds one. A new account takes the workspace's name.
 
-⚠️ **The app's coordinates are the instance's**, PLATFORM scope of
-`connector_settings`, set by the operator (`client_id`, `client_secret`) — as for
-`meta_ads`. Not per tenant (`docs/tenants.md` §Convention). Without them, the flow is
+⚠️ **The app's coordinates are the instance's**, set by the operator — as for
+`meta_ads`: `client_id` at the PLATFORM scope of `connector_settings`, `client_secret`
+and `signing_secret` in the vault, encrypted (`auth/app_instance`). Not per tenant (`docs/tenants.md` §Convention). Without them, the flow is
 still declared but `app_ready` says no, and the card keeps its form.
 
 ⚠️ **Switching app is not free.** Channel memberships belong to the APP, not to the
@@ -47,8 +47,7 @@ _AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
 _TOKEN_URL = "https://slack.com/api/oauth.v2.access"
 _SCOPES = ("member", "org", "group")
 
-#: Only `client_secret` is secret — and it carries the `secret` that the admin
-#: console masks (`capabilities/platform_connectors._sans_les_secrets`).
+#: Only `client_secret` is secret — it lives in the vault (`auth/app_instance`).
 _REGLAGES = ("client_id", "client_secret")
 _COMMANDE = ('oto_admin_connector_setting(op="set", connector="slack", '
              'key="<key>", value="<value>")')
@@ -77,8 +76,8 @@ class ConnectRefused(ValueError):
 
 class SlackAppNotPublished(RuntimeError):
     """The instance publishes no Slack app: its coordinates (`client_id`,
-    `client_secret`) are missing at the PLATFORM scope of `connector_settings`. The
-    message names the missing keys and the operator's command."""
+    `client_secret`) are not set (`auth/app_instance`). The message names the missing
+    keys and the operator's command."""
 
 
 class SlackTokenRotationEnabled(RuntimeError):
@@ -92,17 +91,15 @@ class SlackTokenRotationEnabled(RuntimeError):
 
 def _reglages() -> dict:
     """COLD read: only at the start of a flow or on return from a consent."""
-    from ..db import connector_settings as store
+    from . import app_instance
 
-    return {r["key"]: (r["value"] or "").strip()
-            for r in store.list_connector_settings()
-            if r["scope_type"] == "platform" and r["connector"] == CONNECTOR
-            and r["key"] in _REGLAGES}
+    return app_instance.reglages(CONNECTOR, _REGLAGES)
 
 
 def coordonnees_manquantes() -> list[str]:
-    poses = _reglages()
-    return [nom for nom in _REGLAGES if not poses.get(nom)]
+    from . import app_instance
+
+    return app_instance.manquantes(CONNECTOR, _REGLAGES)
 
 
 def app() -> dict:
@@ -116,20 +113,17 @@ def app() -> dict:
     return _reglages()
 
 
-#: The app's Events API signing secret — same platform scope, separate from
+#: The app's Events API signing secret — in the vault too, separate from
 #: `_REGLAGES` on purpose: the install works without it, only the bot needs it.
 SIGNING_SECRET = "signing_secret"
 
 
 def signing_secret() -> Optional[str]:
     """The signing secret of the published app, or None — read on EACH event (one
-    row, platform scope): rotating it in the console takes effect at once."""
-    from ..db import connector_settings as store
+    vault row): rotating it in the console takes effect at once."""
+    from . import app_instance
 
-    for r in store.list_connector_settings(SIGNING_SECRET):
-        if r["scope_type"] == "platform" and r["connector"] == CONNECTOR:
-            return (r["value"] or "").strip() or None
-    return None
+    return app_instance.reglages(CONNECTOR, (SIGNING_SECRET,)).get(SIGNING_SECRET)
 
 
 def app_disponible(sub: str) -> bool:
