@@ -268,6 +268,11 @@ def _valider_le_message_client(ep: dict, client: dict) -> None:
     if not client["headline"]:
         raise AuthzDenied(400, "client_headline_required",
                           "`client_headline` est requis avec les autres `client_*`.")
+    from .. import causes_pannes
+    for champ in ("headline", "todo"):
+        refus = causes_pannes.copie_refusee(client[champ])
+        if refus:
+            raise AuthzDenied(400, "client_copy_refused", f"`client_{champ}` : {refus}.")
     if client["link"]:
         t = db.get_trigger(int(ep["trigger_id"]), int(ep["org_id"]))
         sub = (t or {}).get("sub")
@@ -275,6 +280,28 @@ def _valider_le_message_client(ep: dict, client: dict) -> None:
             raise AuthzDenied(400, "client_link_off_instance",
                               "`client_link` : un chemin ou une adresse du tableau de bord "
                               "du client seulement.")
+
+
+def _proposer_a_la_cause(ep: dict, client: dict, *, acteur: str) -> None:
+    """Le texte écrit pour le client d'un épisode devient la copie PROPOSÉE de sa cause,
+    dans la langue de l'org, si elle n'en a pas encore dans cette langue. Elle porte son
+    origine (l'org et l'épisode, `causes_agents.decider`), que l'écran Admin des causes
+    montre ; elle ne sert aux autres orgs qu'une fois la cause approuvée par un opérateur
+    (`agent_causes_admin`). Une cause approuvée ou refusée ne se touche pas, même si elle
+    l'est devenue entre la lecture et l'écriture (`si_statut`) ; le lien, propre à l'org,
+    ne s'y range pas."""
+    from .. import alertes_slack_agents
+    from ..db import causes_agents
+    cause = causes_agents.lire(ep["empreinte"]) if ep.get("empreinte") else None
+    if cause is None or cause["statut"] != "proposee":
+        return
+    langue = alertes_slack_agents.langue(int(ep["org_id"]))
+    if langue in (cause.get("copie") or {}):
+        return
+    copie = {k: client[k] for k in ("headline", "todo", "action") if client.get(k)}
+    causes_agents.decider(cause["cle"], acteur=acteur, copie={langue: copie},
+                          origine={"org_id": int(ep["org_id"]), "episode_id": int(ep["id"])},
+                          si_statut="proposee")
 
 
 def _copie_lue(brute: dict) -> dict:
@@ -430,6 +457,7 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
         if any(client.values()):
             from ..db import alertes_slack
             alertes_slack.poser_message_client(int(ep["id"]), client)
+            _proposer_a_la_cause(ep, client, acteur=ctx.sub)
         return {"episode": episodes_agents.lire(int(ep["id"]))}
 
     if inp.op == "escalate":
