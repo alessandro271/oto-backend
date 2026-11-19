@@ -51,6 +51,10 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # ⚠️ PIN SUR UN COMMIT, pas sur un tag : b83685f = connectors#257 (sessions gardées par
+    # l'hôte pour les connecteurs exécutés dans son navigateur, Crunchbase porté), fusionné
+    # sur main mais pas encore publié en version. Repasser sur le tag qui le contiendra
+    # (v1.239.0 ou suivant) dès sa publication. Aucun extra.
     # v1.238.0 = lemlist 1.6.1 (désinscriptions par les routes v2, absente = `unsubscribed: false`,
     # casse ; connectors#251, #256), apify (un 429 rejoué avec backoff, jamais un départ
     # ambigu ; #253), mailpool 1.2.0 (`update_mailbox` ; #255). v1.237.0 = Sheets (structure,
@@ -573,7 +577,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.238.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@b83685f920aef1dc83bb4ac92c3e397336b96524",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

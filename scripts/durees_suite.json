@@ -534,7 +534,7 @@
   "tests/test_credential_rejete_541.py": 0.03,
   "tests/test_credential_scoped_read_and_merge.py": 0.05,
   "tests/test_credits_epuises_quota_exhausted.py": 0.05,
-  "tests/test_crunchbase_session_expiree.py": 0.03,
+  "tests/test_crunchbase_par_la_lib.py": 0.03,
   "tests/test_crypto.py": 0.03,
   "tests/test_csv_tolerant.py": 0.08,
   "tests/test_current_org_run_stage_639.py": 0.03,
