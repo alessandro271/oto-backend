@@ -528,6 +528,7 @@ tests = [
   "tests/**/test_slack_agent_posts_db.py",
   "tests/**/test_slack_reglage.py",
   "tests/**/test_migration_20261109_slack_mention_only.py",
+  "tests/**/test_migration_20261119_slack_mention_dflt.py",
   "tests/**/test_slack_post_note_l_agent.py",
   "tests/**/test_portee_runner.py",
   "tests/**/test_trigger*.py",

@@ -190,8 +190,8 @@ def _partage_par_defaut(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
 
 def _slack(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     """Le réglage Slack de l'org (`db/slack_reglage.py`) : hors d'un DM, l'app ne répond
-    qu'à qui la tague (`mention_only`). Défaut : FALSE, une réponse dans le fil d'un
-    message d'agent le relance sans mention (`slack_events.py`)."""
+    qu'à qui la tague (`mention_only`). Défaut : TRUE (19/11/2026) ; FALSE = une réponse
+    dans le fil d'un message d'agent le relance sans mention (`slack_events.py`)."""
     from .. import db
     if inp.op not in ("get", "set"):
         raise AuthzDenied(400, "unsupported_op", "preview n'existe que pour field_filters.")
@@ -488,11 +488,11 @@ CAPABILITIES += [
             "platform maximum without an Apify key of the org's own, at most the "
             "platform's safety bound with one; get also returns the bound and the "
             "ceiling in force on each key) | slack (the org's Slack app: set takes "
-            "`mention_only` true|false; default false = a reply in the thread of a "
-            "message an agent posted as the app restarts that agent, and a reply in a "
-            "conversation with the in-app agent continues it, without tagging the app; "
-            "true = outside a direct message, the app answers only a message that tags "
-            "it, replies included; direct messages are never affected) | model_regions "
+            "`mention_only` true|false; default true = outside a direct message, the app "
+            "answers only a message that tags it, replies included; false = a reply in "
+            "the thread of a message an agent posted as the app restarts that agent, and "
+            "a reply in a conversation with the in-app agent continues it, without "
+            "tagging the app; direct messages are never affected) | model_regions "
             "(where the org's agents' models may run: set takes `allow_cn` true|false; "
             "default true; false = models with any host in China — `runner.models[].hosting"
             ".region` = cn — are no longer offered (`allowed: false`), an agent cannot be "
