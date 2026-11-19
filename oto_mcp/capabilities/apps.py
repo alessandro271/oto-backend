@@ -43,7 +43,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .. import db, interrupteurs, ownership
+from .. import db, interrupteurs, org_suspension, ownership
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .apps_html import avertissements
@@ -124,8 +124,11 @@ class AppCard(BaseModel):
     # L'appelant peut-il la modifier (éditeur, gérant, propriétaire) ?
     can_edit: bool = False
     # Qui la voit au-delà de son propriétaire (`db.apps.visibilites`) : `{"org":
-    # "editor"|"viewer"|None, "people": n}` — « Vous seul » quand personne.
+    # "editor"|"contributor"|"viewer"|None, "people": n}` — « Vous seul » quand personne.
     visibility: Optional[dict] = None
+    # Peut-il en cliquer les boutons (Use, ou la modifier) ? Servi par `op=get` seul ;
+    # absent d'une liste. Faux = View : le front désactive les gestes.
+    can_use: Optional[bool] = None
     title: str
     thumbnail: Optional[dict] = None
     created_by: Optional[str] = None
@@ -311,7 +314,9 @@ def _cards(sub: str, rows: list[dict], writable: Optional[set[int]] = None) -> l
 
 
 def _view(sub: str, row: dict) -> dict:
+    from . import apps_appel
     row = _cards(sub, [row])[0]
+    row["can_use"] = bool(row.get("can_edit")) or apps_appel.peut_cliquer(sub, int(row["id"]))
     return {k: row[k] for k in AppView.model_fields if k in row}
 
 
@@ -391,6 +396,8 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         # manifeste à corriger (chaque appel y paraîtrait hors manifeste).
         app = _app_or_404(sub, inp.app_id, "read") if inp.app_id is not None else None
         org = org_de_l_app(app) if app is not None else ctx.org_id
+        if app is not None:
+            org_suspension.exiger(org)
         clean, problems = _problemes(sub, org, inp.manifest)
         out: dict = {"ok": not problems, "problems": problems}
         if not problems:
@@ -422,6 +429,9 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
 
     row = _app_or_404(sub, inp.app_id,
                       "read" if inp.op in ("get", "revisions", "read_file", "put_file") else "write")
+    # L'org de l'APP, en plus de celle de l'appel (gardée par l'adaptateur) : l'app d'une
+    # org suspendue se ferme à tous, invités d'une autre org compris.
+    org_suspension.exiger(org_de_l_app(row))
 
     if inp.op == "get":
         view = _view(sub, row)

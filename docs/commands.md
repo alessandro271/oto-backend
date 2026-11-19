@@ -534,6 +534,50 @@ jetons                # « aucun jeton de lien en clair », code 0
 La colonne en clair, vide, est retirée par une révision d'une PR suivante, une fois l'étape
 3 jouée sur toutes les bases vivantes.
 
+### Les lecteurs d'app qui cliquaient — `oto-mcp maintenance apps-lecteurs-actifs`
+
+Depuis le rôle Use d'une app (`contributor`, `docs/apps.md`), un partage `viewer` ouvre
+l'app sans en cliquer les boutons ; avant lui, tout lecteur cliquait. La commande liste les
+partages d'app `viewer` vivants — nominatifs, d'équipe, d'org — par lesquels quelqu'un a
+fait un geste (`app_consents` brûlé) dans les `--jours` derniers jours (30), sur une app non
+archivée, et qui ne cliquerait plus autrement : ni propriétaire (la personne, un membre de
+l'org ou de l'équipe propriétaire, un admin de l'org de l'équipe), ni titulaire d'un partage
+`contributor`, `editor` ou `manager`. **À blanc par défaut** (transaction en lecture seule) :
+c'est l'audit. `--appliquer` les passe en `contributor` dans UNE transaction (15 s / 5 s de
+verrou) ; idempotente. N'imprime que des identifiants (app, type et id du principal) et des
+comptes. Sorties : 0 rien à faire / fait, 2 erreur ou base qui n'admet pas encore
+`contributor` (rien n'est promu), 3 il reste à promouvoir.
+
+**Ordre de mise en prod**, sur chaque base vivante (une instance cible : avant sa montée) :
+
+1. `oto-mcp migrer upgrade head` AVANT la bascule : la révision `20261119_1300_app_use_role`
+   élargit le CHECK des rôles ; le code d'avant n'en voit rien.
+2. La commande à blanc, AVANT la bascule : l'audit. `--appliquer` est une DÉCISION de
+   l'opérateur, prise après lecture de l'audit ; elle ne promeut que les partages listés,
+   jamais tous les `viewer` (ni la révision ni le démarrage n'en promeuvent aucun). Jouée
+   avant la bascule, elle ne laisse aucun de ces lecteurs sans clic.
+3. Tag, bascule.
+
+Un démarrage du code d'AVANT entre 2 et 3 ramène les `contributor` à `viewer` (son
+rattrapage de rôle ne les connaît pas) : rejouer alors l'étape 2 après la bascule.
+
+Les étapes 1 et 2 se jouent depuis l'arbre du COMMIT à livrer (la révision et la commande
+n'existent pas dans le code d'avant), comme tout outil d'exploitation lancé avant son tag :
+`A` désigne cet arbre, posé à côté de l'actif, jamais l'arbre servi.
+
+```bash
+A=<arbre du commit à livrer, son .venv installé>
+lecteurs() {
+  sudo systemd-run --pipe --wait --quiet --collect -p WorkingDirectory="$A" \
+    -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
+    "$A/.venv/bin/python" "$A/deploy/lanceur_secrets.py" maintenance apps-lecteurs-actifs "$@"
+}
+lecteurs                # l'audit, à blanc
+lecteurs --appliquer    # sur décision, après lecture de l'audit
+lecteurs                # « aucun partage viewer par lequel quelqu'un cliquait », code 0
+```
+
 ## Pin oto-core — une version déployée = une coordonnée reproductible
 
 - **`oto-core` PINNÉ sur un tag git** (`oto-core[anonymize] @ git+…@vX.Y.Z` dans `pyproject.toml` — l'extra est `anonymize`, `browser` a été retiré côté backend et n'est resté que sur le CLI local ; plus `@main` flottant ni dép `oto-cli`) : une version déployée = coordonnée reproductible. ⚠️ **`pip` ne réinstalle PAS une dép VCS déjà présente** (`oto-core` "satisfait" quelle que soit sa version) → `pip install -e .` seul ne monte JAMAIS oto-core au tag bumpé. Le deploy installe **par le verrou** (`uv sync --frozen`, #932) : oto-core au commit que `uv.lock` désigne, plus de force-reinstall. Bump connecteurs = tag oto-core + édit du pin **+ `uv lock` dans le même commit** (le verrou est versionné, la CI installe par lui et refuse un verrou en retard — `docs/verrou-dependances.md`) + deploy (PAS de `git pull` box). Cf. ADR 0020. ⚠️ **Symptôme trompeur en LOCAL** : des tests rouges peuvent être un venv en retard sur le pin, pas du code cassé (05/08 : 17 rouges sur un connecteur neuf ; 26/08 : 48 ; 01/09 : 28) → **sous-section ci-dessous**, qui porte la trace exacte à reconnaître et la recette. (⚠️ box `otomata-0` a un VIEUX oto-mcp décommissionné/stoppé avec un editable legacy `oto-cli` pré-split — ne pas s'y fier, le runtime live est la box dédiée.) ⚠️ **Le pin est un champ que TOUTES les sessions // éditent → régressions silencieuses récurrentes** : vécu 2026-07-07, un commit concurrent a réécrit le pin `v1.18.0→v1.17.0` et **cassé un tool déployé SANS erreur** (le tool était enregistré, sa méthode absente de l'ancien oto-core → `AttributeError` seulement à l'appel). Toujours bumper en **superset** (tag haut ⊇ tags bas) ; à la moindre divergence de pin en merge/rebase, **garder la version haute**.

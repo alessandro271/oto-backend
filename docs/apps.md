@@ -38,13 +38,24 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
   (`oto_org_settings domain=partage_par_defaut`, type `app` : `aucun` | `lecture` |
   `ecriture`) ; ce partage d'office est MARQUÉ et se retire seul. `ecriture` est
   permis pour une app (refusé pour un agent) : une app n'a pas d'identité à elle,
-  chaque geste agit au nom de son lecteur, borné par son auteur.
-- **Lecteur / éditeur / gérant**, les rôles d'ADR 0048, par `oto_resource`
-  (`resource_type=app` : `get`, `share`, `unshare`, `transfer`) — la même surface et le
-  même écran « Partager » qu'un projet. Lire l'app = `can_access` lecture (l'ouvrir,
-  s'en servir) ; la modifier = écriture ; la repartager = gouvernance (propriétaire,
-  admin, gérant). Transférer l'app à l'org ou à une équipe la rend à tous leurs
-  membres.
+  chaque geste agit au nom de son lecteur, borné par son auteur. `lecture` pose un
+  partage `viewer` : l'org OUVRE l'app sans en cliquer les boutons (View, ci-dessous).
+- **View / Use / Edit / Manage** — `viewer`, `contributor`, `editor`, `manager`, par
+  `oto_resource_v2` (`resource_type=app` : `get`, `share`, `unshare`, `transfer` ;
+  l'héritée `oto_resource` est sous cliquet et ne prend pas `contributor`) — le même
+  écran « Partager » qu'un projet. View = `can_access` lecture (l'ouvrir, la lire) ;
+  **Use** = l'ouvrir ET cliquer ses boutons (`apps_appel.peut_cliquer` : écriture sur
+  l'app, ou un partage `contributor`, nominatif, d'équipe ou d'org), sans la modifier —
+  projection contenu `read`, refusé hors d'une app (400 `role_for_apps_only`) ; Edit = la
+  modifier ; Manage = la repartager (gouvernance : propriétaire, admin, gérant). Use ne
+  donne aucun droit sur ce que l'app touche : chaque geste reste jugé auteur ∩ lecteur
+  (ci-dessous). Un partage `viewer` d'avant ce rôle reste View : il ne clique plus —
+  `oto-mcp maintenance apps-lecteurs-actifs` liste ceux qui cliquaient et, avec
+  `--appliquer`, les passe en Use (`docs/commands.md`). Transférer l'app à l'org ou
+  à une équipe la rend à tous leurs membres (propriétaires : ils cliquent).
+- **L'org de l'app suspendue** ferme l'app à tous ses lecteurs, ceux d'une autre org
+  compris (`docs/orgs-suspendues.md` §2) ; l'org de l'appel reste gardée comme toute
+  capacité.
 - **L'org d'une app** (`apps_manifeste.org_de_l_app`) est celle de son propriétaire :
   l'org, l'org de l'équipe, et pour une app perso l'org où elle a été créée (sinon
   l'org perso de la personne). C'est là que vivent ses tableaux et ses agents, et là
@@ -185,6 +196,10 @@ et `batch`, un lot de lectures (plus bas).
   tableau lu n'y sont pas. Aucun journal d'audit des lectures n'existe à ce jour.
 
 ### Écrire, ajouter, lancer, déposer — l'accord du lecteur, donné hors de l'app (`me.app.consent`, #1386)
+
+**Use d'abord** : un geste exige Use, Edit ou Manage (`peut_cliquer`), jugé à
+l'émission du consentement, à l'appel et au dépôt — après le refus du brouillon, pour
+ne rien dire de son existence. View reçoit 403 `app_view_only`.
 
 **Le clic dans l'app VAUT accord, jugé par l'hôte** (décision du 31/10/2026, qui remplace
 celle du 29/10). Le serveur ne distingue pas un clic du lecteur d'un appel que l'app fait

@@ -47,6 +47,9 @@ def seams(monkeypatch):
         return droits.get((sub, rid, want), False)
 
     monkeypatch.setattr(ownership, "can_access", can_access)
+    # Le rôle Use (`contributor`) : absent par défaut ; un test le pose pour l'éprouver.
+    monkeypatch.setattr(ownership, "has_role_grant",
+                        lambda sub, rtype, rid, roles: droits.get((sub, "app_role")) in roles)
     monkeypatch.setattr(db.apps, "get_for_call", lambda i: dict(APP) if i == 5 else None)
     monkeypatch.setattr(C, "org_de_l_app", lambda app: ORG_DU_PROJET if app.get("id") == 5 else None)
     monkeypatch.setattr(C, "tableau_de_l_org",

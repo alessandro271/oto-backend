@@ -42,6 +42,16 @@ lecteur voient tous deux (les mêmes que l'écran de l'agent montre au lecteur) 
 pour les runs que le LECTEUR a lancés — l'erreur du run d'un autre peut citer ses
 données.
 
+**Qui clique** : une app se partage en View (`viewer` : l'ouvrir, la lire), Use
+(`contributor` : l'ouvrir ET cliquer ses boutons), Edit, Manage. Un geste (`GESTES`)
+exige Use ou plus (`peut_cliquer`) — à l'émission du consentement, à l'appel et au
+dépôt ; View reçoit 403 `app_view_only`. Use ne donne AUCUN droit sur ce que l'app
+touche : le geste reste jugé par la règle ci-dessous, aux droits du lecteur.
+
+**L'org de l'app** : une app dont l'org est suspendue se ferme à tous ses lecteurs
+(`org_suspension.exiger` dans `_app_pour`), en plus de la garde de l'adaptateur sur
+l'org de l'appel.
+
 **La règle : droits d'une app = droits de son AUTEUR ∩ droits de son LECTEUR.**
 L'auteur (`apps.updated_by`, le dernier à avoir écrit l'app) choisit ce qu'elle
 touche ; le lecteur l'ouvre avec ses propres droits. Sans la règle, quelqu'un qui peut
@@ -95,6 +105,8 @@ MAX_RUNS = 50
 _JOB_DONE = frozenset({"done", "failed", "expired"})
 # Ce qui écrit, lance ou dépose : servi seulement avec un consentement du lecteur.
 GESTES = frozenset({"write_cell", "add_row", "start_agent", "upload_file"})
+# Le rôle de partage qui CLIQUE sans modifier l'app (« Use ») ; Edit et Manage aussi.
+ROLE_USE = frozenset({"contributor"})
 # Un accord = un jeton = UN geste, celui que le résumé décrit : jamais un lot sur un clic.
 GESTES_PAR_ACCORD = 1
 # Ce qu'une requête de cadre annonce (`Sec-Fetch-Dest`) : jamais l'écran hôte.
@@ -264,11 +276,24 @@ def _refus(status: int, code: str, msg: str) -> AuthzDenied:
     return AuthzDenied(status, code, msg)
 
 
-def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False) -> dict:
+def peut_cliquer(sub: str, app_id: int) -> bool:
+    """Use ou plus : modifier l'app (propriétaire, Edit, Manage), ou un partage
+    `contributor`. View (`viewer`) l'ouvre sans en cliquer les boutons."""
+    rid = str(app_id)
+    return (ownership.can_access(sub, APP_RTYPE, rid, "write")
+            or ownership.has_role_grant(sub, APP_RTYPE, rid, ROLE_USE))
+
+
+def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False,
+              geste_: bool = False) -> dict:
+    from .. import org_suspension
+
     app = db.apps.get_for_call(int(app_id))
     if (app is None or app.get("archived_at") is not None
             or not ownership.can_access(ctx.sub, APP_RTYPE, str(app["id"]), "read")):
         raise _refus(404, "unknown_app", f"App {app_id} doesn't exist or isn't shared with you.")
+    # L'org de l'APP, en plus de celle de l'appel (gardée par l'adaptateur).
+    org_suspension.exiger(org_de_l_app(app))
     if draft:
         # L'APERÇU du brouillon (`docs/apps.md` § Brouillon et publication) : ses seuls
         # éditeurs l'ouvrent, et il se juge comme une app à part entière — SON
@@ -280,6 +305,11 @@ def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False) -> dict:
         if brouillon is None:
             raise _refus(404, "no_draft", "This app has no draft.")
         app = {**app, "manifest": brouillon["manifest"], "updated_by": brouillon["by"]}
+    # Après le brouillon : un lecteur qui le demande reçoit le refus du brouillon, qu'il
+    # en existe un ou non — jamais un indice.
+    if geste_ and not peut_cliquer(ctx.sub, int(app["id"])):
+        raise AuthzDenied(403, "app_view_only",
+                     "You can view this app but not use its buttons: ask its owner for Use.")
     if not app.get("updated_by"):
         raise _refus(403, "app_author_unknown",
                      "Nobody is known to have written this app, so it can't act for anyone.")
@@ -606,7 +636,7 @@ def deposer(ctx: ResolvedCtx, app_id: int, consent: Optional[str], name: str,
     jugement est ICI, la route n'adapte que le multipart. L'annonce (nom, taille, type
     déclaré) est ce que le consentement a signé ; les octets reçus doivent y répondre,
     et leur type se juge sur eux (`type_servi`)."""
-    app = _app_pour(ctx, app_id, draft)
+    app = _app_pour(ctx, app_id, draft, geste_=True)
     annonce = {"name": name, "size": len(data), "media_type": _type_normal(declared_type)}
     inp = AppCallInput(app_id=app_id, action="upload_file", file=annonce, draft=draft)
     _annonce(app, annonce)
@@ -751,7 +781,7 @@ def _consent(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
         raise AuthzDenied(400, "consent_not_needed", f"`{inp.action}` doesn't take a consent.")
     if inp.reads is not None:
         raise AuthzDenied(400, "invalid_batch", "A consent is for one gesture: no `reads`.")
-    app = _app_pour(ctx, inp.app_id, inp.draft)
+    app = _app_pour(ctx, inp.app_id, inp.draft, geste_=True)
     _, resume = _geste(ctx, app, inp)
     jeton = secrets.token_urlsafe(32)
     ttl = CONSENT_TTL_UPLOAD if inp.action == "upload_file" else CONSENT_TTL
@@ -876,7 +906,7 @@ def _debiter(n: int) -> None:
 
 
 def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
-    app = _app_pour(ctx, inp.app_id, inp.draft)
+    app = _app_pour(ctx, inp.app_id, inp.draft, geste_=inp.action in GESTES)
     o = inp.options or {}
 
     if inp.action == "upload_file":
@@ -1017,7 +1047,8 @@ CAPABILITIES += [
             "or `batch` up to 10 reads, each answered as its own call in `results`. "
             "Allowed only when BOTH the app's author and its viewer may do it, on "
             "tables and agents of the app's organization. Writing and "
-            "starting need `consent`, from `POST /api/me/apps/{app_id}/consent`. "
+            "starting need the Use role (or Edit/Manage) and `consent`, from "
+            "`POST /api/me/apps/{app_id}/consent`. "
             "Interactive sessions only (no API token)."
         ),
         mcp=None,
@@ -1029,6 +1060,10 @@ CAPABILITIES += [
                           "côté de `reads` — ou `reads` sans `action: batch`"),
             DeclaredError(400, "batch_too_large",
                           "batch : plus de `MAX_LECTURES_PAR_LOT` (10) lectures"),
+            DeclaredError(403, "app_view_only",
+                          "un geste (write_cell, add_row, start_agent) par qui ne tient "
+                          "que View (`viewer`) : il faut Use (`contributor`), Edit ou "
+                          "Manage"),
             DeclaredError(429, "rate_limited",
                           "batch : les lectures du lot dépassent ce qui reste du débit par "
                           "jeton de la route (240/min), chaque lecture comptant un appel"),
@@ -1045,7 +1080,8 @@ CAPABILITIES += [
             "those arguments only — and `summary`, built by the server: the action, its "
             "target and the content it writes. The host MUST show the summary in its "
             "own chrome and use the token only after the viewer confirms there; a click "
-            "in the app approves nothing. Interactive sessions only (no API token), "
+            "in the app approves nothing. Needs the Use role (or Edit/Manage): View "
+            "only reads. Interactive sessions only (no API token), "
             "from an origin this instance declares — never `null`, never a frame."
         ),
         mcp=None,
@@ -1058,6 +1094,9 @@ CAPABILITIES += [
                           "(`Sec-Fetch-Dest: iframe`) : une app ne l'obtient pas elle-même"),
             DeclaredError(400, "consent_not_needed",
                           "l'action n'est pas un geste (lecture : aucun jeton)"),
+            DeclaredError(403, "app_view_only",
+                          "le lecteur ne tient que View (`viewer`) : un geste exige Use "
+                          "(`contributor`), Edit ou Manage"),
             DeclaredError(413, "viewer_storage_full",
                           "upload_file : le lecteur garde déjà 5 Go de fichiers, toutes "
                           "apps confondues"),
