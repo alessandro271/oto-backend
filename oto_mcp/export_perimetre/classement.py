@@ -264,6 +264,9 @@ CLASSEMENT: dict[str, Table] = {
     # où l'org est prévenue qu'un agent ne fonctionne plus (canal ou personne Slack) :
     # un réglage de l'org, il part avec elle.
     "agent_alert_settings": possedee(ParOrg()),
+    # le choix de l'org sur la réparation automatique de ses agents : un réglage de
+    # l'org, il part avec elle.
+    "agent_health_settings": possedee(ParOrg()),
     # les pages et tableaux épinglés dans l'org : partagés (`owner_sub` NULL) ou
     # PERSONNELS d'un membre (`owner_sub` = son compte, la ligne est celle d'UN compte
     # dans l'org) ; `added_by` = l'auteur du geste, pas un compte. Ils partent avec elle.

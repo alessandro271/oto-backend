@@ -3287,6 +3287,29 @@ passe AVANT l'alerte.
   ⚠️ L'incident vit dans la mémoire du processus (`_INCIDENTS`) : un redémarrage le redit
   une fois. Le budget ne fait que borner : il ne relance rien que la boucle ne relançait
   déjà.
+- **Le choix de l'org, et le plafond par org** : la réparation automatique est COUPÉE
+  tant qu'un admin de l'org ne l'a pas allumée (`agent_health_settings.auto_repair`,
+  `DEFAULT FALSE` ; aucune ligne = coupée ; `PUT /api/orgs/{id}/agent-health`). Coupée,
+  la boucle ouvre et dit l'épisode mais ne relance rien (`_avec_consentement`, fermé sur
+  erreur ; `reparation_coupee` au bilan), et `oto_admin_agent_repair` refuse `rerun` et
+  `add_tool` (403 `auto_repair_off`) à QUICONQUE l'appelle — l'agent médecin comme un
+  opérateur, d'où qu'il appelle : cette porte est celle de la plateforme, le choix de
+  l'org la lie. Aucun forçage. Allumée, les relances d'une org sont bornées à
+  `RELANCES_PAR_ORG` (20) sur 24 heures GLISSANTES, tous épisodes confondus, en plus des
+  deux par épisode et du budget d'un passage : comptées et écrites sous un verrou
+  consultatif de l'org, dans la transaction de la trace (`episodes_agents.
+  noter_reparation(plafond_org=)`). Une relance refusée par ce plafond est différée
+  (`plafond_org` au bilan, journalisée), jamais escaladée.
+- **Défaire une réparation** (`POST /api/orgs/{id}/agent-health/undo` `{episode_id}`,
+  qui peut modifier l'agent) : seuls les ajouts d'outils du médecin se défont, en une
+  transaction (`sante_agents.defaire`) — l'épisode puis l'agent relus `FOR UPDATE`. Un
+  outil n'est retiré que s'il y est encore ET que l'agent n'a été écrit par personne
+  depuis l'ajout : son `updated_at` est encore, à la microseconde, celui que l'ajout lui
+  a donné (relevé sur la trace, `maj_at`), et `updated_by` encore l'auteur de l'ajout.
+  Sinon l'outil est gardé et dit (`undo_result.kept`). Dans tous les cas l'annulation
+  s'écrit sur l'épisode, la note de réparation de cet épisode s'efface, et le médecin ne
+  redonne pas ces outils (`runner_triggers.repair_undone_tools`, `{outil: jusqu_a}`,
+  `add_tool` → 409 `repair_undone`) pendant `OUTILS_ANNULES_DUREE_JOURS` (90).
 - **Ce qu'il ne fait jamais** : toucher une clé, une identité, une procédure, un horaire
   ou une donnée ; relancer une panne `inconnu` (un run qui a agi avant de mourir
   referait ses effets). Un épisode du titulaire passe `escalade` sans geste : c'est
@@ -3389,7 +3412,10 @@ passe AVANT l'alerte.
   connecteurs que les motifs NOMMENT, `causes_pannes.connecteur_de_la_panne`, le
   fournisseur du modèle de l'agent en repli pour une réponse de fournisseur) et `error`
   (`causes_pannes.erreur_du_fournisseur` : la réponse d'un fournisseur, passée par la
-  liste blanche de l'empreinte ; notre texte interne ne sort jamais). Rien ne s'y écrit.
+  liste blanche de l'empreinte ; notre texte interne ne sort jamais). Il sert aussi
+  `auto_repair`, et sur chaque item de `fixed` `undo`/`undone`. Les deux écritures
+  (`PUT`, admins, `ORG_ADMIN_OF_LIVE` ; `POST …/undo`, `ORG_MEMBER_OF_LIVE` puis
+  `_acces_agent.exiger(ECRIRE)`) jugent le réglage des alertes AVANT d'écrire.
 - **L'écran Admin des causes** (`capabilities/agent_causes_admin.py`) :
   `GET /api/admin/agent-causes` (`status`, `limit`, avec `copie_origine`) et
   `PUT /api/admin/agent-causes/{key}` (`status`, `classe`, `cote`, `client_copy` par
