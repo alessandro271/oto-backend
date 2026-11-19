@@ -483,7 +483,8 @@ def _cles_ko_par_org() -> dict[int, list[dict]]:
 def _agents_nommes(triggers: list[dict]) -> list[dict]:
     """`[{id, label}]` des déclencheurs : l'alerte NOMME chaque agent et le relie à sa
     page — un nombre seul laisse le destinataire chercher lesquels."""
-    return [{"id": t.get("id"), "label": t.get("label") or t.get("procedure")}
+    return [{"id": t.get("id"), "label": t.get("label") or t.get("procedure"),
+             "proprietaire": t.get("sub")}
             for t in triggers]
 
 
@@ -492,6 +493,23 @@ def _agents_du_retrait(org_id: int, connecteurs: list) -> dict[str, list[dict]]:
     from .db import runner_triggers
     return {c: _agents_nommes(runner_triggers.triggers_actifs_utilisant(org_id, c))
             for c in connecteurs or []}
+
+
+def _cles_du_membre(org_id: int, sub: str, cles_ko: list[dict]) -> list[dict]:
+    """Ce que l'alerte de clé montre à un MEMBRE non admin : ses clés personnelles dans
+    l'org (palier `member`, `<org>:<sub>`) en panne, avec ses seuls agents. Plus
+    étroit que ce qu'il a le droit de voir (`_acces_agent.niveaux`) : un agent qu'on lui
+    partage tourne sous son propriétaire, donc sur la clé de ce dernier, pas sur la
+    sienne. Une clé d'org ou d'équipe relève des admins."""
+    a_lui = f"{int(org_id)}:{sub}"
+    out = []
+    for l in cles_ko:
+        if l.get("entity_type") != "member" or str(l.get("entity_id")) != a_lui:
+            continue
+        siens = [a for a in l.get("agents") or [] if a.get("proprietaire") == sub]
+        if siens:
+            out.append({**l, "agents": siens})
+    return out
 
 
 def alertes_credential(*, dry_run: bool = False) -> dict:
@@ -528,24 +546,43 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
 
     ⚠️ Le marquage vient APRÈS l'envoi. Marquer d'abord transformerait un envoi raté en
     silence définitif, c'est-à-dire en la panne même que ce travail supprime.
+
+    **Qui** (`alerte_agents_bloques.destinataires`) : les titulaires des agents touchés
+    encore membres, puis les admins clients. Un admin reçoit tout ; un membre, sa seule
+    clé personnelle en panne sous ses agents (`_cles_du_membre`), ou rien. L'équipe de la
+    plateforme reçoit un courriel SÉPARÉ par org (`alertes_equipe`) : envoi ouvert et
+    hors `dry_run`, son réglage absent fait lever `AlertesEquipeNonReglees` avant tout
+    envoi, et `run` rend alors un code non nul.
     """
     # Le gabarit vit dans `email_templates` et part par son `_envoyer`, le seul point
     # d'envoi d'un gabarit : cette alerte partait de ce module par `_email._send`, sous
     # le nom et la langue de l'INSTANCE, et oubliait l'expéditeur du tenant de l'org.
     from . import email_templates as _gabarits
     from .db import alertes_credential as db_alertes
-    from .alerte_agents_bloques import destinataire_admin
+    from .alerte_agents_bloques import destinataires
     from .db import users as db_users
-    from . import org_store
+    from . import alertes_equipe, org_store
 
+    actif = _alerte_activee()
+    # Le courriel d'équipe, exigé seulement quand ce passage va réellement envoyer :
+    # envoi ouvert, hors `--dry-run`. Lève AVANT toute lecture ou écriture d'épisode.
+    equipe = alertes_equipe.destinataires() if actif and not dry_run else []
     retraits = {int(g["org_id"]): g for g in db_alertes.a_notifier()}
     cles_ko = _cles_ko_par_org()
-    actif = _alerte_activee()
     envoyes, marques, sans_destinataire = 0, 0, 0
+    equipe_partis, equipe_rates = 0, 0
     for org_id in sorted(set(retraits) | set(cles_ko)):
         g, ko = retraits.get(org_id), cles_ko.get(org_id, [])
-        dest = destinataire_admin(org_id)
-        if dest is None:
+        if g:
+            g = {**dict(g), "agents": _agents_du_retrait(org_id, list(g.get("connectors") or []))}
+        # Les titulaires des agents touchés, puis tous les admins CLIENTS de l'org
+        # (`alerte_agents_bloques.destinataires`) — plus le seul premier admin, qui était
+        # souvent un opérateur de la plateforme.
+        touches = [a for l in ko for a in l.get("agents") or []]
+        for agents in ((g or {}).get("agents") or {}).values():
+            touches += agents
+        dest = destinataires(org_id, proprietaires=[a.get("proprietaire") for a in touches])
+        if not dest:
             # On ne marque PAS : sans destinataire, la ligne reste à notifier. Le jour
             # où l'org gagne un admin, elle partira — la perdre ici serait la perdre
             # exactement quand elle devient délivrable.
@@ -558,21 +595,43 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
         # (`users.locale`) prime sur la langue de la marque. Le gabarit vit dans
         # `email_templates` et part par `_envoyer`, comme tous les autres.
         _base, marque = org_store.org_front(org_id)
-        destinataire, adresse = dest
-        fiche = db_users.get_user(destinataire) or {}
-        if g:
-            g = {**dict(g), "agents": _agents_du_retrait(org_id, list(g.get("connectors") or []))}
-        if _gabarits.send_credential_alert_email(
-                adresse, retrait=g, cles_ko=ko, brand=marque,
-                locale=fiche.get("locale"), org_id=org_id, sub=destinataire):
+        partis = 0
+        for d in dest:
+            # Un admin reçoit tout. Ce qui relève de l'org (retraits, clés d'org ou
+            # d'équipe, gestes d'admin) ne part qu'aux admins : un membre ne reçoit que
+            # SA clé en panne sous SES agents (`_cles_du_membre`), ou rien.
+            retrait, siennes = (g, ko) if d.admin else (None, _cles_du_membre(org_id, d.sub, ko))
+            if not retrait and not siennes:
+                continue
+            fiche = db_users.get_user(d.sub) or {}
+            partis += bool(_gabarits.send_credential_alert_email(
+                d.adresse, retrait=retrait, cles_ko=siennes, brand=marque,
+                locale=fiche.get("locale"), org_id=org_id, sub=d.sub))
+        # Marqué dès qu'UN destinataire l'a reçu : rejouer pour celui qu'un envoi a raté
+        # renverrait le même message à tous les autres.
+        if partis:
             envoyes += 1
             if g:
                 marques += db_alertes.marquer_notifie(list(g["ids"] or []))
             if ko:
                 marques += db_alertes.marquer_cles_annoncees(ko)
+            # L'équipe : un courriel SÉPARÉ, le contenu de l'org, sous la marque de
+            # l'instance et sans lien (aucun compte de l'org derrière). Raté : dit,
+            # compté, jamais rejoué (l'épisode est marqué pour le client).
+            entete = alertes_equipe.entete(org_id, partis)
+            for adresse in equipe:
+                if _gabarits.send_credential_alert_email(
+                        adresse, retrait=g, cles_ko=ko, brand=None, locale="fr",
+                        entete=entete):
+                    equipe_partis += 1
+                else:
+                    equipe_rates += 1
+                    logger.warning("alertes-credential : courriel d'équipe refusé pour "
+                                   "l'org %s (non rejoué)", org_id)
     return {"orgs_a_prevenir": len(set(retraits) | set(cles_ko)),
             "cles_en_panne": sum(len(v) for v in cles_ko.values()),
             "envoyes": envoyes, "marques": marques,
+            "equipe": equipe_partis, "equipe_rates": equipe_rates,
             "sans_destinataire": sans_destinataire,
             "actif": actif,
             "note": (None if actif else
@@ -806,8 +865,11 @@ def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:
     **Fail-open par défaut** : un travail qui casse est journalisé et n'empêche pas les
     suivants, et le code reste 0 — un timer de maintenance qui rougit pour une purge
     ratée réveille quelqu'un pour rien. `--strict` inverse ce choix, pour la CI.
+    Exception : un REFUS de réglage (`alertes_equipe.AlertesEquipeNonReglees`) rend 1,
+    `--strict` ou non — c'est l'exploitation qui doit le voir.
     """
-    echecs = 0
+    from .alertes_equipe import AlertesEquipeNonReglees
+    echecs, refus = 0, 0
     for nom in noms:
         fn = _TRAVAUX[nom]
         debut = time.monotonic()
@@ -816,11 +878,17 @@ def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:
             logger.info("maintenance %s%s : %.0f ms — %s", nom,
                         " (à blanc)" if dry_run else "",
                         (time.monotonic() - debut) * 1000, out)
+        except AlertesEquipeNonReglees as e:
+            # Un réglage manquant n'est pas une purge ratée : le travail allait écrire
+            # à des clients sans le courriel d'équipe. Les suivants tournent, et le code
+            # de sortie le dit même sans `--strict`.
+            refus += 1
+            logger.error("maintenance %s : REFUS — %s: %s", nom, type(e).__name__, e)
         except Exception:
             echecs += 1
             logger.error("maintenance %s : ÉCHEC après %.0f ms", nom,
                          (time.monotonic() - debut) * 1000, exc_info=True)
-    return 1 if (echecs and strict) else 0
+    return 1 if refus or (echecs and strict) else 0
 
 
 # Codes de sortie d'`index-concurrents`. Ce n'est PAS un travail : un travail est

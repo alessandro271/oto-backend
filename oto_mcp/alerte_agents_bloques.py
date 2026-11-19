@@ -5,14 +5,17 @@ personne n'a été prévenu : chaque passage écrivait son compte rendu dans un 
 plus personne ne lisait. Un compte rendu dans le canal que l'agent tient n'est pas une
 escalade. Ce module en est une, et la plus petite possible :
 
-- **qui** : l'admin de l'org PROPRIÉTAIRE de l'agent (`runner_triggers.org_id`), par le
-  courrier de PLATEFORME, sous la marque de l'org (`org_store.org_front`) — jamais par
-  un connecteur de l'org, qui peut être précisément ce qui est tombé ;
+- **qui** : dans l'org PROPRIÉTAIRE de l'agent (`runner_triggers.org_id`), son titulaire
+  encore membre et les admins clients (`destinataires`) ; un admin reçoit tous les
+  agents de l'org, un membre les seuls qu'il a le droit de voir (`agents_visibles`). Par
+  le courrier de PLATEFORME, sous la marque de l'org (`org_store.org_front`) — jamais
+  par un connecteur de l'org, qui peut être précisément ce qui est tombé. L'équipe de la
+  plateforme reçoit un courriel SÉPARÉ, qui nomme l'org (`alertes_equipe`) ;
 - **quand** : un épisode — les travaux morts consécutifs depuis le dernier succès — qui
   atteint `SEUIL` (déclaré ici), annoncé UNE fois (`db/alertes_agents.py`), hors des
   heures calmes par défaut du courrier (`scheduler.DEFAULT_QUIET_HOURS`) : un épisode
   vu la nuit part au premier passage du matin ;
-- **un courriel par org**, quel que soit le nombre d'agents bloqués ;
+- **un courriel par destinataire et par org**, quel que soit le nombre d'agents bloqués ;
 - **où** : seulement la PRODUCTION — la boucle se déclare `tiers=True` dans
   `boucles_de_fond.py`, la préprod (même base) et le développement ne la composent pas ;
 - ⚠️ **un agent dont la panne est la NÔTRE est écarté** (`medecin_agents.py`) : un
@@ -32,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Iterable, NamedTuple, Optional
 
 log = logging.getLogger("oto_mcp.alerte_agents_bloques")
 
@@ -50,19 +53,73 @@ INTERVALLE_S = 900
 _ECARTEES_DITES: set[int] = set()
 
 
-def destinataire_admin(org_id: int) -> Optional[tuple[str, str]]:
-    """`(sub, adresse)` du premier admin de l'org qui a une adresse, ou None.
+class Destinataire(NamedTuple):
+    """Une personne de l'org à prévenir. `admin` : un admin de l'org (ou le premier
+    admin gardé faute de client) reçoit TOUT ; un membre ne reçoit que ce qu'il a le
+    droit de voir (`agents_visibles`)."""
+    sub: str
+    adresse: str
+    admin: bool
 
-    La même règle que l'alerte de clé (`maintenance.alertes_credential`), qui l'appelle :
-    une seule source pour « qui prévient-on dans une org »."""
-    from . import org_store
+
+def destinataires(org_id: int, *, proprietaires: Iterable[str] = ()
+                  ) -> list[Destinataire]:
+    """De qui prévenir dans une org, dans l'ordre : les `proprietaires` (ceux dont les
+    agents sont touchés) encore membres de l'org, puis TOUS ses admins — chacun une fois.
+
+    ⚠️ **Le personnel de la plateforme est écarté** (`access.is_operator_role`), comme un
+    compte suspendu : un opérateur est admin de nombreuses orgs clientes pour les aider,
+    et c'est le CLIENT qui peut réparer ; l'équipe reçoit son propre courriel, séparé
+    (`alertes_equipe`). Une org où ne restent que des opérateurs (une org de
+    démonstration, une org interne) garde la règle d'avant : son premier admin
+    joignable, pour que le message parte quelque part plutôt que nulle part.
+
+    Ce que chacun reçoit n'est pas décidé ici : un admin reçoit tout, un membre ce qu'il
+    a le droit de voir (`agents_visibles`, la règle d'accès des agents).
+
+    Une seule source pour « qui prévient-on dans une org » : l'alerte d'agents bloqués,
+    l'alerte de clé (`maintenance.alertes_credential`) et la langue de l'espace
+    (`alertes_slack_agents.langue`, par `destinataire_admin`)."""
+    from . import access, org_store
     from .db import users as db_users
 
-    admins = [m["sub"] for m in org_store.list_org_members(org_id)
-              if m.get("org_role") == "org_admin"]
-    adresses = db_users.emails_by_subs(admins)
-    sub = next((s for s in admins if adresses.get(s)), None)
-    return (sub, adresses[sub]) if sub else None
+    membres = org_store.list_org_members(org_id)
+    admins = [m["sub"] for m in membres if m.get("org_role") == "org_admin"]
+    du_lieu = {m["sub"] for m in membres}
+    ordre = list(dict.fromkeys(
+        [s for s in proprietaires or () if s and s in du_lieu] + admins))
+    adresses = db_users.emails_by_subs(ordre)
+    clients: list[Destinataire] = []
+    for sub in ordre:
+        if not adresses.get(sub):
+            continue
+        fiche = db_users.get_user(sub) or {}
+        if fiche.get("suspended_at") or access.is_operator_role(sub, fiche.get("role")):
+            continue
+        clients.append(Destinataire(sub, adresses[sub], sub in admins))
+    if clients:
+        return clients
+    repli = next((s for s in admins if adresses.get(s)), None)
+    return [Destinataire(repli, adresses[repli], True)] if repli else []
+
+
+def destinataire_admin(org_id: int) -> Optional[tuple[str, str]]:
+    """`(sub, adresse)` du premier destinataire de l'org (`destinataires`), ou None —
+    un admin CLIENT d'abord, un opérateur seulement s'il n'y a personne d'autre."""
+    tous = destinataires(org_id)
+    return (tous[0].sub, tous[0].adresse) if tous else None
+
+
+def agents_visibles(sub: str, org_id: int, agents: list[dict]) -> list[dict]:
+    """Ceux des `agents` (lignes qui portent `trigger_id` et `proprietaire`) que `sub`
+    a le droit de voir — la règle d'accès des agents (`_acces_agent.niveaux` : son
+    propriétaire, un admin de l'org, un partage en lecture ou en écriture)."""
+    from .capabilities import _acces_agent
+    if not agents:
+        return []
+    niveaux = _acces_agent.niveaux(sub, int(org_id), [
+        {"id": int(a["trigger_id"]), "sub": a.get("proprietaire")} for a in agents])
+    return [a for a in agents if niveaux.get(int(a["trigger_id"]))]
 
 
 def org_a_nous(org_id: int, *, qui: str) -> bool:
@@ -86,9 +143,11 @@ def _heures_calmes(maintenant: datetime) -> bool:
 
 
 def _courriel(to: str, agents: list[dict], *, brand: Optional[str],
-              locale: Optional[str]) -> bool:
+              locale: Optional[str], entete: Optional[str] = None) -> bool:
     """UN message pour les agents bloqués d'une org : lequel, depuis quand, combien de
-    passages perdus, ce que dit le dernier refus — et les deux gestes possibles."""
+    passages perdus, ce que dit le dernier refus — et les deux gestes possibles.
+    `entete` : la ligne du courriel d'ÉQUIPE (`alertes_equipe.entete`), en tête du
+    corps et de l'objet ; absente du courriel d'un client."""
     from . import email as _email
     from . import email_brand as _charte
     from .email_templates import _envoyer
@@ -124,6 +183,9 @@ def _courriel(to: str, agents: list[dict], *, brand: Optional[str],
                  "d'échouer de la même façon tant que la cause n'est pas réparée (souvent "
                  "une clé refusée par son fournisseur) : réparez-la, ou coupez l'agent. "
                  "C'est le seul message pour cette panne.</p>")
+    if entete:
+        corps = f'<p style="{_charte.PARA}"><strong>{esc(entete)}</strong></p>' + corps
+        subject = f"[équipe] {subject}"
     return _envoyer(m, to, subject, _charte.page(
         m, corps, preheader=subject,
         mention=_charte.mention_transactionnelle(m, locale), locale=locale))
@@ -163,15 +225,20 @@ def _annonces_sur_slack(trigger_ids: list) -> set[int]:
 
 
 def balayer(maintenant: Optional[datetime] = None) -> dict:
-    """Un passage : relève les épisodes à annoncer, écrit un courriel par org, marque ce
-    qui est parti. Synchrone (la boucle le pousse hors de l'event loop)."""
-    from . import org_store
+    """Un passage : relève les épisodes à annoncer, écrit à chaque destinataire de l'org
+    le courriel de CE qu'il a le droit de voir, puis à l'équipe un courriel séparé, et
+    marque ce qui est parti. Synchrone (la boucle le pousse hors de l'event loop).
+
+    Lève `alertes_equipe.AlertesEquipeNonReglees` avant tout envoi si le courriel
+    d'équipe n'a pas de destinataire (le démarrage l'a déjà exigé)."""
+    from . import alertes_equipe, org_store
     from .db import alertes_agents
     from .db import users as db_users
 
     maintenant = maintenant or datetime.now(timezone.utc)
     if _heures_calmes(maintenant):
         return {"heures_calmes": True}
+    equipe = alertes_equipe.destinataires()
     bloques = alertes_agents.agents_bloques(SEUIL)
     soignes = _soignes_par_nous([a["trigger_id"] for a in bloques])
     from . import alertes_slack_agents
@@ -182,7 +249,8 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
         if int(a["trigger_id"]) in soignes:
             continue
         par_org.setdefault(int(a["org_id"]), []).append(a)
-    envoyes, marques, ecartees, sans_destinataire = 0, 0, 0, 0
+    envoyes, lettres, marques, ecartees, sans_destinataire = 0, 0, 0, 0, 0
+    equipe_partis, equipe_rates = 0, 0
     for org_id, agents in sorted(par_org.items()):
         if not org_a_nous(org_id, qui="alerte agents bloqués"):
             ecartees += 1
@@ -191,21 +259,43 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
                 log.info("alerte agents bloqués : org %s d'un tenant tiers écartée "
                          "(%d agent(s) bloqué(s), aucun courriel)", org_id, len(agents))
             continue
-        dest = destinataire_admin(org_id)
-        if dest is None:
+        dest = destinataires(org_id, proprietaires=[a.get("proprietaire") for a in agents])
+        if not dest:
             # On ne marque PAS : le jour où l'org gagne un admin joignable, l'épisode part.
             sans_destinataire += 1
             continue
-        sub, adresse = dest
         _base, marque = org_store.org_front(org_id)
-        fiche = db_users.get_user(sub) or {}
-        if _courriel(adresse, agents, brand=marque, locale=fiche.get("locale")):
-            envoyes += 1
-            marques += alertes_agents.marquer_annonces([a["trigger_id"] for a in agents])
-        else:
-            log.warning("alerte agents bloqués : envoi refusé pour l'org %s — rejoué au "
-                        "passage suivant", org_id)
-    return {"orgs": len(par_org), "envoyes": envoyes, "marques": marques,
+        partis = 0
+        for d in dest:
+            # Un admin reçoit tout ; un membre, les seuls agents qu'il a le droit de
+            # voir — rien à lui montrer, rien ne lui part.
+            siens = agents if d.admin else agents_visibles(d.sub, org_id, agents)
+            if not siens:
+                continue
+            fiche = db_users.get_user(d.sub) or {}
+            partis += bool(_courriel(d.adresse, siens, brand=marque,
+                                     locale=fiche.get("locale")))
+        if not partis:
+            log.warning("alerte agents bloqués : aucun courriel parti pour l'org %s — "
+                        "rejoué au passage suivant", org_id)
+            continue
+        # Marqué dès qu'UN destinataire l'a reçu : rejouer pour celui qu'un envoi a
+        # raté renverrait le même message à tous les autres.
+        envoyes += 1
+        lettres += partis
+        marques += alertes_agents.marquer_annonces([a["trigger_id"] for a in agents])
+        # L'équipe : un courriel SÉPARÉ, une fois par épisode annoncé. Un envoi raté
+        # est dit et compté, jamais rejoué (l'épisode est marqué pour le client).
+        entete = alertes_equipe.entete(org_id, partis)
+        for adresse in equipe:
+            if _courriel(adresse, agents, brand=None, locale="fr", entete=entete):
+                equipe_partis += 1
+            else:
+                equipe_rates += 1
+                log.warning("alerte agents bloqués : courriel d'équipe refusé pour "
+                            "l'org %s (non rejoué)", org_id)
+    return {"orgs": len(par_org), "envoyes": envoyes, "lettres": lettres,
+            "marques": marques, "equipe": equipe_partis, "equipe_rates": equipe_rates,
             "tenant_tiers_ecartes": ecartees, "sans_destinataire": sans_destinataire}
 
 

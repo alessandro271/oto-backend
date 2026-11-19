@@ -469,7 +469,8 @@ def send_credential_alert_email(to: str, *, retrait: dict | None, cles_ko: list,
                                 brand: str | None = None,
                                 locale: str | None = None,
                                 org_id: int | None = None,
-                                sub: str | None = None) -> bool:
+                                sub: str | None = None,
+                                entete: str | None = None) -> bool:
     """L'alerte hors bande d'une org (oto#59) : une clé retirée, refusée ou à sec sous
     ses agents programmés. UN message par org, écrit pour un humain qui ne connaît pas
     le vocabulaire de la plateforme.
@@ -484,7 +485,8 @@ def send_credential_alert_email(to: str, *, retrait: dict | None, cles_ko: list,
 
     `brand` = `orgs.front_brand` de l'org (None = l'instance) : son nom, son expéditeur
     et sa langue. `locale` = la préférence de l'admin destinataire (`users.locale`), à
-    défaut la langue de la marque."""
+    défaut la langue de la marque. `entete` : la ligne du courriel d'ÉQUIPE
+    (`alertes_equipe.entete`), en tête du corps et de l'objet ; absente chez un client."""
     from . import links
 
     m = _charte.marque(brand)
@@ -522,6 +524,9 @@ def send_credential_alert_email(to: str, *, retrait: dict | None, cles_ko: list,
     else:
         subject = ("Une clé retirée sous vos agents programmés" if retrait and not cles_ko
                    else "Une clé en panne sous vos agents programmés")
+    if entete:
+        corps = f'<p style="{_charte.PARA}"><strong>{esc(entete)}</strong></p>' + corps
+        subject = f"[équipe] {subject}"
     return _envoyer(m, to, subject, _charte.page(
         m, corps, preheader=t["fin"],
         mention=_charte.mention_transactionnelle(m, locale), locale=locale))

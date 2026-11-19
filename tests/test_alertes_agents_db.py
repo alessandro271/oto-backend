@@ -99,3 +99,61 @@ def test_la_marque_ne_date_pas_l_agent(agent):
     from oto_mcp.db import runner_triggers as rt
     alertes_agents.marquer_annonces([agent])
     assert rt.get_trigger(agent, ORG)["updated_at"] is None
+
+
+def test_destinataires_sur_une_vraie_base_ecarte_l_operateur_et_le_suspendu(live):
+    """Sur les VRAIES lignes `users` (`role`, `suspended_at`) : la doublure sans base ne
+    prouve pas que la fiche lue porte ces colonnes."""
+    from oto_mcp import alerte_agents_bloques as M
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute("INSERT INTO orgs (id, name) VALUES (%s, 'o') ON CONFLICT (id) "
+                     "DO NOTHING", (ORG,))
+        for i, (sub, role, suspendu) in enumerate((
+                ("op", "super_admin", False), ("adm", "member", False),
+                ("susp", "member", True), ("prop", "member", False))):
+            conn.execute(
+                "INSERT INTO users (sub, email, role, suspended_at, suspended_by, "
+                "suspended_reason) VALUES (%s, %s, %s, "
+                "CASE WHEN %s THEN NOW() END, CASE WHEN %s THEN 'op' END, "
+                "CASE WHEN %s THEN 'test' END)",
+                (sub, f"{sub}@acme.test", role, suspendu, suspendu, suspendu))
+            conn.execute(
+                "INSERT INTO org_members (org_id, sub, org_role, joined_at) VALUES "
+                "(%s, %s, %s, NOW() - make_interval(days => %s))",
+                (ORG, sub, "org_member" if sub == "prop" else "org_admin", 10 - i))
+    assert M.destinataires(ORG, proprietaires=["prop"]) == [
+        ("prop", "prop@acme.test", False), ("adm", "adm@acme.test", True)]
+    assert M.destinataire_admin(ORG) == ("adm", "adm@acme.test")
+
+
+def test_ce_qu_un_membre_voit_suit_la_regle_d_acces_sur_une_vraie_base(live):
+    """`agents_visibles` sur les VRAIES lectures de la règle d'accès des agents
+    (`_acces_agent.niveaux` : rôle d'admin, partages vivants) : son agent, celui qu'on
+    lui partage, jamais celui d'un autre ; un admin, tous."""
+    from oto_mcp import alerte_agents_bloques as M
+    from oto_mcp import ownership
+    from oto_mcp.db import runner_triggers as rt
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute("INSERT INTO orgs (id, name) VALUES (%s, 'o') ON CONFLICT (id) "
+                     "DO NOTHING", (ORG,))
+        for sub, role in (("v-adm", "org_admin"), ("v-m1", "org_member"), ("v-m2", "org_member")):
+            conn.execute("INSERT INTO users (sub, email) VALUES (%s, %s) "
+                         "ON CONFLICT (sub) DO NOTHING", (sub, f"{sub}@acme.test"))
+            conn.execute("INSERT INTO org_members (org_id, sub, org_role) VALUES "
+                         "(%s, %s, %s) ON CONFLICT DO NOTHING", (ORG, sub, role))
+
+    def _agent(sub, label):
+        return rt.create_trigger(ORG, sub, procedure="veille", tz="UTC", tools=["a"],
+                                 cron="0 6 * * *", next_due="2999-01-01 00:00:00+00",
+                                 label=label)["id"]
+    a_m1, a_m2, a_m2_partage = _agent("v-m1", "a"), _agent("v-m2", "b"), _agent("v-m2", "c")
+    ownership.grant("runner_trigger", str(a_m2_partage), "user", "v-m1", "read",
+                    granted_by="v-m2")
+    lignes = [{"trigger_id": t, "proprietaire": p}
+              for t, p in ((a_m1, "v-m1"), (a_m2, "v-m2"), (a_m2_partage, "v-m2"))]
+    vus = lambda sub: {a["trigger_id"] for a in M.agents_visibles(sub, ORG, lignes)}  # noqa: E731
+    assert vus("v-m1") == {a_m1, a_m2_partage}
+    assert vus("v-m2") == {a_m2, a_m2_partage}
+    assert vus("v-adm") == {a_m1, a_m2, a_m2_partage}
