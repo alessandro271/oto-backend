@@ -500,21 +500,25 @@ def register(mcp: FastMCP) -> None:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> dict:
-        """Manage who must not be contacted. THREE lists, not one.
+        """Manage who must not be contacted. TWO lists, not one.
 
         They do not hold the same objects, and writing to one does not write to
-        the others:
-        - v1 `get`/`add`/`delete`/`export` — emails and whole DOMAINS
-          (`list` = `var_list`: the v1 listing is gone).
-        - v2 `var_*` — any identifying value (email, domain, LinkedIn URL,
-          phone), with `var_bulk` for up to 10 000 at once.
-        - v2 `contact_*` — the do-not-contact flag on a CRM contact, which rides
+        the other:
+        - values — emails, whole DOMAINS written `@example.com`, LinkedIn URLs,
+          phones. `get`/`add`/`delete`/`list`/`export` (arg `email`) and
+          `var_get`/`var_add`/`var_remove`/`var_list`/`var_export` (arg `value`)
+          are the SAME list, the same requests; `var_bulk` adds up to 10 000.
+        - `contact_*` — the do-not-contact flag on a CRM contact, which rides
           the CONTACT rather than one of its values.
 
-        To check ONE value, use `get` (v1) or `var_get` (v2): a listing can hold
-        thousands of rows. `list` and `var_list` are paged: 100 rows when
-        `limit` is omitted (lemlist caps `var_list` at 100 anyway), and
-        `next_offset` says where the next page starts (null on the last one).
+        To check ONE value, use `get` or `var_get`: a listing can hold
+        thousands of rows. Both answer `unsubscribed: true` (with the record)
+        or `unsubscribed: false` when the value is not on the list — never an
+        error for that. For an address, its DOMAIN (`@example.com`) is
+        checked too: an address of an unsubscribed domain reads true, and
+        `matched` names the value found (the address or `@domain`). `list` and `var_list` are paged: 100 rows when `limit`
+        is omitted (lemlist caps them at 100 anyway), and `next_offset` says
+        where the next page starts (null on the last one).
 
         Args: `email` (v1), `value` / `values` (variables), `contact_id`
         (contacts), `limit`/`offset` on the two listings. The `*_export` ops
@@ -540,7 +544,10 @@ def register(mcp: FastMCP) -> None:
             result = {"variables": rows, **_unsub_page(rows, limit, offset)}
         elif op in ("var_get", "var_add", "var_remove"):
             _need(value=value)
-            result = {"var_get": client.get_unsubscribed_variable,
+            # `var_get` reads through `get_unsubscribe`, the same request: a
+            # value not on the list (404 "Variable not found") is then the
+            # answer `unsubscribed: false`, not an error.
+            result = {"var_get": client.get_unsubscribe,
                       "var_add": client.unsubscribe_variable,
                       "var_remove": client.resubscribe_variable}[op](value)
         elif op == "var_bulk":
