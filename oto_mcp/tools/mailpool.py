@@ -10,8 +10,10 @@ Five tools, one per business object:
   report address, tracking CNAME, single records. `dry_run=True` by default,
   with a real diff;
 - `mailpool_mailboxes` — list, read, create (on slots already paid for;
-  `dry_run=True` by default), export to a sending platform (Mailpool carries
-  the passwords; `dry_run=True` by default) and its batches;
+  `dry_run=True` by default), update a mailbox's sender settings (names,
+  signature, forwarding, avatar; `dry_run=True` by default, with a real diff),
+  export to a sending platform (Mailpool carries the passwords; `dry_run=True`
+  by default) and its batches;
 - `mailpool_spam_checks` — run (free), read, list, delete;
 - `mailpool_account` — subscription slots, warmup.
 
@@ -30,6 +32,11 @@ client (`plan_mailboxes`) reads the slots, domains and existing addresses and
 refuses before sending anything when a slot is missing, a domain is not active
 or is of another type, or an address exists. A create that gets no answer
 (`mailbox_outcome_unknown`) may have landed: list the mailboxes before retrying.
+
+A mailbox update (`op="update"`) sends only the fields that differ from the
+mailbox as read (the client, `update_mailbox`), and checks the answer: a sent
+field not applied, or a field not sent that changed, is `mailbox_update_not_kept`
+with the previous values; no answer is `mailbox_update_outcome_unknown`.
 
 DNS behaviour (observed live on 2026-10-05, encoded in `mailpool_dns`): a DNS
 write REPLACES the whole record set — the fix tool reads, plans, and hands the
@@ -104,6 +111,23 @@ class NewMailbox(BaseModel):
     type: Literal["google", "outlook", "shared"]
     forwardTo: Optional[str] = Field(None, description="address replies are forwarded to")
     signature: Optional[str] = None
+
+
+class MailboxChanges(BaseModel):
+    """Sender settings to change on one mailbox; a field left out is kept."""
+    model_config = ConfigDict(extra="forbid")
+
+    firstName: Optional[str] = Field(None, min_length=1)
+    lastName: Optional[str] = Field(None, min_length=1)
+    signature: Optional[str] = Field(None, min_length=1)
+    forwardTo: Optional[str] = Field(None, description="one address incoming mail is forwarded to")
+    avatar: Optional[str] = Field(
+        None, description="image URL, google/outlook mailboxes only; null removes it")
+
+
+#: `MailboxChanges` field → argument of the client's `update_mailbox`.
+_UPDATE_ARGS = {"firstName": "first_name", "lastName": "last_name", "signature": "signature",
+                "forwardTo": "forward_to", "avatar": "avatar"}
 
 
 def _refuse_ignored(op: str, **provided) -> None:
@@ -237,7 +261,7 @@ def register(mcp: FastMCP) -> None:
     import requests
     from oto.tools.common.errors import UpstreamHTTPError
     from oto.tools.mailpool import (MailpoolCreatePartial, MailpoolCreateRefused,
-                                    MailpoolExportRefused)
+                                    MailpoolExportRefused, MailpoolUpdateNotKept)
     from oto.tools.mailpool.client import MailpoolClient, MailpoolDnsWriteError, strip_secrets
 
     connector_verify.register("mailpool", _verify)
@@ -487,11 +511,12 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def mailpool_mailboxes(
-        op: Literal["list", "get", "create", "export", "export_login",
+        op: Literal["list", "get", "create", "update", "export", "export_login",
                     "export_batches", "export_batch"] = "list",
         mailbox_id: Optional[int] = None,
         domain_id: Optional[int] = None,
         mailboxes: Optional[List[NewMailbox]] = None,
+        changes: Optional[MailboxChanges] = None,
         platform: Optional[Literal["instantly", "smartlead", "reachinbox", "reply", "saleshandy",
                                    "warmbox", "emelia", "lemlist", "plusvibe"]] = None,
         mailbox_ids: Optional[List[int]] = None,
@@ -521,6 +546,19 @@ def register(mcp: FastMCP) -> None:
           `mailbox_outcome_unknown` or `partially_applied` (it lists those
           `created` and names the `uncertain` domain) some mailboxes may
           exist: `op="list"` before calling again.
+        - `update` — change one mailbox's sender settings (`mailbox_id`,
+          `changes`): `firstName`, `lastName`, `signature`, `forwardTo`, and
+          `avatar` on google/outlook mailboxes (null removes it). A field left
+          out is kept; only a field that differs is sent. Address, type and
+          domain cannot be changed; warmup settings are not mailbox fields.
+          ⚠️ `forwardTo` redirects ALL incoming mail of the mailbox, prospects'
+          replies included; on a Microsoft 365 tenant an external forward can
+          get the warmup paused. A signature heavy with links or images can
+          hurt deliverability.
+          `dry_run=True` (the default) returns the before/after diff and sends
+          nothing. On error reason `mailbox_update_outcome_unknown` or
+          `mailbox_update_not_kept` the mailbox may have changed: `op="get"`
+          before calling again.
         - `export` — hand `mailbox_ids` to a sending `platform` (e.g. lemlist):
           Mailpool connects them there itself, passwords included, so none
           passes through here. `dry_run=True` (default) checks only: the
@@ -534,24 +572,32 @@ def register(mcp: FastMCP) -> None:
         - `export_batches` / `export_batch` (`batch_id`) — export progress.
 
         Args:
-            op: list, get, create, export, export_login, export_batches or export_batch.
-            mailbox_id: Mailpool mailbox id (op="get").
+            op: list, get, create, update, export, export_login, export_batches or
+                export_batch.
+            mailbox_id: Mailpool mailbox id (op="get"/"update").
             domain_id: only the mailboxes of this domain (op="list").
             mailboxes: mailboxes to create (op="create").
+            changes: settings to change (op="update").
             platform: sending platform (op="export"/"export_login").
             mailbox_ids: mailboxes to export (op="export").
             batch_id: export batch id (op="export_batch").
-            dry_run: op="create"/"export" — preview only (default True).
+            dry_run: op="create"/"update"/"export" — preview only (default True).
             limit: page size, 1-100.
             offset: items to skip.
         """
         c = _client()
+        if op != "update":
+            _refuse_ignored(op, changes=changes)
         if op.startswith("export"):
             _refuse_ignored(op, mailbox_id=mailbox_id, domain_id=domain_id,
                             mailboxes=mailboxes or None)
             return _export_op(c, op, platform, mailbox_ids, batch_id, dry_run, limit, offset)
         _refuse_ignored(op, platform=platform, mailbox_ids=mailbox_ids or None,
                         batch_id=batch_id)
+        if op == "update":
+            _refuse_ignored(op, domain_id=domain_id, mailboxes=mailboxes or None)
+            return _update_mailbox(c, _need(mailbox_id, "mailbox_id", op),
+                                   _need(changes, "changes", op), dry_run)
         if op == "create":
             _refuse_ignored(op, mailbox_id=mailbox_id, domain_id=domain_id)
             return _create_mailboxes(c, _need(mailboxes, "mailboxes", op), dry_run)
@@ -611,6 +657,51 @@ def register(mcp: FastMCP) -> None:
                 "domains": out["plan"]["domains"],
                 "message": f"Created {len(created)} mailbox(es). Passwords stay in the "
                            "Mailpool dashboard; pending ones turn active on their own."}
+
+    def _update_mailbox(c: MailpoolClient, mailbox_id: int, changes: MailboxChanges,
+                        dry_run: bool) -> Any:
+        given = changes.model_dump(exclude_unset=True)  # `avatar: null` is kept: it removes
+        if not given:
+            raise _bad("op='update': `changes` is empty — name at least one field to change.")
+        kwargs = {_UPDATE_ARGS[k]: v for k, v in given.items()}
+        plan = _run(lambda: c.plan_mailbox_update(mailbox_id, **kwargs))
+        preview = {"mailbox_id": plan["mailbox_id"], "email": plan["email"],
+                   "changes": plan["changes"], "unchanged": plan["unchanged"]}
+        if not plan["changes"]:
+            return {**preview, "dry_run": dry_run, "changed": False,
+                    "message": "Nothing to change: the mailbox already has these settings."}
+        if dry_run:
+            return {**preview, "dry_run": True, "changed": True,
+                    "message": "Nothing was sent. Re-call with dry_run=False to apply."}
+        try:
+            after = strip_secrets(c.update_mailbox(mailbox_id, **kwargs))
+        except MailpoolUpdateNotKept as e:
+            raise _after_write(
+                "mailbox_update_not_kept",
+                f"Mailbox {mailbox_id} was written but Mailpool does not show the expected "
+                f"settings ({e}). Read it with mailpool_mailboxes(op=\"get\") before calling "
+                "again.",
+                not_applied=e.not_applied, changed=e.changed,
+                previous=strip_secrets(e.previous), mailbox=_slim_mailbox(strip_secrets(e.mailbox)))
+        except UpstreamHTTPError as e:
+            if e.status_code < 500:
+                raise _bad(_upstream_message(e), reason="upstream_refused")
+            raise _update_unknown(mailbox_id, e)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            raise _update_unknown(mailbox_id, e)
+        except ValueError as e:
+            raise _bad(str(e))
+        except RuntimeError as e:
+            raise _update_unknown(mailbox_id, e)
+        return {**preview, "dry_run": False, "changed": True, "mailbox": _slim_mailbox(after),
+                "message": f"Updated {len(plan['changes'])} setting(s) of mailbox {mailbox_id}."}
+
+    def _update_unknown(mailbox_id: int, e: Exception) -> McpError:
+        return _after_write(
+            "mailbox_update_outcome_unknown",
+            f"Outcome unknown: the update of mailbox {mailbox_id} got no usable answer "
+            f"({_cause(e)}). It may or may not have changed — read it with "
+            "mailpool_mailboxes(op=\"get\") before calling again.")
 
     def _export_op(c: MailpoolClient, op: str, platform, mailbox_ids, batch_id,
                    dry_run: bool, limit: int, offset: int) -> Any:
