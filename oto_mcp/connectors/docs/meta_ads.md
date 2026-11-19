@@ -1,18 +1,16 @@
 ## prerequisite — a Meta business portfolio and an ad account
 
-oto reads the ad accounts **you choose** when you authorize it on Facebook.
+oto reads the ad accounts your Facebook account can see, once you authorize it on Facebook.
 
-- you need a Facebook account with access to a **business portfolio** (Meta Business Suite) that owns or manages the ad accounts
-- during the authorization, Facebook asks which business and which **ad accounts** to share — only those are visible to oto. To add one later, reconnect and tick it
-- with the recommended setup (system-user token), the connection does **not expire**: it lasts until you remove it (Meta Business Suite → settings → integrations → connected apps) or lose access to the ad account
-- ⚠️ until our Meta app passes Meta's review, it runs with **standard access**: it works, but Meta limits the number of calls heavily. Big reports may hit the limit — wait a few minutes and retry
+- you need a Facebook account with access to the ad accounts (directly or through a **business portfolio** in Meta Business Suite)
+- ⚠️ **beta, testers only**: until our Meta app passes Meta's review, it runs with **standard access** — only people with a role on the app (testers) can authorize it, and Meta limits the number of calls heavily. Ask the operator to add you as a tester, then accept the invite at developers.facebook.com/requests. Big reports may hit the limit — wait a few minutes and retry
+- with the standard-access setup (user token), the connection lasts about **60 days**: then the card goes "to reconnect". After the review, the system-user setup does not expire
 
 ## setup — the callback URL to declare at Meta
 
 operator only. You need a **Meta app** of type *Business* with the **Marketing API** product and **Facebook Login for Business**. Create a login *configuration* with:
 
-- token type: **system-user access token** (never expires)
-- assets: **ad accounts**
+- token type: **user access token** while the app is on standard access (a system-user token gets NO permission there: every call answers "(#200) Missing Permissions"); **system-user access token** (never expires, assets: **ad accounts**) once the app has advanced access
 - permissions: `ads_read`, `business_management`
 
 and declare this callback URL, byte for byte:
