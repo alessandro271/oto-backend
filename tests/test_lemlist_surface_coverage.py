@@ -52,6 +52,10 @@ NON_EXPOSEES = {
     # Le geste doux de `delete_lead`, que `lemlist_lead(op="unsubscribe")`
     # obtient en passant `action=None` — un seul chemin d'appel, pas deux.
     "unsubscribe_lead": "alias de delete_lead sans action",
+    # La même requête que `get_unsubscribe` (`GET /v2/unsubscribes/variables/{v}`),
+    # mais qui LÈVE sur le 404 « Variable not found » : `var_get` passe par
+    # `get_unsubscribe`, qui en fait la réponse `unsubscribed: false`.
+    "get_unsubscribed_variable": "même requête que get_unsubscribe, qui lit le 404 « absent »",
     # Compteurs dérivés d'une page d'activités, plafonnés à 1000 : remplacés par
     # `get_campaign_stats_v2` et gardés pour compatibilité.
     "get_campaign_stats": "déprécié au profit de get_campaign_stats_v2",
