@@ -348,9 +348,15 @@ async def run_medecin_agents_loop(interval: int = INTERVALLE_S) -> None:
     agent chez des tiers). Un passage raté ne tue pas la boucle — il le dit."""
     log.info("médecin des agents : démarré (passage toutes les %ss, %d relances max).",
              interval, RELANCES_MAX)
+    from .db import verrou_de_boucle
     while True:
         try:
-            bilan = await asyncio.to_thread(balayer)
+            # La relance est gardée en base (`noter_reparation`), mais le reste du passage
+            # lit puis écrit (épisodes, escalade au suivi d'erreurs) : deux processus sur
+            # la même base escaladeraient deux fois. Un seul joue le passage
+            # (`db/verrou_de_boucle.py`).
+            bilan = await asyncio.to_thread(verrou_de_boucle.sous_verrou,
+                                            "medecin_agents", balayer, si_saute={})
             if (bilan.get("relances") or bilan.get("gueris") or bilan.get("erreurs")
                     or bilan.get("catalogue_neuves") or bilan.get("catalogue_desaccords")):
                 log.info("médecin des agents : %s", bilan)

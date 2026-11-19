@@ -409,9 +409,14 @@ def tick() -> dict:
 async def run_billing_loop(interval: int = _POLL_INTERVAL_S) -> None:
     """Boucle de fond (lifespan) — un tick raté ne tue pas la boucle."""
     log.info("billing runner démarré (intervalle %ss)", interval)
+    from .db import verrou_de_boucle
     while True:
         try:
-            counts = await asyncio.to_thread(tick)
+            # Les échéances ont leur réservation (`billing_reservation`) ; la
+            # réconciliation, les rattrapages de mandat et les factures lisent puis
+            # agissent. Un seul processus joue le passage (`db/verrou_de_boucle.py`).
+            counts = await asyncio.to_thread(verrou_de_boucle.sous_verrou,
+                                             "billing_runner", tick, si_saute={})
             if counts:
                 log.info("billing_runner tick : %s", counts)
         except asyncio.CancelledError:

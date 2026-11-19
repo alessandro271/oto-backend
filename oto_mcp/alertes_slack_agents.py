@@ -279,9 +279,14 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
 async def run_alertes_slack_loop(interval: int = INTERVALLE_S) -> None:
     """La boucle de fond (`boucles_de_fond.py`, `tiers=True`)."""
     log.info("alertes Slack des agents : démarrée (passage toutes les %ss).", interval)
+    from .db import verrou_de_boucle
     while True:
         try:
-            bilan = await asyncio.to_thread(balayer)
+            # La marque vient APRÈS l'envoi : deux processus sur la même base (bleu/vert)
+            # posteraient deux fois le même message. Un seul joue le passage
+            # (`db/verrou_de_boucle.py`).
+            bilan = await asyncio.to_thread(verrou_de_boucle.sous_verrou,
+                                            "alertes_slack_agents", balayer, si_saute={})
             if bilan.get("envoyes") or bilan.get("rates"):
                 log.info("alertes Slack des agents : %s", bilan)
         except Exception as e:  # noqa: BLE001 — un passage raté ne tue pas la boucle

@@ -214,9 +214,14 @@ async def run_alerte_agents_loop(interval: int = INTERVALLE_S) -> None:
     `interval`, hors de l'event loop. Un passage raté ne tue pas la boucle — il le dit."""
     log.info("alerte agents bloqués : démarrée (seuil %s, passage toutes les %ss).",
              SEUIL, interval)
+    from .db import verrou_de_boucle
     while True:
         try:
-            bilan = await asyncio.to_thread(balayer)
+            # La marque vient APRÈS l'envoi : deux processus sur la même base (bleu/vert)
+            # liraient les mêmes épisodes non marqués et écriraient deux fois. Un seul
+            # joue le passage (`db/verrou_de_boucle.py`).
+            bilan = await asyncio.to_thread(verrou_de_boucle.sous_verrou,
+                                            "alerte_agents_bloques", balayer, si_saute={})
             if bilan.get("envoyes"):
                 log.info("alerte agents bloqués : %s", bilan)
         except Exception as e:  # noqa: BLE001 — un passage raté ne tue pas la boucle

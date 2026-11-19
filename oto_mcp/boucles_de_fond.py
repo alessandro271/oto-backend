@@ -28,8 +28,13 @@ Les interrupteurs par boucle (`OTO_*_ENABLED=0`) restent ce qu'ils étaient : il
 ÉTEIGNENT une boucle partout, ils n'en allument jamais une hors production.
 
 Ce que cette garde ne ferme pas : DEUX processus de production à la fois (recouvrement
-bleu/vert pendant la vidange). Là, c'est la réservation en base qui tient
-(`db/billing_reservation.py`), pas la composition.
+bleu/vert pendant la vidange, plusieurs processus pour une instance). Là, ce n'est pas
+la composition qui tient, c'est la base : chaque boucle tierce a SOIT une réservation
+ligne à ligne qui sort le travail de la file (`transcription_worker`, `jev_jobs_worker`,
+`runner_tick`), SOIT le verrou de boucle, qui ne laisse jouer un tour qu'à un processus
+à la fois (`db/verrou_de_boucle.py` : `scheduler`, `alerte_agents_bloques`,
+`medecin_agents`, `alertes_slack_agents`, `billing_runner`). Une boucle tierce neuve
+choisit l'un ou l'autre : `tests/test_verrou_de_boucle.py` y veille.
 """
 from __future__ import annotations
 
