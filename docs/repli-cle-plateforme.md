@@ -73,11 +73,14 @@ Une org qui a ouvert le réglage mais à qui la clé partagée n'est pas accord�
 - même plafond de jetons par run (`REPLI_MAX_TOKENS`, sauf plafond déclaré par l'agent),
   un seul repli en vol par forfait, même modèle au même palier ;
 - même pré-filtrage SQL avant la limite des candidats (`candidats_repli_abonnement`) :
-  l'interrupteur `repli_api`, « une clé d'org présente OU (instance qui permet ET réglage
-  ouvert) », le forfait déjà en vol. L'accès à la clé partagée, lui, passe par la cascade
-  des clés, qui n'a pas d'écriture SQL : il se juge après la limite, candidat par
-  candidat. Une org opt-in sans accès occupe donc une place sous la limite, sans jamais en
-  cacher une qui paie sur sa clé ;
+  l'interrupteur `repli_api`, ce qui paie, le forfait déjà en vol. L'accès à la clé
+  partagée (accord, palier, prix du modèle, crédits), lui, passe par la cascade des clés,
+  qui n'a pas d'écriture SQL : il se juge après la limite, candidat par candidat. D'où
+  **deux lectures, chacune sous sa limite** : les orgs qui paient sur leur clé, puis —
+  instance qui permet — les orgs opt-in, réduites au plus ancien travail par forfait,
+  demandeur et modèle (un seul repli vole par forfait). Un opt-in que la plateforme ne
+  peut pas payer ne cache donc jamais une org qui paie sur sa clé. Limite connue : au-delà
+  de 25 forfaits opt-in rejetés plus anciens, un autre opt-in payable attend son tour ;
 - la prise (`claim_fallback_job`) revérifie dans son `WHERE` la pause, et pour ce payeur
   `repli_api`, le réglage et l'absence de clé d'org : un admin qui referme, ou une org qui
   dépose sa clé, entre la lecture et la prise, gagne.

@@ -551,7 +551,8 @@ def _pool_au_plafond(base: str, org_id: int, famille: str, modele: Optional[str]
         return (f"{sans_cle} ; repli sur la clé de plateforme ouvert, mais il n'a pas "
                 "servi cette occurrence à temps : un seul travail replié à la fois par "
                 "forfait, et la clé de plateforme ne sert que si elle est accordée à "
-                "l'organisation et que ses crédits couvrent le travail.")
+                "l'organisation, que le modèle a un prix au barème et que les crédits "
+                "de l'organisation couvrent le travail.")
     return (f"{base} Le pool `{famille}` de l'organisation était en pause "
             "(plafond de consommation atteint) au moment où la suivante est arrivée.")
 

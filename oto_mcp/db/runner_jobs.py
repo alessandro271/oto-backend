@@ -1475,11 +1475,15 @@ def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
     plateforme) — le réglage `repli_cle_plateforme` de l'org (19/11/2026). La clé de
     l'org se DÉCHIFFRE ensuite (`_cle_ok_pour_repli`) : la présence de la ligne ne dit
     pas que le coffre la rendra. L'ACCÈS à la clé de plateforme (l'accord, le palier
-    refacturé, les crédits) se juge aussi ensuite, candidat par candidat
-    (`repli_disponible`) : il passe par la cascade des clés, qui n'a pas d'écriture
-    SQL — une org opt-in à qui la clé n'est pas accordée occupe donc une place sous la
-    limite, sans jamais en cacher une qui paie sur SA clé (celles-là restent filtrées
-    avant).
+    refacturé, le prix du modèle, les crédits) se juge aussi ensuite, candidat par
+    candidat (`repli_disponible`) : il passe par la cascade des clés, qui n'a pas
+    d'écriture SQL. D'où DEUX lectures, chacune sous sa limite : les orgs qui paient
+    sur leur clé, puis — seulement si `plateforme` — les orgs opt-in, réduites au plus
+    ancien travail par forfait, demandeur et modèle (un seul repli vole par forfait).
+    Un opt-in que la plateforme ne peut pas payer ne cache donc jamais une org qui paie
+    sur SA clé ; il peut encore, au-delà de `limit` forfaits rejetés plus anciens,
+    retarder un autre opt-in qui, lui, le pourrait. Rendus fusionnés, du plus ancien au
+    plus récent.
 
     ⚠️ Un repli vers `FAMILLE_FERME` pour une org routée vers la ferme n'est ouvert
     qu'à un worker de ferme (`ferme`) : sinon, le repli ferait passer par la boucle
@@ -1489,13 +1493,14 @@ def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
     if not familles:
         return []
     vers_ferme = "TRUE" if depot == FAMILLE_FERME else "FALSE"
-    with _connect() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT rj.id, rj.org_id, rj.sub,
+
+    def lire(payeur_sql: str, enveloppe: str) -> list[dict]:
+        base = f"""
+            SELECT rj.id, rj.org_id, rj.sub, rj.due_at,
                    rj.payload->>'model' AS model,
                    rj.payload->>'model_family' AS model_family,
-                   reg.deposee
+                   reg.deposee,
+                   {_forfait_de_repli("rj", "modep")} AS forfait
               FROM runner_jobs rj
               {_jointures_de_repli(seuil_defaut_pct)}
               {_REGLAGE_DE_REPLI}
@@ -1506,18 +1511,33 @@ def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
                AND rj.payload->>'model_family' = ANY(%s)
                AND (perso.limit_reset_at IS NOT NULL OR pool.reset_at IS NOT NULL)
                AND COALESCE(reg_m.repli_api, %s)
-               AND (reg.deposee
-                    OR (%s AND COALESCE(reg_m.repli_cle_plateforme, FALSE)))
+               AND {payeur_sql}
                AND NOT EXISTS ({_REPLI_EN_VOL.format(
                    forfait=_forfait_de_repli("rj", "modep"))})
-               AND {_servi_par_ce_worker("rj", vers_ferme)}
-             ORDER BY rj.due_at
-             LIMIT %s
-            """,
-            (depot, org_id, org_id, org_ids, org_ids, list(familles),
-             repli_api_par_defaut(), bool(plateforme), bool(ferme), limit),
-        ).fetchall()
-    return [dict(r) for r in rows]
+               AND {_servi_par_ce_worker("rj", vers_ferme)}"""
+        with _connect() as conn:
+            return [dict(r) for r in conn.execute(
+                enveloppe.format(base=base),
+                (depot, org_id, org_id, org_ids, org_ids, list(familles),
+                 repli_api_par_defaut(), bool(ferme), limit)).fetchall()]
+
+    # ⚠️ DEUX lectures, chacune sous SA limite (19/11/2026). Sous une seule, les
+    # travaux d'orgs opt-in que la clé de plateforme ne peut pas payer — rejetés APRÈS
+    # la limite, à chaque sondage (pas d'accord, modèle sans prix, solde…) — cachaient
+    # pour toujours celui d'une org qui paie sur SA clé.
+    cles = lire("reg.deposee", "{base}\n ORDER BY rj.due_at\n LIMIT %s")
+    if not plateforme:
+        return cles
+    # Côté plateforme, un seul repli vole par forfait : on n'en garde que le plus
+    # ancien par forfait, demandeur et modèle — ce qui décide de la payabilité (l'accès
+    # se résout au nom du demandeur, le prix est celui du modèle replié). Trente
+    # travaux d'un même forfait rejeté n'occupent donc qu'une place.
+    plateforme_seule = lire(
+        "NOT reg.deposee AND COALESCE(reg_m.repli_cle_plateforme, FALSE)",
+        "SELECT * FROM (SELECT DISTINCT ON (c.forfait, c.sub, c.model) c.* "
+        "FROM ({base}) c ORDER BY c.forfait, c.sub, c.model, c.due_at, c.id) p "
+        "ORDER BY p.due_at, p.id LIMIT %s")
+    return sorted(cles + plateforme_seule, key=lambda r: (r["due_at"], r["id"]))
 
 
 def claim_fallback_job(job_id: int, worker_sub: str, to_model: str, to_family: str,

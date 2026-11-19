@@ -428,6 +428,59 @@ def test_une_cle_d_org_illisible_ne_bascule_jamais_sur_la_plateforme(cle_de_plat
 
 # ── 4. les bornes : un repli en vol par forfait, la prise revérifie ─────────
 
+def test_des_opt_in_sans_acces_ne_cachent_pas_une_org_qui_paie_sur_sa_cle(cle_de_plateforme):
+    """La tête de file (`LIMIT`), avec l'instance qui permet : trente travaux plus
+    anciens d'une org opt-in à qui la clé de plateforme n'est PAS accordée (rejetés
+    après la limite, à chaque sondage) ne cachent ni le travail d'une org qui paie sur
+    SA clé, ni celui d'une org opt-in accordée."""
+    from oto_mcp.db._conn import _connect
+    n = _nom()
+    membres = [f"{n}-m{i}" for i in range(30)]
+    muette = _org(n, *membres, accordee=False)
+    for m in membres:
+        _abonne(m)
+        _travail(muette, m)
+    with _connect() as conn:
+        conn.execute("UPDATE runner_jobs SET due_at = NOW() - interval '1 hour' "
+                     "WHERE org_id = %s", (muette,))
+    p = _nom()
+    payeuse = _org(p, f"{p}-dem", plateforme=False, accordee=False)
+    _abonne(f"{p}-dem")
+    j_cle = _travail(payeuse, f"{p}-dem")
+    _cle_org(payeuse)
+
+    job = _reserver([muette, payeuse])
+    assert job is not None and job["id"] == j_cle, "l'org qui paie sur sa clé passe"
+
+
+def test_le_plus_ancien_par_forfait_seulement_cote_plateforme(cle_de_plateforme):
+    """Côté plateforme, un seul repli vole par forfait : les candidats n'en gardent que
+    le plus ancien par forfait, demandeur et modèle — trente travaux du MÊME forfait
+    ne remplissent pas la limite, et un autre forfait accordé passe."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import _abonnement
+    from oto_mcp.db._conn import _connect
+    n = _nom()
+    muette = _org(n, f"{n}-dem", accordee=False)
+    _abonne(f"{n}-dem")
+    for _ in range(30):
+        _travail(muette, f"{n}-dem")
+    with _connect() as conn:
+        conn.execute("UPDATE runner_jobs SET due_at = NOW() - interval '1 hour' "
+                     "WHERE org_id = %s", (muette,))
+    a = _nom()
+    accordee = _org(a, f"{a}-dem")
+    _abonne(f"{a}-dem")
+    j_plat = _travail(accordee, f"{a}-dem")
+
+    cands = db.candidats_repli_abonnement(None, [muette, accordee], frozenset({_F}), _API,
+                                          _abonnement.DEFAUT_LIMITE_PCT, plateforme=True)
+    assert [c["org_id"] for c in cands].count(muette) == 1
+    job = _reserver([muette, accordee])
+    assert job is not None and job["id"] == j_plat
+
+
+
 def test_un_seul_repli_en_vol_par_forfait(cle_de_plateforme):
     n = _nom()
     oid = _org(n, f"{n}-dem", f"{n}-autre")
