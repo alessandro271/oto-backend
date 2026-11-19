@@ -52,9 +52,11 @@ def bureau(monkeypatch):
     monkeypatch.setattr(U, "get_user", lambda s: {"locale": "fr"})
     monkeypatch.setattr(org_store, "org_front", lambda o: (None, None))
 
-    # L'équipe de la plateforme : son courriel est rangé à part, pour qu'on voie qu'il
-    # n'est jamais celui d'un client.
-    monkeypatch.setenv("OTO_ALERTES_EQUIPE_DESTINATAIRES", _EQUIPE)
+    # L'équipe de la plateforme = ses admins de plateforme (`alertes_equipe`) : son
+    # courriel est rangé à part, pour qu'on voie qu'il n'est jamais celui d'un client.
+    etat["operateurs"] = [{"sub": "op", "email": _EQUIPE, "role": "admin"}]
+    monkeypatch.setattr(U, "operateurs_de_plateforme",
+                        lambda admin_sub=None: list(etat["operateurs"]))
     monkeypatch.setattr(org_store, "get_org", lambda o: {"id": o, "name": f"org {o}"})
 
     def _envoyer(m, to, subject, html):
@@ -287,11 +289,12 @@ def test_l_equipe_recoit_un_courriel_separe_jamais_une_copie_du_client(bureau, m
     assert bilan["equipe"] == 1 and bilan["equipe_rates"] == 0
 
 
-def test_plusieurs_adresses_d_equipe_chacune_son_courriel(bureau, monkeypatch):
+def test_plusieurs_admins_de_plateforme_chacun_son_courriel(bureau, monkeypatch):
     from oto_mcp import email_templates
     vus = []
-    monkeypatch.setenv("OTO_ALERTES_EQUIPE_DESTINATAIRES",
-                       " e1@exemple.invalid ,e2@exemple.invalid")
+    bureau["operateurs"] = [{"sub": "op1", "email": "e1@exemple.invalid", "role": "admin"},
+                            {"sub": "op2", "email": "e2@exemple.invalid",
+                             "role": "super_admin"}]
     monkeypatch.setattr(email_templates, "_envoyer",
                         lambda m, to, subject, html: vus.append(to) or True)
     bureau["agents"] = [_agent(1, 7)]
@@ -317,9 +320,18 @@ def test_un_envoi_client_rate_n_ecrit_pas_a_l_equipe(bureau):
     assert bureau["equipe"] == [] and bureau["marques"] == []
 
 
-def test_sans_reglage_d_equipe_le_passage_leve_avant_tout_envoi(bureau, monkeypatch):
-    from oto_mcp import alertes_equipe
-    monkeypatch.delenv("OTO_ALERTES_EQUIPE_DESTINATAIRES")
-    with pytest.raises(alertes_equipe.AlertesEquipeNonReglees):
-        M.balayer(_JOUR)
-    assert bureau["lettres"] == [] and bureau["marques"] == []
+def test_sans_admin_de_plateforme_une_erreur_et_les_clients_recoivent(bureau, caplog):
+    """Aucun compte n'a le rôle : une ligne ERROR qui nomme l'org, aucun courriel
+    d'équipe, et le client reçoit le sien — ni repli, ni refus."""
+    bureau["operateurs"] = []
+    bureau["agents"] = [_agent(1, 7)]
+    with caplog.at_level("ERROR", logger="oto_mcp.alertes_equipe"):
+        bilan = M.balayer(_JOUR)
+    assert bureau["equipe"] == []
+    assert [to for to, _s, _h in bureau["lettres"]] == ["a@acme.test"]
+    assert bilan["envoyes"] == 1 and bilan["equipe"] == 0
+    assert bureau["marques"] == [1], "le client l'a reçu : l'épisode est annoncé"
+    erreurs = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(erreurs) == 1
+    assert "org 7" in erreurs[0].getMessage()
+    assert "aucun admin de plateforme" in erreurs[0].getMessage()

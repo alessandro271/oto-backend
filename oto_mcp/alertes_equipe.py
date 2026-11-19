@@ -1,5 +1,4 @@
-"""Le courriel d'ÉQUIPE des alertes d'agents et de clés : à qui il part, et le refus
-quand personne n'est réglé.
+"""Le courriel d'ÉQUIPE des alertes d'agents et de clés : à qui il part.
 
 Les deux alertes qui écrivent à un client (`alerte_agents_bloques.balayer`, l'alerte
 d'agents bloqués ; `maintenance.alertes_credential`, l'alerte de clé) écrivent aussi à
@@ -7,62 +6,50 @@ l'équipe de la plateforme : un courriel SÉPARÉ, jamais une copie visible du c
 reprend le contenu de l'org et la nomme. Le client écrit à ses admins et au titulaire
 de l'agent ; l'équipe, elle, apprend ce qui part chez chaque client.
 
-**Le réglage** : `OTO_ALERTES_EQUIPE_DESTINATAIRES`, variable d'environnement de l'unité
-(le `.env` de l'instance), jamais un réglage en base : c'est une propriété de
-l'exploitation de l'instance, comme l'expéditeur, et elle doit être lisible AVANT la
-base (`boucles_de_fond.composer` est joué avant `_prepare_database`). Une adresse, ou
-plusieurs séparées par des virgules ; les blancs autour de chacune sont ignorés.
+**L'équipe, ce sont les comptes qui ont le rôle plateforme** `admin` ou `super_admin`
+de CETTE instance, à l'adresse de leur compte. Le rôle se lit comme pour autoriser un
+outil `oto_admin_*` (porte `PLATFORM_ADMIN`) : `users.role`, le compte d'amorçage
+`OTO_MCP_ADMIN_SUB` compris, jugé par `access.is_operator_role` — la même source que
+celle qui écarte ces comptes des courriels CLIENTS (`alerte_agents_bloques.destinataires`).
+Aucun réglage à poser : chaque instance écrit à ses propres admins de plateforme.
 
-**Le refus** (`AlertesEquipeNonReglees`) ne part que là où un courriel va réellement
-partir :
-- la boucle `alerte_agents_bloques` EFFECTIVEMENT retenue par `boucles_de_fond.composer`
-  (production déclarée, interrupteur à 1) : le démarrage refuse ;
-- le travail `maintenance alertes-credential` avec son envoi ouvert
-  (`OTO_ALERTE_CREDENTIAL`) et hors `--dry-run` : le travail refuse, code de sortie 1.
-Une préprod, une instance sans boucle d'alerte, un passage à blanc démarrent sans lui.
+Un compte suspendu (`users.suspended_at`) ou d'un tenant désactivé
+(`tenant_desactive.etat`) est écarté, comme un compte sans adresse.
+
+**Personne** : la liste est vide, et c'est à l'appelant de le dire — une ligne ERROR
+qui nomme l'org, aucun courriel d'équipe, les courriels clients partent normalement
+(`signaler_sans_equipe`). Ni repli silencieux, ni refus de démarrage.
 """
 from __future__ import annotations
 
+import logging
 import os
-import re
 
-ENV = "OTO_ALERTES_EQUIPE_DESTINATAIRES"
-
-#: Une adresse : un `@`, un point dans le domaine, ni blanc ni séparateur.
-_ADRESSE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
-
-
-class AlertesEquipeNonReglees(RuntimeError):
-    """Une alerte va écrire à des clients, et le courriel d'équipe n'a pas de
-    destinataire valide (`OTO_ALERTES_EQUIPE_DESTINATAIRES`)."""
-
-
-MESSAGE_ABSENT = (
-    f"{ENV} n'est pas posée : une alerte d'agents ou de clés va écrire à des clients, et "
-    "l'équipe de la plateforme en reçoit un courriel séparé. Posez une adresse, ou "
-    "plusieurs séparées par des virgules, dans l'environnement de l'unité ; ou éteignez "
-    "l'alerte (OTO_ALERTE_AGENTS_ENABLED=0, OTO_ALERTE_CREDENTIAL vide).")
+log = logging.getLogger(__name__)
 
 
 def destinataires() -> list[str]:
-    """Les adresses de l'équipe, dans l'ordre du réglage, chacune une fois. Lève
-    `AlertesEquipeNonReglees` si le réglage est absent, vide, ou porte autre chose
-    qu'une adresse. Lu à chaque appel : jamais mis en cache."""
-    brut = os.environ.get(ENV, "")
-    adresses = [a.strip() for a in brut.split(",")]
-    if not any(adresses):
-        raise AlertesEquipeNonReglees(MESSAGE_ABSENT)
-    for a in adresses:
-        if not _ADRESSE.match(a):
-            raise AlertesEquipeNonReglees(
-                f"{ENV} : « {a} » n'est pas une adresse de courriel (attendu : une "
-                "adresse, ou plusieurs séparées par des virgules).")
-    return list(dict.fromkeys(adresses))
+    """Les adresses des admins de plateforme actifs de l'instance, dans l'ordre de
+    création des comptes, chacune une fois. Vide s'il n'y en a aucun. Lu à chaque
+    appel : jamais mis en cache."""
+    from . import access, tenant_desactive
+    from .db import users as db_users
+    adresses = []
+    for r in db_users.operateurs_de_plateforme(os.environ.get("OTO_MCP_ADMIN_SUB")):
+        if not access.is_operator_role(r["sub"], r.get("role")):
+            continue
+        if tenant_desactive.etat(r["sub"]):
+            continue
+        adresses.append(r["email"].strip())
+    return list(dict.fromkeys(a for a in adresses if a))
 
 
-def exiger() -> None:
-    """La garde de démarrage d'une boucle qui écrit à l'équipe : lève sans réglage."""
-    destinataires()
+def signaler_sans_equipe(alerte: str, org_id: int) -> None:
+    """La ligne ERROR d'un courriel d'équipe qui n'a personne à qui partir : aucun
+    compte n'a le rôle d'admin ou d'opérateur de plateforme."""
+    log.error("%s : aucun admin de plateforme actif sur l'instance — courriel d'équipe "
+              "NON envoyé pour l'org %s (les courriels clients sont partis)",
+              alerte, int(org_id))
 
 
 def entete(org_id: int, clients: int) -> str:

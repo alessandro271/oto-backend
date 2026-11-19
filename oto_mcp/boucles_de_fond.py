@@ -41,7 +41,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable
 
 from . import config
 
@@ -64,9 +64,6 @@ class Boucle:
     tiers: bool
     armee: Callable[[], bool]
     fonction: Callable[[], Fonction]
-    #: Ce que la boucle exige pour démarrer, joué seulement si ELLE est retenue par
-    #: `composer` (production déclarée, interrupteur ouvert) : lève pour refuser.
-    exige: Optional[Callable[[], None]] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.tiers, bool):
@@ -133,13 +130,6 @@ def _credits_echeances() -> Fonction:
 def _alerte_agents() -> Fonction:
     from . import alerte_agents_bloques
     return alerte_agents_bloques.run_alerte_agents_loop
-
-
-def _equipe_reglee() -> None:
-    """Le courriel d'équipe de l'alerte d'agents bloqués (`alertes_equipe`) : sans
-    destinataire, `AlertesEquipeNonReglees`."""
-    from . import alertes_equipe
-    alertes_equipe.exiger()
 
 
 def _medecin_agents() -> Fonction:
@@ -240,10 +230,9 @@ BOUCLES: tuple[Boucle, ...] = (
            armee=_runner_tick_arme, fonction=_runner_tick),
     # Prévient une org quand un de ses agents programmés est bloqué
     # (`alerte_agents_bloques.py`, signal 1168) : ENVOIE un courriel à un client, et un
-    # courriel séparé à l'équipe — dont le réglage est exigé au démarrage.
+    # courriel séparé aux admins de plateforme de l'instance (`alertes_equipe`).
     Boucle(nom="alerte_agents_bloques", tiers=True,
-           armee=_allumee_si_declaree("OTO_ALERTE_AGENTS_ENABLED"), fonction=_alerte_agents,
-           exige=_equipe_reglee),
+           armee=_allumee_si_declaree("OTO_ALERTE_AGENTS_ENABLED"), fonction=_alerte_agents),
     # Soigne un agent hébergé avant que son titulaire ne le remarque
     # (`medecin_agents.py`) : RELANCE un travail mort quand la panne est la nôtre —
     # l'agent relancé agit chez des tiers. Éteinte tant qu'elle n'est pas déclarée.
@@ -274,9 +263,7 @@ def composer() -> list[Fonction]:
     """Les boucles que CE process démarre, dans l'ordre de déclaration.
 
     Lève `config.EnvironnementAmbigu` si une boucle tierce est armée et que le process ne
-    sait pas s'il est la production. Si aucune ne l'est, la question n'est pas posée.
-    Puis joue l'exigence (`Boucle.exige`) des SEULES boucles retenues : une boucle
-    écartée (préprod, interrupteur à 0) n'exige rien."""
+    sait pas s'il est la production. Si aucune ne l'est, la question n'est pas posée."""
     armees = [b for b in BOUCLES if b.armee()]
     tierces = [b.nom for b in armees if b.tiers]
     if tierces and not config.est_la_production():
@@ -289,7 +276,4 @@ def composer() -> list[Fonction]:
                  "l'extérieur.",
                  ", ".join(tierces), config.origine_du_process())
         armees = [b for b in armees if not b.tiers]
-    for b in armees:
-        if b.exige is not None:
-            b.exige()
     return [b.fonction() for b in armees]

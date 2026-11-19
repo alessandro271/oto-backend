@@ -858,17 +858,6 @@ _REGLAGES: tuple[Variable, ...] = (
              "programmés actifs. Absente : le travail compte ce qui partirait, "
              "n'envoie rien.",
              ("oto_mcp/maintenance.py:374", "oto_mcp/maintenance.py:378")),
-    Variable("OTO_ALERTES_EQUIPE_DESTINATAIRES", Classe.REGLAGE, "",
-             "Le courriel d'ÉQUIPE des alertes d'agents bloqués et de clés : une adresse, "
-             "ou plusieurs séparées par des virgules (chacune vérifiée). L'équipe y reçoit "
-             "un courriel séparé par org, jamais une copie visible du client. Exigée "
-             "seulement là où un courriel va partir : la boucle `alerte_agents_bloques` "
-             "retenue par `boucles_de_fond.composer` (production, OTO_ALERTE_AGENTS_ENABLED"
-             "=1), sinon le démarrage lève `AlertesEquipeNonReglees` ; le travail "
-             "`alertes-credential` envoi ouvert et hors --dry-run, sinon il lève et la "
-             "maintenance sort en 1. Une préprod ou une instance sans ces alertes "
-             "démarre sans elle.",
-             ("oto_mcp/alertes_equipe.py:51",)),
     Variable("OTO_UNIPILE_FIN_DE_DROIT", Classe.REGLAGE, "",
              "Ouvre le travail `unipile-fin-de-droit` (#806) : préavis puis suppression "
              "chez unipile des comptes sur la clé plateforme d'une org sans droit "

@@ -33,7 +33,6 @@ def env(monkeypatch):
     monkeypatch.setenv("OTO_ALERTES_SLACK_AGENTS_ENABLED", "1")
     monkeypatch.delenv("OTO_ENV", raising=False)
     monkeypatch.delenv("OTO_SENTRY_ENV", raising=False)
-    monkeypatch.setenv("OTO_ALERTES_EQUIPE_DESTINATAIRES", "equipe@exemple.invalid")
     return monkeypatch
 
 
@@ -180,46 +179,3 @@ def test_le_medecin_des_agents_est_eteint_tant_qu_on_ne_l_allume_pas(env):
     assert _fonction("medecin_agents") in boucles_de_fond.composer()
     env.setenv("OTO_ENV", _PREPROD)
     assert _fonction("medecin_agents") not in boucles_de_fond.composer()
-
-
-# ── Le courriel d'équipe des alertes : exigé là où la boucle tourne, nulle part ailleurs ─
-
-def test_en_preprod_sans_reglage_d_equipe_le_demarrage_passe(env):
-    env.setenv("OTO_ENV", _PREPROD)
-    env.delenv("OTO_ALERTES_EQUIPE_DESTINATAIRES")
-    assert set(boucles_de_fond.composer()) == _toutes(tiers=False)
-
-
-def test_en_production_la_boucle_armee_sans_reglage_d_equipe_refuse(env):
-    from oto_mcp import alertes_equipe
-    env.setenv("OTO_ENV", _PROD)
-    env.delenv("OTO_ALERTES_EQUIPE_DESTINATAIRES")
-    with pytest.raises(alertes_equipe.AlertesEquipeNonReglees) as e:
-        boucles_de_fond.composer()
-    assert str(e.value) == alertes_equipe.MESSAGE_ABSENT
-    assert "OTO_ALERTES_EQUIPE_DESTINATAIRES n'est pas posée" in str(e.value)
-
-
-def test_en_production_la_boucle_eteinte_n_exige_rien(env):
-    env.setenv("OTO_ENV", _PROD)
-    env.delenv("OTO_ALERTES_EQUIPE_DESTINATAIRES")
-    env.setenv("OTO_ALERTE_AGENTS_ENABLED", "0")
-    composees = boucles_de_fond.composer()
-    assert _fonction("alerte_agents_bloques") not in composees
-    assert len(composees) == len(boucles_de_fond.BOUCLES) - 1
-
-
-@pytest.mark.parametrize("valeur", ["", " , ", "equipe", "a@b.c;d@e.f", "a@b.c, x"])
-def test_un_reglage_d_equipe_vide_ou_illisible_refuse(env, valeur):
-    from oto_mcp import alertes_equipe
-    env.setenv("OTO_ENV", _PROD)
-    env.setenv("OTO_ALERTES_EQUIPE_DESTINATAIRES", valeur)
-    with pytest.raises(alertes_equipe.AlertesEquipeNonReglees):
-        boucles_de_fond.composer()
-
-
-def test_un_reglage_d_equipe_a_plusieurs_adresses(env):
-    from oto_mcp import alertes_equipe
-    env.setenv("OTO_ALERTES_EQUIPE_DESTINATAIRES",
-               " e1@exemple.invalid, e2@exemple.invalid ,e1@exemple.invalid")
-    assert alertes_equipe.destinataires() == ["e1@exemple.invalid", "e2@exemple.invalid"]

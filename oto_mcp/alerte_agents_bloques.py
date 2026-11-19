@@ -229,8 +229,9 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
     le courriel de CE qu'il a le droit de voir, puis à l'équipe un courriel séparé, et
     marque ce qui est parti. Synchrone (la boucle le pousse hors de l'event loop).
 
-    Lève `alertes_equipe.AlertesEquipeNonReglees` avant tout envoi si le courriel
-    d'équipe n'a pas de destinataire (le démarrage l'a déjà exigé)."""
+    L'équipe = les admins de plateforme de l'instance (`alertes_equipe.destinataires`) ;
+    sans aucun, une ligne ERROR par org et aucun courriel d'équipe — les clients
+    reçoivent le leur."""
     from . import alertes_equipe, org_store
     from .db import alertes_agents
     from .db import users as db_users
@@ -238,7 +239,7 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
     maintenant = maintenant or datetime.now(timezone.utc)
     if _heures_calmes(maintenant):
         return {"heures_calmes": True}
-    equipe = alertes_equipe.destinataires()
+    equipe: Optional[list] = None   # lue au premier courriel d'équipe à envoyer
     bloques = alertes_agents.agents_bloques(SEUIL)
     soignes = _soignes_par_nous([a["trigger_id"] for a in bloques])
     from . import alertes_slack_agents
@@ -286,6 +287,11 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
         marques += alertes_agents.marquer_annonces([a["trigger_id"] for a in agents])
         # L'équipe : un courriel SÉPARÉ, une fois par épisode annoncé. Un envoi raté
         # est dit et compté, jamais rejoué (l'épisode est marqué pour le client).
+        if equipe is None:
+            equipe = alertes_equipe.destinataires()
+        if not equipe:
+            alertes_equipe.signaler_sans_equipe("alerte agents bloqués", org_id)
+            continue
         entete = alertes_equipe.entete(org_id, partis)
         for adresse in equipe:
             if _courriel(adresse, agents, brand=None, locale="fr", entete=entete):

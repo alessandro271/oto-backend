@@ -50,8 +50,11 @@ def bureau(monkeypatch):
     monkeypatch.setattr(O, "org_front", lambda org: (None, None))
     monkeypatch.setattr(U, "get_user", lambda sub: {"sub": sub, "locale": None})
     # `_envoyer` passe `to, subject, html` en POSITION, comme `_send` le déclare. Le
-    # courriel d'ÉQUIPE (`alertes_equipe`) est rangé à part, dans `EQUIPE_VUS`.
-    monkeypatch.setenv("OTO_ALERTES_EQUIPE_DESTINATAIRES", EQUIPE)
+    # courriel d'ÉQUIPE (`alertes_equipe` : les admins de plateforme) est rangé à part,
+    # dans `EQUIPE_VUS`.
+    OPERATEURS[:] = [{"sub": "op", "email": EQUIPE, "role": "admin"}]
+    monkeypatch.setattr(U, "operateurs_de_plateforme",
+                        lambda admin_sub=None: list(OPERATEURS))
     monkeypatch.setattr(O, "get_org", lambda org: {"id": org, "name": f"org {org}"})
     EQUIPE_VUS.clear()
     monkeypatch.setattr(E, "_send", lambda to, subject, html, **kw: (
@@ -62,6 +65,7 @@ def bureau(monkeypatch):
 
 EQUIPE = "equipe@exemple.invalid"
 EQUIPE_VUS: list = []
+OPERATEURS: list = []
 
 
 def test_ferme_par_defaut_rien_ne_part(bureau, monkeypatch):
@@ -461,23 +465,29 @@ def test_l_equipe_recoit_un_courriel_separe_par_org(org_mixte):
     assert out["equipe"] == 1 and out["equipe_rates"] == 0
 
 
-def test_sans_reglage_d_equipe_l_envoi_ouvert_refuse_avant_tout_envoi(bureau, monkeypatch):
-    from oto_mcp import alertes_equipe
-    envois, marques = bureau
-    monkeypatch.delenv("OTO_ALERTES_EQUIPE_DESTINATAIRES")
-    monkeypatch.setenv(M._ENV_ALERTE, "1")
-    with pytest.raises(alertes_equipe.AlertesEquipeNonReglees):
-        M.alertes_credential()
-    assert envois == [] and marques == []
-    # Le travail refuse, et la maintenance sort en 1 même sans `--strict`.
-    assert M.run(["alertes-credential"]) == 1
+def test_sans_admin_de_plateforme_une_erreur_et_le_client_recoit(org_mixte, caplog):
+    """Aucun compte n'a le rôle : une ligne ERROR qui nomme l'org, aucun courriel
+    d'équipe, les clients reçoivent le leur, l'épisode est marqué et la maintenance
+    ne sort pas en échec."""
+    envois, marques, annoncees = org_mixte
+    OPERATEURS.clear()
+    with caplog.at_level("ERROR", logger="oto_mcp.alertes_equipe"):
+        out = M.alertes_credential()
+    assert EQUIPE_VUS == []
+    assert {e["to"] for e in envois} == {"m1@exemple.invalid", "adm@exemple.invalid"}
+    assert out["envoyes"] == 1 and out["equipe"] == 0 and marques == [1, 2]
+    erreurs = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(erreurs) == 1 and "org 7" in erreurs[0].getMessage()
+    assert M.run(["alertes-credential"]) == 0
 
 
-def test_sans_reglage_d_equipe_un_passage_qui_n_envoie_pas_passe(bureau, monkeypatch):
-    monkeypatch.delenv("OTO_ALERTES_EQUIPE_DESTINATAIRES")
+def test_un_passage_qui_n_envoie_pas_ne_lit_pas_l_equipe(bureau, monkeypatch):
+    from oto_mcp.db import users as U
+
+    def _interdit(admin_sub=None):
+        raise AssertionError("l'équipe n'est lue que si le passage envoie")
+    monkeypatch.setattr(U, "operateurs_de_plateforme", _interdit)
     monkeypatch.delenv(M._ENV_ALERTE, raising=False)
     assert M.alertes_credential()["actif"] is False
-    assert M.run(["alertes-credential"]) == 0
     monkeypatch.setenv(M._ENV_ALERTE, "1")
     assert M.alertes_credential(dry_run=True)["envoyes"] == 0
-    assert M.run(["alertes-credential"], dry_run=True) == 0

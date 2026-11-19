@@ -121,7 +121,7 @@ import logging
 import os
 import sys
 import time
-from typing import Callable
+from typing import Callable, Optional
 
 logger = logging.getLogger("oto_mcp.maintenance")
 
@@ -550,9 +550,9 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
     **Qui** (`alerte_agents_bloques.destinataires`) : les titulaires des agents touchés
     encore membres, puis les admins clients. Un admin reçoit tout ; un membre, sa seule
     clé personnelle en panne sous ses agents (`_cles_du_membre`), ou rien. L'équipe de la
-    plateforme reçoit un courriel SÉPARÉ par org (`alertes_equipe`) : envoi ouvert et
-    hors `dry_run`, son réglage absent fait lever `AlertesEquipeNonReglees` avant tout
-    envoi, et `run` rend alors un code non nul.
+    plateforme — ses admins de plateforme (`alertes_equipe.destinataires`) — reçoit un
+    courriel SÉPARÉ par org, envoi ouvert et hors `dry_run` ; sans aucun admin de
+    plateforme, une ligne ERROR par org, et les clients reçoivent le leur.
     """
     # Le gabarit vit dans `email_templates` et part par son `_envoyer`, le seul point
     # d'envoi d'un gabarit : cette alerte partait de ce module par `_email._send`, sous
@@ -564,9 +564,9 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
     from . import alertes_equipe, org_store
 
     actif = _alerte_activee()
-    # Le courriel d'équipe, exigé seulement quand ce passage va réellement envoyer :
-    # envoi ouvert, hors `--dry-run`. Lève AVANT toute lecture ou écriture d'épisode.
-    equipe = alertes_equipe.destinataires() if actif and not dry_run else []
+    # Le courriel d'équipe (les admins de plateforme), lu au premier courriel d'équipe
+    # à envoyer : jamais à blanc ni envoi fermé.
+    equipe: Optional[list] = None
     retraits = {int(g["org_id"]): g for g in db_alertes.a_notifier()}
     cles_ko = _cles_ko_par_org()
     envoyes, marques, sans_destinataire = 0, 0, 0
@@ -618,6 +618,11 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
             # L'équipe : un courriel SÉPARÉ, le contenu de l'org, sous la marque de
             # l'instance et sans lien (aucun compte de l'org derrière). Raté : dit,
             # compté, jamais rejoué (l'épisode est marqué pour le client).
+            if equipe is None:
+                equipe = alertes_equipe.destinataires()
+            if not equipe:
+                alertes_equipe.signaler_sans_equipe("alertes-credential", org_id)
+                continue
             entete = alertes_equipe.entete(org_id, partis)
             for adresse in equipe:
                 if _gabarits.send_credential_alert_email(
@@ -865,11 +870,8 @@ def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:
     **Fail-open par défaut** : un travail qui casse est journalisé et n'empêche pas les
     suivants, et le code reste 0 — un timer de maintenance qui rougit pour une purge
     ratée réveille quelqu'un pour rien. `--strict` inverse ce choix, pour la CI.
-    Exception : un REFUS de réglage (`alertes_equipe.AlertesEquipeNonReglees`) rend 1,
-    `--strict` ou non — c'est l'exploitation qui doit le voir.
     """
-    from .alertes_equipe import AlertesEquipeNonReglees
-    echecs, refus = 0, 0
+    echecs = 0
     for nom in noms:
         fn = _TRAVAUX[nom]
         debut = time.monotonic()
@@ -878,17 +880,11 @@ def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:
             logger.info("maintenance %s%s : %.0f ms — %s", nom,
                         " (à blanc)" if dry_run else "",
                         (time.monotonic() - debut) * 1000, out)
-        except AlertesEquipeNonReglees as e:
-            # Un réglage manquant n'est pas une purge ratée : le travail allait écrire
-            # à des clients sans le courriel d'équipe. Les suivants tournent, et le code
-            # de sortie le dit même sans `--strict`.
-            refus += 1
-            logger.error("maintenance %s : REFUS — %s: %s", nom, type(e).__name__, e)
         except Exception:
             echecs += 1
             logger.error("maintenance %s : ÉCHEC après %.0f ms", nom,
                          (time.monotonic() - debut) * 1000, exc_info=True)
-    return 1 if refus or (echecs and strict) else 0
+    return 1 if (echecs and strict) else 0
 
 
 # Codes de sortie d'`index-concurrents`. Ce n'est PAS un travail : un travail est

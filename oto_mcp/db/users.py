@@ -1089,6 +1089,21 @@ def list_users() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def operateurs_de_plateforme(admin_sub: Optional[str] = None) -> list[dict]:
+    """`{sub, email, role}` des comptes NON suspendus dont `users.role` est un rôle
+    plateforme (`admin`, `super_admin`), plus `admin_sub` (le compte d'amorçage
+    `OTO_MCP_ADMIN_SUB`) quel que soit son rôle en base, avec une adresse. Ordre de
+    création. Le verdict reste à `access.is_operator_role` : cette lecture ne fait que
+    borner les lignes candidates (`alertes_equipe.destinataires`)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT sub, email, role FROM users "
+            "WHERE (role IN ('admin', 'super_admin') OR sub = %s) "
+            "  AND suspended_at IS NULL AND COALESCE(email, '') <> '' "
+            "ORDER BY created_at, sub", (admin_sub or "",)).fetchall()
+        return [dict(r) for r in rows]
+
+
 def set_user_role(sub: str, role: str) -> None:
     with _connect() as conn:
         conn.execute(
