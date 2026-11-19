@@ -397,11 +397,13 @@ garde son chemin d'avant pour ses DM, inchangé.
   Chaque réponse de chaque canal arrive à la route : « un fil porte-t-il une conversation de
   quelqu'un, et de quelle org ? » se lit AVANT tout credential (`copilot.slack_org_du_fil`).
 - **Réglage d'org « mention seule »** : `oto_org_settings domain=slack` (`set` admin de
-  l'org, `mention_only` true|false ; colonne `orgs.slack_mention_only`, défaut `false`,
-  `db/slack_reglage.py`). Par défaut, rien ne change (ci-dessus). Posé à `true`, hors d'un
+  l'org, `mention_only` true|false ; colonne `orgs.slack_mention_only`, défaut `true`
+  depuis le 19/11/2026 — orgs existantes comprises, révision
+  `20261119_1200_slack_mention_dflt` —, `db/slack_reglage.py`). Par défaut, hors d'un
   DM, l'app ne répond qu'à un message qui la tague : une réponse sans mention dans ce fil
   est jetée avant tout credential (`ignored: mention_only`), et la MÊME personne poursuit
-  sa conversation par une nouvelle mention. Les DM ne changent pas. Détail et fil d'un
+  sa conversation par une nouvelle mention. Posé à `false`, une réponse sans mention
+  poursuit la conversation (ci-dessus). Les DM ne changent pas. Détail et fil d'un
   agent hébergé : `docs/runner-et-automatisations.md` §Une réponse dans le fil d'un agent.
 - **Ce que Slack montre** : 👀 sur la demande ; UN message « working » dans le fil, édité avec
   les notes de progrès (au plus une édition par 1,5 s : `chat.update` est limité), puis

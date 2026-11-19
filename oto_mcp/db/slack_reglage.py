@@ -1,18 +1,20 @@
 """The org's Slack setting — column `orgs.slack_mention_only`.
 
 **Mention only** (`oto_org_settings domain=slack`, `slack_events.py`): outside a DM, the
-app answers only a message that tags it (`@<app>`). Off by default — the state of every
-org before it: a reply in the thread of an agent's message restarts that agent, and the
-same person's reply in a thread of the in-app agent's carries on their conversation,
-without a mention (decision of 29/10/2026). An org admin turns it on.
+app answers only a message that tags it (`@<app>`). ON by default, every org included
+(decision of 19/11/2026, revision `20261119_1200_slack_mention_dflt`). An org admin
+may turn it off: then a reply in the thread of an agent's message restarts that agent,
+and the same person's reply in a thread of the in-app agent's carries on their
+conversation, without a mention (the behaviour of 29/10/2026).
 
 Read by the event route BEFORE any credential (`slack_events.traiter`): the org is
 known from the thread itself — the agent's noted message, or the in-app agent's
 conversation —, never from the workspace's install.
 
 The column is born in `CREATE TABLE orgs` (`db/schema/orgs.py`); an existing base gets
-it from the revision `20261109_2100_slack_mention_only` or from the boot, same DDL
-(`DDL_COLONNE`), in either order.
+it from the revision `20261109_2100_slack_mention_only` (its own frozen DDL, default
+FALSE, then flipped by `20261119_1200_slack_mention_dflt`) or from the boot
+(`DDL_COLONNE`, default TRUE), in either order.
 
 Not flattened into `db.*` — callers write `db.slack_reglage.<fn>`.
 
@@ -26,7 +28,7 @@ from ._conn import _connect
 
 COLONNE = "slack_mention_only"
 DDL_COLONNE = (f"ALTER TABLE orgs ADD COLUMN IF NOT EXISTS {COLONNE} "
-               "BOOLEAN NOT NULL DEFAULT FALSE")
+               "BOOLEAN NOT NULL DEFAULT TRUE")
 
 
 def mention_seule(org_id: int) -> Optional[bool]:
