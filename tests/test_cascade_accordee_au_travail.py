@@ -289,3 +289,68 @@ def test_une_reponse_pending_dit_l_outil_de_collecte_que_l_agent_n_a_pas(harnais
     harnais["tools"] = ["waterfall_email", "fullenrich_result"]
     out = _cascade("waterfall_email", linkedin_url=LINKEDIN, providers=["fullenrich"])
     assert out["pending"] and "missing_tools" not in out
+
+
+# ── la cascade accordée et le compte de chaque connecteur (`_accounts`) ──────
+
+def test_la_cascade_accordee_fait_tourner_ses_etapes_sur_le_compte_nomme(harnais,
+                                                                         monkeypatch):
+    """Les deux règles ensemble : la seule cascade dans la liste, deux espaces lemlist et
+    `_accounts={"lemlist": "espace-b"}`. L'étape lemlist tourne sous l'accord de la
+    cascade (`ouvrir_composite`), jusqu'au vrai `executer_cible`, qui pose le compte nommé
+    (`call_axes.ACCOUNT`) — l'outil du fournisseur le lit à son appel."""
+    from oto_mcp import session_org
+
+    def resoudre(provider, want="auto", sub=None, *, account=None, **kw):
+        if account not in ("espace-a", "espace-b"):
+            raise access.CompteIntrouvable(ErrorData(
+                code=INVALID_PARAMS, message=f"Workspace `{account}` not found"), account)
+        return object()
+    monkeypatch.setattr(access, "resolve_credential", resoudre)
+    monkeypatch.setattr(call_axes, "axes_for_call", lambda name: [call_axes.ACCOUNT])
+    comptes_vus = []
+    run_initial = _Outil.run
+
+    async def run_et_compte(self, args):
+        comptes_vus.append((self.name, session_org.current_call_account()))
+        return await run_initial(self, args)
+    monkeypatch.setattr(_Outil, "run", run_et_compte)
+
+    async def _go():
+        m = FastMCP("t")
+        outils.register(m)
+        fn = (await m.get_tool("waterfall_person")).fn
+        jetons = (verrou_org.poser_outil("waterfall_person"),
+                  session_org.set_call_step_accounts(
+                      call_axes.step_accounts_of({"lemlist": "espace-b"})))
+        try:
+            return await fn(linkedin_url=LINKEDIN, providers=["lemlist_db"])
+        finally:
+            session_org.reset_call_step_accounts(jetons[1])
+            verrou_org.lever_outil(jetons[0])
+    out = asyncio.run(_go())
+    assert comptes_vus == [("lemlist_database", "espace-b")]
+    tentative = _tentative(out, "lemlist_db")
+    assert tentative["account"] == "espace-b"
+    assert tentative.get("code") != outils_du_travail.CODE
+
+
+def test_sous_la_cascade_accordee_un_compte_inconnu_est_refuse_avant_tout_appel(
+        harnais, monkeypatch):
+    """L'accord de la cascade ne lève que la liste du travail : un compte que le
+    connecteur n'a pas reste refusé avant de payer une étape (`comptes.choisir`)."""
+    from oto_mcp import session_org
+
+    def resoudre(provider, want="auto", sub=None, *, account=None, **kw):
+        raise access.CompteIntrouvable(ErrorData(
+            code=INVALID_PARAMS, message=f"Workspace `{account}` not found"), account)
+    monkeypatch.setattr(access, "resolve_credential", resoudre)
+    jeton = session_org.set_call_step_accounts(
+        call_axes.step_accounts_of({"lemlist": "espace-z"}))
+    try:
+        with pytest.raises(McpError) as e:
+            _cascade("waterfall_person", linkedin_url=LINKEDIN, providers=["lemlist_db"])
+    finally:
+        session_org.reset_call_step_accounts(jeton)
+    assert e.value.error.data["code"] == "account_not_found"
+    assert harnais["faits"] == []
