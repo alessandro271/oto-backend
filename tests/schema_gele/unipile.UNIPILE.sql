@@ -7,7 +7,8 @@ org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
 platform_seat BOOLEAN NOT NULL DEFAULT FALSE,
 connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 disconnected_at TIMESTAMPTZ,
-PRIMARY KEY (sub, org_id, provider)
+slot TEXT NOT NULL DEFAULT '',
+CONSTRAINT unipile_accounts_slot_pkey PRIMARY KEY (sub, org_id, provider, slot)
 );
 CREATE TABLE IF NOT EXISTS unipile_pending (
 nonce TEXT PRIMARY KEY,
@@ -15,6 +16,7 @@ sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
 org_id BIGINT,
 provider TEXT NOT NULL DEFAULT 'LINKEDIN',
 platform_seat BOOLEAN NOT NULL DEFAULT FALSE,
+add_account BOOLEAN NOT NULL DEFAULT FALSE,
 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE TABLE IF NOT EXISTS connector_account_grants (
@@ -24,6 +26,7 @@ account_id TEXT NOT NULL,
 grantee_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
 granted_by TEXT NOT NULL,
 granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+slot TEXT NOT NULL DEFAULT '',
 PRIMARY KEY (owner_sub, provider, grantee_sub)
 );
 CREATE INDEX IF NOT EXISTS idx_account_grants_grantee

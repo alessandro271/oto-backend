@@ -36,7 +36,7 @@ def sieges_plateforme(delai_jours: int) -> list[dict]:
     les processus), à partir de `entitlement_lost_at` et du délai."""
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
-            "SELECT ua.sub, ua.org_id, ua.provider, ua.account_id, ua.account_name, "
+            "SELECT ua.sub, ua.org_id, ua.provider, ua.slot, ua.account_id, ua.account_name, "
             "ua.disconnected_at, ua.entitlement_lost_at, ua.entitlement_notice_at, "
             "ua.entitlement_lost_at + make_interval(days => %s) AS supprime_le, "
             "COALESCE(ua.entitlement_lost_at + make_interval(days => %s) <= NOW(), FALSE) "
@@ -52,17 +52,21 @@ def sieges_plateforme(delai_jours: int) -> list[dict]:
         ).fetchall()]
 
 
-def _cles(lignes: Iterable[dict]) -> tuple[list, list, list]:
-    subs, orgs, canaux = [], [], []
+def _cles(lignes: Iterable[dict]) -> tuple[list, list, list, list]:
+    """Les clés des bindings, colonne par colonne. L'emplacement absent d'une ligne vaut
+    le principal ('') : un appelant qui ne connaît pas les emplacements nomme le compte
+    qu'il a toujours nommé."""
+    subs, orgs, canaux, slots = [], [], [], []
     for r in lignes:
         subs.append(r["sub"])
         orgs.append(int(r["org_id"]))
         canaux.append(r["provider"])
-    return subs, orgs, canaux
+        slots.append(r.get("slot") or "")
+    return subs, orgs, canaux, slots
 
 
-_PAR_CLE = ("(sub, org_id, provider) IN (SELECT * FROM unnest("
-            "%s::text[], %s::bigint[], %s::text[]))")
+_PAR_CLE = ("(sub, org_id, provider, slot) IN (SELECT * FROM unnest("
+            "%s::text[], %s::bigint[], %s::text[], %s::text[]))")
 
 
 def marquer_perte(lignes: Iterable[dict]) -> int:
@@ -70,27 +74,27 @@ def marquer_perte(lignes: Iterable[dict]) -> int:
 
     Idempotent : une marque déjà posée n'est jamais repoussée — le délai part du
     premier passage qui a constaté la perte, pas du dernier."""
-    subs, orgs, canaux = _cles(lignes)
+    subs, orgs, canaux, slots = _cles(lignes)
     if not subs:
         return 0
     with _connect() as conn:
         return conn.execute(
             f"UPDATE unipile_accounts SET entitlement_lost_at = NOW() WHERE {_PAR_CLE} "
             "AND platform_seat AND disconnected_at IS NULL AND entitlement_lost_at IS NULL",
-            (subs, orgs, canaux),
+            (subs, orgs, canaux, slots),
         ).rowcount
 
 
 def marquer_preavis(lignes: Iterable[dict]) -> int:
     """Pose `entitlement_notice_at = NOW()` — APRÈS un envoi réussi, jamais avant."""
-    subs, orgs, canaux = _cles(lignes)
+    subs, orgs, canaux, slots = _cles(lignes)
     if not subs:
         return 0
     with _connect() as conn:
         return conn.execute(
             f"UPDATE unipile_accounts SET entitlement_notice_at = NOW() WHERE {_PAR_CLE} "
             "AND entitlement_lost_at IS NOT NULL AND entitlement_notice_at IS NULL",
-            (subs, orgs, canaux),
+            (subs, orgs, canaux, slots),
         ).rowcount
 
 
@@ -99,7 +103,7 @@ def effacer_perte(lignes: Iterable[dict]) -> int:
 
     Par binding, pas par org : le droit se lit pour le titulaire de chaque ligne, et un
     voisin de la même org resté sans droit garde sa marque — et son délai."""
-    subs, orgs, canaux = _cles(lignes)
+    subs, orgs, canaux, slots = _cles(lignes)
     if not subs:
         return 0
     with _connect() as conn:
@@ -107,7 +111,7 @@ def effacer_perte(lignes: Iterable[dict]) -> int:
             "UPDATE unipile_accounts SET entitlement_lost_at = NULL, "
             f"entitlement_notice_at = NULL WHERE {_PAR_CLE} "
             "AND (entitlement_lost_at IS NOT NULL OR entitlement_notice_at IS NOT NULL)",
-            (subs, orgs, canaux),
+            (subs, orgs, canaux, slots),
         ).rowcount
 
 

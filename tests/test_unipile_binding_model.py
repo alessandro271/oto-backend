@@ -25,6 +25,9 @@ def _status_env(monkeypatch, *, org=168, mode="platform", subscribed=True, rows=
     monkeypatch.setattr(access, "credential_mode_for", lambda s, p, **k: mode)
     monkeypatch.setattr(access, "option_open", lambda s, p, **k: subscribed)
     monkeypatch.setattr(db, "list_unipile_accounts", lambda s: rows or [])
+    # Plusieurs comptes par canal : l'ajout fermé ici (PK d'avant), aucun défaut choisi.
+    monkeypatch.setattr(db, "slots_ouverts", lambda: False)
+    monkeypatch.setattr(db, "get_operated_account", lambda s, p: None)
 
 
 # ---- status : proposition, jamais décision --------------------------------
@@ -62,6 +65,7 @@ def test_own_account_no_platform_fallback(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda s: 168)
     monkeypatch.setattr(db, "get_unipile_account_id", lambda s, o, p: None)
     monkeypatch.setattr(providers, "is_personal_cross_org", lambda p: True)
+    monkeypatch.setattr(db, "list_unipile_accounts", lambda s: [])
     monkeypatch.setattr(access, "personal_instance_org",
                         lambda s, p, exclude_org=None: None)
     assert ci._own_unipile_account_id("sub1", "LINKEDIN") is None
@@ -83,6 +87,8 @@ def _connect_env(monkeypatch, *, seat_elsewhere=SEAT, byo_rows=None, alive=True,
                         lambda s, p, exclude_org=None: seat_elsewhere)
     monkeypatch.setattr(db, "list_unipile_accounts", lambda s: byo_rows or [])
     monkeypatch.setattr(db, "create_unipile_pending", lambda *a, **k: None)
+    # Aucun compte du canal ICI (plusieurs comptes par canal : rien à quoi ajouter).
+    monkeypatch.setattr(db, "live_unipile_accounts", lambda s, o, p="LINKEDIN": [])
     # Client hébergé stubé : `account_alive` gouverne l'adoption (vivant) vs la
     # reconnexion (mort) ; `hosted_auth_link` enregistre ses kwargs (reconnect_account).
     def _link(self, **kw):

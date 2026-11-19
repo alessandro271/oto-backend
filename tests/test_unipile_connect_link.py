@@ -24,7 +24,7 @@ class _FakeClient:
 
 
 def _wire(monkeypatch, *, byo=False, option=True, org=39, existing=None, count=0,
-          limit=None, connected=None):
+          limit=None, connected=None, slots=True):
     monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: SimpleNamespace(
         key="KEY", mode="org" if byo else "platform", config={}))
     monkeypatch.setattr(access, "current_org", lambda sub: org)
@@ -48,9 +48,16 @@ def _wire(monkeypatch, *, byo=False, option=True, org=39, existing=None, count=0
     monkeypatch.setattr("oto_mcp.db.count_unipile_accounts_for_org", lambda org_id: count)
     pending = {}
     monkeypatch.setattr("oto_mcp.db.create_unipile_pending",
-                        lambda nonce, sub, org_id, prov, platform_seat=False:
+                        lambda nonce, sub, org_id, prov, platform_seat=False,
+                        add_account=False:
                         pending.update(nonce=nonce, sub=sub, org_id=org_id,
-                                       provider=prov, platform_seat=platform_seat))
+                                       provider=prov, platform_seat=platform_seat,
+                                       add_account=add_account))
+    # Plusieurs comptes par canal : les comptes vivants du canal ICI (dérivés de
+    # `existing`, le compte déjà branché) et l'état de la PK (ouverte par défaut).
+    monkeypatch.setattr("oto_mcp.db.live_unipile_accounts",
+                        lambda sub, org_id, prov="LINKEDIN": [existing] if existing else [])
+    monkeypatch.setattr("oto_mcp.db.slots_ouverts", lambda: slots)
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeClient)
     # Le refus d'option nomme les administrateurs de l'org à un membre (oto#108) : ici
     # un membre, dont l'org a une administratrice.

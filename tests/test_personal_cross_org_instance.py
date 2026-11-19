@@ -133,6 +133,9 @@ def test_own_account_id_falls_back_cross_org(monkeypatch):
     monkeypatch.setattr(
         "oto_mcp.db.get_unipile_account_id",
         lambda sub, org, prov: "ACC-2" if org == 2 else None)
+    # Aucun compte vivant dans l'org de contexte : le repli cross-org s'applique.
+    monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: [
+        {"provider": "LINKEDIN", "account_id": "ACC-2", "org_id": 2, "slot": ""}])
     monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
     monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
     assert connector_identities.resolve_operated_account_id("u1", "LINKEDIN") == "ACC-2"

@@ -24,7 +24,11 @@ def _wire_platform(monkeypatch, *, grants, own=None):
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: own or [])
     monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
     monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
-    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, org, prov: None)
+    # Le compte servi sans pointeur = le principal (sans emplacement) de l'org, cohérent
+    # avec `own` : choisir un autre compte que lui pose un pointeur (plusieurs comptes).
+    monkeypatch.setattr("oto_mcp.db.get_unipile_account_id", lambda sub, org, prov: next(
+        (a["account_id"] for a in own or [] if a.get("org_id") == org
+         and a.get("provider") == prov and not a.get("slot")), None))
     # #172 : pas d'instance perso cross-org ici (le compte propre suffit au test).
     monkeypatch.setattr(access, "personal_instance_org",
                         lambda sub, con, exclude_org=None: None)

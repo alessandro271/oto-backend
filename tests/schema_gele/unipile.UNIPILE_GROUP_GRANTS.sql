@@ -5,6 +5,7 @@ account_id TEXT NOT NULL,
 grantee_group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
 granted_by TEXT NOT NULL,
 granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+slot TEXT NOT NULL DEFAULT '',
 PRIMARY KEY (owner_sub, provider, grantee_group_id)
 );
 CREATE INDEX IF NOT EXISTS idx_account_group_grants_group
