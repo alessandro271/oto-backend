@@ -2181,11 +2181,12 @@ Un agent hébergé qui poste **en tant que l'app** (`slack_post_message(author="
 
 - **Réglage d'org « mention seule »** : `oto_org_settings domain=slack` (`get` membre,
   `set` admin de l'org, `mention_only` true|false ; colonne `orgs.slack_mention_only`,
-  défaut `false`, révision `20261109_2100_slack_mention_only`, `db/slack_reglage.py`).
-  **Par défaut, rien ne change** : une réponse dans le fil relance l'agent sans mention,
-  et la réponse de la même personne dans une conversation de l'agent intégré la poursuit
-  (`docs/copilot.md` §Dans Slack). Posé à `true`, hors d'un DM, l'app ne répond qu'à un
-  message qui la **tague** (`@<app>`), réponses en fil comprises : une réponse sans
+  défaut `true` depuis le 19/11/2026, orgs existantes comprises — révisions
+  `20261109_2100_slack_mention_only` puis `20261119_1200_slack_mention_dflt`,
+  `db/slack_reglage.py`). Posé à `false`, une réponse dans le fil relance l'agent sans
+  mention, et la réponse de la même personne dans une conversation de l'agent intégré la
+  poursuit (`docs/copilot.md` §Dans Slack). **Par défaut**, hors d'un DM, l'app ne répond
+  qu'à un message qui la **tague** (`@<app>`), réponses en fil comprises : une réponse sans
   mention est jetée **avant tout credential** (`ignored: mention_only`) — l'org se lit
   sur le fil lui-même (`slack_agent_posts.org_id`, ou l'org de la conversation de
   l'agent intégré, `copilot.slack_org_du_fil`), jamais sur l'installation. Les DM ne

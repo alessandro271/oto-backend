@@ -1,7 +1,8 @@
 """Le réglage Slack d'une org, « mention seule » (`db/slack_reglage.py`,
 `oto_org_settings domain=slack`).
 
-1. Défaut FALSE : une org qui ne pose rien garde le comportement du 29/10/2026.
+1. Défaut TRUE (19/11/2026) : hors d'un DM, une org qui ne pose rien ne répond qu'à qui
+   tague l'app ; FALSE rend le comportement du 29/10/2026.
 2. La console : `get` rend le réglage, `set` exige `mention_only`, une org inconnue est
    un 404 nommé — jamais un « faux » deviné.
 3. En base : la colonne se pose et se relit ; une org absente se dit (None / False).
@@ -71,10 +72,10 @@ def test_la_colonne_se_pose_et_se_relit(live, pg_module_dsn):
     with psycopg.connect(pg_module_dsn, autocommit=True) as c:
         org = c.execute("INSERT INTO orgs (name) VALUES ('Slack') RETURNING id"
                         ).fetchone()[0]
-    assert slack_reglage.mention_seule(org) is False, "une org d'avant : le défaut"
-    assert slack_reglage.poser_mention_seule(org, True)
-    assert slack_reglage.mention_seule(org) is True
+    assert slack_reglage.mention_seule(org) is True, "une org neuve : le défaut"
     assert slack_reglage.poser_mention_seule(org, False)
     assert slack_reglage.mention_seule(org) is False
+    assert slack_reglage.poser_mention_seule(org, True)
+    assert slack_reglage.mention_seule(org) is True
     assert slack_reglage.mention_seule(10**12) is None
     assert slack_reglage.poser_mention_seule(10**12, True) is False
