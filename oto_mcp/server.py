@@ -1014,8 +1014,9 @@ def build_root_app(app, anon_app):
        au-dessus du compteur des refus du transport : la TAILLE DU CORPS (`borne_corps`,
        routes d'upload reconnues à leur contrat dans la table vivante de `app`), puis
        l'INACTIVITÉ des sessions MCP (`borne_session`, qui arme aussi, en application,
-       le gestionnaire de session des deux faces au démarrage). Mode mesure par défaut,
-       sous le même interrupteur que la limite de débit.
+       le gestionnaire de session des deux faces au démarrage, et les équipe dans tous
+       les modes : `sessions_mcp`, libération des réponses et ligne de contrôle).
+       Mode mesure par défaut, sous le même interrupteur que la limite de débit.
     6. **garde de déconnexion client** (#352), la couche la plus EXTERNE — entre uvicorn
        et tout le reste. Un POST `/mcp` dont le client est parti en cours de route
        laissait une réponse ASGI incomplète ; uvicorn fermait alors le transport, et
@@ -1047,7 +1048,7 @@ def build_root_app(app, anon_app):
                         VersionHeader(
                             ResponseCharset(
                                 subdomain_project.HostDispatch(app, anon_app)))),
-                    faces=(app, anon_app)),
+                    faces=(app, anon_app), noms_faces=("authentifiee", "anonyme")),
                 routes=routes)))
 
 
