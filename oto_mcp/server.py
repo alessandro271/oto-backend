@@ -1311,6 +1311,9 @@ def main():
             # Revue de sécurité 2026-08-29 (oto-backend#572, point informatif n°9) :
             # ne pas annoncer la pile en clair sur chaque réponse anonyme.
             server_header=False,
+            # Sur SIGTERM (fin de vidange bleu/vert, arrêt de l'unité) : les requêtes en
+            # cours finissent, au plus ce délai — cf. `bornes_processus.ARRET_GRACIEUX_S`.
+            timeout_graceful_shutdown=bornes_processus.ARRET_GRACIEUX_S,
         )
         return
 
