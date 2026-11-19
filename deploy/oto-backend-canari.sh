@@ -41,9 +41,9 @@ BG_DOCSHARE_HOST=mcp.oto.ninja
 BG_ASK=                      # l'on-demand TLS est porté par la prod uniquement
 BG_ACTIVE=/etc/oto-mcp/active-canari
 BG_PUBLIC="https://mcp-canari.oto.ninja/.well-known/oauth-protected-resource"
-# Même plafond qu'en prod (cf. oto-backend.sh) : la vidange couvre les requêtes en
-# cours, pas les sessions — inutile de laisser deux versions coexister plus longtemps.
-BG_DRAIN_MAX=120
+# Même plafond qu'en prod (cf. oto-backend.sh, mesure et garde) : la vidange couvre les
+# requêtes en cours, pas les sessions ; égal à l'arrêt gracieux d'uvicorn.
+BG_DRAIN_MAX=240
 # Ce qui était codé en dur dans la bibliothèque avant qu'elle ne serve aussi une
 # instance tierce (#967) — mêmes valeurs, désormais DÉCLARÉES ici.
 BG_LOCK=/var/lock/oto-mcp-bluegreen-canari.lock

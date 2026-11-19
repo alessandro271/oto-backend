@@ -5,7 +5,7 @@ flock -w 900 9
 flock -w 600 8
 date +%H:%M:%S
 date +%H:%M:%S
-systemctl stop oto-mcp-drain-prod.service
+systemctl is-active --quiet oto-mcp-drain-prod.service
 systemctl stop oto-mcp@green
 date +%H:%M:%S
 git fetch --tags --force origin
