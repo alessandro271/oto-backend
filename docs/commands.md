@@ -371,6 +371,9 @@ retire : installations, retraits et activations supprimés, noms retirés du kit
 idempotente. **Jamais les credentials ni leurs instances** sans `--credentials`, refusé
 (code 1) tant que `--preavis-echu AAAA-MM-JJ` n'est pas une date passée : le préavis à
 leurs propriétaires d'abord. Les réglages (`connector_settings`) sont lus, jamais retirés.
+`--connecteur NOM` (répétable) borne la commande à ces orphelins : un préavis ne couvre
+que les clés qu'il nomme, les autres orphelins ne sont ni lus ni touchés ; nommer un
+connecteur servi est refusé (code 1).
 Sorties : 0 fait, 1 refus, 2 erreur, 3 un orphelin reste à la relecture (relancer).
 
 Le catalogue est le registre du code qui tourne : lancée depuis un commit, la commande
@@ -391,6 +394,7 @@ orphelins() {   # le lanceur de l'arbre extrait ; PYTHONPATH : `oto_mcp` est cel
 }
 orphelins                 # à blanc : comparer au constat servi
 orphelins --appliquer     # écrit ; relancer à blanc ensuite : « aucun » partout
+orphelins --credentials --preavis-echu <date> --connecteur <nom>   # les clés d'UN orphelin
 ```
 
 ## Pin oto-core — une version déployée = une coordonnée reproductible

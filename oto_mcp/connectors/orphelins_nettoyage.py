@@ -60,6 +60,10 @@ class PreavisNonEchu(ValueError):
     """`credentials=True` sans date de préavis, ou avec une date pas encore échue."""
 
 
+class ConnecteurServi(ValueError):
+    """`seuls` nomme un connecteur du catalogue servi : ce n'est pas un orphelin."""
+
+
 def verifier_preavis(preavis_echu: Optional[date], aujourd_hui: date) -> None:
     if preavis_echu is None:
         raise PreavisNonEchu(
@@ -143,23 +147,41 @@ def _lire(tables: list[str], catalogue: list[str]) -> list[dict]:
         return [{"table": t, "lignes": _compter(conn, t, catalogue)} for t in tables]
 
 
+def _catalogue_borne(catalogue: list[str], seuls: frozenset[str]) -> list[str]:
+    """Le catalogue qui ne laisse orphelins que `seuls` : chaque autre nom orphelin présent
+    en base y est ajouté, et se trouve ainsi traité comme servi — ni lu ni écrit."""
+    servis = sorted(seuls & frozenset(catalogue))
+    if servis:
+        raise ConnecteurServi(
+            f"--connecteur {', '.join(servis)} : servi par ce code, pas un orphelin")
+    presents = {nom for t in _lire([t for t, _ in orphelins.REFERENCES], catalogue)
+                for nom in t["lignes"]}
+    return sorted(set(catalogue) | (presents - seuls))
+
+
 def nettoyer(*, appliquer: bool, credentials: bool = False,
              preavis_echu: Optional[date] = None,
-             aujourd_hui: Optional[date] = None) -> dict:
+             aujourd_hui: Optional[date] = None,
+             seuls: Optional[frozenset[str]] = None) -> dict:
     """Le rapport : `{"applique", "catalogue", "tables": [...], "intouchees": [...]}`.
 
     Une table traitée porte `a_retirer` (à blanc) ou `retire` et `reste` (appliqué),
     chacun `{connecteur: lignes}` ; une table hors du nettoyage porte ses `lignes`
     orphelines, lues seulement (avec `credentials`, les instances y sont relues après
-    l'archivage que fait le coffre). Le refus du préavis est levé AVANT toute connexion."""
+    l'archivage que fait le coffre). Le refus du préavis est levé AVANT toute connexion.
+
+    `seuls` borne le nettoyage à ces noms orphelins : les autres orphelins ne sont ni
+    retirés ni rapportés (un préavis ne couvre que les clés qu'il nomme)."""
     if credentials:
         verifier_preavis(preavis_echu, aujourd_hui or datetime.now(timezone.utc).date())
-    catalogue = sorted(orphelins.catalogue())
+    servi = sorted(orphelins.catalogue())
+    catalogue = servi if seuls is None else _catalogue_borne(servi, seuls)
     traitees = [*SUPPRIMEES, orphelins.KIT] + ([orphelins.CREDENTIALS] if credentials else [])
     tables = [_traiter(t, catalogue, appliquer) for t in traitees]
     intouchees = [t for t, _ in orphelins.REFERENCES if t not in traitees]
-    return {"applique": appliquer, "catalogue": len(catalogue), "tables": tables,
-            "intouchees": _lire(intouchees, catalogue)}
+    return {"applique": appliquer, "catalogue": len(servi), "tables": tables,
+            "intouchees": _lire(intouchees, catalogue),
+            "seuls": sorted(seuls) if seuls is not None else None}
 
 
 def reste(rapport: dict) -> bool:
@@ -176,6 +198,9 @@ def lignes_du_rapport(rapport: dict) -> list[str]:
     mode = "APPLIQUÉ" if rapport["applique"] else "À BLANC (rien n'est écrit ; --appliquer)"
     out = [f"orphelins : {mode} — catalogue servi par ce code : {rapport['catalogue']} "
            "connecteurs"]
+    if rapport.get("seuls") is not None:
+        out.append(f"  borné à : {', '.join(rapport['seuls'])} — les autres orphelins "
+                   "ne sont ni lus ni touchés")
     for t in rapport["tables"]:
         if "a_retirer" in t:
             out.append(f"  {t['table']} : à retirer — {_noms(t['a_retirer'])}")
