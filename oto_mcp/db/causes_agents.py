@@ -112,13 +112,16 @@ def _avec_origine(ligne: dict[str, Any]) -> dict[str, Any]:
 def decider(cle: str, *, acteur: str, statut: Optional[str] = None,
             classe: Optional[str] = None, cote: Optional[str] = None,
             copie: Optional[dict] = None,
-            origine: Optional[dict] = None) -> Optional[dict[str, Any]]:
+            origine: Optional[dict] = None,
+            si_statut: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Le geste d'un opérateur (ou de l'agent médecin) sur une cause : son statut, sa
     classe, son côté, sa copie au client — fusionnée PAR LANGUE : poser `en` garde `fr`.
     Un champ absent ne change pas ; le geste
     s'ajoute à `gestes` avec son auteur et sa date, et, avec une copie, `origine` —
     l'org et l'épisode pour lesquels elle a été écrite, que l'écran Admin des causes
-    montre à l'opérateur qui l'approuve. Rend la ligne, ou None si la clé n'existe pas."""
+    montre à l'opérateur qui l'approuve. `si_statut` : n'écrire que si la cause a encore
+    ce statut, dans la même requête. Rend la ligne, ou None si la clé n'existe pas (ou
+    n'a plus `si_statut`)."""
     geste = {"acteur": acteur, "statut": statut, "classe": classe, "cote": cote,
              "copie": bool(copie)}
     if copie and origine:
@@ -138,10 +141,12 @@ def decider(cle: str, *, acteur: str, statut: Optional[str] = None,
                            'at', to_char(NOW() AT TIME ZONE 'UTC',
                                          'YYYY-MM-DD"T"HH24:MI:SSZ')))
              WHERE cle = %(cle)s
+               AND (%(si_statut)s::text IS NULL OR statut = %(si_statut)s::text)
             RETURNING {_COLONNES}
             """,
             {"statut": statut, "classe": classe, "cote": cote,
              "copie": json.dumps(copie, ensure_ascii=False) if copie else None,
-             "geste": json.dumps(geste, ensure_ascii=False), "cle": cle},
+             "geste": json.dumps(geste, ensure_ascii=False), "cle": cle,
+             "si_statut": si_statut},
         ).fetchone()
     return dict(r) if r else None

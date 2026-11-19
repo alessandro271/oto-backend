@@ -56,6 +56,7 @@ def allume(live, monkeypatch):
     with _connect() as conn:
         conn.execute("DELETE FROM agent_alert_settings WHERE org_id = %s", (ORG,))
         conn.execute("DELETE FROM agent_episodes WHERE org_id = %s", (ORG,))
+        conn.execute("DELETE FROM agent_causes WHERE cle LIKE 'test-%%'")
     monkeypatch.setenv("OTO_ALERTES_SLACK_AGENTS_ENABLED", "1")
     monkeypatch.setenv("OTO_APP_URL", BASE)
     monkeypatch.setenv("OTO_DASHBOARD_LINK_PATHS", CHEMINS)
@@ -86,12 +87,13 @@ def agent(live):
     return t["id"]
 
 
-def _episode(agent, cote="proprietaire", il_y_a_min=5, classe="inconnu", job_id=None):
+def _episode(agent, cote="proprietaire", il_y_a_min=5, classe="inconnu", job_id=None,
+             empreinte=None):
     from oto_mcp.db import episodes_agents
     from oto_mcp.db._conn import _connect
     ep = episodes_agents.ouvrir_ou_rafraichir(
         org_id=ORG, trigger_id=agent, classe=classe, cote=cote, motif="HTTP 401",
-        job_id=job_id, travaux=1)
+        job_id=job_id, travaux=1, empreinte=empreinte)
     with _connect() as conn:
         conn.execute("UPDATE agent_episodes SET ouvert_at = NOW() - make_interval(mins => %s) "
                      "WHERE id = %s", (il_y_a_min, ep["id"]))
@@ -412,3 +414,235 @@ def test_une_valeur_illisible_leve(allume):
     allume.setenv("OTO_ALERTES_SLACK_AGENTS_ENABLED", "peut-etre")
     with pytest.raises(interrupteurs.InterrupteurIllisible):
         A.actives()
+
+
+# --- La cause approuvée, et un message par problème -------------------------------------
+
+@pytest.fixture()
+def decide(monkeypatch):
+    """Le catalogue décide : la copie d'une cause approuvée n'attend pas `ATTENTE_MIN`."""
+    monkeypatch.setenv("OTO_CATALOGUE_CAUSES_DECIDE", "1")
+
+
+def _autre_agent(label):
+    from oto_mcp.db import runner_triggers as rt
+    return rt.create_trigger(ORG, "jane", procedure="leads-push", tz="UTC", tools=["a"],
+                             cron="0 6 * * *", next_due="2999-01-01 00:00:00+00",
+                             label=label)["id"]
+
+
+def _cause(cle, cote="proprietaire", copie=None, statut="approuvee"):
+    from oto_mcp.db import causes_agents
+    causes_agents.relever([(cle, "x", "cle_refusee", cote)])
+    causes_agents.decider(cle, acteur="ops", statut=statut, copie=copie or {
+        "fr": {"headline": "Le compte de paiement de {marque} est vide.",
+               "todo": "Ajoutez des crédits.", "action": "credits"}})
+
+
+def test_la_copie_de_la_cause_approuvee_part_tout_de_suite_et_l_emporte(slack, agent,
+                                                                       decide):
+    _allumer()
+    _cause("test-c1")
+    ep = _episode(agent, empreinte="test-c1")
+    _dire(ep)
+    assert A.balayer()["envoyes"] == 1
+    texte = slack.posts[0]["text"]
+    assert "Le compte de paiement de Acme est vide." in texte
+    assert "Ajoutez des crédits." in texte and "nouvelle clé API" not in texte
+    assert slack.posts[0]["blocks"][1]["elements"][0]["url"] == f"{BASE}/org/billing"
+
+
+def test_en_ombre_la_copie_donne_le_texte_mais_pas_le_moment(slack, agent):
+    """Catalogue en ombre : la copie approuvée n'avance pas l'alerte ; passé
+    `ATTENTE_MIN`, c'est elle qui se lit."""
+    _allumer()
+    _cause("test-c1o")
+    _episode(agent, empreinte="test-c1o")
+    assert A.balayer()["envoyes"] == 0, "en ombre, l'attente tient"
+    _episode(agent, empreinte="test-c1o", il_y_a_min=A.ATTENTE_MIN + 5)
+    assert A.balayer()["envoyes"] == 1
+    assert "Le compte de paiement de Acme est vide." in slack.posts[0]["text"]
+
+
+def test_une_cause_proposee_ou_d_un_autre_cote_ne_parle_pas(slack, agent, decide):
+    _allumer()
+    _cause("test-c2", statut="proposee")
+    ep = _episode(agent, empreinte="test-c2")
+    assert A.balayer()["envoyes"] == 0, "proposée : l'attente de la classe tient"
+    _cause("test-c3", cote="plateforme")
+    from oto_mcp.db import episodes_agents
+    episodes_agents.ouvrir_ou_rafraichir(
+        org_id=ORG, trigger_id=agent, classe="inconnu", cote="proprietaire",
+        motif="HTTP 401", job_id=None, travaux=1, empreinte="test-c3")
+    _dire(ep)
+    A.balayer()
+    assert "nouvelle clé API" in slack.posts[0]["text"]
+
+
+def test_trois_agents_arretes_par_la_meme_cause_font_un_message(slack, agent, decide):
+    _allumer()
+    _cause("test-c4")
+    autres = [_autre_agent("Relances"), _autre_agent("Veille")]
+    for t in [agent, *autres]:
+        _episode(t, empreinte="test-c4")
+    bilan = A.balayer()
+    assert (bilan["envoyes"], bilan["messages"]) == (3, 1)
+    (post,) = slack.posts
+    assert post["text"].startswith("⚠️ 3 agents ne fonctionnent plus depuis")
+    assert f"*<{BASE}/org/{ORG}/agents?agent={agent}|Leads vers l'emailing>*" in post["text"]
+    for t, nom in zip(autres, ("Relances", "Veille")):
+        assert f"*<{BASE}/org/{ORG}/agents?agent={t}|{nom}>*" in post["text"]
+    assert post["text"].count("Ajoutez des crédits.") == 1
+    assert A.balayer()["envoyes"] == 0, "les trois sont marqués"
+
+
+def test_deux_problemes_differents_font_deux_messages(slack, agent):
+    _allumer()
+    autre = _autre_agent("Relances")
+    _dire(_episode(agent))
+    _dire(_episode(autre), headline="Le compte au nom duquel l'agent tourne a été retiré.")
+    assert A.balayer()["messages"] == 2
+
+
+def test_au_dela_de_cinq_agents_les_autres_se_comptent(slack, agent, decide):
+    _allumer()
+    _cause("test-c5")
+    for t in [agent, *[_autre_agent(f"Agent {i}") for i in range(6)]]:
+        _episode(t, empreinte="test-c5")
+    A.balayer()
+    assert "et 2 autres" in slack.posts[0]["text"]
+
+
+def test_les_retours_d_un_passage_partent_ensemble(slack, agent, decide):
+    from oto_mcp.db import episodes_agents
+    _allumer()
+    _cause("test-c6")
+    autre = _autre_agent("Relances")
+    eps = [_episode(t, empreinte="test-c6") for t in (agent, autre)]
+    A.balayer()
+    for ep in eps:
+        episodes_agents.poser(int(ep["id"]), statut="clos", resolution="gueri")
+    bilan = A.balayer()
+    assert (bilan["envoyes"], bilan["messages"]) == (2, 1)
+    assert slack.posts[-1]["text"] == (
+        f"✅ *<{BASE}/org/{ORG}/agents?agent={agent}|Leads vers l'emailing>*, "
+        f"*<{BASE}/org/{ORG}/agents?agent={autre}|Relances>* refonctionnent.")
+
+
+def test_la_file_sert_la_copie_de_la_cause(slack, agent):
+    from oto_mcp.capabilities import runner_jobs as RJ
+    from oto_mcp.capabilities._types import ResolvedCtx
+    _cause("test-c7")
+    j = _travail_mort(agent)
+    _dire(_episode(agent, classe="cle_refusee", job_id=j, empreinte="test-c7"))
+    out = RJ._avec_le_probleme(ResolvedCtx(sub="jane", org_id=ORG),
+                               [{"id": j, "payload": {"trigger_id": agent}}])
+    assert out[0]["problem"] == {
+        "headline": "Le compte de paiement de Acme est vide.", "todo": "Ajoutez des crédits.",
+        "action": "credits", "link": f"{BASE}/org/billing", "side": "client"}
+
+
+# --- Le texte du médecin part, et devient la copie proposée de sa cause -----------------
+
+def test_diagnose_refuse_un_texte_que_le_client_ne_peut_pas_lire(agent):
+    from oto_mcp.capabilities._types import AuthzDenied
+    ep = _episode(agent)
+    for kw in ({"client_headline": "La clé de lemlist_act est refusée."},
+               {"client_headline": "Il s'est arrêté.", "client_todo": "Voir l'erreur 4011."},
+               {"client_headline": "Il s'est arrêté.", "client_todo": "Lisez `run_note`."}):
+        with pytest.raises(AuthzDenied) as e:
+            _diagnose(ep, **kw)
+        assert e.value.code == "client_copy_refused", kw
+
+
+def test_le_texte_du_medecin_devient_la_copie_proposee_de_sa_cause(slack, agent):
+    from oto_mcp.db import causes_agents
+    _allumer()
+    causes_agents.relever([("test-prop", "x", "inconnu", "proprietaire")])
+    ep = _episode(agent, empreinte="test-prop")
+    _diagnose(ep, client_headline="La clé de l'outil d'emailing est refusée.",
+              client_todo="Collez une nouvelle clé dans Connecteurs.",
+              client_link="/org/1/connectors", client_action="connectors")
+    assert A.balayer()["envoyes"] == 1, "le texte part tout de suite, sans attendre"
+    cause = causes_agents.lire("test-prop")
+    assert cause["statut"] == "proposee", "il attend l'approbation d'un opérateur"
+    assert cause["gestes"][-1]["origine"] == {"org_id": ORG, "episode_id": int(ep["id"])}, \
+        "la proposition dit pour quelle org et quel épisode elle a été écrite"
+    assert cause["copie"] == {"fr": {
+        "headline": "La clé de l'outil d'emailing est refusée.",
+        "todo": "Collez une nouvelle clé dans Connecteurs.", "action": "connectors"}}
+    _diagnose(ep, client_headline="Un autre texte.")
+    assert causes_agents.lire("test-prop")["copie"]["fr"]["headline"].startswith("La clé"), \
+        "la première copie proposée tient"
+
+
+def test_le_medecin_ne_touche_pas_la_copie_d_une_cause_approuvee(agent):
+    from oto_mcp.db import causes_agents
+    _cause("test-prop2")
+    ep = _episode(agent, empreinte="test-prop2")
+    _diagnose(ep, client_headline="Un autre texte.")
+    assert causes_agents.lire("test-prop2")["copie"]["fr"]["headline"].startswith(
+        "Le compte de paiement")
+
+
+def test_une_cause_approuvee_entre_la_lecture_et_l_ecriture_ne_prend_pas_la_copie(live):
+    from oto_mcp.db import causes_agents
+    _cause("test-prop3", copie={"fr": {"headline": "Approuvée."}})
+    assert causes_agents.decider("test-prop3", acteur="medecin",
+                                 copie={"en": {"headline": "Proposed."}},
+                                 si_statut="proposee") is None
+    assert causes_agents.lire("test-prop3")["copie"] == {"fr": {"headline": "Approuvée."}}
+
+
+# --- la ligne de détails : comme le courriel et l'onglet Santé --------------------------
+
+def _ep_seul(tid, motif, modele=None, **kw):
+    return {"id": 900 + tid, "org_id": 1, "trigger_id": tid, "libelle": f"agent {tid}",
+            "classe": "cle_refusee", "cote": "proprietaire", "message": "alerte",
+            "motif": motif, "modele": modele, "agent_sub": "u", "ouvert_at": None,
+            "message_client": None, "cause_copie": None, **kw}
+
+
+@pytest.fixture()
+def sans_liens(monkeypatch):
+    from oto_mcp import links
+    monkeypatch.setattr(links, "link_for", lambda kind, **kw: None)
+
+
+def test_le_message_dit_le_connecteur_et_l_erreur_quand_on_les_connait(sans_liens):
+    """Une clé de modèle refusée : le fournisseur du modèle de l'agent, et sa réponse
+    entre accents graves — une seule ligne, après le geste."""
+    texte, _ = A.composer(_ep_seul(1, "fin_anormale (authentication_failed, HTTP 401 : "
+                                      "Invalid API key)", "claude-sonnet-5"),
+                          "en", marque="Acme")
+    assert "Connector: Anthropic · Error: `HTTP 401 : Invalid API key`" in texte
+    assert texte.splitlines()[-1].startswith("Connector:"), "après le geste"
+
+
+def test_un_paquet_dit_ses_connecteurs_une_fois(sans_liens):
+    eps = [_ep_seul(1, "pas de clé `hubspot` déposée"), _ep_seul(2, "pas de clé `hubspot`")]
+    texte, _ = A.composer_paquet(eps, "fr", marque="Acme")
+    assert texte.count("Connecteur : HubSpot") == 1 and "Erreur" not in texte
+
+
+def test_rien_de_connu_aucune_ligne_et_jamais_notre_texte(sans_liens):
+    texte, _ = A.composer(_ep_seul(1, "RuntimeError : run_start : `x_y` refusé",
+                                   "claude-sonnet-5"), "fr", marque="Acme")
+    assert "Connecteur :" not in texte and "Erreur :" not in texte
+    assert "RuntimeError" not in texte
+
+
+def test_un_libelle_ou_une_copie_ne_forme_ni_lien_ni_mention(sans_liens):
+    """Slack lit `<…>` comme un lien ou une mention (`<!channel>`) : `&`, `<` et `>` d'un
+    libellé, d'une copie ou d'une erreur sont échappés."""
+    ep = _ep_seul(1, "fin_anormale (HTTP 401 : bad <key> & co)", "claude-sonnet-5",
+                  libelle="<!channel> & <https://x.test|ici>",
+                  message_client={"headline": "Clé <refusée> & co", "todo": "<!here>"})
+    texte, blocs = A.composer(ep, "fr", marque="Acme")
+    assert "<!channel>" not in texte and "<!here>" not in texte
+    assert "&lt;!channel&gt; &amp; &lt;https://x.test|ici&gt;" in texte
+    assert "Clé &lt;refusée&gt; &amp; co" in texte and "&lt;!here&gt;" in texte
+    paquet, _ = A.composer_paquet([ep, _ep_seul(2, "x", libelle="a|b>c",
+                                                message_client=ep["message_client"])],
+                                  "fr", marque="Acme")
+    assert "<!channel>" not in paquet and "a/b&gt;c" in paquet
