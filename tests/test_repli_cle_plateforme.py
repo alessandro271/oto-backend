@@ -46,6 +46,24 @@ def _cle_maitre():
         os.environ["OTO_MCP_MASTER_KEY"] = avant
 
 
+@pytest.fixture(scope="module", autouse=True)
+def bareme(live):
+    """Un barème RÉEL (en base), le seul de la base du module : le modèle replié de
+    `sub:sonnet` y a ses quatre lignes (1 unité par 10 jetons), celui de `sub:opus` NON —
+    un repli vers un modèle sans prix ne se facture pas, il attend. Relu tout de suite
+    (`credits.oublier`)."""
+    from oto_mcp.access import credits
+    from oto_mcp.access import credits_tours as tours
+    from oto_mcp.db import credits as db_credits
+    db_credits.poser_bareme(1, [
+        {"connector": tours.MODELE_CONNECTOR,
+         "function": tours.fonction_du_modele("claude-sonnet-5-5"),
+         "unit": u, "budget": 1, "per_n": 10} for u in tours.UNITES_DU_MODELE])
+    credits.oublier()
+    yield 1
+    credits.oublier()
+
+
 @pytest.fixture(scope="module")
 def cle_de_plateforme(live):
     """La clé `anthropic` de PLATEFORME, posée FERMÉE (elle ne sert que les orgs
@@ -320,6 +338,38 @@ def test_la_ferme_ne_prend_jamais_le_repli_sur_la_plateforme(cle_de_plateforme):
     _attend(jid)
 
 
+def test_un_modele_replie_sans_prix_au_bareme_attend(cle_de_plateforme):
+    """`sub:opus` se replie sur un modèle que le barème ne tarife pas : servi, il ne se
+    réglerait pas (`report`) ou s'arrêterait au premier tour (`enforce`). Il attend."""
+    n = _nom()
+    oid = _org(n, f"{n}-dem")
+    _abonne(f"{n}-dem")
+    jid = _travail(oid, f"{n}-dem", model="sub:opus")
+
+    assert _reserver([oid]) is None
+    e = _etat(jid)
+    assert (e["status"], e["attempts"], e["payload"]["model"]) == ("pending", 0, "sub:opus")
+
+
+def test_une_org_qui_regle_chaque_personne_attend(cle_de_plateforme):
+    """Mode de payeur `person` : le run replié se réglerait sur le solde du DEMANDEUR,
+    que le réglage d'un org_admin n'engage pas. Il attend."""
+    from oto_mcp.access import credits
+    from oto_mcp.db import credits as db_credits
+    n = _nom()
+    oid = _org(n, f"{n}-dem")
+    _abonne(f"{n}-dem")
+    jid = _travail(oid, f"{n}-dem")
+    db_credits.poser_mode(oid, "person")
+    credits.oublier()
+    try:
+        assert _reserver([oid]) is None
+        _attend(jid)
+    finally:
+        db_credits.poser_mode(oid, "org")
+        credits.oublier()
+
+
 def test_sans_juge_de_la_plateforme_la_porte_reste_fermee(cle_de_plateforme):
     """Tout autre appelant de `repli_disponible` (sans `plateforme_paie`) garde la
     règle d'avant : seule la clé de l'org paie."""
@@ -545,25 +595,12 @@ def test_sous_le_plancher_de_credits_DEFAIT_au_lieu_d_arreter(cle_de_plateforme,
 # ── 6. LA PREUVE DE FACTURATION ─────────────────────────────────────────────
 
 @pytest.fixture
-def bareme(live, monkeypatch):
-    """Un barème RÉEL (en base) pour le modèle replié : 1 unité par 10 jetons, sur ses
-    quatre lignes ; le budget en `enforce`. Relu tout de suite (`credits.oublier`)."""
-    from oto_mcp.access import credits
-    from oto_mcp.access import credits_tours as tours
-    from oto_mcp.db import credits as db_credits
-    version = 900_000 + int(uuid.uuid4().int % 1000)
-    db_credits.poser_bareme(version, [
-        {"connector": tours.MODELE_CONNECTOR,
-         "function": tours.fonction_du_modele("claude-sonnet-5-5"),
-         "unit": u, "budget": 1, "per_n": 10} for u in tours.UNITES_DU_MODELE])
+def enforce(monkeypatch):
     monkeypatch.setenv("OTO_CREDITS_MODE", "enforce")
-    credits.oublier()
-    yield version
-    credits.oublier()
 
 
 def test_PREUVE_le_run_replie_est_compte_cle_plateforme_pour_l_org_du_travail(
-        cle_de_plateforme, bareme):
+        cle_de_plateforme, enforce):
     """De bout en bout, par les verbes du worker (`claim`, `reserve`, `meter`,
     `complete`), sans rien doubler de ce qui facture :
 

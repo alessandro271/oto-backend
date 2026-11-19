@@ -2837,8 +2837,9 @@ modèle, au même palier, payé aux jetons sur la clé API de l'org. Le repli le
   permet (`OTO_REPLI_CLE_PLATEFORME_PERMIS`, fermé par défaut). Il choisit le payeur, pas
   le repli : `repli_api` reste la porte. Une org qui a sa clé paie toujours sur elle. La
   clé de plateforme est la clé PARTAGÉE accordée à l'org, refacturée tour par tour à ses
-  crédits (`meter_usage`), jamais la clé d'environnement du worker ; sans accord, le
-  travail attend. Le payeur s'écrit dans `_plateforme.repli.payeur` (`cle_org` |
+  crédits (`meter_usage`), jamais la clé d'environnement du worker ; sans accord, sans
+  prix du modèle replié au barème, ou pour une org qui règle les crédits de chaque
+  personne, le travail attend. Le payeur s'écrit dans `_plateforme.repli.payeur` (`cle_org` |
   `cle_plateforme`), et la remise sert ce payeur ou défait le repli — jamais rien
   d'autre. `oto_org_settings domain=model_subscriptions platform_key_fallback=true|false`,
   ou `PUT /api/orgs/{id}/model-subscriptions/{family}/platform-key-fallback`. Révision

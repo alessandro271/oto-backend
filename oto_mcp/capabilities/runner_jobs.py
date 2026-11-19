@@ -910,7 +910,9 @@ def _cle_de_plateforme_du_repli(org_id: int, sub: Optional[str], depot: str,
     REFACTURE (`budget.rang_refacture` : la plateforme ou le tenant primaire — une clé
     de tenant non primaire, ce tenant la paie, et il n'a rien demandé), servie à un
     worker qui MESURE chaque appel, hors ferme, sous la limite du jour et au-dessus du
-    plancher de crédits, sur une instance qui facture ces appels (mode ≠ `off`).
+    plancher de crédits, sur une instance qui facture ces appels (mode ≠ `off`, le
+    modèle replié TARIFÉ au barème), au compte de l'ORG — jamais d'une org qui règle
+    les crédits de chaque personne, où le payeur serait le demandeur.
     JAMAIS la clé d'environnement du worker (le `return job` sans clé de `_avec_cle`) :
     rien ne la mesure, la plateforme paierait sans que l'org soit facturée. Une org à
     qui la clé n'est pas accordée n'y gagne pas un accès : son travail attend.
@@ -936,6 +938,24 @@ def _cle_de_plateforme_du_repli(org_id: int, sub: Optional[str], depot: str,
         return None, f"`{model}` se facture au coût, hors du repli sur la clé de plateforme"
     if tours.mode_du_modele(model, "runner") == "off":
         return None, "les appels au modèle ne sont pas facturés sur cette instance"
+    try:
+        tarife = tours.modele_tarife(model)
+        paie = tours.payeur_du_travail(sub, org_id)
+    except Exception:
+        logger.warning("repli sur la clé de plateforme (org %s) : barème ou mode de "
+                       "payeur illisible — le travail attend", org_id, exc_info=True)
+        return None, "barème de crédits illisible"
+    if not tarife:
+        # Sans ses quatre lignes au barème, le run replié ne se facture pas : servi en
+        # `report` (rien ne se règle), arrêté au premier tour en `enforce`. Ni l'un ni
+        # l'autre n'est le run payé que l'org a choisi : il attend.
+        return None, f"`{model}` n'a pas de prix au barème de crédits de l'instance"
+    if paie != f"org:{org_id}":
+        # ⚠️ Une org dont le payeur est la PERSONNE (`credit_payer_modes`) : le run
+        # replié se réglerait sur le solde du DEMANDEUR, que le réglage d'un org_admin
+        # n'engage pas — le défaut même que `_cle_ok_pour_repli` ferme. Il attend.
+        return None, ("l'organisation règle les crédits de chaque personne : le "
+                      "réglage d'un org_admin n'engage pas le solde du demandeur")
     try:
         partagee = _cle_exigee.cle_partagee(org_id, depot, sub=sub, strict=True)
     except _cle_exigee.CleIllisible:

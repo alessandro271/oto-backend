@@ -53,7 +53,13 @@ accepté la clé de plateforme confondrait deux décisions. Le tableau de bord l
     rien demandé ;
   - servie à un worker qui **mesure** chaque appel (`meters_usage`), jamais à la ferme ;
   - sous la limite de dépense du jour, au-dessus du plancher de crédits d'un travail, sur
-    une instance où les appels au modèle ne sont pas en mode `off`.
+    une instance où les appels au modèle ne sont pas en mode `off` ;
+  - le modèle replié **tarifé** au barème (ses quatre lignes, `credits_tours.modele_tarife`) :
+    sans prix, il serait servi sans rien régler (`report`) ou arrêté au premier tour
+    (`enforce`) — ni l'un ni l'autre n'est le run payé que l'org a choisi ;
+  - réglé au compte de l'**org** (`org:<id>`) : une org dont le payeur est la personne
+    (`credit_payer_modes = person`) ferait payer le DEMANDEUR, que le réglage d'un
+    org_admin n'engage pas — elle attend.
 - **Jamais la clé d'environnement du worker** : le `return job` sans clé de la remise
   ordinaire la ferait payer à la plateforme sans que rien ne la mesure.
 
@@ -154,3 +160,9 @@ fermerait le repli de l'org par effet de bord.
   vérifier l'accord, soit le demander.
 - **Le diagnostic en mode personnel** ne parle d'aucun repli (ni clé d'org, ni
   plateforme) : seul le pool au plafond le fait, comme avant.
+- **Les orgs à payeur « personne »** attendent : faut-il plutôt un consentement de la
+  personne (son propre réglage), ou laisser le réglage de l'admin engager chaque membre ?
+- **`enforce` sans plancher** (`OTO_CREDITS_JOB_FLOOR` absent ou 0) : une org au solde
+  nul passe la prise, puis son premier tour est refusé (`insufficient_credits`) et le
+  travail s'arrête au lieu d'attendre — comme tout travail sur la clé partagée. Un
+  plancher posé ferme ce cas (la prise ne le prend pas, la remise le défait).
