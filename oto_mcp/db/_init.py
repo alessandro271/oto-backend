@@ -694,6 +694,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `20261023_1040_echec_annonce` : ordre indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", alertes_agents.COLONNE_ECHEC_ANNONCE):
         conn.execute(alertes_agents.DDL_COLONNE_ECHEC_ANNONCE)
+    # L'attente d'abonnement annoncée d'un agent — la même que pose la révision
+    # `20261119_1530_forfait_annonce` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "runner_triggers", alertes_agents.COLONNE_FORFAIT_ANNONCE):
+        conn.execute(alertes_agents.DDL_COLONNE_FORFAIT_ANNONCE)
     # L'affichage d'une recette (ses étapes, pour une page) — le même que pose la
     # révision `20261022_2100_recipes_display` : ordre indifférent entre elles.
     if _colonne_absente(conn, "recipes", recipes.COLONNE_DISPLAY):

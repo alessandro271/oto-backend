@@ -375,7 +375,10 @@ CREATE TABLE IF NOT EXISTS runner_triggers (
     updated_at TIMESTAMPTZ,
     -- 23/10/2026 : l'annonce du dernier épisode de BLOCAGE (travaux morts consécutifs)
     -- à l'admin de l'org (`db/alertes_agents.py`). NULL = aucun annoncé.
-    echec_annonce_at TIMESTAMPTZ
+    echec_annonce_at TIMESTAMPTZ,
+    -- 19/11/2026 : l'annonce du dernier épisode d'ATTENTE d'un abonnement personnel à
+    -- reconnecter (`db/alertes_agents.py`), distincte de l'épisode d'échecs. NULL = aucune.
+    forfait_annonce_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_runner_triggers_due
     ON runner_triggers(next_due) WHERE enabled;

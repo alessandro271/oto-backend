@@ -40,8 +40,13 @@ def bureau(monkeypatch):
         return {i for i in ids if i in etat["soignes"]}
     monkeypatch.setattr(episodes_agents, "agents_soignes_par_nous", _soignes)
     monkeypatch.setattr(alertes_agents, "agents_bloques", lambda seuil: list(etat["agents"]))
+    etat["attente"] = []
+    monkeypatch.setattr(alertes_agents, "agents_sans_forfait", lambda: list(etat["attente"]))
     monkeypatch.setattr(alertes_agents, "marquer_annonces",
                         lambda ids: etat["marques"].extend(ids) or len(ids))
+    etat["marques_forfait"] = []
+    monkeypatch.setattr(alertes_agents, "marquer_forfait_annonces",
+                        lambda ids: etat["marques_forfait"].extend(ids) or len(ids))
     # L'org 9 est celle d'un tenant tiers.
     monkeypatch.setattr(db, "org_tenant_slug",
                         lambda o: "partenaire" if int(o) == 9 else tenancy.primary_slug())
@@ -335,3 +340,77 @@ def test_sans_admin_de_plateforme_une_erreur_et_les_clients_recoivent(bureau, ca
     assert len(erreurs) == 1
     assert "org 7" in erreurs[0].getMessage()
     assert "aucun admin de plateforme" in erreurs[0].getMessage()
+
+
+# ── Les agents qui ATTENDENT un abonnement à reconnecter ──────────────────────────────
+
+def _attente(tid, org, statut="needs_login", proprietaire="a"):
+    return {"trigger_id": tid, "org_id": org, "proprietaire": proprietaire,
+            "libelle": f"agent {tid}", "famille": "claude_subscription",
+            "forfait": statut, "travaux": 4, "depuis": "2026-11-08 18:31:00"}
+
+
+def test_un_agent_qui_attend_son_forfait_s_annonce_et_se_marque_a_part(bureau):
+    bureau["agents"] = []
+    bureau["attente"] = [_attente(5, 7)]
+    bilan = M.balayer(_JOUR)
+    (to, subject, html), = bureau["lettres"]
+    assert to == "a@acme.test" and subject == "Un agent programmé est bloqué"
+    assert "agent 5" in html and "ne tourne plus" in html and "4 passage(s)" in html
+    assert "à reconnecter : abonnement Claude" in html and "dans Connecteurs" in html
+    assert "échouent passage après passage" not in html, "il n'échoue pas : il attend"
+    assert bureau["marques"] == [] and bureau["marques_forfait"] == [5], (
+        "l'attente a sa marque : l'épisode d'échecs reste annonçable")
+    assert bilan["envoyes"] == 1 and bilan["marques"] == 1
+
+
+def test_en_anglais_le_geste_et_l_abonnement_sont_nommes(bureau, monkeypatch):
+    from oto_mcp.db import users as U
+    monkeypatch.setattr(U, "get_user", lambda s: {"locale": "en"})
+    bureau["agents"], bureau["attente"] = [], [_attente(5, 7)]
+    M.balayer(_JOUR)
+    html = bureau["lettres"][0][2]
+    assert "has not run since" in html and "to reconnect: Claude plan" in html
+    assert "in Connectors" in html
+
+
+def test_chaque_famille_d_abonnement_a_son_libelle():
+    from oto_mcp import runner_models
+    assert set(runner_models.LIBELLES_ABONNEMENT) == set(runner_models.FAMILLES_PERSONNELLES)
+    for libelles in runner_models.LIBELLES_ABONNEMENT.values():
+        assert libelles["fr"] and libelles["en"]
+
+
+def test_un_message_par_org_les_deux_pannes_ensemble_chaque_agent_une_fois(bureau):
+    # L'agent 1 meurt ET attend (deux lignes du relevé) : nommé une fois, ses deux
+    # épisodes marqués.
+    bureau["attente"] = [_attente(1, 7), _attente(5, 7), _attente(5, 7)]
+    M.balayer(_JOUR)
+    assert len(bureau["lettres"]) == 1
+    html = bureau["lettres"][0][2]
+    assert html.count("agent 1") == 1 and html.count("agent 5") == 1
+    assert "passages de suite en échec" in html and "ne tourne plus" in html
+    assert sorted(bureau["marques"]) == [1, 2]
+    assert sorted(set(bureau["marques_forfait"])) == [1, 5]
+
+
+def test_un_membre_ne_voit_que_ses_agents_en_attente(bureau, monkeypatch):
+    _org_avec_operateur(monkeypatch, roles={"op": "super_admin"})
+    _acces(monkeypatch)
+    bureau["agents"] = []
+    bureau["attente"] = [_attente(5, 7, proprietaire="m1"), _attente(6, 7, proprietaire="a1")]
+    M.balayer(_JOUR)
+    par_qui = {to: html for to, _s, html in bureau["lettres"]}
+    assert "agent 5" in par_qui["m1@acme.test"] and "agent 6" not in par_qui["m1@acme.test"]
+    assert "agent 5" in par_qui["a1@acme.test"] and "agent 6" in par_qui["a1@acme.test"]
+    (_to, _s, equipe), = bureau["equipe"]
+    assert "agent 5" in equipe and "agent 6" in equipe
+
+
+def test_une_lecture_ratee_des_attentes_laisse_partir_les_echecs(bureau, monkeypatch):
+    from oto_mcp.db import alertes_agents
+
+    def _casse():
+        raise RuntimeError("base indisponible")
+    monkeypatch.setattr(alertes_agents, "agents_sans_forfait", _casse)
+    assert M.balayer(_JOUR)["envoyes"] == 1

@@ -157,3 +157,169 @@ def test_ce_qu_un_membre_voit_suit_la_regle_d_acces_sur_une_vraie_base(live):
     assert vus("v-m1") == {a_m1, a_m2_partage}
     assert vus("v-m2") == {a_m2, a_m2_partage}
     assert vus("v-adm") == {a_m1, a_m2, a_m2_partage}
+
+
+# ── Les agents qui ATTENDENT un abonnement à reconnecter (`agents_sans_forfait`) ──────
+# Leurs travaux ne meurent pas : la réservation les saute, ils attendent puis expirent.
+# `agents_bloques` ne les voit jamais.
+
+def _en_attente(tid, il_y_a_min, *, status="pending", sub="jane", famille="claude_subscription"):
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO runner_jobs (org_id, kind, payload, status, sub, created_at) "
+            "VALUES (%s, 'start', %s::jsonb, %s, %s, NOW() - make_interval(mins => %s))",
+            (ORG, json.dumps({"trigger_id": tid, "label": "x", "model_family": famille}),
+             status, sub, il_y_a_min))
+
+
+def _forfait(statut, *, depuis_min=120, sub="jane", last_ok_il_y_a_min=None):
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO user_model_subscriptions (sub, famille, statut, updated_at, "
+            "last_ok_at) VALUES (%s, 'claude_subscription', %s, "
+            "NOW() - make_interval(mins => %s), "
+            "CASE WHEN %s::int IS NULL THEN NULL "
+            "     ELSE NOW() - make_interval(mins => %s::int) END) "
+            "ON CONFLICT (sub, famille) DO UPDATE SET statut = EXCLUDED.statut, "
+            "updated_at = EXCLUDED.updated_at, last_ok_at = EXCLUDED.last_ok_at",
+            (sub, statut, depuis_min, last_ok_il_y_a_min, last_ok_il_y_a_min))
+
+
+def _en_attente_de_forfait():
+    from oto_mcp.db import alertes_agents
+    return {a["trigger_id"]: a for a in alertes_agents.agents_sans_forfait()}
+
+
+@pytest.fixture()
+def agent_forfait(live):
+    # La base est celle du MODULE : chaque banc part sans abonnement ni travail laissé
+    # par un autre.
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute("DELETE FROM user_model_subscriptions")
+        conn.execute("DELETE FROM org_model_subscription_modes WHERE org_id = %s", (ORG,))
+        conn.execute("DELETE FROM runner_jobs WHERE org_id = %s", (ORG,))
+    from oto_mcp.db import runner_triggers as rt
+    t = rt.create_trigger(ORG, "jane", procedure="veille", tz="UTC", tools=["a"],
+                          cron="0 6 * * *", next_due="2999-01-01 00:00:00+00",
+                          label="Alerte réponses", model="sub:sonnet")
+    return t["id"]
+
+
+def test_un_forfait_a_reconnecter_sous_un_travail_qui_attend_s_annonce(agent_forfait):
+    _forfait("needs_login")
+    _en_attente(agent_forfait, 90, status="expired")
+    _en_attente(agent_forfait, 45)
+    a = _en_attente_de_forfait()[agent_forfait]
+    assert (a["org_id"], a["proprietaire"], a["libelle"]) == (ORG, "jane", "Alerte réponses")
+    assert (a["forfait"], a["travaux"]) == ("needs_login", 2)
+    assert agent_forfait not in _bloques(), "aucun travail mort : l'autre épisode est aveugle"
+
+
+def test_rien_tant_que_l_attente_est_courte_ou_le_forfait_sert(agent_forfait):
+    _forfait("needs_login", depuis_min=5)
+    _en_attente(agent_forfait, 45)
+    assert agent_forfait not in _en_attente_de_forfait(), "un needs_login de cinq minutes"
+    _forfait("needs_login")
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute("DELETE FROM runner_jobs WHERE org_id = %s", (ORG,))
+    _en_attente(agent_forfait, 5)
+    assert agent_forfait not in _en_attente_de_forfait(), "un travail tout juste enfilé"
+    _en_attente(agent_forfait, 45)
+    for statut in ("connected", "paused_limit"):
+        _forfait(statut)
+        assert agent_forfait not in _en_attente_de_forfait(), statut
+
+
+def test_un_agent_passe_sur_une_cle_ou_eteint_ne_s_annonce_pas(agent_forfait):
+    from oto_mcp.db import runner_triggers as rt
+    _forfait("disconnected")
+    _en_attente(agent_forfait, 45)
+    assert agent_forfait in _en_attente_de_forfait()
+    rt.update_trigger(agent_forfait, ORG, {"model": "claude-sonnet-5"})
+    assert agent_forfait not in _en_attente_de_forfait(), "un vieux travail attend encore"
+    rt.update_trigger(agent_forfait, ORG, {"model": "sub:sonnet", "enabled": False})
+    assert agent_forfait not in _en_attente_de_forfait()
+
+
+def test_annonce_une_fois_puis_rouvert_par_la_preuve_que_le_forfait_tenait(agent_forfait):
+    from oto_mcp.db import alertes_agents
+    from oto_mcp.db._conn import _connect
+    _forfait("needs_login")
+    _en_attente(agent_forfait, 45)
+    assert alertes_agents.marquer_forfait_annonces([agent_forfait]) == 1
+    assert agent_forfait not in _en_attente_de_forfait(), "déjà annoncé"
+    # Reconnecté (preuve après l'annonce), puis retombé : une panne neuve.
+    with _connect() as conn:
+        conn.execute("UPDATE runner_triggers SET forfait_annonce_at = NOW() - interval "
+                     "'3 hours' WHERE id = %s", (agent_forfait,))
+    _forfait("needs_login", last_ok_il_y_a_min=150)
+    assert agent_forfait in _en_attente_de_forfait()
+
+
+def test_un_travail_que_le_pool_de_l_org_sert_n_attend_pas_le_titulaire(agent_forfait):
+    # Org en pool exclusif : ses travaux ne tournent jamais sur le forfait du titulaire,
+    # le reconnecter ne changerait rien — c'est la règle même de la réservation.
+    from oto_mcp.db._conn import _connect
+    _forfait("needs_login")
+    _en_attente(agent_forfait, 45)
+    assert agent_forfait in _en_attente_de_forfait()
+    with _connect() as conn:
+        conn.execute("INSERT INTO orgs (id, name) VALUES (%s, 'o') ON CONFLICT (id) "
+                     "DO NOTHING", (ORG,))
+        conn.execute("INSERT INTO org_model_subscription_modes (org_id, famille, mode) "
+                     "VALUES (%s, 'claude_subscription', 'pool')", (ORG,))
+    assert agent_forfait not in _en_attente_de_forfait()
+
+
+
+def test_le_run_now_d_un_autre_membre_n_est_pas_la_panne_du_titulaire(agent_forfait):
+    _forfait("needs_login", sub="bob")
+    _forfait("connected")
+    _en_attente(agent_forfait, 45, sub="bob")
+    assert agent_forfait not in _en_attente_de_forfait()
+
+
+def test_annonce_a_reconnecter_puis_trois_echecs_sans_succes_s_annonce(agent_forfait):
+    """L'agent est annoncé « abonnement à reconnecter » ; son titulaire reconnecte ;
+    l'agent échoue ensuite trois fois pour une autre cause, sans jamais réussir.
+    L'épisode d'échecs doit s'annoncer : l'annonce d'attente a sa marque à elle."""
+    from oto_mcp.db import alertes_agents
+    _forfait("needs_login")
+    _en_attente(agent_forfait, 45)
+    assert agent_forfait in _en_attente_de_forfait()
+    assert alertes_agents.marquer_forfait_annonces([agent_forfait]) == 1
+    _forfait("connected", last_ok_il_y_a_min=20)
+    assert agent_forfait not in _en_attente_de_forfait()
+    for h in (3, 2, 1):
+        _travail(agent_forfait, "failed", h, "403 refusé")
+    assert agent_forfait in _bloques(), "trois échecs après l'annonce d'attente"
+    assert alertes_agents.marquer_annonces([agent_forfait]) == 1
+    assert agent_forfait not in _bloques(), "annoncé une fois"
+
+
+def test_annonce_d_echecs_puis_abonnement_a_reconnecter_s_annonce(agent_forfait):
+    """L'inverse : un épisode d'échecs annoncé n'empêche pas l'attente d'abonnement qui
+    suit (sans succès entre les deux) d'être annoncée."""
+    from oto_mcp.db import alertes_agents
+    for h in (6, 5, 4):
+        _travail(agent_forfait, "failed", h, "403 refusé")
+    assert alertes_agents.marquer_annonces([agent_forfait]) == 1
+    _forfait("needs_login")
+    _en_attente(agent_forfait, 45)
+    assert agent_forfait in _en_attente_de_forfait()
+
+
+def test_sans_abonnement_a_reconnecter_la_lecture_sort_d_emblee(agent_forfait, monkeypatch):
+    from oto_mcp.db import alertes_agents
+    _forfait("connected")
+    _en_attente(agent_forfait, 45)
+    lus = []
+    from oto_mcp.db import runner_jobs
+    monkeypatch.setattr(runner_jobs, "_par_le_pool",
+                        lambda: lus.append(1) or "FALSE")
+    assert alertes_agents.agents_sans_forfait() == []
+    assert lus == [], "la requête des travaux n'a pas été composée"
