@@ -1197,6 +1197,13 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
           AND COALESCE(config->>'identity_id', '') <> ''
     """)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_docs_public_token ON docs(public_token) WHERE public_token IS NOT NULL")
+    # Les jetons de lien rangés chiffrés (`db/jetons_de_lien.py`) : l'enveloppe et
+    # l'empreinte du lien public d'une page et du lien d'une procédure partagée. La
+    # colonne en clair ci-dessus n'est plus écrite ; `oto-mcp maintenance
+    # jetons-de-lien` la scelle puis la vide, une révision la retirera.
+    from .jetons_de_lien import DDL_DEMARRAGE as _DDL_JETONS_DE_LIEN
+    for _ordre in _DDL_JETONS_DE_LIEN:
+        conn.execute(_ordre)
     # ADR 0032 §5/§6 (B3) : un run est rattaché au projet actif gelé à son ouverture.
     conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS project_id BIGINT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id, started_at DESC)")

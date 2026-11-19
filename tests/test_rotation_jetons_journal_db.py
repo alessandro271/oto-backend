@@ -14,6 +14,9 @@ import pathlib
 
 import pytest
 
+# Publier scelle le jeton du lien (`db/jetons_de_lien.py`) : il faut la clé maître.
+pytestmark = pytest.mark.usefixtures("cle_maitre")
+
 RACINE = pathlib.Path(__file__).resolve().parents[1]
 ALICE = "usr_rotation_journal_alice"
 

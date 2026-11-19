@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import pytest
 
+# Publier scelle le jeton du lien (`db/jetons_de_lien.py`) : il faut la clé maître.
+pytestmark = pytest.mark.usefixtures("cle_maitre")
+
 from oto_mcp import public_doc_page
 
 NOS_MARQUES = ("oto.cx", "Oto", "otomata")
@@ -70,16 +73,16 @@ def test_la_lecture_par_jeton_remonte_le_PROPRIETAIRE(live):
     renommée rend `None` au lieu de lever, et la page retomberait sur notre marque en
     silence — le défaut exact que ce lot ferme."""
     from oto_mcp import db
-    from oto_mcp.db import _conn
+    from oto_mcp.db import _conn, jetons_de_lien
 
     with _conn._connect() as c:
         c.execute("INSERT INTO orgs (id, name) VALUES (777, 'Acme Inc') "
                   "ON CONFLICT (id) DO NOTHING")
         c.execute("INSERT INTO projects (id, name, owner_type, owner_id) "
                   "VALUES (888, 'P', 'org', '777') ON CONFLICT (id) DO NOTHING")
-        c.execute("INSERT INTO docs (id, project_id, title, body_md, public_token) "
-                  "VALUES (999, 888, 'Notes', 'x', 'jeton-test') "
-                  "ON CONFLICT (id) DO NOTHING")
+        c.execute("INSERT INTO docs (id, project_id, title, body_md, public_token_hash) "
+                  "VALUES (999, 888, 'Notes', 'x', %s) "
+                  "ON CONFLICT (id) DO NOTHING", (jetons_de_lien.empreinte("jeton-test"),))
         c.commit()
 
     doc = db.get_doc_by_public_token("jeton-test")
