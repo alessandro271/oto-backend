@@ -379,7 +379,7 @@ def _read(ctx: ResolvedCtx, inp: TokenInput) -> dict:
         accueilli = profil.get("onboarded_at") or profil.get("onboarding_skipped_at")
         if not profil.get("acquired_via") and not accueilli:
             db.update_account_profile(ctx.sub, {"acquired_via": {
-                "kind": "process_share", "token": share["token"],
+                "kind": "process_share", "share_id": int(share["id"]),
                 "at": datetime.now(timezone.utc).isoformat()}})
     copie = _copie_vivante(instr["id"], ctx.sub)
     return {**vitrine(share, instr), "body_md": instr["body_md"],

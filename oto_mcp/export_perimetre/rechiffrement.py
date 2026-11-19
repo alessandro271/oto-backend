@@ -6,7 +6,7 @@ notre clé, le rechiffre sous la sienne, et le fichier ne porte QUE des secrets 
 pour la cible. L'import ne connaît que la clé de son instance ; le manifeste dit sous
 quelle clé les secrets sont chiffrés par une EMPREINTE (`empreinte_cle`), jamais la clé.
 
-Trois colonnes portent une valeur chiffrée (`classement.secrets`). Leur AAD lie le
+Cinq colonnes portent une valeur chiffrée (`classement.secrets`). Leur AAD lie le
 chiffré à SA ligne, et c'est la fonction du code qui l'écrit qui la dit — jamais une
 recopie ici :
 
@@ -15,7 +15,11 @@ recopie ici :
   change à l'import : on déchiffre sous l'AAD de la ligne SOURCE, on rechiffre sous
   celle de la ligne CIBLE (`transformation`, la fonction même de l'import) ;
 - `runner_triggers.hook_signing_secret_enc` : `runner_hook._aad_du_secret(id)` ;
-- `transcription_jobs.api_key_enc` : `transcription_worker._aad(audio_key)`.
+- `transcription_jobs.api_key_enc` : `transcription_worker._aad(audio_key)` ;
+- `docs.public_token_enc` : `db.jetons_de_lien.aad_page(id)` — le lien public d'une page ;
+- `process_shares.token_enc` : `db.jetons_de_lien.aad_partage(id)` — le lien d'une
+  procédure partagée. Leur empreinte (`*_hash`) voyage telle quelle : un lien continue de
+  répondre sur la cible.
 
 ⚠️ Le clair ne vit que le temps d'un appel : ni fichier, ni journal, ni exception qui
 le porterait (`decrypt_with_key` lève sans le citer).
@@ -26,6 +30,7 @@ import hashlib
 from typing import Callable
 
 from .. import credentials_store, runner_hook, transcription_worker
+from ..db import jetons_de_lien
 from ..crypto import decrypt_with_key, encrypt_with_key
 
 #: table → (colonne chiffrée, AAD de la ligne).
@@ -35,6 +40,8 @@ AAD: dict[str, tuple[str, Callable[[dict], str]]] = {
     "runner_triggers": ("hook_signing_secret_enc",
                         lambda l: runner_hook._aad_du_secret(l["id"])),
     "transcription_jobs": ("api_key_enc", lambda l: transcription_worker._aad(l["audio_key"])),
+    "docs": ("public_token_enc", lambda l: jetons_de_lien.aad_page(l["id"])),
+    "process_shares": ("token_enc", lambda l: jetons_de_lien.aad_partage(l["id"])),
 }
 
 

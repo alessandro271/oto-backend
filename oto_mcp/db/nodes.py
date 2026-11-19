@@ -222,10 +222,9 @@ PURGE_PROJECT_NODES_SQL = f"""
 # pas d'où il vient. Les confondre rendrait la provenance structurante — et
 # rappellerait le `kind='guide'` que M1 a précisément dissous.
 #
-# `public_token` voyage tel quel (**une seule page en porte un** en production,
-# relevé du 11/08). Savoir s'il DEVIENT un accès du modèle de 0053 se tranchera
-# quand la chaîne de grants sera vivante : décider maintenant, ce serait calibrer un
-# modèle d'accès sur une population de un — l'erreur exacte qui a produit #282.
+# Le lien public d'une page ne voyage pas : il reste sur la page, chiffré
+# (`db/jetons_de_lien.py`). La copie en clair qu'y posait la recopie d'avant est
+# retirée par `retirer_jetons_des_props` (`oto-mcp maintenance jetons-de-lien`).
 CONVERT_DOCS_TO_NODES_SQL = f"""
     INSERT INTO nodes (public_id, kind, owner_type, owner_id, position, props,
                        created_at, updated_at)
@@ -237,7 +236,6 @@ CONVERT_DOCS_TO_NODES_SQL = f"""
                'description', d.description,
                'body_md', COALESCE(d.body_md, ''),
                'doc_kind', d.kind,
-               'public_token', d.public_token,
                'project_id', d.project_id,
                'created_by', d.created_by)),
            d.created_at, d.updated_at
@@ -362,6 +360,18 @@ def convert_guides(conn) -> None:
     conn.execute(CONVERT_GUIDES_TO_NODES_SQL)
     conn.execute(RECONCILE_GUIDE_NODES_SQL)
     conn.execute(PURGE_GUIDE_NODES_SQL)
+
+
+def retirer_jetons_des_props(conn, *, appliquer: bool) -> int:
+    """Le nombre de nœuds dont les `props` portent encore une copie en clair d'un lien
+    public de page (`public_token`, posée par la recopie d'avant) ; `appliquer` la
+    retire. Personne ne la lit."""
+    if not appliquer:
+        return int(conn.execute(
+            "SELECT count(*) AS n FROM nodes WHERE props ? 'public_token'").fetchone()["n"])
+    return conn.execute(
+        "UPDATE nodes SET props = props - 'public_token' WHERE props ? 'public_token'"
+    ).rowcount
 
 
 def convert_docs(conn) -> None:

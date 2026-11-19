@@ -25,8 +25,8 @@ Toutes les routes à jeton dans le chemin ne sont pas concernées :
 
 Restent les deux jetons LONGS, les SECTIONS de ce script :
 
-    docs         `docs.public_token` — le lien public d'une page (`/p/d/…`,
-                 `/api/public/docs/…`), SANS échéance et rangé en clair. Aucune date
+    docs         le lien public d'une page (`/p/d/…`, `/api/public/docs/…`), SANS
+                 échéance, rangé chiffré (`db/jetons_de_lien.py`). Aucune date
                  d'émission : tout lien public vivant est tenu pour exposé. Le geste
                  est celui du produit (`db.set_doc_public`) : retirer puis rendre
                  public = un NOUVEAU lien ; l'ancien répond 404. `--sans-reemission`
@@ -80,9 +80,9 @@ def _consultations_depuis(cur, jeton: str) -> int:
 def docs(cur, rapport: dict, avant: list, appliquer: bool,
          reemettre: bool = True) -> None:
     from oto_mcp import db
-    cur.execute("SELECT d.id, d.project_id, d.public_token, p.owner_type, p.owner_id "
+    cur.execute("SELECT d.id, d.project_id, d.public_token_hash, p.owner_type, p.owner_id "
                 "FROM docs d LEFT JOIN projects p ON p.id = d.project_id "
-                "WHERE d.public_token IS NOT NULL ORDER BY d.id")
+                "WHERE d.public_token_hash IS NOT NULL ORDER BY d.id")
     lignes = [dict(r) for r in cur.fetchall()]
     c = rapport.setdefault("docs", Counter())
     orgs, proprietaires = set(), set()
@@ -94,7 +94,8 @@ def docs(cur, rapport: dict, avant: list, appliquer: bool,
         proprietaires.add((d["owner_type"], d["owner_id"]))
         if d["owner_type"] == "org":
             orgs.add(d["owner_id"])
-        if mesurable and _consultations_depuis(cur, d["public_token"]):
+        if mesurable and _consultations_depuis(
+                cur, db.get_doc_by_id(d["id"])["public_token"]):
             c["  dont lus par l'API depuis la bascule"] += 1
         avant.append({"section": "docs", "id": d["id"], "project_id": d["project_id"],
                       "etait_public": True})
@@ -103,9 +104,9 @@ def docs(cur, rapport: dict, avant: list, appliquer: bool,
             continue
         # Conditionnel sur le jeton lu : un lien retiré ou refait entre-temps par son
         # propriétaire n'est pas touché.
-        cur.execute("SELECT public_token FROM docs WHERE id = %s", (d["id"],))
+        cur.execute("SELECT public_token_hash FROM docs WHERE id = %s", (d["id"],))
         r = cur.fetchone()
-        if not r or r["public_token"] != d["public_token"]:
+        if not r or r["public_token_hash"] != d["public_token_hash"]:
             c["  a bougé entre les deux passes (laissé)"] += 1
             continue
         db.set_doc_public(d["id"], False)
