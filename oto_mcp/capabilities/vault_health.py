@@ -8,6 +8,9 @@ Lecture seule, `PLATFORM_ADMIN` (supervision plateforme). Ne renvoie JAMAIS de
 plaintext : le déchiffrement sert de test booléen (ok/ko), la valeur est jetée
 (cf. `credentials_store.scan_vault_health`). Miroir du modèle « état sans secret »
 de `credential_status`.
+
+`by_key_ref` : pour chaque valeur chiffrée, le nombre de lignes par clé du trousseau
+(`key_ref`), compté en base sans rien lire d'autre de l'enveloppe.
 """
 from __future__ import annotations
 
@@ -41,7 +44,9 @@ CAPABILITIES += [
             "envelope), grouped by connector and by entity type (member/user/org/"
             "group/platform), plus the offending rows by identity only (entity_type/"
             "entity_id/connector/account — never any secret). Use it to target "
-            "re-connections after a master-key rotation. Read-only."),
+            "re-connections after a master-key rotation. Also counts, for every encrypted "
+            "column, the rows per key reference (`by_key_ref`, first byte of the "
+            "envelope). Read-only."),
         mcp="oto_admin_vault_health",
         rest=RestBinding("GET", "/api/admin/vault/health"),
     ),

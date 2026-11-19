@@ -123,7 +123,7 @@ _REQUISES: tuple[Variable, ...] = (
              "Clé AES-256 (hex 64 ou base64) du coffre credentials — HORS DB. "
              "Obligatoire DE FAIT : la lecture rend `None` sans lever, mais "
              "`encrypt`/`decrypt` lèvent nommé au premier usage réel.",
-             ("oto_mcp/crypto.py:45", "oto_mcp/crypto.py:65", "oto_mcp/crypto.py:74")),
+             ("oto_mcp/crypto.py:74",)),
     Variable("OTO_MCP_OAUTH_STATE_SECRET", Classe.REQUISE, None,
              "Clé qui signe l'état OAuth et les jetons courts (upload, invite, "
              "optout). Obligatoire DE FAIT à 4 des 5 sites qui la lisent (lèvent "

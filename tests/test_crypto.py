@@ -37,9 +37,10 @@ def test_round_trip(key):
 
 
 def test_envelope_starts_with_key_ref_byte(key):
-    """blob = key_ref(1o) ‖ nonce(12o) ‖ ct+tag → le 1er octet = _KEY_REF."""
+    """blob = key_ref(1o) ‖ nonce(12o) ‖ ct+tag → le 1er octet = le key_ref d'écriture,
+    la clé plate 0x01."""
     blob = base64.b64decode(crypto.encrypt("x", "aad"))
-    assert blob[:1] == crypto._KEY_REF
+    assert blob[0] == crypto.KEY_REF_ECRITURE == crypto.CLE_PLATE == 0x01
     assert len(blob) >= 1 + 12 + 16  # key_ref + nonce + tag GCM au minimum
 
 
@@ -131,3 +132,65 @@ def test_key_whitespace_is_stripped(monkeypatch):
     env = crypto.encrypt("secret", "aad")
     monkeypatch.setenv("OTO_MCP_MASTER_KEY", _KEY_HEX)
     assert crypto.decrypt(env, "aad") == "secret"
+
+
+# --- trousseau : le key_ref choisit la clé ------------------------------------
+
+def _enveloppe_d_avant(cle: bytes, clair: str, aad: str, nonce: bytes) -> str:
+    """Une enveloppe telle que l'écrivait le code d'avant le trousseau : 0x01 ‖ nonce ‖
+    AES-GCM, recopié à la main (sans passer par `crypto`)."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    return base64.b64encode(
+        b"\x01" + nonce + AESGCM(cle).encrypt(nonce, clair.encode(), aad.encode())).decode()
+
+
+def test_le_trousseau_porte_la_seule_cle_plate(key):
+    assert crypto.trousseau() == {0x01: bytes.fromhex(_KEY_HEX)}
+    assert crypto.cle_d_ecriture() == bytes.fromhex(_KEY_HEX)
+
+
+def test_trousseau_vide_sans_cle(monkeypatch):
+    monkeypatch.delenv("OTO_MCP_MASTER_KEY", raising=False)
+    assert crypto.trousseau() == {}
+    assert crypto.cle_d_ecriture() is None
+
+
+def test_une_enveloppe_d_avant_le_trousseau_se_rouvre(key):
+    env = _enveloppe_d_avant(bytes.fromhex(_KEY_HEX), "s3cr3t", "aad:1", b"\x07" * 12)
+    assert crypto.decrypt(env, "aad:1") == "s3cr3t"
+
+
+def test_une_ecriture_est_identique_a_l_ancienne(key, monkeypatch):
+    """À nonce égal, `encrypt` produit l'enveloppe d'avant octet pour octet."""
+    nonce = b"\x42" * 12
+    monkeypatch.setattr(crypto.os, "urandom", lambda n: nonce[:n])
+    attendu = _enveloppe_d_avant(bytes.fromhex(_KEY_HEX), "valeur", "aad:2", nonce)
+    assert crypto.encrypt("valeur", "aad:2") == attendu
+    assert crypto.encrypt_with_key(bytes.fromhex(_KEY_HEX), "valeur", "aad:2") == attendu
+
+
+def test_un_key_ref_inconnu_leve_une_erreur_nommee(key):
+    blob = bytearray(base64.b64decode(crypto.encrypt("secret", "aad")))
+    blob[0] = 0x02
+    with pytest.raises(crypto.CleInconnue, match=r"key_ref=0x02.*clés chargées : 0x01") as e:
+        crypto.decrypt(base64.b64encode(bytes(blob)).decode(), "aad")
+    # distincte d'une enveloppe périmée : un appelant qui jette un cache illisible
+    # (`EnveloppeIndechiffrable`, `ValueError`) ne l'avale pas
+    assert not isinstance(e.value, (crypto.EnveloppeIndechiffrable, ValueError))
+    assert e.value.__cause__ is None
+
+
+def test_le_key_ref_choisit_la_cle_du_trousseau(key, monkeypatch):
+    """`decrypt` ouvre sous la clé que nomme blob[0], pas sous une clé fixe."""
+    autre = b"\x22" * 32
+    blob = crypto.seal(autre, b"secret", "aad", key_ref=0x02)
+    assert blob[0] == 0x02
+    plate = crypto.trousseau()
+    monkeypatch.setattr(crypto, "trousseau", lambda: {**plate, 0x02: autre})
+    assert crypto.decrypt(base64.b64encode(blob).decode(), "aad") == "secret"
+    assert crypto.decrypt(crypto.encrypt("x", "aad"), "aad") == "x"   # 0x01 toujours
+
+
+def test_une_enveloppe_vide_est_refusee(key):
+    with pytest.raises(ValueError, match="enveloppe vide"):
+        crypto.decrypt("", "aad")

@@ -1329,6 +1329,12 @@ def _satellite(nom: str) -> str:
     return f"{nom}_enc"
 
 
+def aad_satellite(entity_type: str, entity_id: str, connector: str, account: str,
+                  nom: str) -> str:
+    """L'AAD de `meta.<nom>_enc` : celle de la ligne suivie du nom du satellite."""
+    return f"{_aad(entity_type, entity_id, connector, account)}#{nom}"
+
+
 def seal_satellite(entity_type: str, entity_id: str, connector: str, account: str,
                    nom: str, valeur: str) -> bool:
     """Range `valeur` CHIFFRÉE dans `meta.<nom>_enc` de la ligne, par fusion JSONB
@@ -1337,7 +1343,7 @@ def seal_satellite(entity_type: str, entity_id: str, connector: str, account: st
     autre ligne, ni vers `secret_enc`. Dernier écrivain gagnant entre processus. False
     si la ligne n'existe plus (clé retirée pendant l'appel)."""
     cle = _satellite(nom)
-    enc = crypto.encrypt(valeur, f"{_aad(entity_type, entity_id, connector, account)}#{nom}")
+    enc = crypto.encrypt(valeur, aad_satellite(entity_type, entity_id, connector, account, nom))
     return update_meta(entity_type, entity_id, connector, account, {cle: enc})
 
 
@@ -1354,7 +1360,8 @@ def unseal_satellite(entity_type: str, entity_id: str, connector: str, account: 
             (cle, entity_type, entity_id, connector, account)).fetchone()
     if not row or not row["enc"]:
         return None
-    return crypto.decrypt(row["enc"], f"{_aad(entity_type, entity_id, connector, account)}#{nom}")
+    return crypto.decrypt(row["enc"],
+                          aad_satellite(entity_type, entity_id, connector, account, nom))
 
 
 @lecture_d_appel
@@ -1850,19 +1857,26 @@ def scan_vault_health() -> dict:
     Prérequis : la master key doit être chargée. Sans elle, AUCUN déchiffrement
     n'est possible et 100 % des lignes apparaîtraient faussement périmées → on lève
     plutôt que rapporter un scan trompeur (le message « impossible » de
-    `crypto.decrypt` ≠ le message « indéchiffrable » d'un vrai InvalidTag)."""
+    `crypto.decrypt` ≠ le message « indéchiffrable » d'un vrai InvalidTag).
+
+    `by_key_ref` : pour CHAQUE valeur chiffrée (`rechiffrement.COLONNES_CHIFFREES`), le
+    nombre de lignes par clé du trousseau (`key_ref`, premier octet de l'enveloppe),
+    compté dans la base sans rien en lire d'autre (`compter_key_refs`)."""
     if not crypto.encryption_enabled():
         raise RuntimeError(
             "OTO_MCP_MASTER_KEY absente — scan de santé impossible (aucun "
             "déchiffrement possible ; toutes les lignes apparaîtraient périmées)"
         )
+    from .export_perimetre.rechiffrement import compter_key_refs
     with _connect() as conn:
+        conn.execute("SET LOCAL statement_timeout = '15s'")
         rows = conn.execute(
             "SELECT entity_type, entity_id, connector, account, secret_enc, set_at "
             "FROM connector_credentials "
             "ORDER BY entity_type, connector, entity_id"
         ).fetchall()
-    return classify_vault_rows(rows)
+        par_cle = compter_key_refs(conn)
+    return {**classify_vault_rows(rows), "by_key_ref": par_cle}
 
 
 def classify_vault_rows(rows) -> dict:
