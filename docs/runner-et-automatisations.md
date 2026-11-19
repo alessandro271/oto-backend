@@ -3109,7 +3109,10 @@ passe AVANT l'alerte.
 - **L'épisode** (`agent_episodes`, `db/episodes_agents.py`) = la même définition que
   l'alerte (travaux morts d'un agent allumé depuis son dernier succès), mais ouvert dès
   le PREMIER travail mort. Un seul épisode vivant par agent (index unique partiel),
-  rafraîchi à chaque passage ; clos au premier succès postérieur (`gueri`) ou quand
+  réécrit seulement quand un champ change ou que son pouls `vu_at` a plus de
+  `episodes_agents.BATTEMENT` (10 min, bien en deçà de `FRAICHEUR`) — l'INSERT ne part
+  que sans épisode vivant, la séquence ne brûle pas un numéro par passage ; clos au
+  premier succès postérieur (`gueri`) ou quand
   l'agent est éteint ou supprimé (`agent_eteint`). Aucune FK : il survit à l'agent.
   `classe` + `cote` (`plateforme` · `proprietaire` · `inconnu`) disent QUI peut réparer ;
   `statut` `ouvert → en_soin → escalade | clos` ; `reparations` = chaque geste, son
@@ -3153,6 +3156,21 @@ passe AVANT l'alerte.
   rare. ⚠️ Ni la relance automatique ni `op=rerun` ne lisent `result.tool_counts` : un
   refus passager après une écriture est relancé comme la file le relance déjà
   (`complete_job`) ; rien encore ne distingue, avant un `rerun`, un run qui a écrit.
+- **Le budget d'un passage, et les incidents** : la boucle relève TOUTES les pannes avant
+  de relancer, puis relâche les relances sous budget — `RELANCES_PAR_PASSAGE` (20) au
+  plus, servies à tour de rôle par org (la plus anciennement en panne d'abord : une
+  grosse org ne passe pas avant une petite), chacune avec une gigue de 0 à `GIGUE_MAX_S`
+  (240 s, `enqueue_job(delai_s=…)`). Ce qui n'est pas servi attend le passage suivant
+  sans rien dépenser de son plafond (`relances_differees` au bilan). Une même classe du
+  côté de la plateforme dans au moins `INCIDENT_ORGS` (3) orgs ET `INCIDENT_PART` (30 %)
+  des orgs en panne au même passage est un **incident** (la part compte : à mille
+  clients, trois orgs sur un refus passager sont le bruit de fond) : dit UNE fois chez
+  nous à son ouverture (journal + suivi d'erreurs, `INCIDENT —`), fini au journal quand
+  plus aucune panne ne le porte ; ses relances se bornent à `INCIDENT_SONDES` (2) par
+  passage, et le plafond d'un de ses agents escalade l'épisode SANS alerte par agent.
+  ⚠️ L'incident vit dans la mémoire du processus (`_INCIDENTS`) : un redémarrage le redit
+  une fois. Le budget ne fait que borner : il ne relance rien que la boucle ne relançait
+  déjà.
 - **Ce qu'il ne fait jamais** : toucher une clé, une identité, une procédure, un horaire
   ou une donnée ; relancer une panne `inconnu` (un run qui a agi avant de mourir
   referait ses effets). Un épisode du titulaire passe `escalade` sans geste : c'est
@@ -3201,11 +3219,48 @@ passe AVANT l'alerte.
   `catalogue_desaccords` — cause approuvée d'une autre classe ou d'un autre côté que la
   regex —, chacun dit au journal) : la regex décide. Une ombre qui casse ne coûte que son
   bilan (`catalogue_erreur`), jamais le passage.
+  Une copie écrite pour un épisode (`op=set_cause` avec `episode_id`) range sur son geste
+  l'org et l'épisode d'origine (`origine`, l'épisode doit porter la cause, sinon 400
+  `episode_not_of_cause`) ; la liste des causes les sert (`copie_origine` : `{acteur, at,
+  org_id, episode_id}` du dernier geste qui a écrit la copie).
+  **Le catalogue qui décide** (`OTO_CATALOGUE_CAUSES_DECIDE`, éteint par défaut) : une
+  cause APPROUVÉE range une panne que la regex dit `inconnu` — sa classe et son côté,
+  donc qui l'alerte vise et ce que le client lit (`catalogue_decidees` au bilan). Jamais
+  au-delà : un verdict de la regex n'est pas défait, une classe posée à la main non plus,
+  et une cause ne donne jamais une classe que la boucle relance (`CLASSES_RELANCEES`) —
+  relancer reste décidé par la regex seule.
+- **L'onglet Santé d'une org, en lecture** (`capabilities/agent_health.py`) :
+  `GET /api/orgs/{id}/agent-health` (membres d'une org vivante, `ORG_MEMBER_OF_LIVE` :
+  409 `org_archived` sur une org archivée ; 404 `agent_alerts_off` sous le réglage des
+  alertes éteint, comme ses voisines) rend, en quelques requêtes pour toute l'org
+  (`db/sante_agents.py`), les agents allumés que l'appelant voit (`_acces_agent.niveaux`,
+  comme la liste des agents) et combien fonctionnent ; `needs_you` — un problème par
+  cause qui attend le client (`alertes_slack_agents.message_du_probleme`), avec les
+  agents qu'il arrête et depuis quand ; `on_us` — ce qui est à nous, côté plateforme ou
+  pas encore compris, une phrase sans geste : une panne de la PLATEFORME se tait six
+  heures (`DUREE_LONGUE`, lu sur `ouvert_at`) — son agent compte d'ici là comme
+  fonctionnant, comme sur sa carte — puis se dit par sa propre phrase (`lasting`) ;
+  `fixed` — les épisodes guéris après un geste du médecin ces 30 jours (la note de
+  réparation de l'agent, sinon la phrase d'une relance) ; `covered` (false : org d'un
+  tenant tiers, que le médecin ne suit pas). Chaque item porte `connectors` (les
+  connecteurs que les motifs NOMMENT, `causes_pannes.connecteur_de_la_panne`, le
+  fournisseur du modèle de l'agent en repli pour une réponse de fournisseur) et `error`
+  (`causes_pannes.erreur_du_fournisseur` : la réponse d'un fournisseur, passée par la
+  liste blanche de l'empreinte ; notre texte interne ne sort jamais). Rien ne s'y écrit.
+- **L'écran Admin des causes** (`capabilities/agent_causes_admin.py`) :
+  `GET /api/admin/agent-causes` (`status`, `limit`, avec `copie_origine`) et
+  `PUT /api/admin/agent-causes/{key}` (`status`, `classe`, `cote`, `client_copy` par
+  langue), admin plateforme, REST seulement — les gardes de `set_cause` sans recopie
+  (`agent_repair._decider_une_cause`) : copie exigée pour approuver une cause du
+  titulaire, copie illisible refusée, un agent hébergé n'approuve jamais. Les incidents
+  vivent dans la mémoire de la boucle et ne s'y servent pas.
 - **Où** : boucle `tiers=True` (une relance refait agir un agent chez des tiers),
   ÉTEINTE tant que `OTO_MEDECIN_AGENTS_ENABLED=1` n'est pas déclaré — production seule.
 - Bancs : `tests/test_medecin_agents.py` (sans base), `tests/test_causes_pannes.py`
-  (l'empreinte, la copie), `tests/test_episodes_agents_db.py` (le SQL, catalogue
-  compris), `tests/test_migration_20261027_agent_episodes.py`,
+  (l'empreinte, la copie, le connecteur, la réponse du fournisseur),
+  `tests/test_episodes_agents_db.py` (le SQL, catalogue et battement compris),
+  `tests/test_agent_health.py`, `tests/test_agent_causes_admin.py`,
+  `tests/test_migration_20261027_agent_episodes.py`,
   `tests/test_alerte_agents_bloques.py` (le silence).
 
 ### `op=list` : la page dit ce qu'elle laisse dehors (#469, 01/09/2026)

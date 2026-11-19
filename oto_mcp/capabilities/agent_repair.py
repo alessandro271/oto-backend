@@ -338,10 +338,28 @@ def _decider_une_cause(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
             and not (copie or cause.get("copie")):
         raise AuthzDenied(400, "client_copy_required",
                           "Une cause du côté du titulaire s'approuve avec sa `client_copy`.")
+    origine = _origine_de_la_copie(inp, cause) if copie else None
     logger.info("cause %s : %s par %s", inp.cause_key, inp.cause_status or "modifiée",
                 ctx.sub)
     return causes_agents.decider(inp.cause_key, acteur=ctx.sub, statut=inp.cause_status,
-                                 classe=inp.classe, cote=inp.cote, copie=copie)
+                                 classe=inp.classe, cote=inp.cote, copie=copie,
+                                 origine=origine)
+
+
+def _origine_de_la_copie(inp: AgentRepairInput, cause: dict) -> Optional[dict]:
+    """L'org et l'épisode pour lesquels une copie est écrite (`episode_id` sur
+    `set_cause`), rangés sur le geste : l'écran Admin des causes les montre à qui
+    l'approuve. L'épisode doit porter cette cause. Sans `episode_id` : None."""
+    from ..db import episodes_agents
+    if inp.episode_id is None:
+        return None
+    ep = episodes_agents.lire(int(inp.episode_id))
+    if ep is None:
+        raise AuthzDenied(404, "episode_not_found", "Aucun épisode sous ce numéro.")
+    if ep.get("empreinte") != cause["cle"]:
+        raise AuthzDenied(400, "episode_not_of_cause",
+                          "Cet épisode ne porte pas cette cause (`empreinte`).")
+    return {"org_id": int(ep["org_id"]), "episode_id": int(ep["id"])}
 
 
 def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
@@ -471,7 +489,9 @@ CAPABILITIES += [
             "live episodes and orgs it covers, and `classes_vues`: the classes the loop "
             "gave them) / set_cause (`cause_key`, and `cause_status`, a corrected "
             "`classe`/`cote`, `client_copy` — merged per language, required to approve "
-            "an owner-side cause; a hosted agent proposes, only an operator approves)."),
+            "an owner-side cause; a hosted agent proposes, only an operator approves; "
+            "with `client_copy`, pass `episode_id`: the episode the copy was written for, "
+            "shown to the operator who approves it)."),
         mcp="oto_admin_agent_repair",
     ),
 ]

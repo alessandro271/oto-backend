@@ -69,11 +69,13 @@ def lister(*, statut: Optional[str] = None, limit: int = 50) -> list[dict[str, A
     """Les causes, avec ce qu'elles couvrent, lu sur les épisodes : `episodes`,
     `vivants`, `orgs`, `derniere_vue`, et `classes_vues` — les classes que la boucle a
     données à ces épisodes ; une cause approuvée dont les épisodes portent une autre
-    classe est un DÉSACCORD entre le catalogue et la regex. Les plus récemment vues
-    d'abord."""
+    classe est un DÉSACCORD entre le catalogue et la regex. `copie_origine` : le
+    dernier geste qui a écrit la copie — `{acteur, at, org_id, episode_id}`, l'org et
+    l'épisode pour lesquels elle a été écrite (None quand le geste n'en nomme aucun) —,
+    ou None sans copie. Les plus récemment vues d'abord."""
     params: dict[str, Any] = {"limit": max(1, min(int(limit), 200)), "statut": statut}
     with _connect() as conn:
-        return [dict(r) for r in conn.execute(
+        rows = conn.execute(
             f"""
             SELECT {", ".join("c." + x.strip() for x in _COLONNES.split(","))},
                    COUNT(e.id)::int AS episodes,
@@ -81,26 +83,47 @@ def lister(*, statut: Optional[str] = None, limit: int = 50) -> list[dict[str, A
                    COUNT(DISTINCT e.org_id)::int AS orgs,
                    MAX(e.vu_at) AS derniere_vue,
                    COALESCE(array_agg(DISTINCT e.classe)
-                            FILTER (WHERE e.classe IS NOT NULL), '{{}}') AS classes_vues
+                            FILTER (WHERE e.classe IS NOT NULL), '{{}}') AS classes_vues,
+                   (SELECT g FROM jsonb_array_elements(c.gestes) WITH ORDINALITY AS x(g, n)
+                     WHERE (g->>'copie')::boolean
+                     ORDER BY n DESC LIMIT 1) AS geste_copie
               FROM agent_causes c
               LEFT JOIN agent_episodes e ON e.empreinte = c.cle
              WHERE %(statut)s::text IS NULL OR c.statut = %(statut)s
              GROUP BY c.cle
              ORDER BY MAX(e.vu_at) DESC NULLS LAST, c.vue_premiere_at DESC
              LIMIT %(limit)s
-            """, params).fetchall()]
+            """, params).fetchall()
+    return [_avec_origine(dict(r)) for r in rows]
+
+
+def _avec_origine(ligne: dict[str, Any]) -> dict[str, Any]:
+    """Range le dernier geste qui a écrit la copie sous `copie_origine`."""
+    g = ligne.pop("geste_copie", None)
+    if isinstance(g, str):
+        g = json.loads(g)
+    origine = (g or {}).get("origine") or {}
+    ligne["copie_origine"] = None if not g else {
+        "acteur": g.get("acteur"), "at": g.get("at"),
+        "org_id": origine.get("org_id"), "episode_id": origine.get("episode_id")}
+    return ligne
 
 
 def decider(cle: str, *, acteur: str, statut: Optional[str] = None,
             classe: Optional[str] = None, cote: Optional[str] = None,
-            copie: Optional[dict] = None) -> Optional[dict[str, Any]]:
+            copie: Optional[dict] = None,
+            origine: Optional[dict] = None) -> Optional[dict[str, Any]]:
     """Le geste d'un opérateur (ou de l'agent médecin) sur une cause : son statut, sa
     classe, son côté, sa copie au client — fusionnée PAR LANGUE : poser `en` garde `fr`.
     Un champ absent ne change pas ; le geste
-    s'ajoute à `gestes` avec son auteur et sa date. Rend la ligne, ou None si la clé
-    n'existe pas."""
+    s'ajoute à `gestes` avec son auteur et sa date, et, avec une copie, `origine` —
+    l'org et l'épisode pour lesquels elle a été écrite, que l'écran Admin des causes
+    montre à l'opérateur qui l'approuve. Rend la ligne, ou None si la clé n'existe pas."""
     geste = {"acteur": acteur, "statut": statut, "classe": classe, "cote": cote,
              "copie": bool(copie)}
+    if copie and origine:
+        geste["origine"] = {"org_id": int(origine["org_id"]),
+                            "episode_id": int(origine["episode_id"])}
     with _connect() as conn:
         r = conn.execute(
             f"""
