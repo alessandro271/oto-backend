@@ -8,9 +8,9 @@ from typing import Optional
 from fastmcp import FastMCP
 from starlette.concurrency import run_in_threadpool
 
-from .. import session_org
+from .. import outils_du_travail, session_org
 from ..auth.hooks import current_user_sub_from_token
-from . import appel, comptes, ordre, qualification, vivier
+from . import appel, cites, comptes, ordre, qualification, vivier
 from .etape import Step, _bills, _missing, _payload, _runnable
 from .valeurs import _bad
 
@@ -191,6 +191,45 @@ async def _run_cascade(mcp: FastMCP, ns: str, kind: str, steps: tuple[Step, ...]
                        qualify: Optional[dict] = None,
                        deadline_at: Optional[float] = None,
                        synchronous_only: bool = False) -> dict:
+    """The cascade (`_planifier_et_lancer`), its steps covered by the cascade's own grant
+    in a hosted job: a job that lists this waterfall runs its steps without listing their
+    tools (`outils_du_travail.ouvrir_composite`) — every other guard of a step still
+    applies, the account named per connector (`_accounts`) included. The model itself
+    still calls only its list: a `pending` answer's collect tool, which the MODEL calls
+    later, is named on the receipt when the job does not list it."""
+    with outils_du_travail.ouvrir_composite((ns, f"{ns}_act"), cites.outils_internes(ns)):
+        out = await _planifier_et_lancer(mcp, ns, kind, steps, inputs, providers_arg,
+                                         dry_run, limits, qualify, deadline_at,
+                                         synchronous_only)
+    if out.get("pending"):
+        out.update(await run_in_threadpool(_collecte_hors_liste, out["pending"]))
+    return out
+
+
+def _collecte_hors_liste(pending: list[dict]) -> dict:
+    """Sync (base) : ce que le reçu dit d'une réponse `pending` dont l'outil de collecte
+    n'est pas dans la liste du travail hébergé — rien hors travail, ou s'il y est."""
+    manque = outils_du_travail.manquants([p.get("tool") for p in pending])
+    if not manque:
+        return {}
+    noms = manque["missing"]
+    agent = f"agent {manque['trigger_id']}" if manque.get("trigger_id") else "this agent"
+    return {"missing_tools": noms,
+            "fix": outils_du_travail.correctif(manque.get("trigger_id"),
+                                               manque.get("tools") or [], noms),
+            "next_step": (f"the pending answer is collected with {noms}, which {agent} "
+                          f"cannot call itself (job {manque['job_id']}): the cascade's "
+                          "steps run under the waterfall, its later collect does not. "
+                          "Say so in run_finish; the owner adds the tool to "
+                          f"{agent}'s tools if pending answers are to be read.")}
+
+
+async def _planifier_et_lancer(mcp: FastMCP, ns: str, kind: str, steps: tuple[Step, ...],
+                               inputs: dict, providers_arg: Optional[list[str]],
+                               dry_run: bool, limits: Optional[dict] = None,
+                               qualify: Optional[dict] = None,
+                               deadline_at: Optional[float] = None,
+                               synchronous_only: bool = False) -> dict:
     """The cascade: the first step that finds the value wins. Then the COMPLETION
     steps (`Step.fills`, e.g. a company's LinkedIn page): each runs only while the
     value still lacks the field it fills, and merges what it finds — a page found

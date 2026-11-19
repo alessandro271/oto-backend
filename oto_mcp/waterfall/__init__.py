@@ -20,9 +20,12 @@ Each tool tries a list of existing connector tools, one after the other, and sto
 FIRST that finds the value asked for. Nothing here talks to a provider: every step is an
 ordinary call of the provider's own tool through `meta.executer_cible`, the seam
 `oto_call` and the recipes use — so each step keeps ITS guards (connector activation for
-the org/team of the call, credential cascade, access level, hosted-job tool list), ITS
+the org/team of the call, credential cascade, access level), ITS
 row in `tool_calls` (and therefore its `quantity`/`key_mode`: the billing stays on the
-provider's row, never on the waterfall's), and ITS namespace's redaction policy.
+provider's row, never on the waterfall's), and ITS namespace's redaction policy. In a
+hosted job, the job's tool list is held for the MODEL: a job that lists the waterfall runs
+its steps without listing their tools — the cascade's grant covers its own fixed step
+table, nothing else (`outils_du_travail.ouvrir_composite`, `cites.outils_internes`).
 
 **Which steps, in which order** — three layers, the most specific wins:
 1. the call's `providers=[…]` (validated: an unknown key is the caller's fault);

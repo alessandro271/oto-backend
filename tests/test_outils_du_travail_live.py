@@ -179,6 +179,40 @@ def test_un_appel_direct_de_la_liste_passe(travail, monkeypatch):
     assert _direct("acme_people", appels) == "servi" and appels == ["acme_people"]
 
 
+def test_une_cascade_appelee_en_direct_couvre_ses_etapes_le_temps_de_son_appel(verrou_de,
+                                                                            monkeypatch):
+    """Le bord pose l'outil APPELÉ avant le handler (`verrou_org.poser_outil`) : c'est ce
+    que lit l'accord d'une cascade à ses étapes (`outils_du_travail.ouvrir_composite`),
+    sur le vrai jeton du travail et sa vraie charge. Pendant l'appel de `waterfall_person`,
+    son étape `lemlist_database` passe ; hors de lui, elle reste refusée."""
+    from oto_mcp import outils_du_travail as odt
+    from oto_mcp.connectors import access_level_gate, activation_gate
+    from oto_mcp.middleware.call_context import CallContextMiddleware
+
+    async def _rien(*a, **k):
+        return None
+    monkeypatch.setattr(activation_gate, "require_active", _rien)
+    monkeypatch.setattr(access_level_gate, "require_covered", _rien)
+    verrou_de({"tools": ["waterfall_person"], "input": "x"})
+
+    class _Msg:
+        name, arguments = "waterfall_person", {}
+
+    class _Ctx:
+        message = _Msg()
+    vu: dict = {}
+
+    async def _handler(c):
+        with odt.ouvrir_composite(("waterfall_person",), {"lemlist_database"}):
+            vu["etape"] = await asyncio.to_thread(odt.refus, "lemlist_database")
+            vu["autre"] = await asyncio.to_thread(odt.refus, "folk_record")
+        return "servi"
+    assert asyncio.run(CallContextMiddleware(frozenset()).on_call_tool(_Ctx(), _handler)) \
+        == "servi"
+    assert vu["etape"] is None and vu["autre"] is not None
+    assert odt.refus("lemlist_database") is not None
+
+
 # ── `oto_call` : `executer_cible` ───────────────────────────────────────────────
 
 def _cible(m, name: str, args: dict):
