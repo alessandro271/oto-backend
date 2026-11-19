@@ -238,6 +238,12 @@ def lever_outil(jeton: contextvars.Token) -> None:
     _OUTIL.reset(jeton)
 
 
+def outil_en_cours() -> Optional[str]:
+    """L'outil dont l'appel est en cours (au canonique), tel que `poser_outil` l'a posé au
+    bord (`CallContextMiddleware`, `meta.executer_cible`) — None hors d'un appel d'outil."""
+    return _OUTIL.get()
+
+
 def outils_permis(v: Optional[Verrou] = None) -> frozenset:
     """Les `oto_admin_*` que le travail de `v` (par défaut, celui de la requête) exerce
     avec le rôle plateforme de son porteur — vide sans travail, ou si son agent n'est pas
