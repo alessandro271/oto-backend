@@ -79,6 +79,14 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                             enveloppe et empreinte, relecture vérifiée,
                                             puis clair vidé — À BLANC par défaut —
                                             PAS un travail : voir plus bas
+    oto-mcp maintenance apps-lecteurs-actifs [--appliquer] [--jours N]
+                                            les partages d'app `viewer` par lesquels
+                                            quelqu'un a fait un geste (écrire, lancer,
+                                            déposer) dans les N derniers jours (30), et
+                                            qui ne cliquerait plus sans Use : à blanc,
+                                            l'audit ; `--appliquer` les passe en
+                                            `contributor`, APRÈS `migrer upgrade head`
+                                            — PAS un travail : voir plus bas
     oto-mcp maintenance copies-du-coffre
                                             copie le coffre d'un connecteur renommé
                                             sous son nouveau nom — l'étape que le
@@ -1102,6 +1110,48 @@ def copies_du_coffre(argv: list[str]) -> int:
         print(f"copies-du-coffre {nom} : {bilan}")
     return COPIES_FAITES
 
+# Codes de sortie d'`apps-lecteurs-actifs` — ceux d'`orphelins`. Un geste d'exploitant
+# joué depuis le commit, avant que le code qui refuse le clic d'un `viewer` ne serve.
+LECTEURS_FAIT = 0
+LECTEURS_ERREUR = 2    # base injoignable, `contributor` pas encore admis par la base,
+                        # écriture en échec (la transaction est annulée : rien n'est promu)
+LECTEURS_RESTE = 3     # à blanc : il y a des partages à promouvoir ; appliqué : relancer
+
+
+def apps_lecteurs_actifs(argv: list[str]) -> int:
+    """`oto-mcp maintenance apps-lecteurs-actifs` : les partages d'app `viewer` par
+    lesquels quelqu'un cliquait (`apps_lecteurs_actifs.py`). À blanc par défaut."""
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance apps-lecteurs-actifs",
+        description=("Les partages d'app `viewer` (nominatifs, d'équipe, d'org) par "
+                     "lesquels quelqu'un a fait un geste dans la fenêtre et ne cliquerait "
+                     "plus sans le rôle Use. À blanc par défaut ; n'imprime que des "
+                     "identifiants et des comptes."))
+    p.add_argument("--appliquer", action="store_true",
+                   help="promeut ces partages en `contributor` ; sans lui, n'écrit rien")
+    p.add_argument("--jours", type=int, default=None,
+                   help="la fenêtre des gestes, en jours (défaut 30)")
+    args = p.parse_args(argv)
+    from . import apps_lecteurs_actifs as lecteurs
+    jours = lecteurs.JOURS_DEFAUT if args.jours is None else args.jours
+    if jours < 1:
+        p.error("--jours compte au moins un jour")
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    try:
+        rapport = lecteurs.passer(appliquer=args.appliquer, jours=jours)
+    except lecteurs.BaseSansRoleUse as e:
+        print(f"REFUS : {e}", file=sys.stderr)
+        return LECTEURS_ERREUR
+    except Exception:
+        logger.error("apps-lecteurs-actifs : ERREUR — la transaction est annulée, rien "
+                     "n'est promu ; relancer à blanc", exc_info=True)
+        return LECTEURS_ERREUR
+    print("\n".join(lecteurs.lignes_du_rapport(rapport)))
+    return LECTEURS_RESTE if lecteurs.reste(rapport) else LECTEURS_FAIT
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "index-concurrents":
@@ -1116,6 +1166,8 @@ def main(argv: list[str] | None = None) -> int:
         return jetons_de_lien(argv[1:])
     if argv and argv[0] == "copies-du-coffre":
         return copies_du_coffre(argv[1:])
+    if argv and argv[0] == "apps-lecteurs-actifs":
+        return apps_lecteurs_actifs(argv[1:])
     p = argparse.ArgumentParser(
         prog="oto-mcp maintenance",
         description="Les travaux de maintenance du backend (ADR 0065, lot 0).")

@@ -14,6 +14,10 @@ déjà posé reprend effet si l'admin rouvre.
 Une app accepte `ecriture` : elle n'a pas d'identité à elle — chaque geste d'une app
 ouverte agit au nom de son LECTEUR, borné par les droits de son AUTEUR (le dernier à
 l'avoir écrite, `apps_appel.py`), et le manifeste se rejuge contre qui la modifie.
+`lecture` pose un partage `viewer` : l'org OUVRE l'app neuve sans en cliquer les
+boutons (View ; un geste exige Use, `contributor`). C'est le sens du mot — « lecture » —
+et celui du défaut : privé, puis le moins qui serve. Ouvrir les boutons à l'org est un
+partage Use nommé (`oto_resource_v2 op=share role=contributor`), ou `ecriture`.
 
 ⚠️ **`ecriture` est REFUSÉ pour un agent** (`default_sharing_write_unsupported`). Un agent
 tourne sous l'identité de son propriétaire à chaque run d'horloge ou de webhook

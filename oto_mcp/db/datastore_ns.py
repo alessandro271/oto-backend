@@ -477,7 +477,10 @@ def count_datastore_rows_for_ns(ns_id: int) -> int:
 
 
 # ADR 0048 — le rôle est la source de vérité ; `permission` (plan CONTENU) en dérive.
-_ROLE_TO_PERMISSION = {"viewer": "read", "editor": "write", "manager": "write"}
+# `contributor` : une app seulement (`resources.ROLES_D_APP_SEULEMENT`) — la lire et cliquer ses
+# boutons. Sur le plan CONTENU, une lecture : il ne modifie pas l'app.
+_ROLE_TO_PERMISSION = {"viewer": "read", "contributor": "read", "editor": "write",
+                       "manager": "write"}
 _PERMISSION_TO_ROLE = {"read": "viewer", "write": "editor"}
 
 
@@ -573,6 +576,26 @@ def best_resource_grants(resource_type: str, resource_ids: list[str],
              [str(r) for r in resource_ids]),
         ).fetchall()
     return {str(r["resource_id"]): r["permission"] for r in rows}
+
+
+def role_grant_exists(resource_type: str, resource_id: str,
+                      principals: list[tuple[str, str]], roles: list[str]) -> bool:
+    """L'un de ces principals tient-il sur la ressource un partage VIVANT dont le rôle
+    est dans `roles` ? En UNE requête, quel que soit le nombre de principals
+    (`ownership.has_role_grant`)."""
+    if not principals or not roles:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM resource_grants g "
+            "JOIN unnest(%s::text[], %s::text[]) AS pr(t, i) "
+            "  ON g.principal_type = pr.t AND g.principal_id = pr.i "
+            "WHERE g.resource_type = %s AND g.resource_id = %s AND g.role = ANY(%s) "
+            f"AND {PARTAGE_VIVANT_G} LIMIT 1",
+            ([p[0] for p in principals], [str(p[1]) for p in principals], resource_type,
+             str(resource_id), list(roles)),
+        ).fetchone()
+    return row is not None
 
 
 def manager_resource_grants(resource_type: str, resource_ids: list[str],

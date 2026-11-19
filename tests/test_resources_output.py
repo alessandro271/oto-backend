@@ -377,4 +377,6 @@ def test_la_surface_stricte_declare_exactement_les_refus_qu_elle_peut_rendre():
     un refus qu'on ne sait pas rejouer ferait promettre au document ce que le serveur
     ne rend pas — un client généré s'y branche."""
     cap = next(c for c in R.CAPABILITIES if c.key == "resources.govern.v2")
-    assert {e.code for e in cap.errors} == _REJOUES
+    # `role_for_apps_only` : la stricte SEULE prend `role=contributor` (l'héritée est
+    # sous cliquet) ; rejoué dans `tests/test_apps_role_use_db.py`.
+    assert {e.code for e in cap.errors} == _REJOUES | {"role_for_apps_only"}

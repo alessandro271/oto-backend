@@ -166,15 +166,25 @@ def list_granted_to(principals: list[tuple[str, str]], *, archived: bool = False
         ).fetchall()
 
 
+#: Le rang d'un rôle de partage d'app, pour dire le plus fort d'une org (`visibilites`) :
+#: View < Use < Edit/Manage. `manager` se dit `editor` à l'écran des apps.
+_RANG_DU_ROLE_SQL = ("CASE role WHEN 'viewer' THEN 1 WHEN 'contributor' THEN 2 "
+                     "WHEN 'editor' THEN 3 WHEN 'manager' THEN 3 END")
+_ROLE_DU_RANG = {1: "viewer", 2: "contributor", 3: "editor"}
+
+
 def visibilites(orgs: dict[int, Optional[int]]) -> dict[int, dict]:
     """Qui VOIT chacune des apps, au-delà de son propriétaire : `{"org":
-    "editor"|"viewer"|None, "people": n}` — le rôle du partage VIVANT à l'org OÙ VIT
+    "editor"|"contributor"|"viewer"|None, "people": n}` — le rôle du partage VIVANT à l'org OÙ VIT
     l'app (`orgs` : id de l'app → son org, `apps_manifeste.org_de_l_app`), et le nombre
     de personnes ou d'équipes nommées. Un partage à une AUTRE org ne compte pas : il
     n'est pas « toute l'org », et le dire en révélerait l'existence. La forme des agents
     (`runner_triggers.visibilites_d_agents`) : l'écran des apps dit « Vous seul » d'une
     app que personne d'autre ne voit, comme les tableaux et les agents. UNE requête pour
-    toute une liste ; une app sans partage vaut `{"org": None, "people": 0}`."""
+    toute une liste ; une app sans partage vaut `{"org": None, "people": 0}`. Le rôle
+    se lit par son RANG (`_RANG_DU_ROLE`), pas par la projection `permission` : un
+    partage Use (`contributor`) projette `read` comme un `viewer`, et l'écran doit les
+    distinguer. `manager` se dit `editor`, comme avant."""
     from ._partage_vivant import PARTAGE_VIVANT
 
     out = {int(i): {"org": None, "people": 0} for i in orgs}
@@ -184,7 +194,7 @@ def visibilites(orgs: dict[int, Optional[int]]) -> dict[int, dict]:
     with _connect() as conn:
         rows = conn.execute(
             "SELECT resource_id, "
-            "  max(permission) FILTER (WHERE principal_type = 'org' "
+            f"  max({_RANG_DU_ROLE_SQL}) FILTER (WHERE principal_type = 'org' "
             "                            AND principal_id = o.org) AS org, "
             "  count(*) FILTER (WHERE principal_type <> 'org') AS people "
             "FROM resource_grants JOIN unnest(%s::text[], %s::text[]) AS o(id, org) "
@@ -194,7 +204,7 @@ def visibilites(orgs: dict[int, Optional[int]]) -> dict[int, dict]:
         ).fetchall()
     for r in rows:
         out[int(r["resource_id"])] = {
-            "org": {"write": "editor", "read": "viewer"}.get(r["org"] or ""),
+            "org": _ROLE_DU_RANG.get(r["org"]),
             "people": int(r["people"] or 0)}
     return out
 
