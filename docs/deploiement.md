@@ -4,8 +4,9 @@ type: reference
 description: >-
   `main` = tronc = preprod, tag vX.Y.Z = prod : pourquoi le modèle tronc unique, les domaines
   RÉELLEMENT servis (prod `.cx`, preprod `.ninja`), ce que fait — ou ne fait pas — le workflow
-  de release, la garde « préprod verte » et la fenêtre finie du healthcheck. Vaut pour le backend
-  et le dashboard ; les commandes sont dans `commands.md`.
+  de release, la garde « préprod verte », la fenêtre finie du healthcheck et les gestes
+  d'exploitation déclarés en trailer (`Geste-exploitation:`), recopiés dans les notes du tag.
+  Vaut pour le backend et le dashboard ; les commandes sont dans `commands.md`.
 ---
 
 # Déploiement — modèle tronc unique
@@ -150,3 +151,62 @@ Lu dans les workflows (`release.yml` et `deploy*.yml` du backend, `tag-release.y
   avoir posé la version : **un seul acte**. Les deux dépôts ne se pilotent donc pas pareil ;
   un tag posé depuis Actions sur le dashboard et laissé là, c'est une version gravée et rien
   de déployé.
+
+## Gestes d'exploitation : un trailer par geste, recopié dans les notes du tag
+
+Une PR qui exige un **geste d'exploitation** (une commande à jouer à la main autour de la
+mise en prod : maintenance, purge, réécriture de données…) le déclare dans un de ses
+commits, par un trailer par geste, **dans l'ordre où les gestes se jouent** :
+
+```
+Geste-exploitation: <commande> ; <avant|après> ; <effaçant|non>
+```
+
+- `<commande>` : la commande exacte, telle qu'on la tape (elle peut contenir un `;` : on
+  coupe aux deux derniers).
+- `avant|après` : par rapport à la bascule de prod du tag. `avant` = à jouer avant de
+  poser le tag (ou, pour une instance, avant sa montée) ; `après` = une fois le tag servi.
+- `effaçant|non` : `effaçant` si le geste est irréversible (données retirées ou réécrites
+  sans retour), `non` sinon.
+
+Le trailer vit dans le **dernier paragraphe** du message, avec `Changelog:` et les autres ;
+une ligne `Geste-exploitation:` ailleurs dans le message n'est pas lue par git comme un
+trailer, et le script la refuse. Plusieurs gestes = plusieurs lignes, dans l'ordre.
+
+Exemple :
+
+```
+Les jetons de lien sont rangés chiffrés
+
+Changelog: changed
+Geste-exploitation: oto-mcp maintenance jetons-de-lien --appliquer ; après ; non
+Geste-exploitation: <une commande irréversible> ; après ; effaçant
+```
+
+**Lecture : `deploy/gestes_exploitation.py <tag précédent>..<SHA>`** (Python standard, sans
+le paquet). Il lit les trailers des commits de la plage, du plus ancien au plus récent
+(chaque commit une fois, les gestes d'un commit dans leur ordre), et imprime une ligne par
+geste — le sha court (12) du commit, puis la ligne de trailer normalisée :
+
+```
+3f2a9c0d1e4b Geste-exploitation: oto-mcp maintenance jetons-de-lien --appliquer ; après ; non
+```
+
+Codes de sortie : `0` aucun geste ; `4` au moins un geste (lignes sur stdout) ; `2` trailer
+mal formé ou hors du bloc de trailers (stderr nomme le commit, stdout vide) ; `3` appel
+invalide ou plage illisible.
+
+**La chaîne de tag recopie ces lignes dans les notes du tag.** `release.yml` joue, avant de
+poser la version, `python3 deploy/gestes_exploitation.py "<dernier tag>..HEAD"` et ajoute
+les lignes au message du tag annoté (et au résumé du run) ; un `2` refuse de poser la
+version. Un tag posé à la main fait de même :
+`git tag -a vX.Y.Z <SHA> -m "vX.Y.Z" -m "$(python3 deploy/gestes_exploitation.py vA.B.C..<SHA>)"`
+(code `0` ou `4` ; `2` = corriger le commit avant de taguer). Les notes se relisent par
+`git tag -l --format='%(contents)' vX.Y.Z`.
+
+**Un automate de montée s'arrête au lieu de prendre le tag** dès qu'une ligne existe entre
+le tag servi et le tag visé : il joue
+`python3 deploy/gestes_exploitation.py <tag servi>..<tag visé>` et ne monte que sur `0`.
+Sur `4`, il s'arrête et rapporte les lignes (un humain joue les gestes `avant`, monte, puis
+joue les gestes `après`) ; sur `2` ou `3`, il s'arrête aussi : un geste illisible n'est pas
+une absence de geste.

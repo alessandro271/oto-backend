@@ -89,15 +89,35 @@ jobs:
             *) echo "::error::la préproduction est '$ETAT' sur ce commit : on ne pose pas de version sur un tronc rouge"; exit 1 ;;
           esac
 
+      - name: Lire les gestes d'exploitation
+        run: |
+          set -euo pipefail
+          # Trailers `Geste-exploitation:` des commits depuis le dernier tag
+          # (docs/deploiement.md § Gestes d'exploitation) : recopiés dans les notes du
+          # tag, pour qu'un automate de montée s'arrête au lieu de le prendre.
+          # 0 = aucun, 4 = des gestes ; tout autre code (2 = trailer mal formé) refuse.
+          DERNIER=$(git tag -l 'v*.*.*' | sort -V | tail -1)
+          CODE=0
+          python3 deploy/gestes_exploitation.py "$DERNIER..HEAD" > gestes.txt || CODE=$?
+          case "$CODE" in
+            0) echo "aucun geste d'exploitation depuis $DERNIER" ;;
+            4) echo "::warning::gestes d'exploitation depuis $DERNIER (recopiés dans les notes du tag)"
+               cat gestes.txt
+               { echo "### Gestes d'exploitation depuis \`$DERNIER\`"; echo '```'; cat gestes.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error::gestes d'exploitation illisibles (code $CODE) : corriger le trailer avant de poser une version"; exit 1 ;;
+          esac
+
       - name: Poser la version
         if: ${{ !inputs.dry_run }}
         env:
           VERSION: ${{ steps.calc.outputs.version }}
         run: |
           set -euo pipefail
+          printf '%s — posée depuis Actions\n' "$VERSION" > notes.txt
+          if [ -s gestes.txt ]; then printf '\n' >> notes.txt; cat gestes.txt >> notes.txt; fi
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              tag -a "$VERSION" -m "$VERSION — posée depuis Actions"
+              tag -a "$VERSION" -F notes.txt
           git push origin "$VERSION"
 
       - name: Simulation
