@@ -117,3 +117,59 @@ def test_l_empreinte_n_a_que_la_forme_de_la_liste_blanche(motif):
 def test_une_majuscule_hors_tete_de_phrase_est_un_nom():
     assert C.de("Le compte Dupont est fermé") == "le compte <nom> est fermé"
     assert C.de("Fermé. Le compte est clos") == "fermé. le compte est clos"
+
+
+# --- ce que le client peut lire de la panne -------------------------------------------
+
+@pytest.mark.parametrize("motif,attendu", [
+    ("pas de clé `anthropic` déposée pour cette organisation", "Anthropic"),
+    ("l'outil `hubspot_search` a échoué", "HubSpot"),
+    ("tool hubspot_search_contacts failed", "HubSpot"),
+    ("credit balance is too low to access the Anthropic API", "Anthropic"),
+    ("RuntimeError : run_start : `_org` refusé", None),
+    ("fin_anormale (max_tokens)", None),
+    ("Make sure the Linear backoff is set", None),
+    (None, None),
+])
+def test_le_connecteur_que_le_motif_nomme(motif, attendu):
+    assert C.connecteur_du_motif(motif) == attendu
+
+
+@pytest.mark.parametrize("motif,attendu", [
+    ("fin_anormale (authentication_failed, HTTP 401 : Invalid API key · Fix it)",
+     "HTTP 401 : Invalid API key"),
+    ("BadRequestError : HTTP 400 invalid_request_error — Too low. See https://x.test/a",
+     "HTTP 400 : Too low. See <url>"),
+    ("ServiceUnavailableError : Error code: 503", "HTTP 503"),
+    ("RuntimeError : run_start : projet inaccessible", None),
+    ("identité invalide — le compte n'a plus de rôle", None),
+])
+def test_la_reponse_du_fournisseur_et_rien_de_notre_texte(motif, attendu):
+    assert C.erreur_du_fournisseur(motif) == attendu
+
+
+def test_le_libelle_jamais_le_slug_en_minuscules():
+    assert C.libelle_connecteur("hubspot") == "HubSpot"
+    assert C.libelle_connecteur("un_inconnu") == "Un Inconnu"
+
+
+def test_une_cle_de_modele_refusee_nomme_le_fournisseur_du_modele():
+    """Le motif ne nomme pas le fournisseur : le modèle de l'agent le dit — seulement
+    pour une réponse de fournisseur, jamais pour notre texte interne."""
+    refus = "fin_anormale (authentication_failed, HTTP 401 : Invalid API key)"
+    assert C.connecteur_de_la_panne(refus, "claude-sonnet-5") == "Anthropic"
+    assert C.connecteur_de_la_panne(refus, None) is None
+    assert C.connecteur_de_la_panne(refus, "modele-inconnu") is None
+    assert C.connecteur_de_la_panne("RuntimeError : run_start : refusé",
+                                    "claude-sonnet-5") is None
+    assert C.connecteur_de_la_panne("pas de clé `hubspot`", "claude-sonnet-5") == "HubSpot"
+
+
+def test_la_reponse_du_fournisseur_passe_par_la_liste_blanche():
+    """Ce que le fournisseur recopie de la requête ou du compte ne sort pas : un nom
+    propre, un texte cité, un identifiant deviennent des repères."""
+    motif = ("fin_anormale (invalid_request, HTTP 400 : Invalid value \"Ma Société\" for "
+             "field Company of account Acme ab12cd34ef56gh)")
+    sortie = C.erreur_du_fournisseur(motif)
+    assert sortie.startswith("HTTP 400 : Invalid value <texte> for field <nom>")
+    assert "Société" not in sortie and "Acme" not in sortie and "ab12cd34ef56gh" not in sortie

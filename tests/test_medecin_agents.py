@@ -102,8 +102,10 @@ def file(monkeypatch):
             "relu": _episode(statut="en_soin", reparations=[
                 {"action": "relance", "job_id": 1}, {"action": "relance", "job_id": 2}])}
     monkeypatch.setattr(db, "file_du_declencheur", lambda t, o: dict(etat["attente"]))
+    etat["delais"] = []
     monkeypatch.setattr(db, "enqueue_job", lambda org, kind, payload=None, sub=None, **k:
-                        etat["enfiles"].append((org, kind, payload, sub)) or {"id": 1})
+                        etat["enfiles"].append((org, kind, payload, sub))
+                        or etat["delais"].append(k.get("delai_s")) or {"id": 1})
     monkeypatch.setattr(db, "runner_arme", lambda o: {"families": etat["familles"]})
 
     def _noter(eid, **kw):
@@ -240,8 +242,8 @@ def test_un_passage_ne_s_arrete_pas_sur_une_panne_illisible(monkeypatch, file, t
     bilan = M.balayer(_MAINTENANT)
     assert appels == [1, 2]
     assert {k: v for k, v in bilan.items() if not k.startswith("catalogue_")} == {
-        "pannes": 2, "relances": 1, "gueris": 1, "gueris_apres_soin": 1, "erreurs": 1,
-        "tenant_tiers_ecartes": 0}
+        "pannes": 2, "relances": 1, "relances_differees": 0, "incidents": [], "gueris": 1,
+        "gueris_apres_soin": 1, "erreurs": 1, "tenant_tiers_ecartes": 0}
 
 
 def test_l_org_d_un_tenant_tiers_n_est_ni_relevee_ni_relancee(monkeypatch, file, tenants):
@@ -310,6 +312,7 @@ def test_un_horodatage_illisible_refuse_la_relance(file):
 def _un_passage(monkeypatch, pannes):
     from oto_mcp.db import episodes_agents
     monkeypatch.setattr(M, "_ECARTEES_DITES", set())
+    monkeypatch.setattr(M, "_INCIDENTS", {})
     monkeypatch.setattr(episodes_agents, "clore_les_gueris", lambda: [])
     monkeypatch.setattr(episodes_agents, "pannes_en_cours", lambda: pannes)
     ouverts = []
@@ -380,3 +383,117 @@ def test_une_cause_qui_complete_un_inconnu_n_est_pas_un_desaccord(monkeypatch, f
     bilan = M.balayer(_MAINTENANT)
     assert (bilan["catalogue_reconnues"], bilan["catalogue_desaccords"]) == (1, 0)
     assert file["enfiles"] == [], "inconnu ne se relance toujours pas"
+
+
+# --- Le budget de relances, l'équité entre orgs, la gigue, les incidents ----------------
+
+def _pannes(org, n, depart=0, motif="HTTP 529 overloaded_error"):
+    return [_panne(org_id=org, trigger_id=1000 * org + depart + i, job_id=100000 + 1000 * org + i,
+                   motif=motif) for i in range(n)]
+
+
+def test_un_passage_relance_au_plus_le_budget_a_tour_de_role(monkeypatch, file, tenants):
+    _un_passage(monkeypatch, _pannes(7, 18) + _pannes(8, 18))
+    bilan = M.balayer(_MAINTENANT)
+    assert (bilan["relances"], bilan["relances_differees"]) == (M.RELANCES_PAR_PASSAGE,
+                                                                 36 - M.RELANCES_PAR_PASSAGE)
+    orgs = [org for org, *_ in file["enfiles"]]
+    assert orgs.count(7) == orgs.count(8) == M.RELANCES_PAR_PASSAGE // 2
+    assert bilan["incidents"] == [], "deux orgs ne font pas un incident"
+
+
+def test_une_grosse_org_ne_passe_pas_avant_une_petite(monkeypatch, file, tenants):
+    _un_passage(monkeypatch, _pannes(7, 40) + _pannes(8, 1))
+    M.balayer(_MAINTENANT)
+    assert 8 in [org for org, *_ in file["enfiles"]]
+
+
+def test_chaque_relance_part_avec_sa_gigue(monkeypatch, file, tenants):
+    _un_passage(monkeypatch, _pannes(7, 5))
+    M.balayer(_MAINTENANT)
+    assert len(file["delais"]) == 5
+    assert all(d is None or 0 < d <= M.GIGUE_MAX_S for d in file["delais"])
+
+
+def test_une_cause_commune_a_trois_orgs_est_un_incident_dit_une_fois(
+        monkeypatch, file, tenants):
+    pannes = _pannes(7, 4) + _pannes(8, 4) + _pannes(10, 4)
+    _un_passage(monkeypatch, pannes)
+    bilan = M.balayer(_MAINTENANT)
+    assert bilan["incidents"] == ["refus_passager"]
+    assert bilan["relances"] == M.INCIDENT_SONDES
+    assert bilan["relances_differees"] == 12 - M.INCIDENT_SONDES
+    assert len(file["signaux"]) == 1 and "INCIDENT" in file["signaux"][0][0]
+    M.balayer(_MAINTENANT)
+    assert len(file["signaux"]) == 1, "un incident ouvert ne se redit pas"
+
+
+def test_la_fin_d_un_incident_se_dit_et_le_rouvre(monkeypatch, file, tenants, caplog):
+    from oto_mcp.db import episodes_agents
+    _un_passage(monkeypatch, _pannes(7, 1) + _pannes(8, 1) + _pannes(10, 1))
+    M.balayer(_MAINTENANT)
+    monkeypatch.setattr(episodes_agents, "pannes_en_cours", lambda: _pannes(7, 1))
+    with caplog.at_level("INFO", logger="oto_mcp.medecin_agents"):
+        assert M.balayer(_MAINTENANT)["incidents"] == []
+    assert "incident refus_passager terminé" in caplog.text
+    assert M._INCIDENTS == {}
+
+
+def test_en_incident_le_plafond_escalade_sans_alerte_par_agent(monkeypatch, file, tenants):
+    """Le plafond atteint (la trace refuse) escalade l'épisode, mais c'est l'incident
+    qui est dit, pas chaque agent."""
+    file["garde"] = False
+    _un_passage(monkeypatch, _pannes(7, 1) + _pannes(8, 1) + _pannes(10, 1))
+    M.balayer(_MAINTENANT)
+    assert [kw.get("statut") for _, kw in file["poses"]].count("escalade") >= 1
+    assert len(file["signaux"]) == 1 and "INCIDENT" in file["signaux"][0][0]
+
+
+def test_a_l_echelle_trois_orgs_sur_beaucoup_ne_font_pas_un_incident(
+        monkeypatch, file, tenants):
+    """Trente orgs en panne, dont trois sur un refus passager : le bruit de fond."""
+    autres = [p for org in range(100, 127)
+              for p in _pannes(org, 1, motif="HTTP 401 invalid x-api-key")]
+    _un_passage(monkeypatch, _pannes(7, 1) + _pannes(8, 1) + _pannes(10, 1) + autres)
+    assert M.balayer(_MAINTENANT)["incidents"] == []
+
+
+# --- Le catalogue qui décide (`OTO_CATALOGUE_CAUSES_DECIDE`) -----------------------------
+
+def _approuver(motif, classe, cote, file):
+    from oto_mcp import causes_pannes
+    file["catalogue"][causes_pannes.cle(causes_pannes.de(motif))] = {
+        "statut": "approuvee", "classe": classe, "cote": cote}
+
+
+@pytest.mark.parametrize("allume", ["", "1"])
+def test_une_cause_approuvee_range_un_inconnu_quand_le_reglage_est_allume(
+        monkeypatch, file, tenants, allume):
+    monkeypatch.setenv(M.ENV_CATALOGUE_DECIDE, allume)
+    motif = "RuntimeError : run_start : identité refusée par la ferme"
+    _approuver(motif, "membre_parti", "proprietaire", file)
+    ouverts = _un_passage(monkeypatch, [_panne(motif=motif)])
+    bilan = M.balayer(_MAINTENANT)
+    attendu = ("membre_parti", "proprietaire") if allume else ("inconnu", "inconnu")
+    assert (ouverts[0]["classe"], ouverts[0]["cote"]) == attendu
+    assert bilan["catalogue_decidees"] == (1 if allume else 0)
+    if allume:
+        assert [kw.get("statut") for _, kw in file["poses"]] == ["escalade"]
+
+
+def test_le_catalogue_ne_rend_jamais_une_panne_relancable(monkeypatch, file, tenants):
+    monkeypatch.setenv(M.ENV_CATALOGUE_DECIDE, "1")
+    motif = "fin_anormale (success)"
+    _approuver(motif, "refus_passager", "plateforme", file)
+    ouverts = _un_passage(monkeypatch, [_panne(motif=motif)])
+    M.balayer(_MAINTENANT)
+    assert ouverts[0]["classe"] == "inconnu" and file["enfiles"] == []
+
+
+def test_le_catalogue_ne_defait_pas_un_verdict_de_la_regex(monkeypatch, file, tenants):
+    monkeypatch.setenv(M.ENV_CATALOGUE_DECIDE, "1")
+    motif = "HTTP 401 invalid x-api-key"
+    _approuver(motif, "autre", "plateforme", file)
+    ouverts = _un_passage(monkeypatch, [_panne(motif=motif)])
+    M.balayer(_MAINTENANT)
+    assert (ouverts[0]["classe"], ouverts[0]["cote"]) == ("cle_refusee", "proprietaire")
