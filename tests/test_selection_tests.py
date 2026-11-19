@@ -152,9 +152,9 @@ def test_un_test_modifie_est_joue(table, index):
 
 
 def test_un_script_joue_les_tests_qui_le_citent(table, index):
-    s = sel.selectionner(["scripts/garde_preprod_verte.py"], table, _RACINE, index)
+    s = sel.selectionner(["scripts/garde_tronc_vert.py"], table, _RACINE, index)
     assert not s.complete
-    assert "tests/test_garde_preprod_verte.py" in s.tests
+    assert "tests/test_garde_tronc_vert.py" in s.tests
 
 
 def test_au_dela_du_seuil_la_suite_est_complete(index):

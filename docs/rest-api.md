@@ -728,21 +728,22 @@ document `openapi._alias_deprecies`, garde `tests/api/test_alias_deprecies_rest.
 ⚠️ **Quand retirer : pas de délai fixe** (Alexis, 25/09/2026). L'ancienne forme part
 quand **tous les consommateurs déclarés ont suivi** — ce que la garde de contrat constate
 (ci-dessous) : tant qu'un contrat épinglé lit encore l'ancienne forme, son retrait rougit
-`contrat-front-code` en nommant le consommateur, et la préproduction ne part pas.
+`contrat-front-code` en nommant le consommateur, et aucun tag ne part de ce commit.
 
 ## Les consommateurs déclarés du contrat (#966)
 
 Qui appelle cette API hors de ce dépôt se DÉCLARE dans `.github/contrat-consommateurs.json`
 (nom, dépôt, chemin du contrat qu'il épingle, secret de lecture — `null` pour un dépôt
-public). Les deux jobs de contrat de `deploy-canari.yml` tournent en matrice sur cette
+public). Le job de contrat de `ci.yml` tourne en matrice sur cette
 liste, une jambe par consommateur, `fail-fast: false` : un rouge ne masque pas les
 suivants, et chaque verdict **nomme** le consommateur (`scripts/contrat-front.py
 --consommateur`).
 
-- **avant déploiement** (`contrat-front-code`, une garde : `deploy-preprod` attend toutes
-  ses jambes) — le document est dérivé sans serveur de `server.routes_rest`, la source du
-  montage, facturation activée comme en préproduction et en production ;
-- **après la préproduction** (`contrat-front`, un constat) — le document réellement servi.
+- **avant déploiement** (`contrat-front-code`, une garde : un rouge rend le run « CI »
+  rouge, et la garde du tronc refuse alors tout tag de ce sha) — le document est dérivé sans
+  serveur de `server.routes_rest`, la source du montage, facturation activée comme en
+  production. Depuis le retrait de la préproduction (19/11/2026), il n'y a plus de constat
+  sur un document servi.
 
 Seul le CONTENU d'un contrat peut rougir. Un secret déclaré mais absent rougit aussi
 (défaut chez nous, #823) ; un dépôt illisible ou un fichier déplacé chez le consommateur
@@ -750,7 +751,7 @@ avertit sans rougir (`scripts/lire-contrat-consommateur.sh`). Sur une PR venue d
 GitHub ne transmet aucun secret : la garde d'avant déploiement y retire de sa matrice les
 consommateurs à secret et l'annonce en avertissement (job `consommateurs`) ; sans
 consommateur lisible, elle est sautée. Ni vert ni rouge : ils sont jugés à la poussée sur
-`main`, avant la préproduction.
+`main`, avant tout tag.
 
 Déclarés au 25/09/2026 : un front tiers (extrait des opérations qu'il appelle) et le
 dashboard (**l'instantané complet** de l'API : tout retrait ou changement de forme d'une
@@ -787,8 +788,8 @@ ci-dessus). Le document est complet ; **le jugement ne porte que sur ce qu'il é
   juge le second contrat dans ses propres étapes, qui tournent même si le contrat public a
   rougi (`!cancelled()`) — un rouge sur l'un ne tait pas l'autre ; le second verdict se
   nomme `« <consommateur> (admin) »` ;
-- **pas après la préproduction** : le document servi exige un jeton d'admin, et **aucun
-  jeton d'admin n'entre dans les secrets de la CI**. `contrat-front` ignore `chemin_admin`.
+- **jamais contre une instance servie** : le document servi exige un jeton d'admin, et
+  **aucun jeton d'admin n'entre dans les secrets de la CI**.
 
 Mêmes règles de verdict que le contrat public (`scripts/contrat-front.py`), même lecteur
 (`scripts/lire-contrat-consommateur.sh`, appelé une seconde fois sur `chemin_admin`) : un

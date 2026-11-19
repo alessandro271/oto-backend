@@ -22,7 +22,7 @@ import re
 import _banc_bleu_vert as banc
 
 RACINE = banc.DEPLOY_DU_DEPOT.parent
-UNITE_ARRET_S = 300          # TimeoutStopSec=5min des unités oto-mcp@ et oto-mcp-canari@
+UNITE_ARRET_S = 300          # TimeoutStopSec=5min des unités oto-mcp@
 MARGE_FERMETURE_S = 30       # le temps de fermer le processus après les requêtes
 
 
@@ -42,8 +42,7 @@ def _commandes(trace: str) -> list[str]:
 
 def test_plafond_de_vidange_egal_a_l_arret_gracieux_et_sous_l_unite():
     gracieux = _arret_gracieux()
-    for wrapper in ("oto-backend.sh", "oto-backend-canari.sh"):
-        assert _plafond(wrapper) == gracieux, wrapper
+    assert _plafond("oto-backend.sh") == gracieux
     assert gracieux + 2 * MARGE_FERMETURE_S <= UNITE_ARRET_S
     assert gracieux <= 270
 

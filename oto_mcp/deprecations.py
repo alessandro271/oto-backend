@@ -13,9 +13,9 @@ geste — changer cette constante — et non une chasse aux chaînes de caractè
 quarante descriptions, dont on oublierait trois.
 
 Pourquoi un TAG et pas une date de merge (`RETRAIT` se lit « premier tag `vX.Y.Z`
-posé à partir de cette date ») : `main` est la PREPROD. Un alias retiré au merge
-serait retiré du serveur que les intégrateurs sondent, deux mois de préavis
-annoncés et zéro jour servi. Le retrait est le lot D — issue #526, qui porte la
+posé à partir de cette date ») : seul un tag déploie, `main` n'est que le tronc. Une
+date de merge ne dit pas quand le retrait est SERVI : c'est le premier tag qui l'emporte
+qui le sert aux intégrateurs. Le retrait est le lot D — issue #526, qui porte la
 liste complète de ce que la date emporte.
 
 ⚠️ **Ce module n'est pas un fourre-tout de compatibilité.** Il ne porte que des

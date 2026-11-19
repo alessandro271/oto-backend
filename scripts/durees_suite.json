@@ -643,7 +643,7 @@
   "tests/test_functions_stockage_live.py": 1.72,
   "tests/test_garde_anti_boucle_flotte_830.py": 0.03,
   "tests/test_garde_identite_chemins.py": 12.72,
-  "tests/test_garde_preprod_verte.py": 0.05,
+  "tests/test_garde_tronc_vert.py": 0.05,
   "tests/test_github_leexi_productlane.py": 1.7,
   "tests/test_gmail_attachments.py": 0.03,
   "tests/test_gmail_attachments_hors_boucle.py": 2.81,

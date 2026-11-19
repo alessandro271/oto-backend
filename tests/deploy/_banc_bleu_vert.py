@@ -1,14 +1,17 @@
 """Banc des GESTES du déploiement bleu/vert de NOTRE box (#967).
 
 Ce que ce banc prouve : rendre la bibliothèque bleu/vert générique ne change RIEN à ce
-que nos deux déploiements (`deploy/oto-backend.sh` pour la production,
-`deploy/oto-backend-canari.sh` pour la préproduction) font sur la machine. Il rejoue
-chaque scénario réel — bascule dans les deux sens, retour arrière, préproduction, et
+que notre déploiement (`deploy/oto-backend.sh`, la production) fait sur la machine. Il
+rejoue chaque scénario réel — bascule dans les deux sens, retour arrière, et
 les chemins d'échec (couleur morte au démarrage, `caddy validate` qui refuse, trafic
 public en échec, certificat pas encore prêt puis jamais prêt, lanceur figé sur un
 chemin) — dans une racine jetable, avec des
 doublures qui JOURNALISENT chaque commande au lieu de l'exécuter, puis compare la
 trace à une référence enregistrée depuis les scripts d'avant.
+
+Retrait de la préproduction (19/11/2026) : le tronc ne déploie plus, le wrapper de
+préproduction `oto-backend-canari.sh` et ses quatre scénarios `canari-*` sont retirés ;
+aucun geste de production n'a bougé.
 
 Lot 5 (30/09/2026) : nos deux wrappers déclarent `BG_LANCEUR=versionne`, et les
 références de leurs scénarios ont été régénérées — seule la propagation du lanceur
@@ -73,10 +76,9 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 TAG = "v1.2.3"
 
 # Scripts de notre box, sources de la réécriture de chemins.
-SCRIPTS = ("oto-mcp-bluegreen.sh", "oto-backend.sh", "oto-backend-canari.sh",
-           "oto-mcp-drain.sh")
+SCRIPTS = ("oto-mcp-bluegreen.sh", "oto-backend.sh", "oto-mcp-drain.sh")
 
-# nom -> (script, argument, environnement {prod|canari}, couleur active, variantes)
+# nom -> (script, argument, environnement (prod), couleur active, variantes)
 SCENARIOS: dict[str, tuple[str, list[str], str, str, dict[str, str]]] = {
     "prod-bleu-vers-vert": ("oto-backend.sh", [TAG], "prod", "blue", {}),
     "prod-vert-vers-bleu": ("oto-backend.sh", [TAG], "prod", "green", {}),
@@ -122,14 +124,10 @@ SCENARIOS: dict[str, tuple[str, list[str], str, str, dict[str, str]]] = {
     # arrêté ni installé, la couleur en service n'a pas bougé.
     "prod-vidange-sans-fin": ("oto-backend.sh", [TAG], "prod", "blue",
                               {"BANC_VIDANGE_EN_COURS": "sans-fin"}),
-    "canari-bleu-vers-vert": ("oto-backend-canari.sh", [SHA], "canari", "blue", {}),
-    "canari-vert-vers-bleu": ("oto-backend-canari.sh", [SHA], "canari", "green", {}),
-    "canari-retour-arriere": ("oto-backend-canari.sh", ["--rollback"], "canari", "blue", {}),
-    "canari-sans-argument": ("oto-backend-canari.sh", [], "canari", "blue", {}),
     "vidange": ("oto-mcp-drain.sh", ["oto-mcp", "blue", "9103", "120"], "prod", "green", {}),
 }
 
-ARBRES = {"prod": "/opt/oto-mcp", "canari": "/opt/oto-mcp-canari"}
+ARBRES = {"prod": "/opt/oto-mcp"}
 
 # Doublures : chacune journalise `nom args…` dans $BANC_TRACE, puis se comporte comme
 # le scénario le demande. Les commandes de fichiers (cp, chmod, install) s'exécutent

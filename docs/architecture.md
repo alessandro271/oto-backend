@@ -84,7 +84,7 @@ deploy/
 ├── oto-mcp.service       # systemd, User=root, /opt/oto-mcp, port 9103
 ├── oto-mcp-maintenance.{service,timer}   # les travaux sortis du boot (ADR 0065), prod seulement
 ├── oto-journal-archive.{service,timer}   # archivage du journal des appels
-└── *.sh, *.py            # oto-backend{,-canari}.sh (deploy), bluegreen/drain, start-encrypted, refresh SIRENE, ingestions
+└── *.sh, *.py            # oto-backend.sh (deploy), bluegreen/drain, start-encrypted, refresh SIRENE, ingestions
 
 ```
 
