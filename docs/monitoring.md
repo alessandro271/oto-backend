@@ -376,6 +376,33 @@ le démarrage journalise `borne de session MCP : … N gestionnaire(s) armé(s)`
 (face authentifiée + face anonyme). Chaque dépassement est aussi journalisé (`borne <limiteur> …`, une ligne par clé
 et par minute au plus, empreinte tronquée).
 
+**Les sessions MCP ouvertes ne retiennent plus leur dernière réponse** (`oto_mcp/sessions_mcp.py`,
+équipé au même démarrage, dans tous les modes). Deux défauts du transport Streamable HTTP de
+l'SDK `mcp`, corrigés par une enveloppe sur le serveur que chaque gestionnaire fait tourner,
+sans forker l'SDK : la tâche `message_router` du transport gardait dans ses variables locales
+le dernier message acheminé (une session arrêtée après un `tools/list` gardait ~1,3 Mo de tas
+et ~3 Mo de RSS jusqu'à la borne d'inactivité) — chaque réponse est désormais suivie d'un
+témoin minuscule, une réponse à un identifiant qu'aucune requête ne porte, que le routeur
+prend à sa place et ne livre à personne ; et une session fermée par `DELETE` restait pour
+toujours dans le gestionnaire (`_server_instances`, `_session_owners` : l'SDK ne retire que
+les sessions NON terminées) — l'enveloppe la retire. Un gestionnaire qui n'a plus ces
+accroches, ou qui porte un `event_store` (il rejouerait le témoin), refuse le démarrage ; le
+démarrage journalise `sessions MCP : N gestionnaire(s) équipé(s)…` — attendu 2. Le banc
+`tests/test_sessions_mcp_liberation.py` joue le vrai SDK, avec pour chaque correctif un
+témoin qui rougit le jour où l'SDK corrige lui-même le défaut.
+
+La **ligne de contrôle**, toutes les 5 min, une par processus :
+
+```
+sessions MCP : authentifiee ouvertes=42 terminees_retenues=0 fermees_inactivite=7 fermees_delete=3 ; anonyme ouvertes=0 terminees_retenues=0 fermees_inactivite=0 fermees_delete=0 (sur 300 s)
+```
+
+`ouvertes` = sessions vivantes au gestionnaire à l'instant de la ligne ; `terminees_retenues`
+= sessions terminées encore retenues (**0 attendu** : autre chose dit qu'une fermeture
+échappe à l'enveloppe) ; `fermees_*` = fermetures depuis la ligne précédente, par la borne
+d'inactivité ou par `DELETE`. Elle ne dépend pas du niveau des journaux `mcp.*`, qui disent
+la même chose session par session (`Created new transport…`, `Session … idle timeout`).
+
 Pas la connexion d'un connecteur, pas le `tools/list`. (Ce paragraphe disait « uniquement
 les invocations d'outils » jusqu'au 2026-08-29 : les appels `/api/*` y sont écrits depuis
 `RestCallLogger`, et le handshake depuis `on_initialize` — c'est cet angle mort de lecture

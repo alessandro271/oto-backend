@@ -134,6 +134,7 @@ chemins = [
   "oto_mcp/bornes_processus.py",
   "oto_mcp/borne_corps.py",
   "oto_mcp/borne_session.py",
+  "oto_mcp/sessions_mcp.py",
   "oto_mcp/egress.py",
   "oto_mcp/crypto.py",
   "oto_mcp/env_inventory.py",
