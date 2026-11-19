@@ -99,6 +99,18 @@ Le code : `oto_mcp/alertes_capacite.py` (la boucle, les textes, les envois),
   n'attend sans forfait, **constaté deux passes de suite** (`DELAI_CLOTURE_S`) : une passe
   qui tombe pendant la sonde ne voit rien attendre sans que rien soit reparti. Un travail
   rendu à la file par la sonde (dû dans `VERIFICATION_S`) compte comme dû.
+- **« Plus rien n'attend » n'est pas une reprise.** Un webhook périme à sa fraîcheur, une
+  file se vide à la main, un agent s'éteint : si la cause tient encore (le pool n'a
+  toujours aucun prêteur servable, un titulaire est toujours au plafond ou à
+  reconnecter), l'incident se clôt `repris = false` et aucune ligne « les agents ont
+  repris » ne part. Le travail suivant qui attend ouvre un incident neuf.
+- **Sans mode réglé, le pool qui complète compte.** Un demandeur dont l'abonnement ne sert
+  pas ici passe par le pool dès qu'un prêteur est servable, et la prise le fait attendre
+  tant qu'aucun ne l'est : des prêts vivants dont aucun ne sert, c'est un incident de la
+  voie du pool (sa cause, ses prêteurs). ⚠️ Le texte de péremption, lui, choisit la voie
+  par `par_le_pool`, qui dit « personnelle » quand aucun prêteur n'est servable : pour ce
+  cas il dit « pas ouvert dans cette organisation ». Même classement
+  (`cause_du_forfait`), voie différente ; non retouché ici.
 - **Un pool mêlé est `plafond`.** Un prêteur au plafond et un à reconnecter : le tableau
   ci-dessus dirait `reconnexion` ; le texte de péremption dit `plafond`, et il n'y a qu'un
   classement (`cause_du_forfait`, sorti de `raison_de_peremption`). `reconnexion` en pool,
@@ -107,8 +119,9 @@ Le code : `oto_mcp/alertes_capacite.py` (la boucle, les textes, les envois),
 - **Quand les travaux d'une org n'attendent pas tous la même chose** (voie personnelle,
   plusieurs propriétaires), le message dit une cause : d'abord celle qui ne cède pas seule
   (`pool_vide`, puis `reconnexion`), puis `plafond`.
-- **Ce qui n'est pas un incident** : un abonnement qui n'est pas ouvert dans l'org (le
-  travail attend un geste d'un autre ordre, que le texte de péremption nomme), un
+- **Ce qui n'est pas un incident** : un abonnement qui n'est pas ouvert dans l'org, hors
+  du cas ci-dessus (le travail attend un geste d'un autre ordre, que le texte de
+  péremption nomme), un
   demandeur sans ligne d'abonnement (la remise arrête son travail), le travail d'un agent
   éteint, une org suspendue (son incident reste tel quel, ni libre ni clos). Le repli API
   se juge sans sa limite de 25 candidats ni « un repli en vol par forfait » : un repli qui
@@ -127,8 +140,9 @@ Le code : `oto_mcp/alertes_capacite.py` (la boucle, les textes, les envois),
   d'agents, sans dépendre de leur réglage d'instance ; un Slack absent, éteint ou qui
   refuse fait partir le courriel au premier admin joignable. La reprise suit la même règle.
 - **Le titulaire** est prévenu une fois par incident, titulaire par titulaire
-  (`titulaires_prevenus`) : un prêteur qui arrive en cours d'incident est prévenu à la
-  passe suivante. Son adresse vient de son compte (`users.email`) ; sans adresse, rien.
+  (`titulaires_prevenus`) ; la passe relève qui tient le forfait qui manque
+  (`titulaires`), et un prêteur qui arrive en cours d'incident est prévenu à la passe
+  suivante. Son adresse vient de son compte (`users.email`) ; sans adresse, rien.
 
 ### Hors de cette PR
 

@@ -827,7 +827,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "et dit la reprise — AGIT sur un tiers, donc production seulement. `1`, "
              "`true`, `yes`, `on` l'allument ; absente, vide ou un non l'éteignent ; "
              "toute autre valeur lève.",
-             ("oto_mcp/alertes_capacite.py:87",)),
+             ("oto_mcp/alertes_capacite.py:89",)),
     Variable("OTO_CATALOGUE_CAUSES_DECIDE", Classe.REGLAGE, "",
              "Le catalogue des causes de panne d'agent DÉCIDE (`medecin_agents.py`) : une "
              "cause approuvée range une panne que la regex dit `inconnu` — sa classe et son "

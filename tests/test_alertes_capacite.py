@@ -8,10 +8,12 @@ Ce qu'on prouve, réglage d'instance allumé :
   occupé), un travail que le repli rejouera (interrupteur ouvert, clé d'org lisible), un
   abonnement pas ouvert ici ne sont pas des incidents ; `needs_login` → `reconnexion`,
   un pool sans prêt → `pool_vide`, le propriétaire au plafond en voie personnelle →
-  `plafond` ; un pool mêlé est `plafond`, comme le texte de péremption ;
+  `plafond` ; un pool mêlé est `plafond`, comme le texte de péremption ; sans mode
+  réglé, des prêteurs tous au plafond font un incident du pool ;
 - **le cycle** : ouvert une fois, clos une passe après avoir cédé, avec les occurrences
   périmées pendant l'arrêt ; une passe qui tombe pendant la sonde d'un forfait ne clôt
-  rien, et rien ne repart deux fois ; une org suspendue n'est ni libre ni close ;
+  rien, et rien ne repart deux fois ; une org suspendue n'est ni libre ni close ; plus
+  rien qui attend alors que la cause tient n'est pas une reprise ;
 - **les envois** : une alerte par incident sur le Slack de l'org, sinon (Slack absent ou
   qui refuse) le courriel à l'admin ; rien de parti = rien de marqué, et le passage
   suivant rejoue ; le titulaire reçoit SON état, une fois ; la ligne de reprise ;
@@ -702,3 +704,89 @@ def test_personne_a_qui_le_dire_n_est_pas_un_envoi_rate(base):
     bilan = A.balayer()
     assert (bilan["alertes"], bilan["rates"], bilan["sans_destinataire"]) == (0, 0, 1)
     assert _incident(p.org)["alerte_at"] is None
+
+
+# --- Sans mode réglé : le pool qui complète -----------------------------------------
+
+def test_sans_mode_des_preteurs_tous_au_plafond_sont_un_incident_du_pool(base):
+    """Le demandeur n'a pas d'abonnement à lui : sans mode réglé, la prise le fait passer
+    par le pool dès qu'un prêteur est servable, et ATTENDRE tant qu'aucun ne l'est."""
+    p = SimpleNamespace(preteur=f"preteur-{uuid.uuid4().hex[:6]}",
+                        demandeur=f"demandeur-{uuid.uuid4().hex[:6]}")
+    _personne(p.preteur)
+    _personne(p.demandeur)
+    org = _org(p.preteur, p.demandeur)
+    reset = _futur(5)
+    _abonne(p.preteur, statut="paused_limit", reset=reset, pret_a=[org])
+    _travail(org, p.demandeur, agent=_agent(org, p.demandeur), ouvert=False)
+    A.balayer()
+    inc = _incident(org)
+    assert (inc["cause"], inc["par_le_pool"], inc["titulaires"]) == (
+        "plafond", True, [p.preteur])
+    assert A._date(inc["reprise_at"]) == reset.replace(microsecond=0)
+
+
+def test_sans_mode_un_preteur_servable_n_est_pas_un_incident(base):
+    preteur = _personne(f"preteur-{uuid.uuid4().hex[:6]}")
+    demandeur = _personne(f"demandeur-{uuid.uuid4().hex[:6]}")
+    org = _org(preteur, demandeur)
+    _abonne(preteur, pret_a=[org])
+    _travail(org, demandeur, ouvert=False)
+    A.balayer()
+    assert _incident(org) is None
+
+
+def test_sans_mode_ni_pret_un_abonnement_pas_ouvert_ici_n_est_pas_un_incident(base):
+    demandeur = _personne(f"demandeur-{uuid.uuid4().hex[:6]}")
+    org = _org(demandeur)
+    _abonne(demandeur, statut="paused_limit", reset=_futur())
+    _travail(org, demandeur, ouvert=False)
+    A.balayer()
+    assert _incident(org) is None
+
+
+def test_sans_mode_le_forfait_du_proprietaire_au_plafond(base):
+    proprio = _personne(f"proprio-{uuid.uuid4().hex[:6]}")
+    org = _org(proprio)
+    _abonne(proprio, statut="paused_limit", reset=_futur())
+    _travail(org, proprio)
+    A.balayer()
+    inc = _incident(org)
+    assert (inc["cause"], inc["par_le_pool"], inc["titulaires"]) == (
+        "plafond", False, [proprio])
+
+
+def test_mode_personnel_le_proprietaire_a_reconnecter(base):
+    proprio = _personne(f"proprio-{uuid.uuid4().hex[:6]}")
+    org = _org(proprio, mode="personnel")
+    _abonne(proprio, statut="needs_login")
+    _travail(org, proprio)
+    A.balayer()
+    assert (_incident(org)["cause"], _incident(org)["par_le_pool"]) == (
+        "reconnexion", False)
+
+
+# --- Plus rien n'attend, la cause tient ----------------------------------------------
+
+def test_un_travail_perime_alors_que_la_cause_tient_n_annonce_pas_de_reprise(base):
+    """Un webhook périme à sa fraîcheur pendant que le forfait est toujours au plafond :
+    l'incident se clôt (rien n'attend plus), sans « les agents ont repris »."""
+    from oto_mcp.db._conn import _connect
+    p = _pool_au_plafond()
+    _slack_de(p.org)
+    _ouvert(p)
+    with _connect() as conn:
+        conn.execute("UPDATE runner_jobs SET status = 'expired', finished_at = NOW() "
+                     "WHERE id = %s", (p.job,))
+    A.balayer()
+    _vieillir(p.org, 6)
+    bilan = A.balayer()
+    assert (bilan["clos"], bilan["reprises"]) == (1, 0)
+    inc = _incident(p.org)
+    assert inc["repris"] is False and inc["clos_at"] is not None
+    assert [m["text"] for m in base.slack.posts if "repris" in m["text"]] == []
+    # Le webhook suivant, toujours sans forfait : un incident NEUF, qui s'annoncera.
+    _travail(p.org, p.demandeur, ouvert=False)
+    A.balayer()
+    neuf = _incident(p.org)
+    assert neuf["id"] != inc["id"] and neuf["ouvert_at"] is None

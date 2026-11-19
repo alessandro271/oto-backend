@@ -26,6 +26,8 @@ Ce module écrit l'alerte qui manquait, une par INCIDENT (`db/incidents_capacite
   un courriel de plateforme : SON forfait, au plafond jusqu'à quand, ou à reconnecter. Lui
   seul peut lever une `reconnexion` ;
 - **à la reprise** — une ligne : depuis quand, et combien d'occurrences ont été manquées.
+  Seulement quand la capacité est revenue : plus rien qui attend alors que la cause
+  tient (`la_cause_tient`), ce n'est pas une reprise, et rien ne le dit.
 
 Rien n'appelle un modèle ici : le texte est fixe, en français ou en anglais (la langue de
 l'espace, `alertes_slack_agents.langue`), sous la marque du tenant de l'org.
@@ -149,11 +151,23 @@ def _constat(org_id: int, famille: str, lot: list[dict]) -> Optional[dict[str, A
             "titulaires": _titulaires(org_id, famille, bloques)}
 
 
+def la_cause_tient(inc: dict) -> bool:
+    """La cause d'un incident tient-elle encore, travaux ou pas ? En voie du pool : le
+    pool n'a toujours aucun prêteur servable (`cause_du_forfait`). En voie personnelle :
+    un de ses titulaires est toujours au plafond ou à reconnecter. Quand plus rien
+    n'attend alors qu'elle tient (un webhook périmé à sa fraîcheur, une file vidée, un
+    agent éteint), l'incident se clôt sans dire « les agents ont repris »."""
+    from .capabilities import _abonnement
+    org, famille = int(inc["org_id"]), inc["famille"]
+    if inc["par_le_pool"]:
+        return _abonnement.cause_du_forfait(org, famille, None, pool=True) is not None
+    return any(etat_du_titulaire(sub, famille) for sub in inc.get("titulaires") or ())
+
+
 def constater() -> tuple[dict[str, int], dict[tuple[int, str], dict]]:
     """La moitié de la passe qui n'envoie rien : relève les travaux sans forfait, les range
     par (org, famille), écarte les orgs d'un tenant tiers, et fait avancer les incidents
-    (`incidents_capacite.constater`). Rend le bilan, et ce que la passe a vu (les
-    titulaires y sont, pour les courriels)."""
+    (`incidents_capacite.constater`). Rend le bilan, et ce que la passe a vu."""
     from . import org_store
     from .alerte_agents_bloques import org_a_nous
     from .capabilities import _abonnement
@@ -178,9 +192,21 @@ def constater() -> tuple[dict[str, int], dict[tuple[int, str], dict]]:
         c = _constat(org_id, famille, lot)
         if c:
             vus[(org_id, famille)] = c
+    # Ce que la passe ne voit plus : une org suspendue n'est pas lue (son incident reste
+    # tel quel) ; ailleurs, plus rien n'attend — reste à savoir si la cause a cédé.
+    suspendues = set(org_store.suspended_org_ids())
+    tenus, sans_reprise = [], []
+    for inc in incidents_capacite.vivants():
+        cle = (int(inc["org_id"]), inc["famille"])
+        if cle in vus:
+            continue
+        if cle[0] in suspendues:
+            tenus.append(cle)
+        elif la_cause_tient(inc):
+            sans_reprise.append(cle)
     bilan = incidents_capacite.constater(
         vus.values(), delai_min_s=DELAI_MIN * 60, delai_cloture_s=DELAI_CLOTURE_S,
-        intouchables=org_store.suspended_org_ids())
+        tenus=tenus, sans_reprise=sans_reprise)
     return {**bilan, "tenant_tiers_ecartes": ecartees}, vus
 
 
@@ -486,10 +512,10 @@ def _prevenir_le_titulaire(sub: str, inc: dict) -> Optional[bool]:
     return _courriel(adresse, sujet, paragraphes, boutons, brand=brand, locale=langue_)
 
 
-def prevenir(vus: dict[tuple[int, str], dict]) -> dict[str, int]:
+def prevenir() -> dict[str, int]:
     """La moitié de la passe qui envoie : les alertes des incidents ouverts, les courriels
-    de leurs titulaires (ceux que la passe a vus), les lignes de reprise. Chaque envoi se
-    marque après coup ; un raté se rejoue."""
+    de leurs titulaires (ceux que la dernière passe a relevés), les lignes de reprise.
+    Chaque envoi se marque après coup ; un raté se rejoue."""
     from . import alertes_slack_agents
     from .db import alertes_slack, incidents_capacite
     reglages = alertes_slack.orgs_a_prevenir()
@@ -516,7 +542,7 @@ def prevenir(vus: dict[tuple[int, str], dict]) -> dict[str, int]:
             if _compter(par, "alertes"):
                 incidents_capacite.marquer_alerte(int(inc["id"]), par)
         deja = set(inc.get("titulaires_prevenus") or ())
-        for sub in (vus.get((org, inc["famille"])) or {}).get("titulaires", ()):
+        for sub in inc.get("titulaires") or ():
             if sub in deja:
                 continue
             parti = _prevenir_le_titulaire(sub, inc)
@@ -542,10 +568,10 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
         raise AlertesCapaciteEteintes(f"{ENV_ACTIVES} est éteint : aucune alerte de "
                                       "capacité.")
     maintenant = maintenant or datetime.now(timezone.utc)
-    bilan, vus = constater()
+    bilan, _vus = constater()
     if _heures_calmes(maintenant):
         return {**bilan, "heures_calmes": True}
-    return {**bilan, **prevenir(vus)}
+    return {**bilan, **prevenir()}
 
 
 async def run_alertes_capacite_loop(interval: int = INTERVALLE_S) -> None:

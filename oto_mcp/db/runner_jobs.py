@@ -1599,10 +1599,15 @@ def travaux_sans_forfait(seuil_defaut_pct: int, marge_s: int = 0) -> list[dict]:
       (`PRETEUR_SERVABLE`) — sans la clause « en vol » de la prise : un prêteur
       servable et occupé sert, la file avance ;
     - voie personnelle : l'abonnement du demandeur est ouvert ici, et à reconnecter,
-      déconnecté ou en pause qui freine — la négation exacte de la clause de prise. Un
-      abonnement pas ouvert ici, ou absent, n'est pas une panne de CAPACITÉ : la remise
-      arrête le second, le premier attend un geste d'un autre ordre, que
-      `_abonnement.raison_de_peremption` nomme.
+      déconnecté ou en pause qui freine — la négation exacte de la clause de prise ;
+    - et, sans mode réglé, le pool qui COMPLÈTE (`sql_par_le_pool`) : le demandeur
+      dont l'abonnement ne sert pas ici passe par le pool dès qu'un prêteur est
+      servable, et la prise le fait ATTENDRE en voie personnelle tant qu'aucun ne l'est.
+      Des prêts vivants dont aucun ne sert, c'est le pool qui manque : rendu en voie du
+      pool (`par_le_pool` vrai), pour que la cause et les titulaires soient les siens.
+      Hors de ce cas, un abonnement pas ouvert ici, ou absent, n'est pas une panne de
+      CAPACITÉ : la remise arrête le second, le premier attend un geste d'un autre
+      ordre, que `_abonnement.raison_de_peremption` nomme.
 
     ⚠️ Jamais `sonde` : la pause STOCKÉE, comme le repli (`_pause_pour_l_org`). Une pause
     qu'un worker revérifie par la sonde (`VERIFICATION_S`, dix minutes) reste une pause
@@ -1618,15 +1623,22 @@ def travaux_sans_forfait(seuil_defaut_pct: int, marge_s: int = 0) -> list[dict]:
     sa clé DÉCHIFFRÉE (`_cle_ok_pour_repli`, sur le dépôt du modèle de même tier),
     sans sa limite ni « un repli en vol par forfait » : un repli qui tourne, c'est une
     file qui avance, et vingt-cinq travaux plus anciens ne doivent pas en cacher un."""
-    from .org_subscription_pool import PRET_VIVANT, PRETEUR_SERVABLE, repli_api_par_defaut
+    from .org_subscription_pool import (PRET_VIVANT, PRETEUR_SERVABLE,
+                                        repli_api_par_defaut, sql_propre_sert)
     familles = sorted(_FAMILLES_ABONNEMENT)
     if not familles:
         return []
+
+    def _pret(clause: str) -> str:
+        return (f"EXISTS (SELECT 1 FROM user_model_subscription_loans l {PRET_VIVANT} "
+                f"WHERE l.org_id = rj.org_id AND l.famille = {_FAMILLE_RJ}{clause})")
+    un_pret, un_servable = _pret(""), _pret(f" AND {PRETEUR_SERVABLE}")
     with _connect() as conn:
         rows = conn.execute(
             f"""
             SELECT rj.id, rj.org_id, rj.sub, rj.payload->>'model' AS model,
-                   {_FAMILLE_RJ} AS famille, modep.actif AS par_le_pool,
+                   {_FAMILLE_RJ} AS famille,
+                   (modep.actif OR NOT b.propre_bloque) AS par_le_pool,
                    t.id AS trigger_id,
                    ((perso.limit_reset_at IS NOT NULL OR pool.reset_at IS NOT NULL)
                     AND COALESCE((SELECT r.repli_api FROM org_model_subscription_modes r
@@ -1635,6 +1647,22 @@ def travaux_sans_forfait(seuil_defaut_pct: int, marge_s: int = 0) -> list[dict]:
                        AS pause_repliable
               FROM runner_jobs rj
               {_jointures_de_repli(seuil_defaut_pct)}
+              -- `propre_bloque` : la voie personnelle attend l'abonnement du demandeur ;
+              -- `pool_bloque` : le pool qui complète (aucun mode réglé) a des prêts
+              -- vivants, et aucun ne sert ; `aucun_servable` : la voie du pool attend.
+              CROSS JOIN LATERAL (SELECT
+                   {_ABONNEMENT_OUVERT_ICI} AND EXISTS (
+                       SELECT 1 FROM user_model_subscriptions ab
+                        WHERE ab.sub = rj.sub AND ab.famille = {_FAMILLE_RJ}
+                          AND (ab.statut IN ('needs_login', 'disconnected')
+                               OR {user_subscriptions.pause_en_vigueur('ab')}))
+                       AS propre_bloque,
+                   (SELECT m.mode FROM org_model_subscription_modes m
+                     WHERE m.org_id = rj.org_id AND m.famille = {_FAMILLE_RJ}) IS NULL
+                   AND rj.fleet_id IS NULL
+                   AND NOT {sql_propre_sert("rj.sub", _FAMILLE_RJ, _ABONNEMENT_OUVERT_ICI)}
+                   AND {un_pret} AND NOT {un_servable} AS pool_bloque,
+                   NOT {un_servable} AS aucun_servable) b
               LEFT JOIN runner_triggers t
                      ON t.org_id = rj.org_id
                     AND t.id = CASE WHEN rj.payload->>'trigger_id' ~ '^[0-9]+$'
@@ -1648,17 +1676,8 @@ def travaux_sans_forfait(seuil_defaut_pct: int, marge_s: int = 0) -> list[dict]:
                AND NOT EXISTS (SELECT 1 FROM orgs o_susp WHERE o_susp.id = rj.org_id
                                 AND o_susp.suspended_at IS NOT NULL)
                AND (t.id IS NULL OR t.enabled)
-               AND CASE WHEN modep.actif
-                        THEN NOT EXISTS (
-                             SELECT 1 FROM user_model_subscription_loans l {PRET_VIVANT}
-                              WHERE l.org_id = rj.org_id AND l.famille = {_FAMILLE_RJ}
-                                AND {PRETEUR_SERVABLE})
-                        ELSE {_ABONNEMENT_OUVERT_ICI} AND EXISTS (
-                             SELECT 1 FROM user_model_subscriptions ab
-                              WHERE ab.sub = rj.sub AND ab.famille = {_FAMILLE_RJ}
-                                AND (ab.statut IN ('needs_login', 'disconnected')
-                                     OR {user_subscriptions.pause_en_vigueur('ab')}))
-                   END
+               AND CASE WHEN modep.actif THEN b.aucun_servable
+                        ELSE b.propre_bloque OR b.pool_bloque END
              ORDER BY rj.org_id, rj.id
             """,
             (repli_api_par_defaut(), int(marge_s), familles),

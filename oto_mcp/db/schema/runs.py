@@ -870,11 +870,14 @@ ORG_INCIDENTS_CAPACITE = """
 --              passé `DELAI_MIN` (NULL : encore un candidat, effacé s'il cède avant) ;
 --              `libre_at` — la première passe qui ne l'a plus vu ; `clos_at` — la
 --              clôture, à `libre_at` (l'heure où les agents ont repris) ;
---   `travaux`, `agents`, `reprise_at` — ce que dit la dernière passe : les travaux qui
---              attendent, les agents allumés qu'ils font attendre, l'échéance la plus
---              proche quand elle est connue ;
+--   `travaux`, `agents`, `reprise_at`, `titulaires` — ce que dit la dernière passe :
+--              les travaux qui attendent, les agents allumés qu'ils font attendre,
+--              l'échéance la plus proche quand elle est connue, qui tient le forfait qui
+--              manque (les comptes à prévenir) ;
 --   `perimees` — les occurrences périmées (`expired`) de cette famille dans l'org entre
---              `vu_at` et `libre_at`, comptées à la clôture ;
+--              `vu_at` et `libre_at`, comptées à la clôture ; `repris` — clos parce que
+--              la capacité est revenue (vrai), ou parce que plus rien n'attend alors que
+--              la cause tient encore (faux : aucune ligne de reprise ne le dit) ;
 --   `alerte_at`/`alerte_par`, `titulaires_prevenus`/`titulaires_at`, `retour_at` — ce
 --              qui est PARTI, posé après l'envoi : l'alerte (Slack, sinon courriel aux
 --              admins), le courriel à chaque titulaire de forfait, la ligne de reprise.
@@ -893,7 +896,9 @@ CREATE TABLE IF NOT EXISTS org_incidents_capacite (
     travaux INTEGER NOT NULL DEFAULT 0,
     agents INTEGER NOT NULL DEFAULT 0,
     reprise_at TIMESTAMPTZ,
+    titulaires TEXT[] NOT NULL DEFAULT '{}',
     perimees INTEGER,
+    repris BOOLEAN,
     alerte_at TIMESTAMPTZ,
     alerte_par TEXT CHECK (alerte_par IN ('slack', 'courriel')),
     titulaires_prevenus TEXT[] NOT NULL DEFAULT '{}',

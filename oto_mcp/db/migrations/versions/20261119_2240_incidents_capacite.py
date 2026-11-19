@@ -3,10 +3,10 @@
 Une table NEUVE, née entière : `org_incidents_capacite`
 (`db/schema/runs.py::ORG_INCIDENTS_CAPACITE`), et son index unique PARTIEL (un seul
 incident vivant par org et famille) — posés aussi par le démarrage (`CREATE … IF NOT
-EXISTS` de l'assemblage), même DDL. Aucune FK. Une colonne de comptes
-(`titulaires_prevenus`, les titulaires de forfait déjà prévenus d'un incident) : un état
-d'exploitation, que la boucle reconstruit ; une fusion de comptes au pire réécrit une fois
-à la même personne.
+EXISTS` de l'assemblage), même DDL. Aucune FK. Deux colonnes de comptes (`titulaires`,
+qui tient le forfait qui manque ; `titulaires_prevenus`, ceux déjà prévenus) : un état
+d'exploitation, que la boucle reconstruit à chaque passe ; une fusion de comptes au pire
+réécrit une fois à la même personne.
 
 **Verrous.** Aucun sur une table existante : la table neuve est vide. `lock_timeout` 5 s,
 comme les voisines.
