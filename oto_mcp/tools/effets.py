@@ -504,7 +504,6 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # add_members may also remove (remove_record_ids); copy_from moves up to 100 000 records
     "hubspot_list": {"lire": "search get members record_lists", "ecrire": "create restore", "detruire": "update delete add_members remove_members clear_members copy_from"},
     "hubspot_object": {"lire": "search list get associations", "ecrire": "create update add_note", "detruire": "delete merge"},
-    "hubspot_owners": "lire",
     # update PATCHes the raw definition: options given replace the whole option list
     "hubspot_property": {"lire": "list get groups", "ecrire": "create", "detruire": "update delete"},
     "hubspot_push_rows": "envoyer",
