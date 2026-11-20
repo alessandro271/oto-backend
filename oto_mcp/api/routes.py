@@ -171,6 +171,7 @@ _READ_OPS = frozenset({
     "validate",  # juger un manifeste d'app sans rien écrire (`me.app`)
     "read_file",  # un agent lit un fichier de l'app, sans rien écrire (`me.app`)
     "revision",  # une version entière d'une app, pour la lire (`me.app`)
+    "plan", "status",  # ce qu'un effacement d'org ferait, et où il en est (`org.erasure`)
 })
 
 
