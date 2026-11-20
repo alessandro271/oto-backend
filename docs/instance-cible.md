@@ -112,6 +112,7 @@ rien et réécrit seulement ce qui se dérive de la déclaration.
 | Amont Caddy initial | `/etc/caddy/upstream-<i>-<r>.conf` |
 | Vidange (chemin stable : elle tourne après le déploiement) | `/usr/local/lib/<i>/oto-mcp-drain.sh` |
 | Maintenance quotidienne, après la bascule, sur l'arbre qui sert — chaque rôle a sa base, donc la sienne | `<i>-<r>-maintenance.{service,timer}` |
+| Archive quotidienne du journal d'appels (rétention, mois sortis vers le seau du rôle), même pose que la maintenance | `<i>-<r>-journal-archive.{service,timer}` |
 
 Ce qu'elle **exige et ne pose jamais** — le socle, geste d'opérateur, chacun refusé en
 le nommant s'il manque : root ; `uv`, `git`, `caddy`, `python3` ; la clé d'API du
