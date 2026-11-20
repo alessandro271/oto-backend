@@ -345,7 +345,7 @@ hellostock_offre	get list	58fb614b1be522a7
 hellostock_offre_update	-	443a0d1788efde7e
 hellostock_positionnements	-	2da8a2cd2cc486c0
 higgsfield	estimate get_request list_models	7c3e71836acdd960
-higgsfield_act	cancel create_generation create_upload delete	5e5bd378805d8612
+higgsfield_act	cancel create_generation create_upload delete	9126ff4ea024ebc6
 hithorizons_company	-	36fc9a5218e00cb1
 hithorizons_search_company	-	530beeeaa3916bf0
 hithorizons_search_unstructured	-	0f6e4340c8bcc0b0

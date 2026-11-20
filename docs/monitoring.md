@@ -1156,6 +1156,12 @@ annulé : gratuit — et son statut ne porte aucun prix. Sur la clé plateforme
 - **La soumission** vérifie le quota du jour de l'octroi pour le PRIX du travail (en
   micro-dollars, l'unité de `grant_quota_unit`), le note en `units`, et note le travail avec
   ce prix (table `higgsfield_jobs`). Aucune `quantity` : rien n'est encore facturé.
+- **Un prix illisible** (`usd` nul) est refusé sur la clé plateforme, et sur un appel dont la
+  clé n'est pas connue ; sur la clé propre du client, un `max_usd` invérifiable est refusé
+  (`higgsfield_cap_unverifiable`, sans signal), et sans `max_usd` le travail part non chiffré
+  (`price.usd` nul, `price.note`), sans rien facturer. Un refus nommé `higgsfield_price_unknown` (une
+  combinaison que la lib n'a pas mesurée) dépose un signal plateforme (`oto_admin_signal`,
+  `gap`/`billing`), un par combinaison : sa redite s'y rattache en occurrence.
 - **La lecture d'un travail abouti** (`higgsfield` op=get_request) par l'org qui l'a soumis
   trace son prix en `quantity`, le travail pour job (`higgsfield_request_id`).
 - **Lire, annuler ou effacer** un travail (`get_request`, `cancel`, `delete`) n'est permis
@@ -1168,4 +1174,5 @@ annulé : gratuit — et son statut ne porte aucun prix. Sur la clé plateforme
 - **`oto-mcp maintenance higgsfield-jobs`** relève chaque nuit les travaux sans issue : un
   travail abouti reçoit une ligne `higgsfield` de nature `kind='settlement'` sous l'org et
   la personne qui l'ont soumis ; les autres se closent sans coût. Une seule clé plateforme
-  servie, comme Apify. Pas de comparaison : Higgsfield n'expose ni solde ni compteur.
+  servie, comme Apify. Pas de comparaison : Higgsfield n'expose pas de solde, et son
+  compteur (`GET /models/usage`) somme les travaux par tranche et par modèle, jamais par travail.
