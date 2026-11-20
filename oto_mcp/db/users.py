@@ -480,6 +480,9 @@ _SUB_COLUMNS = [
     # Le PROPRIÉTAIRE d'un canal opéré : hors PK `(sub, provider)`, donc UPDATE nu
     # (le TITULAIRE, lui, est en PK → `_PK_SUB_TABLES`).
     ("unipile_operated_accounts", "owner_sub"),
+    # Le TITULAIRE d'un compte LinkedIn sous ses limites d'envoi et son compte glissant :
+    # hors PK (clé = le compte Unipile), UPDATE nu — ses limites le suivent.
+    ("unipile_sending_limits", "sub"), ("unipile_sending_log", "sub"),
     # ressources possédées + grants (ère ownership 0030/0042/0048 — ajoutées Phase H B1 :
     # l'inventaire n'avait jamais suivi, une bascule de tenant orphelinait les ressources
     # user-owned et les grants nominatifs). `owner_id`/`principal_id` mélangent sub et
@@ -1083,6 +1086,21 @@ def list_users() -> list[dict]:
         rows = conn.execute(
             "SELECT sub, email, name, role, created_at, updated_at FROM users ORDER BY created_at"
         ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def operateurs_de_plateforme(admin_sub: Optional[str] = None) -> list[dict]:
+    """`{sub, email, role}` des comptes NON suspendus dont `users.role` est un rôle
+    plateforme (`admin`, `super_admin`), plus `admin_sub` (le compte d'amorçage
+    `OTO_MCP_ADMIN_SUB`) quel que soit son rôle en base, avec une adresse. Ordre de
+    création. Le verdict reste à `access.is_operator_role` : cette lecture ne fait que
+    borner les lignes candidates (`alertes_equipe.destinataires`)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT sub, email, role FROM users "
+            "WHERE (role IN ('admin', 'super_admin') OR sub = %s) "
+            "  AND suspended_at IS NULL AND COALESCE(email, '') <> '' "
+            "ORDER BY created_at, sub", (admin_sub or "",)).fetchall()
         return [dict(r) for r in rows]
 
 

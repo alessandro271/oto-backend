@@ -7,6 +7,11 @@ fait ; la phrase pour le client est exigée et servie sur l'agent (`repair`) ; a
 réparation, la relance est permise même du côté du titulaire ; et la porte n'écrit
 aucune procédure (`set_procedure` n'existe pas). `op=get` sert la procédure que suit
 l'agent, son corps à qui peut déjà la lire, sinon son slug et sa version seuls.
+
+Et le choix de l'org : tant qu'un admin n'a pas allumé la réparation automatique, ni
+relance ni ajout d'outil — quel que soit l'appelant de la porte de la plateforme ; un
+outil qu'une personne a retiré après une réparation n'est pas redonné ; au plus
+`RELANCES_PAR_ORG` relances par org sur 24 heures, tous épisodes confondus.
 """
 from __future__ import annotations
 
@@ -29,6 +34,8 @@ def agent(live, monkeypatch):
     with _connect() as conn:
         conn.execute("INSERT INTO orgs (id, name) VALUES (%s, 'Acme test') "
                      "ON CONFLICT DO NOTHING", (ORG,))
+    from oto_mcp.db import sante_agents
+    sante_agents.poser_auto_repair(ORG, True)
     t = rt.create_trigger(ORG, "jane", procedure="nouveaux-comptes", tz="UTC",
                           tools=["oto_recipe"], cron="0 6 * * *",
                           next_due="2999-01-01 00:00:00+00", label="Nouveaux comptes")
@@ -254,3 +261,106 @@ def test_la_copie_se_fusionne_par_langue(agent):
     out = _appel(op="set_cause", cause_key="k5", client_copy={"en": {"headline": "Outage."}})
     assert out["cause"]["copie"] == {"fr": {"headline": "Panne."},
                                      "en": {"headline": "Outage."}}
+
+
+# --- Le choix de l'org ----------------------------------------------------------------
+
+def _couper():
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute("DELETE FROM agent_health_settings WHERE org_id = %s", (ORG,))
+
+
+@pytest.mark.parametrize("appelant", ["medecin", "operateur"])
+def test_sans_consentement_rien_n_est_repare_quel_que_soit_l_appelant(agent, appelant):
+    """Aucune ligne pour l'org : coupée. L'agent médecin comme un opérateur, sous la même
+    porte de plateforme, sont refusés — sans rien écrire sur l'épisode ni sur l'agent."""
+    from oto_mcp.db import episodes_agents, runner_triggers as rt
+    _couper()
+    ep = _episode(agent, cote="plateforme")
+    for op, kw in (("rerun", {}), ("add_tool", {"tool": "serper_search",
+                                                "client_note": "Nous avons ajouté un outil."})):
+        with pytest.raises(AuthzDenied) as e:
+            _appel(sub=appelant, op=op, episode_id=ep["id"], **kw)
+        assert (e.value.status, e.value.code) == (403, "auto_repair_off")
+    assert episodes_agents.lire(int(ep["id"]))["reparations"] == []
+    assert rt.get_trigger(agent, ORG)["tools"] == ["oto_recipe"]
+    # Lire et diagnostiquer restent permis.
+    assert _appel(sub=appelant, op="get", episode_id=ep["id"])["episode"]["id"] == ep["id"]
+
+
+def test_une_org_qui_a_coupe_la_reparation_est_refusee(agent):
+    from oto_mcp.db import sante_agents
+    sante_agents.poser_auto_repair(ORG, False)
+    ep = _episode(agent)
+    with pytest.raises(AuthzDenied) as e:
+        _appel(op="rerun", episode_id=ep["id"])
+    assert e.value.code == "auto_repair_off"
+
+
+def test_un_outil_retire_apres_une_reparation_n_est_pas_redonne(agent):
+    from oto_mcp.db import runner_triggers as rt, sante_agents
+    ep = _episode(agent)
+    _appel(op="add_tool", episode_id=ep["id"], tool="serper_search",
+           client_note="Nous avons ajouté la recherche web.")
+    fait = sante_agents.defaire(int(ep["id"]), ORG, acteur="jane")
+    assert fait["retires"] == ["serper_search"], "intact depuis l'ajout : retiré"
+    assert rt.get_trigger(agent, ORG)["tools"] == ["oto_recipe"]
+    with pytest.raises(AuthzDenied) as e:
+        _appel(op="add_tool", episode_id=ep["id"], tool="serper_search",
+               client_note="Nous avons ajouté la recherche web.")
+    assert (e.value.status, e.value.code) == (409, "repair_undone")
+
+
+# --- Le plafond par org ---------------------------------------------------------------
+
+def test_le_plafond_de_l_org_compte_tous_ses_episodes_sur_24_heures(agent):
+    from oto_mcp.db import episodes_agents, runner_triggers as rt
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute("DELETE FROM agent_episodes WHERE org_id = %s", (ORG,))
+    autres = [rt.create_trigger(ORG, "jane", procedure="p", tz="UTC", tools=[],
+                                cron="0 6 * * *", next_due="2999-01-01 00:00:00+00")["id"]
+              for _ in range(2)]
+    eps = [_episode(a) for a in [agent, *autres]]
+
+    def _relance(ep, job):
+        return episodes_agents.noter_reparation(int(ep["id"]), action="relance",
+                                                acteur="medecin", job_id=job, maximum=2,
+                                                plafond_org=2)
+    assert _relance(eps[0], 1) is not None
+    assert _relance(eps[1], 2) is not None
+    assert _relance(eps[2], 3) is None, "le plafond de l'org, sur un troisième épisode"
+    assert episodes_agents.relances_de_l_org(ORG) == 2
+    # Hors de la fenêtre de 24 heures, une relance ne compte plus.
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE agent_episodes SET reparations = (SELECT jsonb_agg(jsonb_set(r, '{at}', "
+            "to_jsonb('2000-01-01T00:00:00Z'::text))) FROM jsonb_array_elements(reparations) r)"
+            " WHERE id = %s", (int(eps[0]["id"]),))
+    assert _relance(eps[2], 3) is not None
+
+
+def test_deux_relances_simultanees_ne_depassent_pas_le_plafond_de_l_org(agent):
+    import threading
+    from oto_mcp.db import episodes_agents, runner_triggers as rt
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute("DELETE FROM agent_episodes WHERE org_id = %s", (ORG,))
+    autre = rt.create_trigger(ORG, "jane", procedure="p", tz="UTC", tools=[],
+                              cron="0 6 * * *", next_due="2999-01-01 00:00:00+00")["id"]
+    eps = [_episode(agent), _episode(autre)]
+    depart, faits = threading.Barrier(2), []
+
+    def _relance(ep, job):
+        depart.wait()
+        faits.append(episodes_agents.noter_reparation(
+            int(ep["id"]), action="relance", acteur="medecin", job_id=job, maximum=2,
+            plafond_org=1))
+    fils = [threading.Thread(target=_relance, args=(e, i)) for i, e in enumerate(eps)]
+    for f in fils:
+        f.start()
+    for f in fils:
+        f.join()
+    assert sum(f is not None for f in faits) == 1
+

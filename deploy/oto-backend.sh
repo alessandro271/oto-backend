@@ -3,8 +3,8 @@
 #   — modifier là puis recopier ici (/opt/deploy/oto-backend.sh sur oto-platform).
 # Déploiement build-serveur d'oto-backend PROD (oto-mcp), exécuté par le runner
 # self-hosted via `sudo /opt/deploy/oto-backend.sh <tag>` (sudoers NOPASSWD scope).
-# Modèle de release : push sur `main` -> PRÉPROD (oto-backend-canari.sh) ; TAG
-# vX.Y.Z -> PROD (CE script). Le tag est passé en argument par le workflow
+# Modèle de release : seul un TAG vX.Y.Z déploie, en PROD (CE script) ; `main` n'est
+# que le tronc, jugé par la CI sans rien servir (plus de préproduction, 19/11/2026). Le tag est passé en argument par le workflow
 # (github.ref_name) ; pas de défaut (prod = acte explicite, aucun fallback branche).
 # Cf. ADR 0020. Endpoints : mcp.oto.cx, les hôtes des tenants tiers, *.mcp.oto.cx, *.share.oto.cx.
 #
@@ -12,8 +12,8 @@
 # TOUTE session MCP ouverte coupée à chaque release. Maintenant : la nouvelle
 # version démarre à côté sur le port de la couleur inactive, on la valide en direct,
 # on bascule l'amont Caddy (reload gracieux — les connexions établies CONTINUENT sur
-# l'ancienne couleur), on DRAINE l'ancienne (jusqu'à 10 min, le temps que les agents
-# finissent leurs sessions), puis on l'arrête. Détail : deploy/oto-mcp-bluegreen.sh.
+# l'ancienne couleur), on DRAINE l'ancienne (jusqu'à 4 min, le temps que les requêtes
+# en cours finissent), puis on l'arrête. Détail : deploy/oto-mcp-bluegreen.sh.
 # ⚠️ L'amont de l'on-demand TLS (`ask` -> /api/mcp/tls-check) bascule AVEC le reste :
 # il est dans le même fichier d'amont généré, sinon les certificats à la demande
 # casseraient dès l'arrêt de l'ancienne couleur.
@@ -39,9 +39,16 @@ BG_ACTIVE=/etc/oto-mcp/active-prod
 BG_PUBLIC="https://mcp.oto.cx/.well-known/oauth-protected-resource"
 # Plafond de la vidange. Mesuré le 28/08 sous charge réelle : la vidange ne protège
 # PAS les sessions MCP (elles tombent en <4 s, le client rouvre), seulement les
-# requêtes déjà en cours. Donc pas de raison de faire vivre deux versions longtemps —
-# et une bonne raison de ne pas le faire : deux versions écrivent dans la MÊME base.
-BG_DRAIN_MAX=120
+# requêtes déjà en cours. Elle s'arrête dès que la couleur n'a plus de connexion
+# (quelques secondes en pratique) : le plafond ne mord que sur un appel long.
+# 240 s (19/11/2026) : relevé du journal d'appels de la production sur 30 jours, le plus
+# long appel ABOUTI dure 190 s (p99,9 des appels d'outils : 33 s) ; 120 s en coupait
+# trois. Les seuls appels plus longs (2, à 300 s) échouent sur un délai du fournisseur —
+# et la vidange en vol leur donne 240 + 240 s (plafond, puis arrêt gracieux d'uvicorn).
+# ⚠️ Égal à l'arrêt gracieux d'uvicorn (`oto_mcp/bornes_processus.ARRET_GRACIEUX_S`) et
+# sous le TimeoutStopSec des unités de la couleur (5 min), avec une marge pour fermer.
+# Garde : tests/deploy/test_vidange_sans_coupure.py.
+BG_DRAIN_MAX=240
 # Ce qui était codé en dur dans la bibliothèque avant qu'elle ne serve aussi une
 # instance tierce (#967) — mêmes valeurs, désormais DÉCLARÉES ici.
 BG_LOCK=/var/lock/oto-mcp-bluegreen-prod.lock

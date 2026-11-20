@@ -244,6 +244,11 @@ CLASSEMENT: dict[str, Table] = {
     # ── messagerie hébergée ────────────────────────────────────────────────────
     "unipile_accounts": possedee(ParOrg(), comptes=("sub",)),
     "unipile_operated_accounts": possedee(ParSub()),
+    # limites d'envoi posées par le titulaire du compte : un réglage à lui, il part avec lui.
+    "unipile_sending_limits": possedee(ParSub()),
+    "unipile_sending_log": exclue(ParSub(), "compte glissant des envois des 7 derniers "
+                                  "jours : il ne sert que la fenêtre en cours, purgé "
+                                  "au-delà de 8 jours"),
     "unipile_pending": exclue(ParSub(), "connexion en cours : un état éphémère, qui ne "
                               "survit pas à une bascule"),
     # ── runner, abonnements de modèle, transcription ───────────────────────────
@@ -259,6 +264,9 @@ CLASSEMENT: dict[str, Table] = {
     # où l'org est prévenue qu'un agent ne fonctionne plus (canal ou personne Slack) :
     # un réglage de l'org, il part avec elle.
     "agent_alert_settings": possedee(ParOrg()),
+    # le choix de l'org sur la réparation automatique de ses agents : un réglage de
+    # l'org, il part avec elle.
+    "agent_health_settings": possedee(ParOrg()),
     # les pages et tableaux épinglés dans l'org : partagés (`owner_sub` NULL) ou
     # PERSONNELS d'un membre (`owner_sub` = son compte, la ligne est celle d'UN compte
     # dans l'org) ; `added_by` = l'auteur du geste, pas un compte. Ils partent avec elle.

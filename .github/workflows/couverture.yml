@@ -35,7 +35,7 @@ permissions:
 jobs:
   couverture:
     runs-on: ubuntu-latest
-    # Le job `test` de deploy-canari.yml tient en 20 min ; l'instrumentation de
+    # Le job `test` de ci.yml tenait en 20 min ; l'instrumentation de
     # coverage.py ralentit l'exécution, d'où la marge.
     timeout-minutes: 40
     steps:

@@ -504,7 +504,6 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # add_members may also remove (remove_record_ids); copy_from moves up to 100 000 records
     "hubspot_list": {"lire": "search get members record_lists", "ecrire": "create restore", "detruire": "update delete add_members remove_members clear_members copy_from"},
     "hubspot_object": {"lire": "search list get associations", "ecrire": "create update add_note", "detruire": "delete merge"},
-    "hubspot_owners": "lire",
     # update PATCHes the raw definition: options given replace the whole option list
     "hubspot_property": {"lire": "list get groups", "ecrire": "create", "detruire": "update delete"},
     "hubspot_push_rows": "envoyer",
@@ -621,7 +620,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "linear_user": {"lire": "list get viewer"},
     # registers a webhook: data then leaves to its URL (decided: a send)
     "linear_webhook": {"lire": "list", "envoyer": "create update", "detruire": "delete"},
-    "linkedin_unipile_account": {"lire": "status contracts inmail_balance", "ecrire": "select"},
+    "linkedin_unipile_account": {"lire": "status contracts inmail_balance limits", "ecrire": "select"},
     # update can archive a thread; update_member can reject an applicant
     "linkedin_unipile_act": {"envoyer": "send react_message publish_post comment_post react_post invite accept_invitation endorse", "detruire": "update update_member decline_invitation cancel_invitation"},
     "linkedin_unipile_facets": "lire",

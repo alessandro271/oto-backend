@@ -3,7 +3,7 @@
 Le backend d'oto, **produit central et déployable** (SaaS ou on-premise : `Dockerfile`, config 100 % par env) : un
 serveur MCP (Streamable HTTP, toujours authentifié Logto) qui expose les connecteurs **oto-core** (`oto.tools`, importés
 directement — aucune dépendance à la CLI) et une face REST `/api/*` sur le même service. **Prod** = `mcp.oto.cx`,
-**preprod** = `mcp.oto.ninja` (ADR 0040, dépôt `infra`) ; le tableau de bord servi aux utilisateurs vient de `config.dashboard_url()`.
+seule instance servie : `main` n'est que le tronc (CI seule), un tag `vX.Y.Z` est le seul déploiement (dépôt `infra`) ; le tableau de bord servi aux utilisateurs vient de `config.dashboard_url()`.
 
 > **Ce fichier est une CARTE, pas un journal** : où vit quoi, les règles en vigueur, les pointeurs — ni date ni récit
 > d'incident ; l'histoire qui a produit chaque règle vit dans `docs/` (index en bas). **Un lot qui change un concept
@@ -55,7 +55,7 @@ argument MCP** ; la table de routes est **figée** (`docs/architecture.md`, `doc
 JWT Logto **ES384**, discovery RFC 9728 qui annonce l'émetteur Logto, client MCP inscrit chez Logto par **CIMD** (Logto ≥ 1.44 exigé), DCR RFC 7591 pour les clients sans CIMD sous le domaine de l'émetteur (`auth/inscription_dynamique.py`) ; au-dessus des orgs, l'étage **tenant** (ADR 0052 : un partenaire
 sert oto sous sa marque) · ⚠️ **on n'étend plus le tenant** : ni capacité, route, table,
 colonne, rang de cascade, marque ou réglage par tenant neufs — un besoin « par tenant » se traite par instance ou
-par org, retirer reste permis ; gelé par `tests/test_tenant_ne_s_etend_plus.py` (`docs/tenants.md` §Convention). ⚠️ Logto prod/preprod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **on n'annonce que ce qui SIGNE** :
+par org, retirer reste permis ; gelé par `tests/test_tenant_ne_s_etend_plus.py` (`docs/tenants.md` §Convention). ⚠️ Logto de prod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **on n'annonce que ce qui SIGNE** :
 le PRM porte l'`issuer` (`LOGTO_ENDPOINT` + `/oidc`), jamais un autre domaine du même Logto — l'`iss` de RFC 9207
 et la métadonnée RFC 8414 divergeraient sinon ; « openid » sans `resource` = jeton opaque, 401 (`docs/auth-logto.md`) · ⚠️ **un env-liste s'ÉTEND, ne se
 remplace jamais** (`MCP_AUDIENCE_ALT`, `OTO_MCP_CORS_ORIGINS`, `MAILER_FROM_DOMAINS`, SPF, redirect URIs), chaque env
@@ -211,8 +211,9 @@ propre niveau** — une borne posée au plus profond ne borne rien si les envelo
 <raison>` (`docs/silences-2026-08-27.md`).
 **Box Scaleway dédiée** (ADR 0002, dépôt `infra`) : oto-backend isolé + Caddy ; DB = PG managé partagé (`otomata-main-enc`, DB `oto_mcp`) ;
 coffre `connector_credentials` chiffré au repos (AES-256-GCM, master key en Secret Manager au boot) ; S3 pour
-avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on écrit depuis la preprod est la donnée de prod
-(`docs/live-migrations.md`), et seule la prod fait tourner les boucles de fond qui agissent sur un tiers (`boucles_de_fond.py`) · **détails machine et procédure de déploiement = repo privé `otomata-tech/infra`**, pas ici
+avatars/logos · ⚠️ **aucun serveur ne suit le tronc** : un geste `avant` se joue depuis un arbre du SHA du tag, juste avant la
+bascule (`docs/deploiement.md`) ; seule une instance déclarée `OTO_ENV=prod` fait tourner les boucles de fond qui agissent
+sur un tiers (`boucles_de_fond.py`, `config.est_la_production()`) · **détails machine et procédure de déploiement = repo privé `otomata-tech/infra`**, pas ici
 (ce repo est public) ; intervention prod = skill `prod-init`.
 
 ## Docs
@@ -244,7 +245,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   applique la liste poussée aux seules clés refacturées (`daily_spend_limit`), fail-open, et rend au commerce la
   personne de chaque appel
 - `contributions-forks.md` — recevoir une PR de fork : trois pièges, pin oto-core sur le tronc
-- `deploiement.md` — le modèle tronc unique : main = préprod, tag = prod, garde « préprod verte », domaines servis, pièges du tag
+- `deploiement.md` — le modèle tronc unique : main = tronc (CI seule), tag = prod, garde « tronc vert », domaines servis, pièges du tag, gestes d'exploitation
 - `namespace-fr.md` — sources `fr_`, deux stocks SIRENE, `dirigeants` vide à trois lectures, `data.oto.zone`
 - `rest-api.md` — endpoints, OpenAPI, jetons, CORS
 - `version-servie.md` — dater un changement : les 3 surfaces, les 3 coordonnées qui mentent

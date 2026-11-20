@@ -2,9 +2,9 @@
 title: Déploiement de la plateforme
 type: reference
 description: >-
-  `main` = tronc = preprod, tag vX.Y.Z = prod : pourquoi le modèle tronc unique, les domaines
-  RÉELLEMENT servis (prod `.cx`, preprod `.ninja`), ce que fait — ou ne fait pas — le workflow
-  de release, la garde « préprod verte », la fenêtre finie du healthcheck et les gestes
+  `main` = tronc (CI seulement), tag vX.Y.Z = prod, seul déploiement : pourquoi le modèle tronc
+  unique, les domaines RÉELLEMENT servis, ce que fait — ou ne fait pas — le workflow de
+  release, la garde « tronc vert », la fenêtre finie du healthcheck et les gestes
   d'exploitation déclarés en trailer (`Geste-exploitation:`), recopiés dans les notes du tag.
   Vaut pour le backend et le dashboard ; les commandes sont dans `commands.md`.
 ---
@@ -22,19 +22,21 @@ Plus de dualité `canari`/`main` (backend et dashboard). Motif : les PR des sess
 Code (web) ciblaient la branche de prod par défaut et se faisaient refuser par une garde —
 « ça ne déploie plus ». Bascule vers le trunk-based :
 
-- **`main` = tronc = PREPROD.** On travaille directement dans le checkout du dépôt :
-  `git pull --rebase` avant de bosser, commit, puis `git pull --rebase && git push` →
-  **déploiement preprod automatique** (`mcp.oto.ninja` / `manage.oto.ninja`, porte
-  `needs: test`). Depuis le 08/10/2026 (#1185), ce `test` ne joue que les **volets touchés**
+- **`main` n'est que le TRONC : il ne déploie rien** (décision du 19/11/2026 ; l'instance
+  principale n'a plus de préproduction). Une poussée sur `main` — ou une PR vers `main` —
+  lance la CI (`.github/workflows/ci.yml`, « CI ») et rien d'autre : aucun serveur ne suit
+  le tronc. Le job `test` de la CI est le check requis par la protection de `main`. Depuis
+  le 08/10/2026 (#1185), ce `test` ne joue que les **volets touchés**
   par le diff (base = `before` du push) **plus le socle** de gardes transverses (sortie
   déclarée des capacités, façade d'erreur MCP, contrat servi, concordance carte/client,
   portée, inventaire d'env, silences, SQL hors boucle, surfaces figées) : table
   `tests/volets.toml`, script `scripts/selection_tests.py`, le résumé du run dit ce qui a été
-  retenu et pourquoi. Base inconnue, fichier transverse ou hors volet : suite complète. On ne commite sur `main` que du shippable en preprod. Les PR ouvertes par
-  Claude Code (web) ciblent `main` : elles déploient la preprod **au merge**.
-- **tag `vX.Y.Z` = PROD.** La mise en prod est un **acte explicite** : poser le tag sur un
-  commit de `main` et le pousser déclenche « Deploy prod » (garde → déploiement → healthcheck
-  → rollback). Rollback = redéployer le tag précédent. Les tags `v*` sont **immuables**
+  retenu et pourquoi. Base inconnue, fichier transverse ou hors volet : suite complète. On ne
+  commite sur `main` que du livrable : le prochain tag le prendra. Une PR fusionnée dans
+  `main` ne sert rien tant qu'aucun tag ne la porte.
+- **tag `vX.Y.Z` = PROD, et c'est le SEUL déploiement.** La mise en prod est un **acte
+  explicite** : poser le tag sur un commit de `main` et le pousser déclenche « Deploy prod »
+  (garde du tronc → suite complète → déploiement → healthcheck → rollback). Rollback = redéployer le tag précédent. Les tags `v*` sont **immuables**
   (ruleset GitHub : un tag de release ne se re-pointe pas). Côté backend, le tag est passé
   au script serveur (`oto-backend.sh <tag>` : `git reset --hard <tag>`). Côté dashboard :
   artefact seul, build au tag.
@@ -53,26 +55,31 @@ Code (web) ciblaient la branche de prod par défaut et se faisaient refuser par 
   tombe quand même dans une part), dérive son `-n` de la mémoire de SA machine et joue
   `--dist loadgroup` ; `reference` collecte ce que jouait l'ancien job ; le **verdict**
   rougit si l'union des collectes des parts n'est pas exactement la référence (trou ou
-  doublon). Au push, `test` de « Deploy preprod » est le même agrégateur, sur la sélection.
+  doublon). Au push, `test` de « CI » est le même agrégateur, sur la sélection.
   Régénérer les durées après un run complet et vert :
   `gh run download <run_id> -n suite-durees` puis copier `durees_suite.json` dans
   `scripts/` et commiter. ⚠️ Les artefacts ont des noms fixes (`junit-suite`, `suite-durees`,
   `suite-part-<i>`…) : un même run ne doit appeler `suite-tests.yml` qu'une fois, sinon ils
   entrent en collision. Détail : `docs/commands.md` §Suite parallèle en CI.
-- **La prod exige aussi une préprod verte** : un run de préprod vert sur le sha exact du tag
-  (`scripts/garde_preprod_verte.py`), refusé sinon, en nommant le run lu et sa conclusion.
-  Ce vert dit « déployé en préprod, sélection et socle verts », **pas** « suite complète ». Donc : taguer un commit **déjà poussé sur
-  `main`** et dont le run « Deploy preprod » est vert. Porte de secours (run purgé, incident
-  GitHub) : « Deploy prod » en `workflow_dispatch` avec `sans_garde_preprod: true` —
-  délibéré, tracé, hors d'atteinte d'une simple poussée de tag. Il ne contourne que la
-  garde : la suite complète du tag tourne toujours.
+- **La prod exige aussi un tronc vert** (`scripts/garde_tronc_vert.py`) : le sha du tag est
+  sur `main` (pointe ou ancêtre de la pointe), ET le run « CI » poussé sur `main` à ce sha
+  exact a conclu `success`, son job `test` compris. Refusé sinon, en nommant le run lu et sa
+  conclusion. Ce vert dit « sélection, socle et contrats des consommateurs verts », **pas**
+  « suite complète ». Donc : taguer la **pointe d'une poussée sur `main`** dont le run « CI »
+  est vert (un commit arrivé au milieu d'une poussée de plusieurs commits n'a pas de run à
+  lui). Porte de secours (run purgé, incident GitHub) : « Deploy prod » en
+  `workflow_dispatch` avec `sans_garde_tronc: true` — délibéré, tracé, hors d'atteinte d'une
+  simple poussée de tag. Il ne contourne que la garde : la suite complète du tag tourne
+  toujours.
 - ⚠️ **La fenêtre du healthcheck serveur est finie** (120 s à ce jour, ~60 s constatés à
   l'origine) : un lot qui ajoute un travail one-shot au boot (re-projection, migration au
   démarrage) la vérifie — et l'élargit — **avant** le tag, sinon rollback automatique sur un
   déploiement sain. Ce qui n'a rien à faire au boot va en maintenance (`oto-mcp maintenance …`).
-- **Prod et preprod partagent la MÊME base.** Ce qu'on écrit depuis la preprod est la donnée
-  de prod ; seule la prod fait tourner les boucles de fond qui agissent sur un tiers
-  (`live-migrations.md`).
+- **Aucun serveur ne sert le tronc avant la prod.** Ce qui se vérifiait en préproduction se
+  vérifie désormais dans la CI (sélection, contrats) et au tag (suite complète). Une
+  instance dont la déclaration a une préprod (`instance-cible.md`) garde la sienne ; elle y
+  monte un tag, jamais le tronc. `OTO_ENV` et `config.est_la_production()` restent la garde
+  des boucles de fond qui agissent sur un tiers (`live-migrations.md`).
 - ⚠️ **Une révision ne suppose pas que le code neuf a démarré.** Chez nous, on démarre puis
   on migre (`migrer upgrade head` après le tag) ; une instance cible migre AVANT de démarrer
   (`instance-cible.md` § Les migrations, jouées par la montée). Ce qu'une révision attend
@@ -86,8 +93,7 @@ Code (web) ciblaient la branche de prod par défaut et se faisaient refuser par 
   de GitHub Releases par tag (rejeté : « garder la main sur les notes »). Un agent peut
   proposer un brouillon (matière : les trailers `Changelog:` des commits), le mainteneur valide.
 - **`main` est protégée légèrement** : la contrainte vise les tiers (proposition + check
-  `test`), pas l'équipe — le mainteneur garde le push direct sur `main`, qui est
-  l'itération preprod rapide (cf. `LICENSING.md` du dépôt public `oto` pour la forme de la
+  `test`), pas l'équipe — le mainteneur garde le push direct sur `main` (cf. `LICENSING.md` du dépôt public `oto` pour la forme de la
   protection).
 - **Dépôts mono-branche** (sites, CLI, plugin…) : inchangés, un push = leur unique flux.
 
@@ -148,7 +154,11 @@ de la base chiffrée, pas les adresses réellement servies) :
 | | backend | dashboard |
 |---|---|---|
 | **PROD** (tag `v*`) | `mcp.oto.cx` | `manage.oto.cx` |
-| **PREPROD** (push `main`) | `mcp.oto.ninja` | `manage.oto.ninja` |
+
+Le backend n'a plus d'instance de préproduction depuis le 19/11/2026 : `mcp.oto.ninja` et
+son alias `mcp-canari.oto.ninja` ne servent plus l'instance principale (retrait côté
+serveur : gestes d'exploitation de la PR qui l'a décidé). La préproduction du dashboard
+relève de son propre dépôt.
 
 **Le piège est actif, pas théorique** : les anciens noms répondent encore.
 
@@ -158,8 +168,6 @@ de la base chiffrée, pas les adresses réellement servies) :
   sur un build fossile ne protège de rien.
 - `dashboard-canari.oto.ninja` répond **302** vers `manage.oto.ninja` : bon endroit, si l'outil
   de mesure suit les redirections.
-- `mcp-canari.oto.ninja` sert la **même** instance de preprod que `mcp.oto.ninja` : alias
-  vivant, mais le nom canonique est `mcp.oto.ninja`.
 
 Source de vérité côté dashboard : son propre `docs/deploiement.md`.
 
@@ -171,7 +179,7 @@ Lu dans les workflows (`release.yml` et `deploy*.yml` du backend, `tag-release.y
 - **Le workflow de release tague le SOMMET DU TRONC à l'instant du déclenchement, et
   n'accepte aucun commit nommé.** Le dashboard fait un checkout `ref: main` puis `git tag`
   sur ce HEAD ; le backend tague le HEAD du ref sur lequel il est dispatché (et refuse de
-  publier si « Deploy preprod » est rouge sur ce commit). Leur seul input de version est un
+  publier si « CI » est rouge sur ce commit). Leur seul input de version est un
   `vX.Y.Z`, **jamais un SHA**. Un tag qui doit viser un commit précis, différent du sommet,
   se pose donc **localement** (`git tag vX.Y.Z <commit> && git push origin vX.Y.Z`) ;
   passer par le workflow taguerait autre chose, silencieusement.
@@ -196,8 +204,12 @@ Geste-exploitation: <commande> ; <avant|après> ; <effaçant|non>
 
 - `<commande>` : la commande exacte, telle qu'on la tape (elle peut contenir un `;` : on
   coupe aux deux derniers).
-- `avant|après` : par rapport à la bascule de prod du tag. `avant` = à jouer avant de
-  poser le tag (ou, pour une instance, avant sa montée) ; `après` = une fois le tag servi.
+- `avant|après` : par rapport à la bascule de prod du tag. Le tronc ne déploie plus rien :
+  aucun serveur n'a encore servi le code du tag quand un geste `avant` se joue. Un geste
+  `avant` se joue donc **depuis un arbre du SHA du tag** (export `git archive <SHA>`, jamais
+  le checkout de la box ni la couleur en service, qui portent l'ancienne version), **juste
+  avant la bascule** — pour une instance, juste avant sa montée. `après` = une fois le tag
+  servi, depuis la couleur active.
 - `effaçant|non` : `effaçant` si le geste est irréversible (données retirées ou réécrites
   sans retour), `non` sinon.
 

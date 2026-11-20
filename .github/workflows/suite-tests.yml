@@ -2,7 +2,7 @@ name: Suite de tests
 
 # LA SUITE, RÉPARTIE SUR PLUSIEURS RUNNERS (#1111).
 #
-# Jusqu'au 08/10/2026, le job `test` de deploy-canari.yml jouait toute la suite sur UN runner
+# Jusqu'au 08/10/2026, le job `test` du workflow du tronc jouait toute la suite sur UN runner
 # (`pytest -n 4`) : ~9 min le 01/10, ~14 min le 08/10 (21 500 cas), payées par chaque
 # correctif d'une ligne. Ce workflow joue la MÊME couverture répartie en N parts, une par
 # runner, chacune avec un `-n` dérivé de SA machine :
@@ -18,8 +18,8 @@ name: Suite de tests
 #   perdu entre deux parts ne rend pas la CI verte et aveugle : il la rend ROUGE.
 #
 # Appelé par `uses:` — l'appelant voit ses jobs sous « <job appelant> / <job d'ici> ». La
-# garde de mise en production (`scripts/garde_preprod_verte.py`) lit un job nommé
-# EXACTEMENT `test` : c'est l'appelant qui le porte (cf. deploy-canari.yml), pas ce fichier.
+# garde de mise en production (`scripts/garde_tronc_vert.py`) lit un job nommé
+# EXACTEMENT `test` : c'est l'appelant qui le porte (cf. ci.yml), pas ce fichier.
 #
 # Entrée `ref` : ce qu'on teste, vide = le commit de l'événement. Au tag (deploy.yml), le
 # tag, validé par l'appelant AVANT de servir de `ref:` de checkout.

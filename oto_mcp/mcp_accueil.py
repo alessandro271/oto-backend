@@ -17,8 +17,8 @@ Ce qui est garanti, parce que c'est la négociation OAuth d'un client conforme :
 - un 401 ailleurs que sur `/mcp` (la face REST `/api/*` a ses propres 401) et tout autre
   statut passent tels quels.
 
-**Seulement sur l'hôte principal d'oto** (`mcp.oto.cx`, et `mcp.oto.ninja` en
-préproduction). Le texte est de NOTRE marque : il renvoie vers `oto.cx/llms.txt`, notre
+**Seulement sur l'hôte principal d'oto** (`mcp.oto.cx` ; l'hôte de l'ancienne
+préproduction en est sorti avec elle, le 19/11/2026). Le texte est de NOTRE marque : il renvoie vers `oto.cx/llms.txt`, notre
 plugin et notre CLI. Une instance servie ailleurs (ADR 0070), l'hôte d'un tenant
 (ADR 0052), l'endpoint d'org `<slug>--mcp.<D>` ou un projet publié en portée org
 gardent le 401 d'avant, corps compris — le choix le plus prudent : se taire plutôt que
@@ -31,7 +31,7 @@ import json
 
 #: Les hôtes où le texte est servi : les NÔTRES, jamais déduits de `OTO_MCP_PUBLIC_URL`
 #: (une instance tierce la déclare aussi, et ce texte n'est pas le sien).
-HOTES_OTO = frozenset({"mcp.oto.cx", "mcp.oto.ninja"})
+HOTES_OTO = frozenset({"mcp.oto.cx"})
 
 LLMS_TXT = "https://oto.cx/llms.txt"
 

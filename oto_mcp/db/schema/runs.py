@@ -375,7 +375,10 @@ CREATE TABLE IF NOT EXISTS runner_triggers (
     updated_at TIMESTAMPTZ,
     -- 23/10/2026 : l'annonce du dernier épisode de BLOCAGE (travaux morts consécutifs)
     -- à l'admin de l'org (`db/alertes_agents.py`). NULL = aucun annoncé.
-    echec_annonce_at TIMESTAMPTZ
+    echec_annonce_at TIMESTAMPTZ,
+    -- 19/11/2026 : l'annonce du dernier épisode d'ATTENTE d'un abonnement personnel à
+    -- reconnecter (`db/alertes_agents.py`), distincte de l'épisode d'échecs. NULL = aucune.
+    forfait_annonce_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_runner_triggers_due
     ON runner_triggers(next_due) WHERE enabled;
@@ -856,5 +859,18 @@ CREATE TABLE IF NOT EXISTS agent_causes (
     copie JSONB,
     gestes JSONB NOT NULL DEFAULT '[]'::jsonb,
     vue_premiere_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+AGENT_HEALTH_SETTINGS = """
+-- La réparation automatique des agents d'une org (`db/sante_agents.py`) : une ligne par
+-- org qui a CHOISI. Aucune ligne = COUPÉE : un admin de l'org l'allume
+-- (`PUT /api/orgs/{id}/agent-health`). Coupée, ni la boucle du médecin ni personne qui
+-- répare au nom de la plateforme ne relance ni ne répare les agents de l'org ; les
+-- épisodes et les messages continuent.
+CREATE TABLE IF NOT EXISTS agent_health_settings (
+    org_id BIGINT PRIMARY KEY,
+    auto_repair BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """

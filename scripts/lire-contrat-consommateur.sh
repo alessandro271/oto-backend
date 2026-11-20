@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ramène le contrat ÉPINGLÉ par UN consommateur déclaré de notre API (#966) — un seul
-# fichier, depuis son dépôt. Appelé par les deux jobs de contrat de
-# `.github/workflows/deploy-canari.yml`, une fois par entrée de
+# fichier, depuis son dépôt. Appelé par le job de contrat de `.github/workflows/ci.yml`
+# (contrat public, puis contrat admin s'il est déclaré), une fois par entrée de
 # `.github/contrat-consommateurs.json`.
 #
 # Usage : lire-contrat-consommateur.sh <nom> <dépôt owner/repo> <chemin> <secret|"">

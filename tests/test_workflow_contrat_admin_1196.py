@@ -9,8 +9,8 @@ tient :
 2. la garde : dans `contrat-front-code`, les quatre étapes admin ne tournent que si
    `chemin_admin` est déclaré — et tournent MÊME si le contrat public a rougi (`!cancelled()`), lisent CE chemin, dérivent le document admin
    (`build(admin=True)`) et le confrontent avec l'outil commun ;
-3. le périmètre : le constat d'après préproduction (`contrat-front`) ne juge PAS de contrat
-   admin — décision du 09/10/2026, pas de clé admin en CI.
+3. le périmètre : aucun job ne juge un contrat admin contre une instance servie —
+   décision du 09/10/2026, pas de clé admin en CI.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ import pytest
 import yaml
 
 _RACINE = pathlib.Path(__file__).resolve().parents[1]
-_WF = _RACINE / ".github" / "workflows" / "deploy-canari.yml"
+_WF = _RACINE / ".github" / "workflows" / "ci.yml"
 
 
 def _jobs() -> dict:
@@ -136,6 +136,11 @@ def test_le_contrat_public_est_toujours_lu_sur_chemin_pas_chemin_admin():
     assert "if" not in lire
 
 
-def test_le_constat_d_apres_preproduction_ne_juge_pas_de_contrat_admin():
-    texte = yaml.safe_dump(_jobs()["contrat-front"])
-    assert "chemin_admin" not in texte and "admin=True" not in texte
+def test_aucun_job_ne_juge_le_contrat_admin_hors_de_la_garde():
+    for nom, job in _jobs().items():
+        # `consommateurs` VALIDE la forme de la liste (champ `chemin_admin` compris) ;
+        # seule la garde `contrat-front-code` le JUGE.
+        if nom in ("contrat-front-code", "consommateurs"):
+            continue
+        texte = yaml.safe_dump(job)
+        assert "chemin_admin" not in texte and "admin=True" not in texte, nom
