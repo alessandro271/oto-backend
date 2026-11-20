@@ -326,6 +326,8 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
             return stream_response(request, result.events, media_type=binding.media,
                                    headers={"Cache-Control": "no-cache",
                                             "X-Accel-Buffering": "no"})
+        if isinstance(result, dict) and result and all(v is None for v in result.values()):
+            request.scope[CLE_VIDE] = True
         return json_response(request, result, status=binding.status)
     return _handler
 
