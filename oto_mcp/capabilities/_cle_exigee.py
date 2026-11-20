@@ -203,12 +203,9 @@ def raison_sans_acces(fournisseur: str) -> str:
     # plus fréquent est la facturation qui retire l'accord quand les crédits de
     # l'org sont épuisés : l'ancien texte disait « jamais
     # accordée, ou retirée » et faisait chercher une clé au lieu d'une recharge.
-    return (f"crédits épuisés ou accès retiré : la clé partagée `{fournisseur}` n'est "
-            "plus ouverte à cette organisation (crédits du mois consommés, ou accès "
-            "jamais accordé ou retiré), et elle n'a pas déposé sa propre clé. Trois "
-            "issues : recharger des crédits ou prendre un plan (Facturation), déposer "
-            "sa propre clé (Connecteurs), ou demander l'accès à qui administre la clé "
-            "partagée de cette instance. L'agent repartira à sa prochaine échéance.")
+    return (f"crédits épuisés : la clé partagée `{fournisseur}` n'est plus ouverte à "
+            "cette organisation. Rechargez des crédits (Facturation) ou déposez votre "
+            "propre clé (Connecteurs) ; l'agent repartira à sa prochaine échéance.")
 
 
 RAISON_FERME = (
