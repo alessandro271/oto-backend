@@ -103,6 +103,11 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   2026-08-27 ; le `POST`, multipart, reste écrit à la main et **classé `NATURE`** —
   l'adaptateur lit du JSON, un corps binaire est hors du moule par construction. C'est la
   FORME qui tranche, pas le domaine. Effacer purge aussi l'objet stocké (pas d'orphelin).
+- `POST /api/me/avatar/import` `{url}` — capacité `me.avatar.import` (20/11/2026) : la photo
+  `picture` du jeton d'IDENTITÉ (le jeton d'accès ne la porte pas), récupérée côté serveur
+  et ré-hébergée comme avatar — **seulement sur un compte sans avatar** (un upload gagne,
+  `imported: false`). Hôtes fermés : https et `*.googleusercontent.com`, aucune redirection
+  hors de Google, garde d'egress « URL choisie » ; lecture bornée à la borne d'image.
 - `GET|DELETE /api/me/projects/{project_id}/files` + `POST …/files/{file_id}/public` —
   **les fichiers bruts d'un projet**, capacités `me.project_file.{list,delete,set_public}`
   depuis le 2026-08-27 (`capabilities/media_and_files.py`). Le **dépôt** (`POST …/files`,
