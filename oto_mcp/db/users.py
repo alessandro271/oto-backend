@@ -1168,17 +1168,30 @@ def resume_account(sub: str) -> bool:
     return bool(row)
 
 
-def set_avatar_url(sub: str, url: Optional[str]) -> None:
+def set_avatar_url(sub: str, url: Optional[str], *, seulement_si_absent: bool = False) -> bool:
     """Pose (ou efface si url=None) l'URL publique de l'avatar du user.
 
     URL publique servie depuis l'Object Storage — pas un secret, colonne en
-    clair (hors coffre chiffré)."""
+    clair (hors coffre chiffré).
+
+    `seulement_si_absent` : ne pose que sur une ligne SANS avatar, dans le même
+    UPDATE (`avatar_url IS NULL`) — l'import d'une photo de profil
+    (`POST /api/me/avatar/import`) ne doit jamais écraser un upload, y compris un
+    upload arrivé entre sa lecture et son écriture. Rend True si la ligne a changé."""
     upsert_user(sub)
     with _connect() as conn:
-        conn.execute(
-            "UPDATE users SET avatar_url = %s, updated_at = NOW() WHERE sub = %s",
-            (url, sub),
-        )
+        if seulement_si_absent:
+            cur = conn.execute(
+                "UPDATE users SET avatar_url = %s, updated_at = NOW() "
+                "WHERE sub = %s AND avatar_url IS NULL",
+                (url, sub),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE users SET avatar_url = %s, updated_at = NOW() WHERE sub = %s",
+                (url, sub),
+            )
+        return bool(cur.rowcount)
 
 
 def set_user_locale(sub: str, locale: str) -> None:
