@@ -1,9 +1,8 @@
 """La FORME sous laquelle un appel a désigné un tableau (`args.ref_kind`), au journal.
 
-Le journal cite le tableau résolu : `957`, `slot:vivier` et `vivier` y laissaient la même
-trace, et l'usage d'un nom de tableau ne se comptait pas avant son retrait
-(`deprecations.RETRAIT_NOM_DE_TABLEAU`). La forme (`number`|`slot`|`name`, jamais le nom)
-est notée au point de résolution et rejoint la ligne MCP (relevé d'appel) comme la ligne
+Le journal cite le tableau résolu : `957` et `slot:vivier` y laissaient la même trace. Un
+nom est refusé (`datastore_by_name`) ; la forme (`number`|`slot`|`name`, jamais le nom)
+est notée au point où l'adresse est jugée — `name` pour un refus — et rejoint la ligne MCP (relevé d'appel) comme la ligne
 de route REST (`RestCallLogger`). Ce banc fige les deux faces, sans base ; la mesure et son
 index sont joués sur une vraie base (`test_migration_20261120_tableau_par_nom.py`).
 """
@@ -13,7 +12,7 @@ import asyncio
 
 import pytest
 
-from oto_mcp import deprecations, session_org
+from oto_mcp import session_org
 
 # ── La règle : la forme la plus dépréciée l'emporte, no-op sans holder ────────
 
@@ -41,25 +40,23 @@ def test_une_forme_inconnue_est_refusee():
         session_org.noter_forme_tableau("nom")
 
 
-@pytest.mark.parametrize("adresse,forme,avis", [("vivier", "name", True),
-                                                ("204", "number", False),
-                                                (" 204 ", "number", False),
-                                                # Des chiffres qui NOMMENT un tableau.
-                                                ("2024", "name", True)])
-def test_une_adresse_resolue_note_sa_forme_et_l_avis_du_nom(adresse, forme, avis):
+def test_le_refus_d_un_nom_note_name_sur_les_deux_faces_sans_avis():
+    from oto_mcp.capabilities.datastore.common import refus_nom_de_tableau
+
     trace: dict = {}
     avis_servis: list = []
     rest: dict = {}
     jetons = (session_org.set_call_trace(trace), session_org.set_call_avis(avis_servis),
               session_org.set_ref_rest(rest))
     try:
-        session_org.noter_adresse_de_tableau(adresse, 204, "vivier")
+        refus = refus_nom_de_tableau("vivier")
     finally:
         session_org.reset_call_trace(jetons[0])
         session_org.reset_call_avis(jetons[1])
         session_org.reset_ref_rest(jetons[2])
-    assert trace == {"ref_kind": forme} == rest
-    assert avis_servis == ([deprecations.avis_nom_de_tableau("vivier", 204)] if avis else [])
+    assert refus.code == "datastore_by_name"
+    assert trace == {"ref_kind": "name"} == rest
+    assert avis_servis == []
 
 
 def test_un_slot_resolu_note_slot_meme_si_le_store_voit_un_numero(monkeypatch):
@@ -71,7 +68,7 @@ def test_un_slot_resolu_note_slot_meme_si_le_store_voit_un_numero(monkeypatch):
     try:
         assert scope.resolve_datastore_ref("slot:vivier") == "204"
         # Le store résout ensuite l'identifiant que le slot a rendu.
-        session_org.noter_adresse_de_tableau("204", 204)
+        session_org.noter_forme_tableau(session_org.REF_NUMBER)
         assert scope.resolve_datastore_ref("vivier") == "vivier"
     finally:
         session_org.reset_call_trace(jeton)
@@ -94,17 +91,30 @@ def store(monkeypatch):
     return D.make_store("u-1")
 
 
-@pytest.mark.parametrize("adresse,forme", [("vivier", "name"), ("204", "number")])
-def test_le_store_note_la_forme_de_l_adresse(store, adresse, forme):
+def test_le_store_note_la_forme_du_numero(store):
     trace: dict = {}
     jeton = session_org.set_call_trace(trace)
     try:
-        assert store._resolve(adresse) == 204
+        assert store._resolve("204") == 204
     finally:
         session_org.reset_call_trace(jeton)
-    assert trace["ref_kind"] == forme
+    assert trace["ref_kind"] == "number"
     # Le nom résolu va dans `ns_name` (hors journal), jamais dans `ref_kind`.
     assert trace["ns_id"] == 204
+
+
+def test_le_store_refuse_un_nom_et_note_name(store):
+    from oto_mcp.datastore.errors import TableauParNom
+
+    trace: dict = {}
+    jeton = session_org.set_call_trace(trace)
+    try:
+        with pytest.raises(TableauParNom):
+            store._resolve("vivier")
+    finally:
+        session_org.reset_call_trace(jeton)
+    # Refusé avant toute lecture : la forme, aucun tableau.
+    assert trace == {"ref_kind": "name"}
 
 
 def test_la_forme_rejoint_les_args_de_la_ligne_mcp():
@@ -119,7 +129,7 @@ def test_la_forme_rejoint_les_args_de_la_ligne_mcp():
 
 # ── REST : la ligne de route porte la forme, jamais le nom ────────────────────
 
-def _route_journalisee(monkeypatch, adresse: str) -> dict:
+def _route_journalisee(monkeypatch, adresse: str, statut: int = 200) -> dict:
     """Une route `/api/datastores/{datastore}/t` dont le handler résout le tableau
     (en threadpool, comme toute capacité), derrière le journal des routes : rend la
     ligne de route écrite."""
@@ -138,8 +148,12 @@ def _route_journalisee(monkeypatch, adresse: str) -> dict:
         ok: bool
 
     def handler(ctx, inp):
-        # Ce que fait le store une fois l'adresse résolue (cf. `DatastorePg._resolve`).
-        session_org.noter_adresse_de_tableau(inp.datastore, 204, "vivier")
+        # Ce que font les capacités : un nom est refusé, un numéro résolu.
+        from oto_mcp.capabilities.datastore.common import refus_nom_de_tableau
+        from oto_mcp.datastore.errors import est_un_nom_de_tableau
+        if est_un_nom_de_tableau(inp.datastore):
+            raise refus_nom_de_tableau(inp.datastore)
+        session_org.noter_forme_tableau(session_org.REF_NUMBER)
         return {"ok": True}
 
     cap = Capability(
@@ -178,14 +192,15 @@ def _route_journalisee(monkeypatch, adresse: str) -> dict:
         await asyncio.gather(*list(ar._REST_LOG_TASKS), return_exceptions=True)
 
     asyncio.run(drive())
-    assert envoye[0]["status"] == 200, envoye
+    assert envoye[0]["status"] == statut, envoye
     assert len(lignes) == 1
     return lignes[0]
 
 
-@pytest.mark.parametrize("adresse,forme", [("vivier", "name"), ("204", "number")])
-def test_la_ligne_de_route_rest_porte_la_forme(monkeypatch, adresse, forme):
-    ligne = _route_journalisee(monkeypatch, adresse)
+@pytest.mark.parametrize("adresse,forme,statut", [("vivier", "name", 400),
+                                                  ("204", "number", 200)])
+def test_la_ligne_de_route_rest_porte_la_forme(monkeypatch, adresse, forme, statut):
+    ligne = _route_journalisee(monkeypatch, adresse, statut)
     assert ligne["kind"] == "rest"
     assert ligne["args"] == {"ref_kind": forme}
     # Rien du nom dans les `args` : seulement sa forme.
