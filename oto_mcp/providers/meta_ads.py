@@ -11,11 +11,13 @@ from ._model import _c
 # Same family as `instagram_meta` (the instance's Meta application, credentials
 # set at the platform tier, flow hosted by oto), but NOT the same product:
 # Facebook Login for Business on graph.facebook.com, a `config_id` instead of a
-# list of permissions, and a system-user token (BISU) that does not expire
+# list of permissions. Target: a system-user token (BISU) that does not expire
 # — hence no renewal pass.
 #
 # ⚠️ Without App Review ("Advanced" access), the application stays on
-# "Standard" access: it works, but is heavily rate-limited. The card says so.
+# "Standard" access: only people with a role on the app can consent, a BISU
+# token gets no permission (so the platform config is a USER token, ~60 days),
+# and calls are heavily rate-limited. The card says so.
 CONNECTOR = _c(
     "meta_ads", ["meta_ads"],
     auth_modes={"byo_user"},
@@ -24,7 +26,7 @@ CONNECTOR = _c(
     label="Meta Ads",
     help="Your Facebook & Instagram ad accounts: campaigns, ad sets, ads and their "
          "performance (spend, reach, clicks, conversions). You authorize oto on "
-         "Facebook and pick the ad accounts. Read-only.",
+         "Facebook. Read-only. Beta: invited testers only until Meta's review.",
     href="https://www.facebook.com/business/ads",
 )
 
