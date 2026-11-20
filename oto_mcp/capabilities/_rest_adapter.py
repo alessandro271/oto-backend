@@ -53,6 +53,14 @@ CLE_RUN = "oto_run"
 # journal REST (`call_uid`), qui le relit dans son `finally`.
 CLE_GESTE = "oto_geste"
 
+# Ce que le journal REST doit savoir d'une requête pour décider de ne PAS l'écrire,
+# même motif : l'`op` de l'entrée (une route peut porter plusieurs gestes) et le fait
+# que la réponse ne rend RIEN (un objet dont toutes les valeurs sont nulles, comme
+# `{"job": null}`). Le middleware ne voit que le code de statut : sans ces deux
+# clés, une réclamation vide et une réclamation servie s'y ressemblent.
+CLE_OP = "oto_op"
+CLE_VIDE = "oto_vide"
+
 AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 
 
@@ -198,6 +206,8 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
             inp = cap.Input(**data)
         except ValidationError:
             return json_error(request, 400, "invalid_input")
+        if isinstance(getattr(inp, "op", None), str):
+            request.scope[CLE_OP] = inp.op
         # L'empreinte du client (IP réelle + user-agent) est posée AUTOUR du
         # handler : elle est un fait de transport, et un handler ne voit pas la
         # requête (ADR 0004). Une seule capacité la lit aujourd'hui — l'acceptation
@@ -307,6 +317,8 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
             return stream_response(request, result.events, media_type=binding.media,
                                    headers={"Cache-Control": "no-cache",
                                             "X-Accel-Buffering": "no"})
+        if isinstance(result, dict) and result and all(v is None for v in result.values()):
+            request.scope[CLE_VIDE] = True
         reponse = json_response(request, result, status=binding.status)
         # Un tableau adressé par son NOM dans le chemin : servi, et daté. La face MCP
         # dit la même chose dans la réponse (`session_org.noter_avis`).
