@@ -131,3 +131,46 @@ def test_le_calcul_porte_une_borne_sql(rapide):
     vu = []
     T.formes(1, 28, [5], lambda: vu.append(_conn._duree_bornee_ms.get()) or "ok")
     assert vu == [T.DUREE_MAX_MS]
+
+
+def test_la_file_est_bornee(monkeypatch):
+    """Au-delà de `EN_VOL_MAX` clés en vol ou en queue, aucune n'est ajoutée : la page
+    sort sans le temps gagné, et l'ouverture suivante retente."""
+    monkeypatch.setattr(T, "ATTENTE_S", 0.0)
+    monkeypatch.setattr(T, "EN_VOL_MAX", 3)
+    lache = threading.Event()
+    lances = []
+
+    def lent():
+        lances.append(1)
+        lache.wait(5)
+        return "fini"
+
+    for org in range(1, 7):
+        assert T.formes(org, 28, [5], lent) is None
+    assert len(T._en_vol) == 3
+    lache.set()
+    assert _attendre(lambda: not T._en_vol)
+    assert len(lances) == 3
+    assert _attendre(lambda: T.formes(6, 28, [5], lent) == "fini")
+
+
+def test_les_calculs_tournent_dans_des_fils_demons(rapide):
+    """Un fil non démon retiendrait l'arrêt du processus jusqu'à la fin de chaque
+    calcul en queue."""
+    vu = []
+    T.formes(1, 28, [5], lambda: vu.append(threading.current_thread().daemon) or "ok")
+    assert vu == [True]
+
+
+def test_la_memoire_des_echecs_est_bornee(monkeypatch):
+    monkeypatch.setattr(T, "ATTENTE_S", 0.0)
+    monkeypatch.setattr(T, "_TAILLE_MAX", 2)
+
+    def casse():
+        raise RuntimeError("borne atteinte")
+
+    for org in range(1, 6):
+        T.formes(org, 28, [5], casse)
+        assert _attendre(lambda: not T._en_vol)
+    assert len(T._echecs) == 2

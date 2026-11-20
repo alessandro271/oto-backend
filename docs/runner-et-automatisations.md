@@ -3687,8 +3687,11 @@ Il tourne désormais dans un fil de fond : borné (`statement_timeout` 60 s par 
 un seul calcul en vol par clé (org, fenêtre, agents vus), deux au plus pour tout le
 processus, résultat en cache 10 min, échec retenté après 30 min (une lecture trop lourde pour la borne ne se relance pas à chaque ouverture). La page attend au plus
 2 s ; sans résultat (ni frais ni périmé), elle sort sans le temps gagné et le dit
-(`time_saved_status: "pending"`, sinon `"ready"`). Cache par processus : vidé au
-redémarrage. Bancs : `tests/test_temps_gagne_borne.py`.
+(`time_saved_status: "pending"`, sinon `"ready"`, déclaré dans `JobsOut`). Cache par
+processus : vidé au redémarrage, chaque couleur d'une bascule calcule de son côté. Les
+calculs tournent dans des fils DÉMONS (un `ThreadPoolExecutor` viderait sa file avant de
+laisser le processus s'arrêter) et au plus 32 clés sont en vol ou en queue ; au-delà, la
+page sort sans le temps gagné. Bancs : `tests/test_temps_gagne_borne.py`.
 
 **Revu sur des agents réels (17/10/2026)**, qui surcomptaient :
 - un balayage qui ne PRODUIT rien de neuf ne gagne rien — sa recherche ne compte que

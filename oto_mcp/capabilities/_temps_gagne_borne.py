@@ -25,14 +25,21 @@ Ce module change QUI attend :
   lourde à chaque ouverture.
 
 Le cache est celui du PROCESSUS : un redémarrage le vide, et le premier affichage
-recalcule.
+recalcule. Deux processus (les deux couleurs d'une bascule) calculent chacun de leur
+côté : au plus `CALCULS_SIMULTANES` par processus.
+
+⚠️ **Des fils DÉMONS, une file bornée.** Un `ThreadPoolExecutor` rejoint ses fils à la
+sortie de l'interpréteur ET vide sa file d'abord : l'arrêt d'une couleur aurait attendu
+chaque calcul en queue, jusqu'à une minute par requête. Un fil démon meurt avec le
+processus (sa connexion fermée, PostgreSQL annule la requête). Au-delà de
+`EN_VOL_MAX` clés en vol ou en queue, aucune n'est ajoutée : la page sort sans le temps
+gagné, l'ouverture suivante retente.
 """
 from __future__ import annotations
 
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 from ..db import lecture_bornee
@@ -50,8 +57,10 @@ DUREE_MAX_MS = 60_000
 CALCULS_SIMULTANES = 2
 #: Après un échec, le délai avant de retenter la même clé.
 REESSAI_APRES_ECHEC_S = 1800.0
-#: Au-delà de ce nombre d'entrées, les plus anciennes partent.
+#: Au-delà de ce nombre d'entrées (résultats, échecs), les plus anciennes partent.
 _TAILLE_MAX = 2000
+#: Les clés en vol ou en queue, au plus : la file ne grossit pas sans fin.
+EN_VOL_MAX = 32
 
 Cle = tuple[int, int, tuple[int, ...]]
 
@@ -59,10 +68,10 @@ _verrou = threading.Lock()
 _cache: dict[Cle, tuple[float, object]] = {}
 _echecs: dict[Cle, float] = {}
 _en_vol: dict[Cle, threading.Event] = {}
-#: Les calculs FONT LA QUEUE derrière `CALCULS_SIMULTANES` fils : une org légère attend
-#: qu'un fil se libère, au lieu d'être servie sans résultat parce que deux orgs lourdes
-#: les tiennent.
-_executeur: Optional[ThreadPoolExecutor] = None
+#: Les calculs FONT LA QUEUE derrière `CALCULS_SIMULTANES` places : une org légère attend
+#: qu'une place se libère, au lieu d'être servie sans résultat parce que deux orgs
+#: lourdes les tiennent.
+_places = threading.BoundedSemaphore(CALCULS_SIMULTANES)
 #: Monte à chaque `vider()` : un calcul lancé avant ne range pas son résultat après.
 _generation = 0
 
@@ -74,7 +83,6 @@ def formes(org_id: int, jours: int, agents: list[int],
 
     ⚠️ Appelée depuis un handler SYNCHRONE (fil du pool de requêtes, REST comme MCP) :
     l'attente bornée ne touche jamais la boucle d'événements."""
-    global _executeur
     cle: Cle = (int(org_id), int(jours), tuple(int(a) for a in agents))
     maintenant = time.monotonic()
     with _verrou:
@@ -82,13 +90,11 @@ def formes(org_id: int, jours: int, agents: list[int],
         if connu is not None and maintenant - connu[0] < TTL_S:
             return connu[1]
         evt = _en_vol.get(cle)
-        if evt is None and _peut_relancer(cle, maintenant):
+        if evt is None and _peut_relancer(cle, maintenant) and len(_en_vol) < EN_VOL_MAX:
             evt = threading.Event()
             _en_vol[cle] = evt
-            if _executeur is None:
-                _executeur = ThreadPoolExecutor(max_workers=CALCULS_SIMULTANES,
-                                                thread_name_prefix="temps-gagne")
-            _executeur.submit(_calculer, cle, calculer, evt, _generation)
+            threading.Thread(target=_calculer, args=(cle, calculer, evt, _generation),
+                             name=f"temps-gagne-{cle[0]}", daemon=True).start()
     if connu is not None:
         # Périmé plutôt que rien, et tout de suite : un résultat d'il y a vingt minutes
         # vaut mieux qu'une attente, et le calcul frais est en route.
@@ -107,6 +113,7 @@ def _peut_relancer(cle: Cle, maintenant: float) -> bool:
 
 def _calculer(cle: Cle, calculer: Callable[[], object], evt: threading.Event,
               generation: int) -> None:
+    _places.acquire()
     debut = time.monotonic()
     try:
         with lecture_bornee.lectures_bornees("temps gagné des agents", DUREE_MAX_MS):
@@ -124,7 +131,9 @@ def _calculer(cle: Cle, calculer: Callable[[], object], evt: threading.Event,
         with _verrou:
             if generation == _generation:
                 _echecs[cle] = time.monotonic()
+                _elaguer()
     finally:
+        _places.release()
         with _verrou:
             if _en_vol.get(cle) is evt:
                 _en_vol.pop(cle, None)
@@ -132,11 +141,16 @@ def _calculer(cle: Cle, calculer: Callable[[], object], evt: threading.Event,
 
 
 def _elaguer() -> None:
-    """Sous `_verrou`. Garde le cache borné : les entrées les plus anciennes partent."""
-    if len(_cache) <= _TAILLE_MAX:
-        return
-    for cle, _v in sorted(_cache.items(), key=lambda kv: kv[1][0])[: len(_cache) - _TAILLE_MAX]:
-        _cache.pop(cle, None)
+    """Sous `_verrou`. Garde le cache et la mémoire des échecs bornés : les entrées les
+    plus anciennes partent."""
+    if len(_cache) > _TAILLE_MAX:
+        for cle, _v in sorted(_cache.items(),
+                              key=lambda kv: kv[1][0])[: len(_cache) - _TAILLE_MAX]:
+            _cache.pop(cle, None)
+    if len(_echecs) > _TAILLE_MAX:
+        for cle, _t in sorted(_echecs.items(),
+                              key=lambda kv: kv[1])[: len(_echecs) - _TAILLE_MAX]:
+            _echecs.pop(cle, None)
 
 
 def vider() -> None:

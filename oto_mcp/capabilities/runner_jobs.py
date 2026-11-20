@@ -366,6 +366,16 @@ class JobsOut(BaseModel):
     #: défaut, ou les surcharges de l'org — pour que l'écran dise sur quoi repose le
     #: chiffre.
     time_standards: Optional[dict[str, float]] = None
+    #: summary — le temps gagné est-il dans la réponse ? Il se calcule hors de la
+    #: requête (`_temps_gagne_borne`) : `pending` = pas encore connu, la réponse porte
+    #: alors des `time_saved` vides et ni `time_saved_minutes` ni `time_standards` —
+    #: une absence, jamais un zéro.
+    time_saved_status: Optional[Literal["ready", "pending"]] = Field(
+        None, description=(
+            "summary: `ready` = time saved is in the response; `pending` = not computed "
+            "yet (it is computed in the background): each agent then has no "
+            "`time_saved_minutes`, empty `time_saved` and `time_saved_not_counted`, and "
+            "`time_standards` is absent. An absence, never a zero: ask again later."))
     # enqueue → id/status/due_at ; claim → job (ou null, file vide) ;
     # list → jobs + total + next_cursor ;
     # complete → ok/status + run_id/rows_released/release ; les autres → ok.
