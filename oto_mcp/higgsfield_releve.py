@@ -14,8 +14,9 @@ reads it like any other, the usage lenses (`kind='mcp'`) do not count it as the 
 activity — nobody called anything. The biller keeps one line per job: a late read by the
 submitter changes nothing. A failed, nsfw or canceled job closes at no cost.
 
-No comparison with Higgsfield's own count, unlike Apify: Higgsfield has no balance or
-usage endpoint to compare with.
+No comparison with Higgsfield's own count, unlike Apify: Higgsfield has no balance
+endpoint, and its usage endpoint (`GET /models/usage`) sums the completed jobs by time
+bucket and model, never by job: nothing there to match a job's record against.
 
 Run by `oto-mcp maintenance higgsfield-jobs`, prod only (the database is shared).
 """

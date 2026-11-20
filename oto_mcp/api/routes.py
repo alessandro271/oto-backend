@@ -30,7 +30,8 @@ dormant depuis la v2 du fournisseur, #581 ; `api/atlassian.py` et `api/folk.py` 
 Ce fichier garde aussi les deux MIDDLEWARES ASGI de la face REST, dont l'ordre de
 pose (dans `server.py`) est un contrat dont dépendent des colonnes de monitoring :
 `ViewAsMiddleware` (org/équipe/user de consultation, ADR 0023) et `RestCallLogger`
-(une ligne `tool_calls(kind='rest')` par requête, ADR 0017).
+(une ligne `tool_calls(kind='rest')` par requête, hors boucles de machines
+`NON_JOURNALISES`, ADR 0017).
 
 Le reste du palier ORG (`/api/me/orgs`, `/api/orgs/*`, `/api/admin/orgs/*`) est
 100 % en capacités depuis la migration qui a supprimé `api_routes_orgs.py` — ce
@@ -614,9 +615,45 @@ class ViewAsMiddleware:
 # --- Journalisation des appels REST dans le flux unifié (ADR 0017, kind='rest') ---
 # La face MCP est tracée par otomata-calllog ; la face REST ne l'était PAS (3/4 de
 # la plateforme invisibles au monitoring). Ce middleware comble le trou : une ligne
-# tool_calls(kind='rest') par requête /api/*, dérivée du même substrat.
+# tool_calls(kind='rest') par requête /api/*, dérivée du même substrat — sauf les
+# boucles de machines qui réussissent (`NON_JOURNALISES`, ci-dessous).
 
 _REST_LOG_TASKS: set = set()  # garde les refs des tâches fire-and-forget (anti-GC)
+
+# Ce que le journal n'écrit PAS : les boucles de machines, qui remplissaient le
+# journal aux deux tiers sans qu'aucune lecture n'en dépende (ni présence d'un
+# worker, tenue par `runner_workers.last_seen_at` ; ni timeline de run, ces lignes
+# ne portant pas de `run_id` ; ni quota, facturation ou audit, qui lisent `mcp`).
+# Une réponse en erreur (≥ 400, 429 compris) s'écrit TOUJOURS : c'est elle qu'on
+# cherche. Clé = (méthode, route normalisée, `op` de l'entrée ou None).
+#
+# - Lectures de service répétées, sans autre effet que de répondre.
+NON_JOURNALISES = frozenset({
+    ("GET", "/api/version", None),
+    ("GET", "/api/orgs/:id/usage/tools", None),
+    ("GET", "/api/orgs/:id/usage/connections", None),
+    ("GET", "/api/orgs/:id/usage/calls", None),
+    # Un tour ajouté au fil d'un run hébergé : son contenu est déjà dans
+    # `run_messages`. La lecture du fil (`op=read`), elle, reste écrite : un admin
+    # d'org peut y lire le fil d'un autre.
+    ("POST", "/api/me/runs/thread", "append"),
+})
+# - Gestes écrits seulement s'ils rendent quelque chose : une réclamation de travail
+#   qui n'attribue rien (`{"job": null}`) ne s'écrit pas ; celle qui attribue un
+#   job, ou qui dit pourquoi elle n'a pas pu regarder (`campaign_error`), oui.
+NON_JOURNALISES_SI_VIDES = frozenset({
+    ("POST", "/api/me/runner/jobs", "claim"),
+})
+
+
+def _a_journaliser(method: str, route: str, code: int, scope) -> bool:
+    """Faux pour une boucle de machine qui a réussi (cf. `NON_JOURNALISES`)."""
+    if not 200 <= code < 400:
+        return True
+    cle = (method, route, scope.get(_cap_rest_adapter.CLE_OP))
+    if cle in NON_JOURNALISES:
+        return False
+    return not (cle in NON_JOURNALISES_SI_VIDES and scope.get(_cap_rest_adapter.CLE_VIDE))
 
 
 def _claimed_sub(request: Request) -> str | None:
@@ -663,7 +700,8 @@ async def _emit_rest_event(row: dict) -> None:
 class RestCallLogger:
     """Middleware ASGI **brut** : journalise chaque requête `/api/*` comme événement
     `kind='rest'` du flux unifié (ADR 0017). Pass-through total hors `/api/*` (ne
-    touche JAMAIS le streaming `/mcp`) et sur les préflights `OPTIONS` (bruit CORS).
+    touche JAMAIS le streaming `/mcp`) et sur les préflights `OPTIONS` (bruit CORS),
+    rien sur une boucle de machine qui réussit (`_a_journaliser`).
     `tool` = `MÉTHODE /route-normalisée` ; `ok` = 2xx/3xx ; les ≥400 portent le code
     dans `error`. Écriture en tâche de fond → zéro latence ajoutée, jamais bloquant."""
 
@@ -707,49 +745,51 @@ class RestCallLogger:
                 org = run["org_id"]
             sub = principal.get("sub") or _claimed_sub(request)
             route, masques = journal_secrets.route_and_secrets(scope.get("path", ""))
-            ecriture_view_as = bool(scope.get(CLE_VIEW_AS_ECRITURE))
-            if ecriture_view_as:
-                # Une écriture faite AU NOM d'un autre compte : le marqueur la distingue
-                # d'une consultation, et son org est celle où elle a agi (même sans
-                # `X-Oto-Org`), pour que le journal de l'org de la cible la montre.
-                masques = {**(masques or {}), "view_as_write": True}
-                if org is None:
-                    org = scope.get(CLE_VIEW_AS_ORG)
-            row = {
-                "kind": "rest",
-                "tool": f"{method} {route}",
-                # Le masque ne va JAMAIS dans `tool` (une empreinte par jeton ferait
-                # exploser la cardinalité du `GROUP BY tool` du monitoring) : il va
-                # dans `args`, où il répond à « le même jeton a-t-il été rejoué ? ».
-                "args": masques,
-                # ⚠️ `sub` = le PORTEUR du bearer, jamais la cible d'un « en tant
-                # que ». `effective_sub` n'est pas là pour ça : le schéma en fait
-                # le compte relu APRÈS le handler, dont toute divergence d'avec
-                # `sub` EST un défaut. Y écrire une consultation view-as rendrait
-                # normale la divergence que cette colonne existe pour dénoncer.
-                "sub": sub,
-                # Le jeton employé, NOMMÉ jamais écrit : deux appels du même compte
-                # par deux jetons étaient indistinguables, et une délégation du
-                # runner ressemblait à une session humaine.
-                "token_id": principal.get("token_id"),
-                "token_kind": principal.get("token_kind"),
-                "org_id": org,
-                # La cible du « voir en tant que » APPLIQUÉE (#572 point 4) : publiée
-                # par `ViewAsMiddleware` dans ce scope, jamais l'en-tête brut — cf.
-                # `CLE_VIEW_AS_APPLIQUE`. Jamais un remplacement de `sub` (l'opérateur
-                # réel reste le sub de la ligne, volontairement) : un champ EN PLUS.
-                "view_as_sub": scope.get(CLE_VIEW_AS_APPLIQUE),
-                "run_id": run.get("run_id"),
-                # Le geste de la requête (oto#273) : le même identifiant que celui
-                # estampillé sur les lignes qu'elle a écrites. NULL hors capacité.
-                "call_uid": scope.get(_cap_rest_adapter.CLE_GESTE),
-                "ok": 200 <= code < 400,
-                "error": (f"HTTP {code}" if code >= 400 else None),
-                "duration_ms": int((time.monotonic() - started) * 1000),
-            }
-            task = asyncio.create_task(_emit_rest_event(row))
-            _REST_LOG_TASKS.add(task)
-            task.add_done_callback(_REST_LOG_TASKS.discard)
+            # Pas de `return` ici : dans un `finally`, il avalerait l'exception en vol.
+            if _a_journaliser(method, route, code, scope):
+                ecriture_view_as = bool(scope.get(CLE_VIEW_AS_ECRITURE))
+                if ecriture_view_as:
+                    # Une écriture faite AU NOM d'un autre compte : le marqueur la distingue
+                    # d'une consultation, et son org est celle où elle a agi (même sans
+                    # `X-Oto-Org`), pour que le journal de l'org de la cible la montre.
+                    masques = {**(masques or {}), "view_as_write": True}
+                    if org is None:
+                        org = scope.get(CLE_VIEW_AS_ORG)
+                row = {
+                    "kind": "rest",
+                    "tool": f"{method} {route}",
+                    # Le masque ne va JAMAIS dans `tool` (une empreinte par jeton ferait
+                    # exploser la cardinalité du `GROUP BY tool` du monitoring) : il va
+                    # dans `args`, où il répond à « le même jeton a-t-il été rejoué ? ».
+                    "args": masques,
+                    # ⚠️ `sub` = le PORTEUR du bearer, jamais la cible d'un « en tant
+                    # que ». `effective_sub` n'est pas là pour ça : le schéma en fait
+                    # le compte relu APRÈS le handler, dont toute divergence d'avec
+                    # `sub` EST un défaut. Y écrire une consultation view-as rendrait
+                    # normale la divergence que cette colonne existe pour dénoncer.
+                    "sub": sub,
+                    # Le jeton employé, NOMMÉ jamais écrit : deux appels du même compte
+                    # par deux jetons étaient indistinguables, et une délégation du
+                    # runner ressemblait à une session humaine.
+                    "token_id": principal.get("token_id"),
+                    "token_kind": principal.get("token_kind"),
+                    "org_id": org,
+                    # La cible du « voir en tant que » APPLIQUÉE (#572 point 4) : publiée
+                    # par `ViewAsMiddleware` dans ce scope, jamais l'en-tête brut — cf.
+                    # `CLE_VIEW_AS_APPLIQUE`. Jamais un remplacement de `sub` (l'opérateur
+                    # réel reste le sub de la ligne, volontairement) : un champ EN PLUS.
+                    "view_as_sub": scope.get(CLE_VIEW_AS_APPLIQUE),
+                    "run_id": run.get("run_id"),
+                    # Le geste de la requête (oto#273) : le même identifiant que celui
+                    # estampillé sur les lignes qu'elle a écrites. NULL hors capacité.
+                    "call_uid": scope.get(_cap_rest_adapter.CLE_GESTE),
+                    "ok": 200 <= code < 400,
+                    "error": (f"HTTP {code}" if code >= 400 else None),
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                }
+                task = asyncio.create_task(_emit_rest_event(row))
+                _REST_LOG_TASKS.add(task)
+                task.add_done_callback(_REST_LOG_TASKS.discard)
 
 
 def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
