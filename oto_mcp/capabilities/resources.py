@@ -324,9 +324,16 @@ def _enrich_datastores(rows: list[dict]) -> list[dict]:
     """La LISTE des tableaux (op=list) : les nombres de lignes et les libellés lus en
     lot, pas un `count(*)` et une lecture de propriétaire par tableau — chacun sur sa
     connexion du pool. Sur une liste de plateforme (tous les tableaux), c'était des
-    milliers de requêtes et des dizaines de secondes par affichage."""
-    comptes = db.count_datastore_rows_for_ns_ids([int(r["id"]) for r in rows])
-    libelles = _libelles_d_owners((r.get("owner_type"), r.get("owner_id")) for r in rows)
+    milliers de requêtes et des dizaines de secondes par affichage.
+
+    ⚠️ Un SEUL emprunt au pool pour tout l'enrichissement (`db.reuse_connection`) : le
+    chemin ne fait que lire (`tests/test_resources_liste_en_lot_live.py` le vérifie).
+    Une org ou une équipe propriétaire coûte encore une lecture, par propriétaire
+    DISTINCT, jamais par tableau."""
+    with db.reuse_connection():
+        comptes = db.count_datastore_rows_for_ns_ids([int(r["id"]) for r in rows])
+        libelles = _libelles_d_owners((r.get("owner_type"), r.get("owner_id"))
+                                      for r in rows)
     return [_enrich_datastore(r, row_count=comptes.get(int(r["id"]), 0),
                               owner_label=libelles.get((r.get("owner_type"),
                                                         r.get("owner_id"))))
