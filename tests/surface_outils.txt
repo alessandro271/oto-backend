@@ -393,7 +393,7 @@ klaviyo_metrics	get list	1688eb6b74aaa8e9
 klaviyo_profiles	get list upsert	36830019a7799090
 klaviyo_reports	campaigns flows metric	c80811cf07de87d6
 klaviyo_segments	get list members	4f0b31b7ebd0d826
-leexi_calls	create get presign search	df76029bb9c9411f
+leexi_calls	create get presign search	d79a963460f0380f
 leexi_meetings	create delete get launch_bot list	95ef33dccb79e98d
 leexi_notes	delete get list update	39cecba23622cbd7
 leexi_teams	create delete get list update	ac4733fa900884fc
@@ -459,7 +459,7 @@ lighton_upload_document	-	91250c6c64a685e0
 lighton_workspaces	-	16701a5579193983
 linear_comment	create delete get list update	90ee8713dab5a6a8
 linear_cycle	get list	5c6905c8b058c2f2
-linear_issue	archive create delete get list search update	367e72b30f7fa2f7
+linear_issue	archive create delete get list search update	4295b289d4b2e5e5
 linear_label	create delete get list	0f6538924d92ccfe
 linear_project	create delete get list update	991108116da84b5b
 linear_team	get list states	40292427ffc1df6a
