@@ -101,6 +101,7 @@ _COMPANY_CACHE: dict[tuple, tuple] = {}     # (sub, ident_lower) -> (epoch, resu
 _COMPANY_TTL = 6 * 3600                      # company profiles ~static → 6h
 _COMPANY_CACHE_MAX = 3000                    # memory bound (coarse purge beyond it)
 _RL_DEFAULT_SECS = 30    # 429 without a readable delay → short backoff (bursts = a few s)
+_MSG_REPRISE_MAX_S = 8   # messaging READS: Unipile delay waited out once, up to this
 _RL_MAX_SECS = 3600      # cap: a "Retry in 12 hours" (rare/misleading) does not lock
                          #  the day — at worst we re-probe after 1h (self-correcting)
 
@@ -501,6 +502,58 @@ def _page_de_messagerie(page, fields: Optional[list[str]],
     return out
 
 
+# The v2 relations endpoint nests the person under `user` (`{id, object, created_at,
+# user: {id, display_name, public_identifier, first_name, last_name, profile_url,
+# description}}`, observed 2026-11-21), while this tool documents a FLAT connection
+# with `member_id`, `name` and `headline`. Projecting the nested shape refused every
+# documented key ("absent from all connections… Keys present: created_at, id, object,
+# user"): an hourly agent failed on each run. The fix is ADDITIVE: `user` stays as
+# upstream sends it (an agent reading `items[].user.display_name`, or projecting
+# `fields=["user"]`, is unchanged), and the documented keys are added beside it.
+_RELATION_ALIASES = {"member_id": "id", "name": "display_name", "headline": "description"}
+
+
+def _relation_a_plat(it):
+    """One connection with the documented flat keys ADDED: the `user` keys lifted to
+    the top (never over a key the relation carries: its own `id`/`object` stay), plus
+    the v1 names (`member_id` = the person's id, `name`, `headline`). `user` is kept.
+    An item without a `user` object (v1, a test double) is returned as is."""
+    if not isinstance(it, dict) or not isinstance(it.get("user"), dict):
+        return it
+    user = it["user"]
+    plat = dict(it)
+    for k, v in user.items():
+        if k not in ("id", "object"):
+            plat.setdefault(k, v)
+    for v1, v2 in _RELATION_ALIASES.items():
+        if v1 not in plat and user.get(v2) is not None:
+            plat[v1] = user[v2]
+    return plat
+
+
+def _porte_relation(it, f: str) -> bool:
+    tete, _, queue = f.partition(".")
+    if not isinstance(it, dict) or tete not in it:
+        return False
+    return not queue or (isinstance(it[tete], dict) and queue in it[tete])
+
+
+def _projette_relation(it: dict, fields: list) -> dict:
+    """The named keys of one connection; `parent.key` keeps the nesting (as `_slim`
+    does), and `member_id` is always kept."""
+    garde: dict = {"member_id": it["member_id"]} if "member_id" in it else {}
+    for f in fields:
+        tete, _, queue = f.partition(".")
+        if not _porte_relation(it, f):
+            continue
+        if not queue:
+            garde[tete] = it[tete]
+        else:
+            sous = garde.get(tete) if isinstance(garde.get(tete), dict) else {}
+            garde[tete] = {**sous, queue: it[tete][queue]}
+    return garde
+
+
 def _page_de_relations(page, fields: Optional[list] = None):
     """A page of 1st-degree connections, without the duplicated envelope, projected if requested.
 
@@ -514,7 +567,8 @@ def _page_de_relations(page, fields: Optional[list] = None):
     `member_id` is always kept: it is the deduplication key that the
     description prescribes, projecting until it is lost would make the export unusable.
     A requested field that NO item on the page carries is refused, naming the
-    keys present — never silently dropped."""
+    keys present — never silently dropped. A sub-key is named `parent.key`
+    (`user.display_name`) and keeps its nesting."""
     if not isinstance(page, dict):
         return page
     out = {k: v for k, v in page.items() if k not in ("data", "next_cursor")}
@@ -523,17 +577,17 @@ def _page_de_relations(page, fields: Optional[list] = None):
         items = page.get("data") if isinstance(page.get("data"), list) else []
     if "cursor" not in out and "next_cursor" in page:
         out["cursor"] = page["next_cursor"]
+    items = [_relation_a_plat(it) for it in items]
     if fields:
-        presentes = {k for it in items if isinstance(it, dict) for k in it}
-        inconnues = [f for f in fields if f not in presentes]
+        inconnues = [f for f in fields if not any(_porte_relation(it, f) for it in items)]
         if items and inconnues:
+            presentes = {k for it in items if isinstance(it, dict) for k in it}
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=(f"`fields`: key(s) absent from all connections on the "
-                         f"page: {inconnues}. Keys present: {sorted(presentes)}.")))
-        garder = set(fields) | {"member_id"}
-        items = [{k: v for k, v in it.items() if k in garder}
-                 for it in items if isinstance(it, dict)]
+                         f"page: {inconnues}. Keys present: {sorted(presentes)} "
+                         f"(a sub-key is named `parent.key`).")))
+        items = [_projette_relation(it, fields) for it in items if isinstance(it, dict)]
     out["items"] = items
     return out
 
@@ -1231,6 +1285,24 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
     def _bad(msg: str) -> McpError:
         return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
+    def _lecture_reprise(fn):
+        """A READ refused by Unipile's API-wide burst limit ("We only allow 10
+        requests. Retry in 3 seconds") is waited out ONCE, when Unipile's own delay
+        is short. Measured 21 Nov 2026: 40 % of one account's WhatsApp reads failed
+        that way, all with 3-17 s delays; the agent read each refusal as a failure.
+        A longer delay, or a second refusal, goes back to the caller as is. Never on
+        a send: `_agir` is not wrapped."""
+        from oto.tools.unipile.client import UnipileRateLimited
+
+        try:
+            return fn()
+        except UnipileRateLimited as e:
+            attente = getattr(e, "retry_after", None)
+            if attente is None or attente > _MSG_REPRISE_MAX_S:
+                raise
+            time.sleep(attente + 0.5)
+            return fn()
+
     @mcp.tool(name=cl, annotations=LECTURE, description=(
         f"Reads {channel} messaging via Unipile: 1-to-1 AND group conversations. "
         f"Sending is `{acteur}`.\n\n"
@@ -1257,15 +1329,16 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
             if refus:
                 raise _bad(refus)
             page = limit if limit is not None else 20
-            return unipile_messagerie.page_de_fils(
-                unipile_client(prov).list_chats(limit=page, cursor=cursor,
-                                                with_attendee_names=with_names), page)
+            return unipile_messagerie.page_de_fils(_lecture_reprise(
+                lambda: unipile_client(prov).list_chats(
+                    limit=page, cursor=cursor, with_attendee_names=with_names)), page)
         if op == "read":
             if chat_id is None:
                 raise _bad("op='read' requires chat_id")
             return unipile_messagerie.references_des_pieces(
-                unipile_messagerie.page_de_messages(unipile_client(prov).list_messages(
-                    chat_id, limit=limit if limit is not None else 30)), cl)
+                unipile_messagerie.page_de_messages(_lecture_reprise(
+                    lambda: unipile_client(prov).list_messages(
+                        chat_id, limit=limit if limit is not None else 30))), cl)
         raise _bad(f"op must be 'list' or 'read' — sending is `{acteur}`.")
 
     @mcp.tool(name=acteur, annotations=ACTE, description=(
