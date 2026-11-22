@@ -112,9 +112,71 @@ def test_pause_dun_lead_sans_campagne_vise_toutes_les_campagnes():
         assert inst.pause_lead.call_args.kwargs == {"campaign_id": "cam_1"}
 
 
-def test_les_trois_listes_de_desinscription_ne_se_confondent_pas():
-    """v1 emails, v2 variables, v2 contacts : écrire dans l'une n'écrit pas
-    dans les autres, et le dispatch doit le refléter."""
+def test_lire_une_valeur_desinscrite_passe_par_get_unsubscribe_sous_les_deux_noms():
+    """`get` et `var_get` lisent la même liste par la même requête : tous deux
+    passent par `get_unsubscribe`, qui rend `unsubscribed: false` pour une valeur
+    absente au lieu de lever (le 404 « Variable not found » de lemlist)."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_unsubscribe.return_value = {"value": "a@example.test", "unsubscribed": False}
+        tool = _tool("lemlist_unsubscribe")
+
+        assert tool.fn(op="get", email="a@example.test") == {
+            "value": "a@example.test", "unsubscribed": False}
+        tool.fn(op="var_get", value="@example.test")
+        assert [c.args for c in inst.get_unsubscribe.call_args_list] == [
+            ("a@example.test",), ("@example.test",)]
+        inst.get_unsubscribed_variable.assert_not_called()
+
+
+def _reponse_lemlist(monkeypatch, status, body):
+    """Le vrai client d'oto-core, `requests` doublé par UNE réponse de statut donné."""
+    import json
+
+    import requests
+
+    sent = []
+    texte = json.dumps(body)
+
+    class _Rep:
+        status_code = status
+        ok = status < 400
+        headers = {}
+        text = texte
+        content = texte.encode()
+        request = None
+
+        def json(self):
+            return body
+
+    def _request(method, url, **kw):
+        sent.append((method, url))
+        return _Rep()
+
+    monkeypatch.setattr(requests, "request", _request)
+    return sent
+
+
+@pytest.mark.exige_pin_oto_core   # lit le vrai client : faux si le venv retarde
+@pytest.mark.parametrize("op, arg", [("get", "email"), ("var_get", "value")])
+def test_une_valeur_absente_de_la_liste_est_une_reponse_par_le_vrai_client(monkeypatch, op, arg):
+    """La route v1 `GET /unsubscribes/{email}` n'est plus servie ; le client épinglé
+    lit `GET /v2/unsubscribes/variables/{email}`, et son 404 « Variable not found »
+    devient `unsubscribed: false` — après avoir lu aussi le domaine de l'adresse
+    (`@example.test`), absent lui aussi."""
+    sent = _reponse_lemlist(monkeypatch, 404, {"error": "Variable not found"})
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)):
+        out = _tool("lemlist_unsubscribe").fn(op=op, **{arg: "a@example.test"})
+    assert [m for m, _ in sent] == ["GET", "GET"]
+    assert sent[0][1].endswith("/v2/unsubscribes/variables/a@example.test")
+    assert sent[1][1].endswith("/v2/unsubscribes/variables/@example.test")
+    assert out == {"value": "a@example.test", "unsubscribed": False}
+
+
+def test_les_listes_de_desinscription_ne_se_confondent_pas():
+    """Les valeurs (sous `add` comme sous `var_add`) et le drapeau d'un contact :
+    écrire dans l'une n'écrit pas dans l'autre, et le dispatch doit le refléter."""
     key, cls = _with_fake_client()
     with key, cls as client_cls:
         inst = client_cls.return_value
@@ -337,6 +399,20 @@ def _activites_doublees(monkeypatch, body):
 
     monkeypatch.setattr(requests, "request", _request)
     return sent
+
+
+@pytest.mark.exige_pin_oto_core   # lit le vrai client : faux si le venv retarde
+def test_list_des_desinscriptions_lit_la_liste_v2_par_le_vrai_client(monkeypatch):
+    """`GET /unsubscribes` (liste v1) répond 404 « Route not found ». Le client
+    épinglé lit la liste v2 sous le nom `list_unsubscribes` : `op="list"` y passe,
+    une page de 100, sa clé `unsubscribes` gardée."""
+    sent = _activites_doublees(monkeypatch, [{"value": "example.test"}])
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)):
+        out = _tool("lemlist_unsubscribe").fn(op="list")
+    ((method, url, params),) = sent
+    assert method == "GET" and url.endswith("/v2/unsubscribes/variables")
+    assert params == {"limit": 100}
+    assert out["unsubscribes"] == [{"value": "example.test"}]
 
 
 def test_compact_des_activites_atteint_le_vrai_client(monkeypatch):

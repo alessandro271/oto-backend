@@ -142,7 +142,7 @@ def flotte(client, org):
     """Une flotte déclarée PAR LA ROUTE — pas insérée en base à la main."""
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "model": MODELE_SERVI, "label": "passage d'essai", "procedure": "enrichissement",
-        "tools": ["oto_kb"], "namespace": "un-tableau", "row_filter": {"lot": "a"},
+        "tools": ["oto_kb"], "namespace": str(org["ns"]), "row_filter": {"lot": "a"},
         # Un modèle du CATALOGUE : depuis le 12/09/2026 il part avec les travaux,
         # donc une chaîne libre est refusée à la déclaration.
         "model": "claude-sonnet-5",
@@ -230,7 +230,7 @@ def test_armer_n_ecrit_ni_ne_sert_plus_le_denominateur(client, org):
     h = _h(org["membre"])
     fid = client.post(ROUTE, headers=h, json={
         "op": "create", "model": MODELE_SERVI, "label": "sans-denominateur", "procedure": "p",
-        "tools": ["oto_kb"], "namespace": "un-tableau"}).json()["fleet"]["id"]
+        "tools": ["oto_kb"], "namespace": str(org["ns"])}).json()["fleet"]["id"]
     with _connect() as c:
         c.execute("UPDATE runner_fleets SET rows_at_launch = 12 WHERE id = %s", (fid,))
         c.commit()
@@ -289,19 +289,20 @@ def test_la_cible_est_gardee_par_son_identifiant_sur_la_route(flotte, org):
     assert flotte["namespace"] == str(org["ns"])
 
 
-def test_une_cible_introuvable_ou_ambigue_est_refusee_sur_la_route(client, org):
+def test_une_cible_introuvable_ou_par_nom_est_refusee_sur_la_route(client, org):
     """#1067 : la cible se résout une fois, à la déclaration, dans la portée du
-    déclarant — rien qui y réponde, ou deux tableaux au même rang, est refusé."""
+    déclarant — un numéro sans tableau est introuvable, et un nom est refusé, même
+    porté par deux tableaux."""
     from oto_mcp import db, group_store
     base = {"op": "create", "model": MODELE_SERVI, "label": "x", "procedure": "p", "tools": ["oto_kb"]}
-    assert _refus(client, org, {**base, "namespace": "nulle-part"}
+    assert _refus(client, org, {**base, "namespace": "999999999"}
                   ) == (404, "datastore_not_found")
     for i in (1, 2):
         g = group_store.create_group(org["id"], f"equipe-doublon-{i}")
         group_store.add_group_member(g, org["membre"])
         db.create_datastore("group", str(g), "doublon")
     assert _refus(client, org, {**base, "namespace": "doublon"}
-                  ) == (409, "datastore_ambigu")
+                  ) == (400, "datastore_by_name")
 
 
 def test_un_perimetre_sans_tableau_est_refuse_sur_la_route(client, org):
@@ -481,9 +482,10 @@ def test_une_flotte_HISTORIQUE_sans_borne_reste_lisible_et_S_ARME(client, org):
 #
 #   lancer   de l'argent et des effets externes IRRÉVERSIBLES — des lignes
 #            écrites chez un tiers ⟹ plancher ADMIN
-#   arrêter  une interruption et un travail à reprendre ⟹ tout MEMBRE, parce
-#            qu'un passage qui part en vrille doit pouvoir être stoppé par la
-#            première personne qui le voit
+#   arrêter  une interruption et un travail à reprendre ⟹ son PROPRIÉTAIRE ou
+#            un admin, sans plancher admin : la déclarante arrête la sienne sans
+#            attendre ; les autres membres n'interrompent pas ce qui agit sous
+#            une autre identité que la leur
 #
 # ⚠️ Et aucun des deux ne pose un FAIT : `launch` arme (on a demandé), `stop`
 # demande l'arrêt (la boucle ne l'a pas lu). Une intention déclarée et un fait
@@ -627,14 +629,12 @@ def test_un_simple_membre_ne_LANCE_pas(client, org, simple_membre):
     # La phrase du refus est servie sous `detail` (enveloppe REST), pas `message`.
     assert "ARRÊTER" in rr.json().get("detail", ""), (
         "un refus qui n'enseigne pas ce qui RESTE ouvert pousse à chercher un "
-        "contournement — ici, que tout membre peut arrêter")
+        "contournement — ici, que sa déclarante peut l'arrêter")
 
 
-def test_un_simple_membre_ARRÊTE(client, org, simple_membre):
-    """L'autre moitié, et c'est le choix de conception : un passage qui part en
-    vrille doit pouvoir être stoppé par la première personne qui le voit, pas par
-    celle qui a le bon rôle. Attendre un admin pendant qu'une flotte dépense est
-    le mauvais échange."""
+def test_un_simple_membre_n_ARRÊTE_pas_celle_d_un_autre(client, org, simple_membre):
+    """Arrêter interrompt un travail qui agit sous l'identité de sa déclarante :
+    droit par objet, comme `update`. Le refus ne pose aucun ordre d'arrêt."""
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "model": MODELE_SERVI, "label": "arret-par-membre", "procedure": "p",
         "tools": ["oto_kb"],
@@ -644,8 +644,72 @@ def test_un_simple_membre_ARRÊTE(client, org, simple_membre):
                        json={"op": "launch", "fleet_id": fid}).status_code == 200
     rr = client.post(ROUTE, headers=_h(simple_membre),
                      json={"op": "stop", "fleet_id": fid, "reason": "vu passer"})
+    assert (rr.status_code, rr.json().get("error")) == (403, "fleet_stop_forbidden")
+    lu = client.post(ROUTE, headers=_h(simple_membre), json={"op": "get", "fleet_id": fid})
+    assert lu.json()["fleet"]["status"] == "armed", "un refus n'arrête rien"
+
+
+def test_la_declarante_ARRÊTE_la_sienne_et_l_admin_celle_d_un_autre(
+        client, org, simple_membre):
+    """Le propriétaire n'attend pas un admin pour arrêter la sienne ; l'admin arrête
+    celle d'un autre."""
+    for qui_arrete in (simple_membre, org["membre"]):
+        r = client.post(ROUTE, headers=_h(simple_membre), json={
+            "op": "create", "model": MODELE_SERVI, "label": "a-arreter", "procedure": "p",
+            "tools": ["oto_kb"], "max_tokens_per_row": 50_000})
+        fid = r.json()["fleet"]["id"]
+        assert client.post(ROUTE, headers=_h(org["membre"]),
+                           json={"op": "launch", "fleet_id": fid}).status_code == 200
+        rr = client.post(ROUTE, headers=_h(qui_arrete),
+                         json={"op": "stop", "fleet_id": fid, "reason": "fin"})
+        assert rr.status_code == 200, rr.text
+        assert rr.json()["fleet"]["status"] == "stopping"
+
+
+# ── le droit par objet : modifier est au déclarant et aux admins de l'org ─────
+
+def _declarer(client, sub: str, label: str) -> int:
+    r = client.post(ROUTE, headers=_h(sub), json={
+        "op": "create", "model": MODELE_SERVI, "label": label, "procedure": "p",
+        "tools": ["oto_kb"], "max_tokens_per_row": 50_000})
+    assert r.status_code == 200, r.text
+    return r.json()["fleet"]["id"]
+
+
+def test_un_simple_membre_ne_MODIFIE_pas_celle_d_un_autre(client, org, simple_membre):
+    """Refusé sur la consigne comme sur les outils, et rien n'est écrit. La lire reste
+    ouvert."""
+    fid = _declarer(client, org["membre"], "a-l-admin")
+    for champs in ({"label": "autre"}, {"input": "autre consigne"},
+                   {"tools": ["oto_kb", "data_write"]}):
+        rr = client.post(ROUTE, headers=_h(simple_membre),
+                         json={"op": "update", "fleet_id": fid, **champs})
+        assert (rr.status_code, rr.json().get("error")) == (403, "fleet_edit_forbidden")
+    lu = client.post(ROUTE, headers=_h(simple_membre), json={"op": "get", "fleet_id": fid})
+    assert lu.status_code == 200, lu.text
+    assert (lu.json()["fleet"]["label"], lu.json()["fleet"]["tools"]) == ("a-l-admin", ["oto_kb"])
+
+
+def test_le_declarant_modifie_la_sienne_et_l_admin_celle_d_un_autre(
+        client, org, simple_membre):
+    fid = _declarer(client, simple_membre, "au-membre")
+    r = client.post(ROUTE, headers=_h(simple_membre),
+                    json={"op": "update", "fleet_id": fid, "label": "par-le-declarant"})
+    assert r.status_code == 200, r.text
+    r = client.post(ROUTE, headers=_h(org["membre"]),
+                    json={"op": "update", "fleet_id": fid, "label": "par-l-admin"})
+    assert r.status_code == 200, r.text
+    assert r.json()["fleet"]["label"] == "par-l-admin"
+
+
+def test_lancer_reste_aux_admins_meme_pour_le_declarant(client, org, simple_membre):
+    """Le plancher de `launch` est plus haut que le droit par objet : il suit ce que le
+    geste ENGAGE. Le déclarant non admin ne lance pas la sienne ; l'admin la lance."""
+    fid = _declarer(client, simple_membre, "a-lancer")
+    rr = client.post(ROUTE, headers=_h(simple_membre), json={"op": "launch", "fleet_id": fid})
+    assert (rr.status_code, rr.json().get("error")) == (403, "org_admin_required")
+    rr = client.post(ROUTE, headers=_h(org["membre"]), json={"op": "launch", "fleet_id": fid})
     assert rr.status_code == 200, rr.text
-    assert rr.json()["fleet"]["status"] == "stopping"
 
 
 # ── LE CYCLE COMPLET : l'intention devient un fait, et par qui ───────────────

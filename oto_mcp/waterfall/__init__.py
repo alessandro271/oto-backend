@@ -8,7 +8,8 @@ the domain both serve:
 
 - `etape` — what a step is (`Step`, `Collect`); `entrees` — a call's inputs, normalized;
   `valeurs` — reading a provider's answer;
-- `ordre` — which steps, in which order, on which key; `appel` — one step's call and
+- `ordre` — which steps, in which order, on which key; `comptes` — on which ACCOUNT of
+  each connector, when the caller names one (`_accounts`); `appel` — one step's call and
   its verdict; `moteur` — the cascade;
 - `qualification` — the optional Jev pass; `vivier` — the people pool (pages, reveals);
 - one step table per cascade (`email`, `telephone`, `societe`, `personne`, `gens`,
@@ -19,9 +20,12 @@ Each tool tries a list of existing connector tools, one after the other, and sto
 FIRST that finds the value asked for. Nothing here talks to a provider: every step is an
 ordinary call of the provider's own tool through `meta.executer_cible`, the seam
 `oto_call` and the recipes use — so each step keeps ITS guards (connector activation for
-the org/team of the call, credential cascade, access level, hosted-job tool list), ITS
+the org/team of the call, credential cascade, access level), ITS
 row in `tool_calls` (and therefore its `quantity`/`key_mode`: the billing stays on the
-provider's row, never on the waterfall's), and ITS namespace's redaction policy.
+provider's row, never on the waterfall's), and ITS namespace's redaction policy. In a
+hosted job, the job's tool list is held for the MODEL: a job that lists the waterfall runs
+its steps without listing their tools — the cascade's grant covers its own fixed step
+table, nothing else (`outils_du_travail.ouvrir_composite`, `cites.outils_internes`).
 
 **Which steps, in which order** — three layers, the most specific wins:
 1. the call's `providers=[…]` (validated: an unknown key is the caller's fault);
@@ -42,8 +46,10 @@ no key at all is skipped without being called.
 **What a step's failure does**: nothing but move on — a connector not activated, a key
 refused, an empty account, a rate limit, a provider error: each is recorded on the receipt
 (`attempts`) with its code and message, and the next provider is tried. Only the caller's
-OWN input faults raise — and a qualification asked for that Jev cannot run, refused
-before anything is spent.
+OWN input faults raise — and a qualification asked for that Jev cannot run, or an account
+named (`_accounts`) that its connector does not have, refused before anything is spent.
+One step failure stops the cascade: a NAMED account that the step's connector says it
+does not have (`account_required`) — the next providers are not paid for it.
 
 **Asynchronous providers** (lemlist, Dropcontact, FullEnrich, Apollo's phone reveal): the
 step submits, then polls the provider's own collect tool (free) within a bounded wait.

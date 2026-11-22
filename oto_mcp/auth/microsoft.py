@@ -83,8 +83,9 @@ seven days), served by the capability `me.microsoft_admin_consent`
 return writes nothing (`api/microsoft._retour_approbation`).
 
 ⚠️ The coordinates of oto's Microsoft application (multi-tenant, registered in the
-operator's directory) live in the database, PLATFORM scope of `connector_settings`,
-connector `microsoft`, set by the operator.
+operator's directory) are set by the operator under the connector `microsoft`:
+`client_id` at the PLATFORM scope of `connector_settings`, `client_secret` in the vault,
+encrypted (`auth/app_instance`).
 """
 from __future__ import annotations
 
@@ -154,7 +155,7 @@ _CALLBACK_PATH = "/api/microsoft/oauth/callback"
 #: The default directory: any work or school account, in its home directory.
 _ANNUAIRE_PAR_DEFAUT = "organizations"
 
-#: `client_secret` carries the `_secret` suffix that the admin console masks.
+#: `client_id` is a public setting, `client_secret` lives in the vault (`auth/app_instance`).
 _REGLAGES = ("client_id", "client_secret")
 
 _COMMANDE = ('oto_admin_connector_setting(op="set", connector="microsoft", '
@@ -332,19 +333,17 @@ def annuaire(tenant: Optional[str]) -> str:
 # --- the application's coordinates -------------------------------------------
 
 def _reglages() -> dict:
-    """Database read: at the start of a flow, on return from a consent, and
-    at the RENEWAL of an access token (once per hour per person)."""
-    from ..db import connector_settings as store
+    """Read at the start of a flow, on return from a consent, and at the RENEWAL of an
+    access token (once per hour per person) — `auth/app_instance`."""
+    from . import app_instance
 
-    return {r["key"]: (r["value"] or "").strip()
-            for r in store.list_connector_settings()
-            if r["scope_type"] == "platform" and r["connector"] == CONNECTOR
-            and r["key"] in _REGLAGES}
+    return app_instance.reglages(CONNECTOR, _REGLAGES)
 
 
 def coordonnees_manquantes() -> list[str]:
-    poses = _reglages()
-    return [nom for nom in _REGLAGES if not poses.get(nom)]
+    from . import app_instance
+
+    return app_instance.manquantes(CONNECTOR, _REGLAGES)
 
 
 def app() -> dict:
@@ -745,7 +744,10 @@ def persist_grant(sub: str, org_id: int, grant, tenant: Optional[str] = None,
     if partage:
         scopes = " ".join(sorted(_normalises(scopes)
                                  & _borne_partagee(ancien.get("scopes"), connector)))
-    meta = {**{k: v for k, v in ancien.items()
+    # The previous row's satellites follow, never its secret keys
+    # (`credentials_store.public_meta`: a token stays in memory, a sealed satellite
+    # stays with its row).
+    meta = {**{k: v for k, v in credentials_store.public_meta(ancien).items()
                if not k.startswith("health_") and k != "tenant"},
             "email": adresse,
             "name": me.get("displayName"),
@@ -1051,11 +1053,19 @@ def copier_depuis_sharepoint() -> dict:
     `sharepoint` to the carrier. Additive — the old rows stay, for the code still
     served on the shared base (prod and preprod) until the tag; their removal is a
     later lot. Idempotent: a copied row is marked (`credentials_store.copy_connector_rows`),
-    the coordinates are only copied to a carrier that has none."""
+    the coordinates are only copied to a carrier that has none.
+
+    Only the PUBLIC coordinates go through `connector_settings`: the secret lives in the
+    vault, under the carrier (`oto-mcp maintenance secrets-d-application` seals the old
+    card's plain secret there)."""
     from ..db import connector_settings as store
 
+    publics = tuple(k for k in _REGLAGES if not store.a_la_forme_d_un_secret(CONNECTOR, k))
     bilan = credentials_store.copy_connector_rows(_ANCIENNE_CARTE, CONNECTOR)
-    bilan["settings"] = store.copy_platform_settings(_ANCIENNE_CARTE, CONNECTOR, _REGLAGES)
+    # A carrier whose secret is in the vault is managed by the operator: never rewritten.
+    gere = any(r["connector"] == CONNECTOR for r in credentials_store.app_secrets_set())
+    bilan["settings"] = 0 if gere else store.copy_platform_settings(
+        _ANCIENNE_CARTE, CONNECTOR, publics)
     if any(bilan.values()):
         logger.info("microsoft: vault copied from %s — %s", _ANCIENNE_CARTE, bilan)
     return bilan

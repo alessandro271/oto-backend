@@ -151,6 +151,9 @@ _DECLARATIONS: tuple[str, ...] = (
     # platform tier) before anyone can connect to it.
     "instagram_meta",
     "meta_ads",
+    # Neighbour of `meta_ads` by trade (ad accounts, read-only) and situation (the
+    # instance's LinkedIn application, consent of the person) — wired 2026-11-17.
+    "linkedin_ads",
     "cognism",
     # B2B prospecting and outbound (search, enrichment, sequences) — wired 2026-10-17.
     # Neighbour of `cognism`/`lusha` by trade; strict BYOK, the customer's own credits.
@@ -187,6 +190,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "bigquery",
     # eighth service (2026-10-08) — same shape, `adwords` consent only, read-only tools.
     "google_ads",
+    # ninth service (2026-11-15) — same shape, `webmasters.readonly` consent only,
+    # read-only tool. The service-account connector `google_search_console` stays.
+    "search_console",
     # --- open-data / no credential ------------------------------------------
     # Unrelated public sources → distinct connectors (formerly `fr_open`, which
     # merged them: an incoherent "open data" bag, activating one activated the other).

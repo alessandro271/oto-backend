@@ -47,7 +47,7 @@ from typing import Callable
 import psycopg
 from psycopg.rows import tuple_row
 
-from ..crypto import _load_master_key
+from ..crypto import trousseau
 
 from .classement import (CLASSEMENT, EXCLUE, EXPORTEES, INSTANCE, JOURNAL, RAISON_JOURNAL,
                          Table, comptes_de, sans_journal)
@@ -368,8 +368,7 @@ def _colonnes(schema: Schema, t: str) -> list[str]:
 def _recodeur(lu: Lecture, cle_cible: bytes) -> Callable[[str, str], str]:
     """`recoder(table, ligne)` : la ligne JSON, son secret rechiffré pour la cible —
     sous l'AAD de la ligne que l'import écrira (`Transformation`, la même fonction)."""
-    cle_source = _load_master_key()
-    if cle_source is None:
+    if not trousseau():
         raise RuntimeError("OTO_MCP_MASTER_KEY absente : l'export ne peut pas lire les "
                            "secrets qu'il doit rechiffrer pour la cible")
     transformation = Transformation.depuis(lu.schema, lu.perimetre.comptes_cible())
@@ -381,7 +380,7 @@ def _recodeur(lu: Lecture, cle_cible: bytes) -> Callable[[str, str], str]:
         if source.get(AAD[t][0]) is None:
             return ligne
         source[AAD[t][0]] = rechiffrer(t, source, transformation.appliquer(t, source),
-                                       cle_source, cle_cible)
+                                       cle_cible)
         return json.dumps(source, ensure_ascii=False)
     return recoder
 

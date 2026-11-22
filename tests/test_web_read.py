@@ -463,8 +463,8 @@ def _cran_deux(monkeypatch, reponse, *, platform=True):
 
 def test_le_cran_serper_debite_ce_qu_il_a_reellement_coute(monkeypatch):
     """`web_read` est la SECONDE bouche serper du backend, et elle débitait UNE unité de
-    quota là où un scrape en coûte deux — la description du tool annonce « ~2 credits »
-    depuis toujours, et `cout.serper_credits` les rendait déjà à l'appelant. La moitié de
+    quota là où un scrape en coûte de deux à dix — la description du tool annonçait
+    « ~2 credits », et `cout.serper_credits` les rendait déjà à l'appelant. La moitié de
     la dépense de ce chemin n'était comptée nulle part.
 
     Ce que le tool ANNONCE et ce qu'il DÉBITE sont désormais la même lecture de la même

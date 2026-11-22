@@ -8,7 +8,8 @@ Package sans surface propre. Deux sujets qui se répondent :
   endpoints publics) ;
 - **sortant** — `flow` (la danse `authorization_code`, écrite UNE fois), `pkce` (les
   helpers state/PKCE), puis un module par fournisseur :
-  `google`, `salesforce`, `zoho`, `microsoft`, `ubersuggest`, `jefacture`.
+  `google`, `salesforce`, `zoho`, `microsoft`, `ubersuggest`, `jefacture`,
+  `linkedin_ads`.
 
 Une famille se reconnaît ici au SUFFIXE (`*_oauth`) autant qu'au préfixe — cf.
 `docs/conventions.md` §« Où vit un fichier ».

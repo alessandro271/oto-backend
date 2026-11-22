@@ -35,18 +35,20 @@ from ._conn import _connect
 
 
 def set_account_grant(owner_sub: str, provider: str, account_id: str,
-                      grantee_sub: str, granted_by: str) -> None:
+                      grantee_sub: str, granted_by: str, slot: str = "") -> None:
     """Accorde (upsert) à `grantee_sub` le droit d'opérer le compte `provider` de
-    `owner_sub`. `account_id` = snapshot d'audit (la résolution relit le live)."""
+    `owner_sub`. `account_id` = snapshot d'audit (la résolution relit le live).
+    `slot` = l'emplacement prêté (`unipile_accounts.slot`, '' = le compte principal) :
+    c'est lui que la résolution suit, pas l'identifiant du moment."""
     with _connect() as conn:
         conn.execute(
             "INSERT INTO connector_account_grants "
-            "(owner_sub, provider, account_id, grantee_sub, granted_by) "
-            "VALUES (%s, %s, %s, %s, %s) "
+            "(owner_sub, provider, account_id, grantee_sub, granted_by, slot) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (owner_sub, provider, grantee_sub) DO UPDATE SET "
             "account_id = EXCLUDED.account_id, granted_by = EXCLUDED.granted_by, "
-            "granted_at = NOW()",
-            (owner_sub, provider, account_id, grantee_sub, granted_by),
+            "slot = EXCLUDED.slot, granted_at = NOW()",
+            (owner_sub, provider, account_id, grantee_sub, granted_by, slot),
         )
 
 
@@ -74,7 +76,7 @@ def list_account_grants_by_owner(owner_sub: str) -> list[dict]:
             "FROM connector_account_grants g "
             "LEFT JOIN users u ON u.sub = g.grantee_sub "
             "LEFT JOIN unipile_accounts ua "
-            "  ON ua.sub = g.owner_sub AND ua.provider = g.provider "
+            "  ON ua.sub = g.owner_sub AND ua.provider = g.provider AND ua.slot = g.slot "
             "  AND ua.disconnected_at IS NULL "
             "WHERE g.owner_sub = %s ORDER BY g.provider, g.granted_at",
             (owner_sub,),
@@ -105,7 +107,7 @@ def list_account_grants_to(grantee_sub: str) -> list[dict]:
             "FROM connector_account_grants g "
             "LEFT JOIN users u ON u.sub = g.owner_sub "
             "LEFT JOIN unipile_accounts ua "
-            "  ON ua.sub = g.owner_sub AND ua.provider = g.provider "
+            "  ON ua.sub = g.owner_sub AND ua.provider = g.provider AND ua.slot = g.slot "
             "  AND ua.disconnected_at IS NULL "
             "LEFT JOIN orgs o ON o.id = ua.org_id "
             "WHERE g.grantee_sub = %s "
@@ -122,7 +124,7 @@ def list_account_grants_to(grantee_sub: str) -> list[dict]:
             "LEFT JOIN org_groups grp ON grp.id = gg.grantee_group_id "
             "LEFT JOIN users u ON u.sub = gg.owner_sub "
             "LEFT JOIN unipile_accounts ua "
-            "  ON ua.sub = gg.owner_sub AND ua.provider = gg.provider "
+            "  ON ua.sub = gg.owner_sub AND ua.provider = gg.provider AND ua.slot = gg.slot "
             "  AND ua.disconnected_at IS NULL "
             "LEFT JOIN orgs o ON o.id = ua.org_id "
             "WHERE m.sub = %s "
@@ -147,7 +149,7 @@ def _accounts_lent_to(grantee_sub: str, provider: str, *,
             "SELECT ua.account_id, g.owner_sub, u.email AS owner_email "
             "FROM connector_account_grants g "
             "JOIN unipile_accounts ua "
-            "  ON ua.sub = g.owner_sub AND ua.provider = g.provider "
+            "  ON ua.sub = g.owner_sub AND ua.provider = g.provider AND ua.slot = g.slot "
             "  AND ua.disconnected_at IS NULL "
             "JOIN users u ON u.sub = g.owner_sub "
             f"WHERE g.grantee_sub = %s AND g.provider = %s AND {pause} "
@@ -156,7 +158,7 @@ def _accounts_lent_to(grantee_sub: str, provider: str, *,
             "FROM connector_account_group_grants gg "
             "JOIN org_group_members m ON m.group_id = gg.grantee_group_id "
             "JOIN unipile_accounts ua "
-            "  ON ua.sub = gg.owner_sub AND ua.provider = gg.provider "
+            "  ON ua.sub = gg.owner_sub AND ua.provider = gg.provider AND ua.slot = gg.slot "
             "  AND ua.disconnected_at IS NULL "
             "JOIN users u ON u.sub = gg.owner_sub "
             f"WHERE m.sub = %s AND gg.provider = %s AND {pause}",
@@ -184,19 +186,19 @@ def suspended_lenders_for(grantee_sub: str, provider: str) -> dict[str, dict]:
 
 
 def set_account_group_grant(owner_sub: str, provider: str, account_id: str,
-                            grantee_group_id: int, granted_by: str) -> None:
+                            grantee_group_id: int, granted_by: str, slot: str = "") -> None:
     """Accorde (upsert) à TOUS LES MEMBRES ACTUELS de `grantee_group_id` le droit
     d'opérer le compte `provider` de `owner_sub` — même contrat que
     `set_account_grant`, cible groupe plutôt que sub nommé."""
     with _connect() as conn:
         conn.execute(
             "INSERT INTO connector_account_group_grants "
-            "(owner_sub, provider, account_id, grantee_group_id, granted_by) "
-            "VALUES (%s, %s, %s, %s, %s) "
+            "(owner_sub, provider, account_id, grantee_group_id, granted_by, slot) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (owner_sub, provider, grantee_group_id) DO UPDATE SET "
             "account_id = EXCLUDED.account_id, granted_by = EXCLUDED.granted_by, "
-            "granted_at = NOW()",
-            (owner_sub, provider, account_id, grantee_group_id, granted_by),
+            "slot = EXCLUDED.slot, granted_at = NOW()",
+            (owner_sub, provider, account_id, grantee_group_id, granted_by, slot),
         )
 
 
@@ -224,7 +226,7 @@ def list_account_group_grants_by_owner(owner_sub: str) -> list[dict]:
             "FROM connector_account_group_grants gg "
             "LEFT JOIN org_groups grp ON grp.id = gg.grantee_group_id "
             "LEFT JOIN unipile_accounts ua "
-            "  ON ua.sub = gg.owner_sub AND ua.provider = gg.provider "
+            "  ON ua.sub = gg.owner_sub AND ua.provider = gg.provider AND ua.slot = gg.slot "
             "  AND ua.disconnected_at IS NULL "
             "WHERE gg.owner_sub = %s ORDER BY gg.provider, gg.granted_at",
             (owner_sub,),

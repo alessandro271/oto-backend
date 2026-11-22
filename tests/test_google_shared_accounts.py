@@ -139,7 +139,7 @@ def test_partager_drive_ne_livre_pas_le_gmail_perso_du_titulaire(monkeypatch):
     (k,) = ecrits
     assert gmail not in k["scopes"].split()
     assert G.services_granted(k["scopes"]) == ["drive"]
-    assert k["access_token"] is None and k["expires_at"] is None
+    assert "access_token" not in k and "expires_at" not in k
 
 
 def test_un_partage_incremental_garde_ce_quil_partageait_deja(monkeypatch):
@@ -258,7 +258,8 @@ def test_le_refresh_et_la_sante_secrivent_sur_lentite_partagee(monkeypatch):
     monkeypatch.setattr(requests, "post", lambda *a, **k: _OK())
     creds = G.credentials_for("u", service="gmail")
     assert creds.token == "AT-NEUF"
-    assert coffre.meta("hello@x.test", ("org", str(ORG)))["access_token"] == "AT-NEUF"
+    assert coffre.jeton("hello@x.test", ("org", str(ORG))) == "AT-NEUF"
+    assert "access_token" not in coffre.meta("hello@x.test", ("org", str(ORG)))
     assert sante == [("org", str(ORG), "hello@x.test")]
 
 
@@ -310,9 +311,11 @@ def test_le_statut_montre_les_comptes_partages(monkeypatch):
     assert [(a["email"], a["scope"]) for a in out["shared"]] == [
         ("group@x.test", "group"), ("org@x.test", "org")]
     # `ALL` = le consentement du COMPTE : les six du split, pas bigquery (2026-10-02)
-    # ni google_ads (2026-10-08), qui ne s'autorisent que depuis leur carte.
+    # ni google_ads (2026-10-08) ni search_console (2026-11-15), qui ne s'autorisent
+    # que depuis leur carte.
     assert out["shared"][0]["services"] == [s for s in G.SERVICES
-                                            if s not in ("bigquery", "google_ads")]
+                                            if s not in ("bigquery", "google_ads",
+                                                         "search_console")]
     # Qui l'a connecté : lu dans le statut, validé par le modèle servi.
     assert [a["connected_by"] for a in out["shared"]] == ["admin-group", "admin-org"]
     assert fo.GoogleStatus(**out).shared[1].connected_by == "admin-org"

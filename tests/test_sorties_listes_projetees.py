@@ -84,7 +84,9 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # client d'oto-core, `oto.tools.lemlist.database_views`) — le défaut reste la page brute.
 # 207 → 206 le 2026-11-15 : lemlist_get_activities payé (`fields` et `compact`, appliqués
 # par le client d'oto-core, `oto.tools.lemlist.activity_views`) — le défaut reste la liste brute.
-_PLAFOND = 206
+# 206 → 205 le 2026-11-21 : leexi_calls payé (op='search' : vue légère par défaut, chaque
+# colonne lourde devient sa taille ; `full=True` le brut, `select` choisit — signal #1917).
+_PLAFOND = 205
 
 
 def _debt() -> set[str]:

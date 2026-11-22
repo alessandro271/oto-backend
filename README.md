@@ -6,8 +6,7 @@ connectors (`oto.tools.*`) as tools to Claude — plus a REST API for the
 [dashboard](https://github.com/otomata-tech/oto-dashboard). Imports oto-core directly;
 no CLI dependency.
 
-- **Public endpoint**: `https://mcp.oto.cx/mcp` (plug into claude.ai or Claude Code);
-  `https://mcp.oto.ninja/mcp` is the pre-production deployment of the same service.
+- **Public endpoint**: `https://mcp.oto.cx/mcp` (plug into claude.ai or Claude Code).
 - **Auth**: OAuth via [Logto](https://logto.io) self-hosted (`auth.oto.ninja`), JWT
   verified against the Logto JWKS (ES384); the audience is the endpoint's own URL.
 - **Self-hostable**: image `Dockerfile`, configured entirely through environment variables.
@@ -79,9 +78,10 @@ python -m venv .venv
 
 ## Deploy
 
-Single trunk, two rings. Pushing to `main` triggers `.github/workflows/deploy-canari.yml`
-and deploys **pre-production**; pushing a `vX.Y.Z` tag triggers `.github/workflows/deploy.yml`
-and deploys **production**. Both SSH the dedicated box, reset to the ref, reinstall
+Single trunk, one ring. Pushing to `main` (or opening a PR against it) runs
+`.github/workflows/ci.yml` and deploys nothing; pushing a `vX.Y.Z` tag triggers
+`.github/workflows/deploy.yml`, which checks that the tagged commit is on `main` with a green
+CI run, runs the full suite and deploys **production**. The deploy SSHes the dedicated box, reset to the ref, reinstall
 exactly what `uv.lock` pins (`uv sync --frozen`; a ref without a lock is refused), restart the
 `oto-mcp` systemd service, run an HTTP smoke check and roll back on failure. Machine-level
 details are kept in a private infrastructure repository, not here.

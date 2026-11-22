@@ -491,11 +491,11 @@ rien ne rendait navigable et que rien ne tenait.
   sur un **fichier orphelin** (connecteur posé mais pas déclaré → dort invisible) ou un
   **module fantôme** (faute dans `modules=`/nom). Seul un **module spine** chargé
   explicitement (rare) s'ajoute à `_EXPLICIT_TOOL_MODULES`. Le job `test` tourne
-  **sur les PR ET sur push main** (`deploy-canari.yml` « Deploy preprod », `on:
+  **sur les PR ET sur push main** (`ci.yml` « CI », `on:
   pull_request` + `push` sur main ; required check de branch protection sur main) et
   au **tag** (`deploy.yml` « Deploy prod »), et installe oto-core **au tag épinglé**
-  (runner neuf → pin du pyproject) : un test rouge bloque le merge ET le deploy (les
-  deux jobs `deploy` ont `needs: test`). Garde-fou anti-version-skew : `test_tools_client_methods_exist.py`
+  (runner neuf → pin du pyproject) : un test rouge bloque le merge ET le deploy (`deploy`
+  a `needs: test`, et la garde du tronc exige le `test` de « CI » vert au sha du tag). Garde-fou anti-version-skew : `test_tools_client_methods_exist.py`
   vérifie STATIQUEMENT que les méthodes appelées sur le client existent sur la classe
   oto-core épinglée (un tool en avance de phase sur son oto-core casse la PR au lieu
   d'atteindre la prod — leçon `folk_get_user`). Portée élargie le **31/07** : `_client()`

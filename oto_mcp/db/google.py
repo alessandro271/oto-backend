@@ -41,8 +41,6 @@ def _google_row(account: str, cur: dict) -> dict:
     return {
         "google_email": account or None,
         "refresh_token": cur["secret"],
-        "access_token": m.get("access_token"),
-        "expires_at": m.get("expires_at"),
         "scopes": m.get("scopes"),
         "is_default": bool(m.get("is_default")),
         "granted_at": m.get("granted_at"),
@@ -59,14 +57,13 @@ def set_google_oauth(
     google_email: str,
     refresh_token: str,
     scopes: str,
-    access_token: Optional[str] = None,
-    expires_at: Optional[str] = None,
     make_default: Optional[bool] = None,
     client_id: Optional[str] = None,
 ) -> None:
     """Upsert un compte Google dans le COFFRE (connector='google', account=email ;
-    satellites — access_token/expires_at/scopes/is_default/granted_at/client_id — dans
-    meta). `client_id` = le client OAuth ÉMETTEUR du jeton (pas un secret).
+    satellites NON secrets — scopes/is_default/granted_at/client_id — dans meta).
+    `client_id` = le client OAuth ÉMETTEUR du jeton (pas un secret). Le jeton d'accès
+    ne s'y range pas : il vit en mémoire, par processus (`auth/google.credentials_for`).
 
     `make_default` None → défaut si 1er compte. is_default conservé si déjà défaut
     (existing OR new). Claime la ligne mono pré-migration (account='').
@@ -83,8 +80,8 @@ def set_google_oauth(
     is_default = bool(prior and prior["meta"].get("is_default")) or make_default
     granted_at = (prior["meta"].get("granted_at") if prior else None) \
         or datetime.now(timezone.utc).isoformat()
-    meta = {"access_token": access_token, "expires_at": expires_at, "scopes": scopes,
-            "is_default": is_default, "granted_at": granted_at, "client_id": client_id}
+    meta = {"scopes": scopes, "is_default": is_default, "granted_at": granted_at,
+            "client_id": client_id}
     with _connect() as conn:
         with conn.transaction():
             if account:   # claim l'éventuelle ligne mono pré-migration (account='')
@@ -202,8 +199,6 @@ def _shared_ent(scope: str, target_id: int) -> tuple[str, str]:
 
 def set_shared_google_oauth(scope: str, target_id: int, *, set_by: str, google_email: str,
                             refresh_token: str, scopes: str,
-                            access_token: Optional[str] = None,
-                            expires_at: Optional[str] = None,
                             client_id: Optional[str] = None) -> None:
     """Upsert d'un compte Google PARTAGÉ (org ou équipe). Premier compte ⟹ défaut."""
     from .. import credentials_store
@@ -215,9 +210,8 @@ def set_shared_google_oauth(scope: str, target_id: int, *, set_by: str, google_e
     is_default = bool(prior and prior["meta"].get("is_default")) or make_default
     granted_at = (prior["meta"].get("granted_at") if prior else None) \
         or datetime.now(timezone.utc).isoformat()
-    meta = {"access_token": access_token, "expires_at": expires_at, "scopes": scopes,
-            "is_default": is_default, "granted_at": granted_at, "client_id": client_id,
-            "connected_by": set_by}
+    meta = {"scopes": scopes, "is_default": is_default, "granted_at": granted_at,
+            "client_id": client_id, "connected_by": set_by}
     with _connect() as conn:
         with conn.transaction():
             credentials_store.set_credential(

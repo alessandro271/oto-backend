@@ -708,3 +708,136 @@ compte sur la propre clé du client (`platform_seat = false`) n'est jamais regar
   `entitlement_lost_at` et `deletion_scheduled_at` ; `release` libère sans `force` un
   siège en service dont aucune org n'a plus le droit, et refuse toujours (409
   `seat_in_use`) celui dont l'org a le droit.
+
+## Délier un canal rend le siège plateforme
+
+Un compte branché sur la **clé plateforme** se paie chez unipile tant qu'il y EXISTE.
+La déconnexion du membre (`DELETE /api/me/unipile`, `capabilities/unipile_me._disconnect`)
+ne faisait que délier : la ligne prenait `disconnected_at` et le compte continuait de
+coûter, jusqu'à une reprise à la main (`oto_admin_unipile_seat release`) ou la fin du droit.
+Désormais :
+
+1. le binding est soft-déconnecté **d'abord** (la ligne survit, preuve de propriété) ;
+2. si c'était un **siège plateforme** (`platform_seat = true`) et qu'**aucun binding vivant**
+   ne nomme plus ce compte (`db.unipile_account_in_service`) (un compte adopté dans une autre org y reste en service), le
+   compte est **supprimé chez unipile** (`client.delete_account`) — même ordre que
+   `unipile_seats.liberer` ;
+3. la suppression se fait sous **la** clé qui porte le compte. Une ligne ne dit pas quelle
+   clé plateforme a créé son compte : elle n'est nommable que si la plateforme n'a **qu'une**
+   clé unipile (même règle que le parent de la sous-instance, `db/sous_instances`). Avec
+   plusieurs, rien n'est tenté à l'aveugle (`unipile_seats.client_for_seat`) ;
+4. une panne amont, une clé absente ou ambiguë ne fait **pas** échouer la déconnexion. La
+   réponse le dit (`seat: alive`, `reason` : `provider_failed` | `no_platform_key` |
+   `platform_key_ambiguous`), un signal `gap`/`billing` part vers les admins (cible
+   `unipile_seat:<account_id>`, un sujet par siège), et le siège reste `disconnected` dans
+   l'inventaire, où un admin le libère. Un compte encore en service dans une autre org rend
+   `seat: alive`, `reason: in_use_elsewhere`, sans signal ; une suppression faite rend
+   `seat: deleted`.
+
+Sans org courante, la déconnexion est refusée (400 `no_org_context`) : il n'y a rien à délier.
+
+⚠️ Un compte **BYO** (`platform_seat = false`) vit sur l'abonnement de l'org : jamais supprimé.
+⚠️ Se reconnecter ensuite est une **nouvelle connexion complète** chez le fournisseur, avec un
+**nouvel** `account_id`, et l'historique de l'ancien compte n'est pas repris : la réconciliation le lie par sa date de création (le plancher du
+pending), comme une première connexion. Le rebind déterministe par ligne morte ne joue plus
+pour ce compte-là — il n'existe plus.
+⚠️ `disconnected_at` n'est **jamais réécrit** par une seconde déconnexion
+(`clear_unipile_account` ne touche qu'une ligne vivante) : la facturation lit cette date.
+
+## Plusieurs comptes par canal
+
+Un membre peut connecter **plusieurs comptes sur un même canal** dans une org — deux
+LinkedIn, deux numéros WhatsApp. Chaque compte est une ligne d'`unipile_accounts` à son
+**emplacement** (`slot`) :
+
+- `''` = l'emplacement **principal** : celui de toute ligne née avant, celui qu'une
+  connexion ordinaire **remplace** (rien ne change pour un membre à un seul compte), le
+  compte servi par défaut ;
+- un compte **ajouté** (`add_account=true` sur `me.unipile.connect`, sur le flux de la
+  carte, ou sur `unipile_connect_start`) prend un emplacement à lui, nommé par son premier
+  `account_id` puis figé. C'est la clé stable de la connexion : sa sous-instance
+  (`canal:<provider>:<slot>`), sa clé de facturation (`unipile_connection_key` suffixée
+  de l'emplacement — le principal garde la clé d'avant, à l'octet), le prêt qui le vise.
+
+**Chaque compte ajouté est un siège** : il compte dans le plafond de l'org, et la lentille
+`org.usage.connections` le rend comme une connexion de plus. **Sous la clé plateforme,
+l'ajout exige que l'org ait un plafond PROPRE** (`orgs.unipile_account_limit` posé, `0`
+compris : un « sans plafond » explicite) : sans lui, refus `403 unipile_seat_cap_required`
+(`unipile_connect.exiger_plafond_pour_ajout`), qui dit de faire poser le plafond par un
+admin plateforme (`PUT /api/admin/orgs/{id}/unipile-limit`). Le défaut d'instance
+(`OTO_MCP_UNIPILE_DEFAULT_LIMIT`) ne compte pas : c'est un garde-fou, pas une décision sur
+l'org (décision du 18/11/2026). La garde vit dans `hosted_auth_url`, que les trois chemins
+d'ajout traversent (`me.unipile.connect`, flux de la carte, `unipile_connect_start`), et
+vaut aussi pour la connexion ordinaire requalifiée en ajout ci-dessous. Clé BYO : pas de
+siège plateforme, pas de garde. L'ajout n'adopte pas un
+compte d'une autre org et ne combine pas `premium` (les deux nomment le compte déjà là). Quand il ne reste ici que des comptes ajoutés, une connexion ordinaire
+est un ajout (elle ne prend pas l'emplacement principal, donc le défaut, en silence). À la
+réconciliation, si un même canal porte une demande ordinaire et une demande d'ajout,
+l'ajout l'emporte : ce qui ne détruit rien gagne. Un même `account_id` n'occupe jamais deux
+emplacements (`set_unipile_account` le remet à sa place). La fusion de deux comptes de
+personne pré-traite la ligne (`_PK_SUB_TABLES`) : à emplacement égal, celle du survivant
+reste.
+
+**Ce qu'un appel sert sans `_account=`** (`identities.resolve_operated_account_id`) : le
+compte que le membre a choisi par défaut (pointeur `unipile_operated_accounts` avec
+lui-même pour propriétaire, posé par `oto_identity(op='set')` sur un compte ajouté), sinon
+le principal. **Jamais d'office un compte ajouté, même le seul qui reste** quand le principal
+est déconnecté (décision du 18/11/2026) : des comptes ici et aucun défaut choisi = refus
+qui les nomme, `several_accounts_no_default` pour plusieurs, `no_default_account` pour un
+seul (`identities.SansCompteParDefaut`, dont `PlusieursComptesSansDefaut` hérite) — jamais
+un choix à la place du membre. Un projet qui épingle un des comptes lève le refus. **Un compte ajouté ne devient jamais le défaut
+tout seul.** `_account=<account_id>` désigne n'importe lequel des comptes d'ici pour un
+appel.
+
+**La carte** (`me.unipile.status`) garde ses champs : ils décrivent le compte servi par
+défaut ; `channels.<canal>.accounts` liste tous les comptes du canal, le défaut marqué ;
+`multi_account` dit si l'ajout est ouvert ici (PK à emplacement ET option) — le front
+n'offre « ajouter un compte » que sur lui : un backend d'avant REMPLACERAIT le compte.
+**Délier** prend `account_id` (sans lui : le compte par défaut, jamais tous ; des comptes
+sans principal, même un seul : 409 `account_id_required`). **Prêter** aussi (`connectors.account_grants`,
+`account_id`) : le prêt suit l'emplacement prêté. Limite : un bénéficiaire reçoit UN
+compte par canal d'un même prêteur — en prêter un autre remplace le premier (la PK des
+prêts n'a pas bougé).
+
+**Migration en deux lots** (base partagée, `docs/live-migrations.md`) : le démarrage pose
+la colonne `slot`, l'index unique `(sub, org_id, provider, slot)` sur lequel le code neuf
+arbitre, `unipile_pending.add_account` et le `slot` des prêts. La PK reste
+`(sub, org_id, provider)` tant que le code d'avant sert : un second compte ne peut pas
+naître, l'ajout refuse `multi_account_unavailable` (`db.slots_ouverts`). La révision
+`20261118_1500_unipile_slots`, jouée **après le tag de prod**, passe la PK à
+`(sub, org_id, provider, slot)` et ouvre l'ajout sans redémarrage.
+
+## Limites d'envoi LinkedIn (posées par le titulaire du compte)
+
+LinkedIn plafonne chaque compte (invitations, messages, visites de profil) et Unipile ne
+limite rien de son côté : sans borne ici, un agent ou une recette envoie jusqu'au refus de
+LinkedIn — ou jusqu'à la restriction du compte. Le **titulaire** du compte pose donc ses
+propres limites, par REST (`GET|PUT /api/me/unipile/limits` ; l'écran viendra dans
+l'application ; capacités
+`me.unipile.limits` / `me.unipile.limits_set`, `capabilities/unipile_limits.py`).
+
+- **Quatre limites**, chacune sur une fenêtre **glissante** : invitations par 24 h et par
+  7 jours, messages par 24 h, visites de profil par 24 h (`unipile_limites.LIMITES`).
+  `0` met l'action en pause.
+- **Aucune limite par défaut** : sans ligne, rien ne change (des séquences tournent déjà).
+  La vue propose des valeurs (`suggested`) et donne le maximum recommandé par le
+  fournisseur (`provider_max`) ; le réglage ne refuse aucun nombre (borne de saisie 1 000).
+- **Par compte, jamais par ligne `unipile_accounts`** : clé = l'`account_id` Unipile. Le
+  même compte relié dans deux orgs, ou opéré par un bénéficiaire de prêt, a UNE limite et
+  UN compte d'actions. Seul le titulaire la pose (404 `account_not_connected` sinon).
+- **La garde** (`unipile_limites.garde`) est dans les gestes eux-mêmes —
+  `linkedin_unipile_act` `op=send` et `op=invite`, `linkedin_unipile_profile`
+  `op=person` (une visite, même quand le slug est lu deux fois) — donc sur tous les
+  chemins : appel MCP direct, `oto_call`, recettes, agents hébergés. Elle réserve la place
+  **avant** l'appel, atomiquement (verrou consultatif par compte), et la **rend** si
+  l'appel échoue : seule une action faite compte. Sans limite posée pour l'action, elle
+  ne fait que compter (une requête, sans transaction ni verrou).
+- **Le refus** : `linkedin_sending_limit_reached` (rejouable, `retry_after_seconds` = quand
+  la plus ancienne action sort de la fenêtre), rien n'est envoyé. Le 422
+  `cannot_resend_yet` de LinkedIn sur une invitation devient `linkedin_invitation_limit`.
+- **Fail-open** : une base qui ne répond pas ne bloque pas un envoi, elle se journalise.
+- L'agent lit les limites du compte avec lequel il agit : `linkedin_unipile_account(op="limits")`.
+- Tables `unipile_sending_limits` (une ligne par limite posée, rangée sous le titulaire,
+  exportée avec lui) et `unipile_sending_log` (une ligne par action réussie, purgée
+  au-delà de 8 jours, non exportée) — révision `20261119_1400_sending_limits`, ordre avec
+  le code indifférent.

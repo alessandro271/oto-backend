@@ -58,6 +58,9 @@ def s(monkeypatch):
         return droits.get((sub, rid, want), False)
 
     monkeypatch.setattr(ownership, "can_access", can_access)
+    # Le rôle Use (`contributor`) : absent par défaut ; un test le pose pour l'éprouver.
+    monkeypatch.setattr(ownership, "has_role_grant",
+                        lambda sub, rtype, rid, roles: droits.get((sub, "app_role")) in roles)
     monkeypatch.setattr(db.apps, "get_for_call", lambda i: dict(APP) if i == 5 else None)
     monkeypatch.setattr(C, "org_de_l_app", lambda app: ORG)
     monkeypatch.setattr(C, "tableau_de_l_org", lambda ns, org: org == ORG)
@@ -125,6 +128,39 @@ def test_sans_consentement_rien_n_est_fait(s, geste_):
     e = refus(call, **geste_)
     assert (e.status, e.code) == (403, "consent_required")
     assert s["update"] == s["append"] == s["run_now"] == []
+
+
+@pytest.fixture
+def view(s, monkeypatch):
+    """Le lecteur ouvre l'app (View) sans la modifier : `write` sur l'app lui est refusé."""
+    lire = ownership.can_access
+
+    def can_access(sub, rtype, rid, want="read"):
+        return False if (rtype == "app" and want == "write") else lire(sub, rtype, rid, want)
+
+    monkeypatch.setattr(ownership, "can_access", can_access)
+    return s
+
+
+@pytest.mark.parametrize("geste_", [ECRIRE, dict(action="add_row", table="leads", values={"name": "B"}),
+                                    dict(action="start_agent", agent="enrich")])
+def test_view_ne_clique_pas(view, geste_):
+    """View : 403 `app_view_only` à l'émission du consentement comme à l'appel."""
+    e = refus(consent, **geste_)
+    assert (e.status, e.code) == (403, "app_view_only")
+    assert refus(call, consent="x", **geste_).code == "app_view_only"
+    assert view["consents"] == {}
+    assert view["update"] == view["append"] == view["run_now"] == []
+
+
+def test_use_clique_aux_droits_du_lecteur(view):
+    """Use (`contributor`) clique ; le geste reste celui du lecteur, borné par l'auteur."""
+    view["droits"][(LECTEUR, "app_role")] = "contributor"
+    jeton = consent(**ECRIRE)
+    with geste.portee(geste.CONSOLE, LECTEUR, "g-use"):
+        call(consent=jeton, **ECRIRE)
+    (sub, _inp), = view["update"]
+    assert sub == LECTEUR
 
 
 def test_le_consentement_vaut_une_fois(s):

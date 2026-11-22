@@ -30,7 +30,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Awaitable, Callable, NamedTuple
+from typing import Any, Awaitable, Callable, NamedTuple
+
+# Le verdict d'une sonde, ses motifs et `ProbeUnavailable` sont ceux de la lib
+# (`oto.tools.common.browser_session`) : un connecteur porté dans la lib et un connecteur
+# propre à oto 1 rendent le MÊME verdict, et `ProbeUnavailable` se rattrape d'un seul nom.
+from oto.tools.common.browser_session import (  # noqa: F401 — réexportés
+    AUTH_REJECTED,
+    LOGGED_IN,
+    NO_SESSION,
+    ProbeUnavailable,
+    Verdict,
+)
 
 from . import browserbase, db
 
@@ -46,15 +57,22 @@ Verify = Callable[..., Awaitable["Verdict"]]
 # Motifs de refus, stables — c'est le CODE que lit l'agent appelant, le texte n'étant
 # qu'une glose. Trois causes, trois conduites : finir de se loguer dans la fenêtre /
 # recommencer le login parce qu'il a été rejeté / ne PAS recommencer, ça vient de nous.
-LOGGED_IN = "logged_in"
-NO_SESSION = "no_session"              # rien ne prouve un login : l'humain n'a pas fini
-AUTH_REJECTED = "auth_rejected"        # 401/403, page de login : identifiants refusés
+# LOGGED_IN, NO_SESSION (rien ne prouve un login : l'humain n'a pas fini) et AUTH_REJECTED
+# (401/403, page de login : identifiants refusés) viennent de la lib, cf. l'import.
 PROBE_UNAVAILABLE = "probe_unavailable"  # la SONDE est en panne, pas l'utilisateur
 FORCED = "forced"                      # persisté sans vérification, à la demande
 WINDOW_CLOSED = "window_closed"        # la fenêtre de connexion n'existe plus : vérifier
                                        # à nouveau ne PEUT pas réussir
 
 _REGISTRY: dict[str, Verify] = {}
+
+# finish(run, jar, on_jar) -> Verdict : la fin de connexion d'un connecteur de la lib
+# exécuté dans le navigateur de l'hôte (`oto.tools.common.browser_session`). `run` est le
+# navigateur de l'hôte, lié à la fenêtre de login ; `jar` le Context Browserbase ; la lib
+# sonde la session et, login confirmé, la rend par `on_jar`, qui l'écrit au coffre. Une
+# sonde sans verdict lève `ProbeUnavailable` et rien n'est écrit. SYNCHRONE, comme la lib.
+Finish = Callable[[Callable[[str, str, str, Any], Any], str, Callable[[str], None]], "Verdict"]
+_FINISH: dict[str, Finish] = {}
 
 # URL de login par connecteur : la page vers laquelle amener la session dès l'ouverture
 # de la Live View (sinon `about:blank`, l'utilisateur ne sait pas où se loguer). Optionnel
@@ -80,38 +98,25 @@ class SessionError(RuntimeError):
     (peut contenir l'URL CDP avec `?apiKey=…`) : logguer le détail, message propre."""
 
 
-class ProbeUnavailable(RuntimeError):
-    """La sonde de login n'a rendu AUCUN verdict — endpoint sondé disparu (404),
-    réponse d'une forme inattendue. Ce n'est pas « pas logué », c'est « je ne sais pas ».
-
-    ⚠️ Les confondre casse TOUT le connecteur. Le 2026-09-03 : la sonde de
-    `pennylaneged` tapait la route MÉTIER `/crm/flow_companies` ; Pennylane l'a
-    déplacée sous `/portfolio/`, elle a répondu 404, `verify` a rendu False et
-    `finalize` est sorti AVANT `_persist()` — plus aucune cliente ne pouvait connecter
-    sa GED, et le message accusait l'authentification (une matinée perdue).
-
-    Une sonde muette ne doit donc pas rendre un connecteur inconnectable. Mais elle ne
-    doit pas non plus passer inaperçue : `finalize` persiste ET rend l'anomalie à
-    l'appelant dans `FinalizeResult.warning`, en la logguant en ERROR. On ne masque
-    rien — on distingue, et on le dit."""
-
-
-class Verdict(NamedTuple):
-    """Ce que rend une sonde de login — pas un booléen nu.
-
-    ⚠️ **Un connecteur parle à des AGENTS.** Un `False` sans motif ne leur laisse
-    qu'une conduite : recommencer. Le 2026-09-03 une cliente a ainsi relancé six fois
-    la connexion de sa GED sur une session qui était valide depuis le début. Les trois
-    causes d'un refus appellent trois conduites OPPOSÉES — finir de se loguer dans la
-    fenêtre, refaire un login rejeté, ou surtout ne PAS recommencer — donc elles se
-    distinguent ici, dans le retour, ou elles ne se distinguent nulle part.
-
-    `retry=False` veut dire : inutile de repasser par la Live View, le problème n'est
-    pas chez l'utilisateur."""
-    connected: bool
-    reason: str
-    detail: str = ""
-    retry: bool = True
+# `ProbeUnavailable` (la lib) : la sonde n'a rendu AUCUN verdict — endpoint sondé disparu
+# (404), réponse d'une forme inattendue. Ce n'est pas « pas logué », c'est « je ne sais
+# pas ». ⚠️ Les confondre casse TOUT le connecteur. Le 2026-09-03 : la sonde de
+# `pennylaneged` tapait la route MÉTIER `/crm/flow_companies` ; Pennylane l'a déplacée
+# sous `/portfolio/`, elle a répondu 404, `verify` a rendu False et `finalize` est sorti
+# AVANT `_persist()` — plus aucune cliente ne pouvait connecter sa GED, et le message
+# accusait l'authentification (une matinée perdue). Pour un connecteur à `verify`,
+# `finalize` persiste donc ET rend l'anomalie dans `FinalizeResult.warning`, en la
+# logguant en ERROR. Pour un connecteur de la lib (`finish`), la lib n'écrit rien sur une
+# sonde muette : `finalize` le dit (`connected=False`, motif `probe_unavailable`), et
+# `force` reste l'échappatoire.
+#
+# `Verdict` (la lib) : ce que rend une sonde de login — pas un booléen nu. ⚠️ **Un
+# connecteur parle à des AGENTS.** Un `False` sans motif ne leur laisse qu'une conduite :
+# recommencer. Le 2026-09-03 une cliente a ainsi relancé six fois la connexion de sa GED
+# sur une session qui était valide depuis le début. Les trois causes d'un refus appellent
+# trois conduites OPPOSÉES — finir de se loguer dans la fenêtre, refaire un login rejeté,
+# ou surtout ne PAS recommencer. `retry=False` veut dire : inutile de repasser par la Live
+# View, le problème n'est pas chez l'utilisateur.
 
 
 class FinalizeResult(NamedTuple):
@@ -184,7 +189,7 @@ def _prune(now: float) -> None:
 
 
 def register(connector: str, verify: Verify, *, login_url: str | None = None,
-             account_aware: bool = False) -> None:
+             account_aware: bool = False, finish: Finish | None = None) -> None:
     """Déclare un connecteur à session navigateur + sa vérification de login. `login_url`
     = page de login vers laquelle ouvrir la Live View (recommandé — évite l'`about:blank`).
 
@@ -192,8 +197,16 @@ def register(connector: str, verify: Verify, *, login_url: str | None = None,
     UN site mais N — sa `login_url` est fournie à l'appel (`start(..., login_url=…)`) et
     son `verify` reçoit `(session_id, account)` au lieu de `(session_id)`, `account`
     identifiant le site (host). Les connecteurs à site unique (crunchbase, brevoauto,
-    pennylaneged) restent inchangés."""
+    pennylaneged) restent inchangés.
+
+    `finish` (connecteur de la lib exécuté dans le navigateur de l'hôte) : `finalize`
+    lui confie la sonde ET l'écriture au coffre (par `on_jar`), au lieu de `verify`
+    suivi de `_persist`. `verify` reste la sonde de `sonder`."""
+    if finish is not None and account_aware:
+        raise ValueError(f"{connector} : `finish` ne vaut que pour un connecteur à site unique")
     _REGISTRY[connector] = verify
+    if finish is not None:
+        _FINISH[connector] = finish
     if account_aware:
         _ACCOUNT_AWARE.add(connector)
     if login_url:
@@ -325,6 +338,12 @@ async def finalize(sub: str, connector: str, context_id: str, session_id: str,
     if _PENDING.get(key, 0.0) < time.monotonic():
         _PENDING.pop(key, None)
         raise SessionError("session de connexion inconnue ou expirée — relance « Connecter ».")
+    finish = _FINISH.get(connector)
+    if finish is not None and not force:
+        res = await _finish(finish, sub, connector, context_id, session_id, scope, group_id)
+        if res.connected:
+            _PENDING.pop(key, None)
+        return res
     verdict = Verdict(True, FORCED, "Session persistée SANS vérification du login "
                       "(`force`) : si les appels échouent, c'est qu'elle n'était pas "
                       "loguée.", retry=False)
@@ -351,3 +370,52 @@ async def finalize(sub: str, connector: str, context_id: str, session_id: str,
                             group_id, account)
     _PENDING.pop(key, None)
     return FinalizeResult(True, verdict.reason, verdict.detail, verdict.retry, warning)
+
+
+_SONDE_MUETTE = (
+    "{e}. Rien n'a été enregistré : sans verdict de la sonde, la session n'est pas tenue "
+    "pour connectée. Si tu t'es bien connecté dans la fenêtre, rappelle la finalisation "
+    "avec `force=true` sur les mêmes identifiants, puis confirme par un vrai appel.")
+
+
+async def _finish(finish: Finish, sub: str, connector: str, context_id: str,
+                  session_id: str, scope: str, group_id: "int | None") -> FinalizeResult:
+    """Fin de connexion d'un connecteur de la lib : la lib sonde la session par le
+    navigateur de l'hôte, lié à la fenêtre de login (le Context n'est persisté qu'à sa
+    libération : une nouvelle session n'y verrait pas le login), et rend la session
+    confirmée par `on_jar`, qui l'écrit au coffre (`_persist`). Une sonde sans verdict
+    (`ProbeUnavailable`) ne vaut jamais connexion : rien n'est écrit, et le refus le dit."""
+    ecrit: list[str] = []
+
+    def run(jar: str, page_url: str, page_function: str, arg: Any = None) -> Any:
+        if jar != context_id:
+            raise SessionError("la lib a demandé une autre session que celle de la fenêtre "
+                               "de connexion.")
+        return asyncio.run(browserbase.run_session_eval(session_id, page_url,
+                                                        page_function, arg))
+
+    def on_jar(jar: str) -> None:
+        ecrit.append(jar)
+        _persist(sub, connector, jar, session_id, scope, group_id)
+
+    try:
+        verdict = await asyncio.to_thread(finish, run, context_id, on_jar)
+    except ProbeUnavailable as e:
+        logger.error("session verify inconclusive for %s: %s", connector, e)
+        return FinalizeResult(False, PROBE_UNAVAILABLE, _SONDE_MUETTE.format(e=e),
+                              retry=False)
+    except SessionError:
+        raise
+    except Exception:  # noqa: BLE001 — détail loggué, jamais renvoyé (peut porter l'apiKey)
+        if ecrit:            # l'écriture au coffre a échoué : rien à voir avec la sonde
+            raise
+        logger.exception("session verify failed for %s", connector)
+        if await _fenetre_fermee(session_id):
+            return FinalizeResult(False, WINDOW_CLOSED, _FENETRE_FERMEE, retry=False)
+        raise SessionError("vérification de la session impossible — réessaie.")
+    if not verdict.connected:
+        return FinalizeResult(False, verdict.reason, verdict.detail, verdict.retry)
+    if ecrit != [context_id]:
+        raise RuntimeError(f"{connector} : login confirmé sans que la session soit rendue "
+                           "à l'hôte (`on_jar`)")
+    return FinalizeResult(True, verdict.reason, verdict.detail, verdict.retry)

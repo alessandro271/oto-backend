@@ -102,13 +102,15 @@ def _phrase(texte: str) -> str:
     return texte if fin < 0 else texte[:fin + 1]
 
 
-def texte_de_l_outil(description: dict, outil: str, fonctions: list[dict]) -> str:
-    """The tool's description: what the side does, then one sentence per op."""
+def texte_de_l_outil(description: dict, outil: str, fonctions: list[dict], note: str = "") -> str:
+    """The tool's description: what the side does, then one sentence per op. `note`, the platform's sentence
+    (`Connector.tool_note`), follows the head of the READ tool."""
     label = description["connector"]["label"]
     ns = descriptions.espace(description)
     if outil == ns:
         tete = (f"{label} — read{' or prepare' if descriptions.lecteur_simule(fonctions) else ''}. Nothing is sent "
-                f"or destroyed here{f' (that is `{ns}_act`)' if len(descriptions.outils(description)) > 1 else ''}.")
+                f"or destroyed here{f' (that is `{ns}_act`)' if len(descriptions.outils(description)) > 1 else ''}."
+                f"{f' {note}' if note else ''}")
     else:
         tete = f"{label} — act: what this tool does reaches the vendor, sends or destroys. Reading is `{ns}`."
     ops = "\n".join(f"- `{f['name']}` — {_phrase(f['description'])}" for f in fonctions)
@@ -277,10 +279,10 @@ class OutilDecrit(Tool):
     _ops: list = PrivateAttr()
 
     @classmethod
-    def monte(cls, servi: Servi, outil: str, fonctions: list[dict]) -> "OutilDecrit":
+    def monte(cls, servi: Servi, outil: str, fonctions: list[dict], note: str = "") -> "OutilDecrit":
         ns = descriptions.espace(servi.description)
         annotations = (ACTE if outil != ns else SIMULATION if descriptions.lecteur_simule(fonctions) else LECTURE)
-        tool = cls(name=outil, description=texte_de_l_outil(servi.description, outil, fonctions),
+        tool = cls(name=outil, description=texte_de_l_outil(servi.description, outil, fonctions, note),
                    parameters=schema_union(fonctions), annotations=annotations)
         tool._servi = servi
         tool._ops = [f["name"] for f in fonctions]
@@ -300,12 +302,12 @@ class OutilDecrit(Tool):
         return self.convert_result(await asyncio.to_thread(self._servi.appeler, f, args))
 
 
-def monter(mcp: FastMCP, nom: str, description: dict) -> tuple[OutilDecrit, ...]:
+def monter(mcp: FastMCP, nom: str, description: dict, note: str = "") -> tuple[OutilDecrit, ...]:
     """Mount the pair of one described connector and register its probe; refuse, before mounting anything, a
-    description the reader cannot serve."""
+    description the reader cannot serve. `note`: the platform's sentence for the read tool (`Connector.tool_note`)."""
     descriptions.verifier(description)
     servi = Servi(nom, description)
-    montes = tuple(OutilDecrit.monte(servi, outil, fonctions)
+    montes = tuple(OutilDecrit.monte(servi, outil, fonctions, note)
                    for outil, fonctions in descriptions.outils(description).items())
     for outil in montes:
         mcp.add_tool(outil)
@@ -319,4 +321,4 @@ def monter(mcp: FastMCP, nom: str, description: dict) -> tuple[OutilDecrit, ...]
 def register(mcp: FastMCP) -> None:
     """Mount every inscribed connector (`providers._model._decrit`)."""
     for c in descriptions.inscrits():
-        monter(mcp, c.name, descriptions.charger(c.name))
+        monter(mcp, c.name, descriptions.charger(c.name), c.tool_note)

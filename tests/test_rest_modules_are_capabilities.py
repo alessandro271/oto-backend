@@ -52,6 +52,7 @@ _KNOWN: dict[str, str] = {
     "/api/microsoft/oauth/callback": NATURE,
     "/api/ubersuggest/oauth/callback": NATURE,
     "/api/jefacture/oauth/callback": NATURE,
+    "/api/linkedin_ads/oauth/callback": NATURE,
     # Écran d'autorisation WordPress (mot de passe d'application) : même geste de
     # navigateur, sans code à échanger.
     "/api/wordpress/connect/callback": NATURE,

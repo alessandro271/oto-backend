@@ -39,7 +39,14 @@ CREATE TABLE IF NOT EXISTS unipile_accounts (
     -- rebindée déterministiquement au même sub — sans elle, l'heuristique du
     -- poll-and-bind (compte créé APRÈS le pending) rate toute réutilisation.
     disconnected_at TIMESTAMPTZ,
-    PRIMARY KEY (sub, org_id, provider)
+    -- EMPLACEMENT du compte sur ce canal (plusieurs comptes par canal, #multi-comptes) :
+    -- '' = l'emplacement PRINCIPAL — celui de toute ligne née avant, celui qu'une
+    -- (re)connexion ordinaire remplace, le compte servi par défaut. Un compte AJOUTÉ
+    -- prend un emplacement à lui, nommé par son premier `account_id` et jamais renommé :
+    -- c'est la clé stable d'une connexion (facturation, sous-instance, prêt), pas
+    -- l'identifiant courant du compte.
+    slot TEXT NOT NULL DEFAULT '',
+    CONSTRAINT unipile_accounts_slot_pkey PRIMARY KEY (sub, org_id, provider, slot)
 );
 -- ⚠️ PAS d'index sur `org_id` ICI : la colonne est aussi posée par un
 -- `ALTER … ADD COLUMN` de `_init.py`, donc elle peut MANQUER sur une base qui
@@ -61,6 +68,9 @@ CREATE TABLE IF NOT EXISTS unipile_pending (
     org_id BIGINT,                       -- org de contexte au connect (porté au compte)
     provider TEXT NOT NULL DEFAULT 'LINKEDIN',  -- canal demandé (B1, multi-canal)
     platform_seat BOOLEAN NOT NULL DEFAULT FALSE,  -- siège clé plateforme (ADR 0033 B4)
+    -- la demande AJOUTE un compte au canal (nouvel emplacement) au lieu de remplacer
+    -- le compte principal
+    add_account BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -79,6 +89,8 @@ CREATE TABLE IF NOT EXISTS connector_account_grants (
     grantee_sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
     granted_by TEXT NOT NULL,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- l'emplacement prêté (`unipile_accounts.slot`) : '' = le compte principal
+    slot TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (owner_sub, provider, grantee_sub)
 );
 CREATE INDEX IF NOT EXISTS idx_account_grants_grantee
@@ -121,8 +133,44 @@ CREATE TABLE IF NOT EXISTS connector_account_group_grants (
     grantee_group_id BIGINT NOT NULL REFERENCES org_groups(id) ON DELETE CASCADE,
     granted_by TEXT NOT NULL,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    slot TEXT NOT NULL DEFAULT '',          -- l'emplacement prêté, cf. ci-dessus
     PRIMARY KEY (owner_sub, provider, grantee_group_id)
 );
 CREATE INDEX IF NOT EXISTS idx_account_group_grants_group
     ON connector_account_group_grants(grantee_group_id, provider);
+"""
+
+# Limites d'envoi d'un compte LinkedIn, posées par la personne qui le possède (et le
+# compte de ce qu'il a fait, sur une fenêtre glissante). LinkedIn plafonne PAR COMPTE et
+# Unipile ne limite rien (`docs/unipile.md` §Limites d'envoi) : la seule borne qu'un
+# agent, une recette ou un prêt rencontre avant LinkedIn est celle-ci.
+#
+# ⚠️ Clé = l'`account_id` Unipile, JAMAIS la ligne `unipile_accounts` : un même compte est
+# relié dans N orgs et opéré par des bénéficiaires de prêt — clé par ligne, il aurait N
+# fois sa limite. `sub` = le PROPRIÉTAIRE du compte (rangement, export), pas l'appelant.
+#
+# `unipile_sending_limits` : une ligne par (compte, limite) posée ; aucune ligne = aucune
+# limite (rien ne change pour qui n'a rien réglé). `unipile_sending_log` : une ligne par
+# action RÉUSSIE (réservée avant l'appel, retirée s'il échoue), purgée au-delà de 8 jours
+# (la plus longue fenêtre est la semaine glissante).
+SENDING_LIMITS = """
+CREATE TABLE IF NOT EXISTS unipile_sending_limits (
+    account_id TEXT NOT NULL,
+    lim TEXT NOT NULL,
+    max_count INTEGER NOT NULL CHECK (max_count >= 0),
+    sub TEXT NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (account_id, lim)
+);
+CREATE TABLE IF NOT EXISTS unipile_sending_log (
+    id BIGSERIAL PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    sub TEXT REFERENCES users(sub) ON DELETE CASCADE,
+    at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_unipile_sending_log_acct
+    ON unipile_sending_log(account_id, action, at);
+CREATE INDEX IF NOT EXISTS idx_unipile_sending_limits_sub ON unipile_sending_limits(sub);
+CREATE INDEX IF NOT EXISTS idx_unipile_sending_log_sub ON unipile_sending_log(sub);
 """

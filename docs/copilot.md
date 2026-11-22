@@ -214,13 +214,18 @@ pire.
   même rédaction, même règlement que la cible d'`oto_call` — sous `sub_override`, un
   contexte FastMCP lié à l'instance servie, et un **geste propre à l'appel**.
 - **Un résultat d'outil est coupé à 20 000 caractères** (`texte.PLAFOND_RESULTAT`, 80 000
-  avant ; `oto_procedure` et `oto_guide` gardent 80 000 : leur lecture n'a ni section ni champs, une
-  procédure ou un guide coupé serait illisible — `texte.PLAFONDS_PAR_OUTIL`), et la coupe est DITE au modèle (« narrow the call (filter, fields, limit) »). Raison :
+  avant ; `oto_procedure`, `oto_guide` et `oto_apps` gardent 80 000 : leur lecture n'a ni section ni champs, une
+  procédure ou un guide coupé serait illisible, et une app coupée ne se corrige pas au-delà de la coupe
+  (chaque `find` d'un `patch` se copie de la lecture) — `texte.PLAFONDS_PAR_OUTIL`), et la coupe est DITE au modèle (« narrow the call (filter, fields, limit) »). Raison :
   chaque caractère gardé est écrit une fois dans le cache de prompt (1,25 × le prix d'entrée)
   puis relu à chaque appel suivant de la conversation. Mesuré sur les conversations stockées
   (30 jours) : les résultats d'outils font ~86 % de l'historique rejoué, et les ~13 % de
   résultats de plus de 20 000 caractères portent ~77 % de leurs caractères. Les réponses de la
   page (outils côté client) ont leur propre coupe, à 20 000 (`boucle.repondre_page`).
+- **Un patch d'app qui ne change rien est refusé avant la carte** (`boucle.edit_sans_effet`) : un
+  `replace` égal à son `find` est dit au modèle sans demander l'approbation de la personne ; l'outil le
+  refuserait de toute façon (`remplacements.appliquer`, comme une liste dont le texte final est celui de
+  départ) — aucune version enregistrée identique à la précédente.
 - **Une lecture est allégée avant d'être coupée** (`texte.alleger`, lectures seulement, jamais la
   réponse d'une écriture) : JSON compact (pas d'espace après `,` et `:`) et, dans une liste d'au
   moins trois lignes, plus de clé dont la valeur est `null`, `""`, `[]` ou `{}` (0 et `false`
@@ -392,11 +397,13 @@ garde son chemin d'avant pour ses DM, inchangé.
   Chaque réponse de chaque canal arrive à la route : « un fil porte-t-il une conversation de
   quelqu'un, et de quelle org ? » se lit AVANT tout credential (`copilot.slack_org_du_fil`).
 - **Réglage d'org « mention seule »** : `oto_org_settings domain=slack` (`set` admin de
-  l'org, `mention_only` true|false ; colonne `orgs.slack_mention_only`, défaut `false`,
-  `db/slack_reglage.py`). Par défaut, rien ne change (ci-dessus). Posé à `true`, hors d'un
+  l'org, `mention_only` true|false ; colonne `orgs.slack_mention_only`, défaut `true`
+  depuis le 19/11/2026 — orgs existantes comprises, révision
+  `20261119_1200_slack_mention_dflt` —, `db/slack_reglage.py`). Par défaut, hors d'un
   DM, l'app ne répond qu'à un message qui la tague : une réponse sans mention dans ce fil
   est jetée avant tout credential (`ignored: mention_only`), et la MÊME personne poursuit
-  sa conversation par une nouvelle mention. Les DM ne changent pas. Détail et fil d'un
+  sa conversation par une nouvelle mention. Posé à `false`, une réponse sans mention
+  poursuit la conversation (ci-dessus). Les DM ne changent pas. Détail et fil d'un
   agent hébergé : `docs/runner-et-automatisations.md` §Une réponse dans le fil d'un agent.
 - **Ce que Slack montre** : 👀 sur la demande ; UN message « working » dans le fil, édité avec
   les notes de progrès (au plus une édition par 1,5 s : `chat.update` est limité), puis

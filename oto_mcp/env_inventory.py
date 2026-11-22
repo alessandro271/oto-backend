@@ -122,8 +122,10 @@ _REQUISES: tuple[Variable, ...] = (
     Variable("OTO_MCP_MASTER_KEY", Classe.REQUISE, None,
              "Clé AES-256 (hex 64 ou base64) du coffre credentials — HORS DB. "
              "Obligatoire DE FAIT : la lecture rend `None` sans lever, mais "
-             "`encrypt`/`decrypt` lèvent nommé au premier usage réel.",
-             ("oto_mcp/crypto.py:45", "oto_mcp/crypto.py:65", "oto_mcp/crypto.py:74")),
+             "`encrypt`/`decrypt` lèvent nommé au premier usage réel. Porte le "
+             "`key_ref` 0x01 du trousseau (mode plate, et lecture de 0x01 pendant la "
+             "transition vers Key Manager ; docs/connector-vault.md).",
+             ("oto_mcp/crypto.py:141",)),
     Variable("OTO_MCP_OAUTH_STATE_SECRET", Classe.REQUISE, None,
              "Clé qui signe l'état OAuth et les jetons courts (upload, invite, "
              "optout). Obligatoire DE FAIT à 4 des 5 sites qui la lisent (lèvent "
@@ -496,20 +498,31 @@ _REGLAGES: tuple[Variable, ...] = (
              "de sa part de la fenêtre, `report` (défaut) journalise une fois par "
              "fenêtre l'org qui la dépasse et ne refuse rien, `off` ne compte rien. "
              "Une valeur inconnue LÈVE au boot.",
-             ("oto_mcp/access/platform_rate.py:64",)),
+             ("oto_mcp/access/platform_rate.py:77",)),
     Variable("OTO_PLATFORM_KEY_ORG_RATE_LIMIT", Classe.REGLAGE, None,
              "Appels d'UNE org sur UNE clé plateforme partagée par fenêtre (défaut 120 "
              "dans le code ; 0 = sans limite). Illisible : LÈVE au boot.",
-             ("oto_mcp/access/platform_rate.py:111",)),
+             ("oto_mcp/access/platform_rate.py:124",)),
     Variable("OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S", Classe.REGLAGE, None,
              "Durée en secondes de la fenêtre fixe de l'équité des clés plateforme "
              "(défaut 60 dans le code, 1 au moins). Illisible : LÈVE au boot.",
-             ("oto_mcp/access/platform_rate.py:87",)),
+             ("oto_mcp/access/platform_rate.py:100",)),
     Variable("OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES", Classe.REGLAGE, "",
              "Limites par connecteur porteur de la clé, `serper=600,aiark=30` ; "
-             "`0` = sans limite pour ce connecteur. Vide = la limite commune partout. "
+             "`0` = sans limite pour ce connecteur. Au-dessus des défauts du code "
+             "(`DEFAULT_OVERRIDES` : `google_ads=30`). Vide = ces défauts, et la "
+             "limite commune ailleurs. "
              "Une paire illisible LÈVE au boot.",
-             ("oto_mcp/access/platform_rate.py:97",)),
+             ("oto_mcp/access/platform_rate.py:110",)),
+    Variable("OTO_GOOGLE_ADS_DAILY_OPS", Classe.REGLAGE, None,
+             "Requêtes Google Ads par jour UTC pour TOUTE la plateforme (`tools/"
+             "google_ads.py`) : le quota est celui du projet Google Cloud du client "
+             "OAuth (Explorer 2 880 / 24 h glissantes, Basic 15 000). Défaut 1 440 dans "
+             "le code (la moitié d'Explorer : une journée fixe peut doubler à minuit) ; "
+             "toujours appliqué, quel que soit le mode F-051 (la borne par org et par "
+             "minute, elle, est F-051) ; `0` = sans budget du jour. Illisible : "
+             "LÈVE au boot.",
+             ("oto_mcp/tools/google_ads.py:103",)),
     Variable("OTO_JOURNAL_REVISIONS", Classe.REGLAGE, "on",
              "Interrupteur du journal des révisions de ligne du datastore (oto#273) : "
              "`off` le coupe pour les écritures de CE processus, sans redéployer (un "
@@ -619,27 +632,28 @@ _REGLAGES: tuple[Variable, ...] = (
              "#1232 : corps, délai d'outil, `statement_timeout`, inactivité des sessions "
              "MCP) : `report` les mesure, `enforce` les applique. Lue au démarrage : en "
              "changer demande un redémarrage.",
-             ("oto_mcp/limite_debit.py:179", "oto_mcp/bornes_processus.py:108")),
+             ("oto_mcp/limite_debit.py:179", "oto_mcp/bornes_processus.py:111")),
     Variable("OTO_BORNE_CORPS_OCTETS", Classe.REGLAGE, "4194304",
              "Borne du processus (#1232) : taille max (octets) du corps d'une requête "
              "HTTP hors routes d'upload. Mesurée en `report`, `413` en `enforce` "
              "(`OTO_DEBIT_MODE`) ; `0` désarme ; une valeur illisible empêche le démarrage.",
-             ("oto_mcp/bornes_processus.py:110",)),
+             ("oto_mcp/bornes_processus.py:113",)),
     Variable("OTO_BORNE_CORPS_UPLOAD_OCTETS", Classe.REGLAGE, "115343360",
              "Borne du processus (#1232) : taille max (octets) du corps sur une route "
              "d'upload (reconnue à son contrat : corps déclaré non JSON). Mesurée en "
              "`report`, `413` en `enforce` ; `0` désarme ; illisible : refus de démarrer.",
-             ("oto_mcp/bornes_processus.py:113",)),
+             ("oto_mcp/bornes_processus.py:116",)),
     Variable("OTO_BORNE_OUTIL_S", Classe.REGLAGE, "120",
              "Borne du processus (#1232) : durée max (s) d'un appel d'outil MCP, la même "
              "pour tous. Mesurée en `report`, erreur MCP `tool_timeout` en `enforce` ; "
              "`0` désarme ; illisible : refus de démarrer.",
-             ("oto_mcp/bornes_processus.py:114",)),
+             ("oto_mcp/bornes_processus.py:117",)),
     Variable("OTO_BORNE_SESSION_INACTIVE_S", Classe.REGLAGE, "1800",
-             "Borne du processus (#1232) : inactivité max (s) d'une session MCP. Mesurée "
-             "en `report` (session reprise après ce délai), fermée par l'SDK `mcp` en "
-             "`enforce` ; `0` désarme ; illisible : refus de démarrer.",
-             ("oto_mcp/bornes_processus.py:119",)),
+             "Borne du processus (#1232) : inactivité max (s) d'une session MCP, fermée "
+             "par l'SDK `mcp` dès que `OTO_DEBIT_MODE` n'est pas `off` (`report` compris : "
+             "hygiène mémoire, pas un refus) ; `0` désarme ; "
+             "illisible : refus de démarrer.",
+             ("oto_mcp/bornes_processus.py:122",)),
     Variable("OTO_DEBIT_ADRESSES_EXEMPTEES", Classe.REGLAGE, "",
              "Adresses ou CIDR (séparés par des virgules) de NOS machines, exemptés des "
              "classes de débit par adresse et du budget d'échecs ; leurs jetons paient "
@@ -691,7 +705,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "dépassent sont comptés ; en `enforce`, posée sur chaque connexion du pool "
              "(la préparation de la base au démarrage, le DDL à chaud et le travail de "
              "fond hors pool en sont exemptés). `0` désarme ; illisible : refus de démarrer.",
-             ("oto_mcp/bornes_processus.py:116",)),
+             ("oto_mcp/bornes_processus.py:119",)),
     Variable("OTO_MCP_DDL_LOCK_TIMEOUT_MS", Classe.REGLAGE, "5000",
              "`lock_timeout` du DDL à chaud (`CREATE INDEX CONCURRENTLY`).",
              ("oto_mcp/db/_conn.py:97", "oto_mcp/db/_conn.py:104")),
@@ -732,7 +746,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "Backoff (s) entre tentatives FOD.", ("oto_mcp/fod/http.py:35",)),
     Variable("FOD_RETRY_AFTER_MAX_S", Classe.REGLAGE, "10",
              "Plafond (s) d'un `Retry-After` FOD honoré.",
-             ("oto_mcp/fod/http.py:134",)),
+             ("oto_mcp/fod/http.py:177",)),
     Variable("OTO_MCP_S3_REGION", Classe.REGLAGE, "fr-par",
              "Région S3/Scaleway du store média.", ("oto_mcp/media_store.py:61",)),
     Variable("OTO_MCP_S3_PRESIGN_EXPIRY", Classe.REGLAGE, "3600",
@@ -802,6 +816,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "les champs `client_*` du médecin. `1`, `true`, `yes`, `on` l'allument ; "
              "absente, vide ou un non l'éteignent ; toute autre valeur lève.",
              ("oto_mcp/alertes_slack_agents.py:79",)),
+    Variable("OTO_CATALOGUE_CAUSES_DECIDE", Classe.REGLAGE, "",
+             "Le catalogue des causes de panne d'agent DÉCIDE (`medecin_agents.py`) : une "
+             "cause approuvée range une panne que la regex dit `inconnu` — sa classe et son "
+             "côté, donc qui l'alerte vise et ce que le client lit ; jamais une relance. "
+             "Éteint, le catalogue reste en ombre. `1`, `true`, `yes`, `on` l'allument ; "
+             "absente, vide ou un non l'éteignent ; toute autre valeur lève.",
+             ("oto_mcp/medecin_agents.py:286",)),
     Variable("OTO_BILLING_RUNNER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : runner de facturation — AGIT sur un tiers "
              "(prélèvement), donc lu aussi par `est_la_production()`.",
@@ -966,6 +987,34 @@ _REGLAGES: tuple[Variable, ...] = (
              "Second émetteur Logto toléré (coexistence multi-domaine), pour les "
              "personnes comme pour les services.",
              ("oto_mcp/server.py:228", "oto_mcp/auth/service_identity.py:91")),
+    Variable("OTO_MCP_TROUSSEAU", Classe.REGLAGE, "",
+             "Mode Key Manager du coffre : les clés de données ENVELOPPÉES de l'instance, "
+             "en JSON `{\"02\": \"<sortie de GenerateDataKey>\"}` (key_ref en deux "
+             "chiffres hexadécimaux, jamais 01). Secret facultatif, tiré du Secret Manager "
+             "par le lanceur (`OTO_SECRETS_OPTIONNELS`). Chaque clé est ouverte UNE fois par "
+             "processus par `Decrypt` de Scaleway Key Manager, et ne vit qu'en RAM. Vide = "
+             "mode plate. Posée, elle exige `OTO_MCP_KMS_CLE` et `OTO_MCP_KMS_REGION`, "
+             "sinon refus de démarrer (docs/connector-vault.md).",
+             ("oto_mcp/crypto.py:192",)),
+    Variable("OTO_MCP_KMS_CLE", Classe.REGLAGE, "",
+             "Identifiant de la clé Scaleway Key Manager qui enveloppe les clés de "
+             "`OTO_MCP_TROUSSEAU` (non secret). Exigée avec le trousseau, refusée sans lui.",
+             ("oto_mcp/crypto.py:193",)),
+    Variable("OTO_MCP_KMS_REGION", Classe.REGLAGE, "",
+             "Région Scaleway de cette clé Key Manager (ex. fr-par ; non secret). Exigée "
+             "avec le trousseau, refusée sans lui.",
+             ("oto_mcp/crypto.py:194",)),
+    Variable("OTO_MCP_CLE_ECRITURE", Classe.REGLAGE, "01",
+             "Le key_ref sous lequel le coffre ÉCRIT (deux chiffres hexadécimaux) : `01` "
+             "(clé plate) par défaut, `02` une fois le trousseau posé et vérifié. Un key_ref "
+             "absent du trousseau refuse le démarrage.",
+             ("oto_mcp/crypto.py:195",)),
+    Variable("CREDENTIALS_DIRECTORY", Classe.REGLAGE, "",
+             "Posée par systemd, jamais à la main : le dossier des credentials de l'unité. "
+             "Le coffre y lit `scw-kms`, la clé d'API de `Decrypt` de Key Manager "
+             "(`LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key`, ligne ajoutée à l'unité au passage à Key "
+             "Manager), en mode Key Manager seulement.",
+             ("oto_mcp/crypto.py:232",)),
     Variable("OTO_EXPORT_CLE_CIBLE", Classe.REGLAGE, None,
              "Clé maîtresse (hex 64 ou base64) de l'instance CIBLE d'un export par "
              "périmètre, pour cette seule exécution de `oto-mcp perimetre export` : les "

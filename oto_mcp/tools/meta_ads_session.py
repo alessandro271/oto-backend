@@ -44,8 +44,8 @@ def resolve_token(sub: str) -> str:
         from .. import config
         raise RuntimeError(
             "No Meta Ads account connected. Authorize oto from your connectors page "
-            f"({config.dashboard_url_for(sub)}/, connector « Meta Ads ») and pick "
-            "the ad accounts to share.")
+            f"({config.dashboard_url_for(sub)}/, connector « Meta Ads »). With a "
+            "system-user setup, Facebook also asks which ad accounts to share.")
     return row["secret"]
 
 

@@ -4,6 +4,7 @@ Cinq routes écrites à la main jusqu'au 2026-08-27, portées en capacités (ADR
 mêmes chemins, mêmes codes, même corps sur le fil :
 
 - `DELETE /api/me/avatar`                                  → efface mon avatar
+- `POST   /api/me/avatar/import`  (ajoutée le 20/11/2026)  → ma photo de profil Google
 - `DELETE /api/orgs/{id}/logo`                             → efface le logo UPLOADÉ de l'org
 - `GET    /api/me/projects/{project_id}/files`             → liste les fichiers bruts
 - `DELETE /api/me/projects/{project_id}/files/{file_id}`   → en supprime un
@@ -31,13 +32,14 @@ cinq-là sont les chemins du dashboard.
 from __future__ import annotations
 
 from typing import Any, Optional
+from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel
 
 from .. import access, db, org_store
 from . import _publication
 from ._authz import SUB_ONLY
-from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
 _FILES = "/api/me/projects/{project_id:int}/files"
@@ -48,6 +50,13 @@ _FILE = _FILES + "/{file_id:int}"
 
 class AvatarClearInput(BaseModel):
     """Aucun paramètre : l'avatar effacé est celui du porteur du jeton."""
+
+
+class AvatarImportInput(BaseModel):
+    """L'adresse `picture` du jeton d'IDENTITÉ émis à la connexion (la photo du compte
+    Google). Texte libre ici : l'hôte est jugé dans le handler, qui rend son propre
+    refus nommé (`url_not_allowed`) plutôt que l'`invalid_input` de pydantic."""
+    url: str
 
 
 class OrgLogoClearInput(BaseModel):
@@ -81,6 +90,14 @@ class ProjectFilePublicInput(BaseModel):
 
 class Cleared(BaseModel):
     ok: bool
+
+
+class AvatarImported(BaseModel):
+    ok: bool
+    # Faux = rien n'a changé : la personne avait déjà un avatar (un upload gagne).
+    imported: bool
+    # L'avatar SERVI après l'appel : l'importé, ou celui qui était déjà là.
+    avatar_url: Optional[str] = None
 
 
 class ProjectFile(BaseModel):
@@ -161,6 +178,95 @@ def _avatar_clear(ctx: ResolvedCtx, inp: AvatarClearInput) -> dict:
     return {"ok": True}
 
 
+# L'import de la photo de profil (20/11/2026). Le jeton d'IDENTITÉ porte `picture`
+# (la photo du compte Google) ; le jeton d'ACCÈS que lit ce service ne la porte pas, et le
+# navigateur du tableau de bord ne peut pas télécharger l'image lui-même. Le tableau de
+# bord envoie donc l'adresse, une fois, et le serveur la récupère, la RE-HÉBERGE (une
+# adresse Google peut changer ou se fermer) et la pose — seulement sur un compte SANS
+# avatar : un upload gagne toujours. L'adresse vient du client : elle ne vise QUE les
+# hôtes d'images de Google, n'en sort jamais par une redirection, et passe la garde
+# d'egress sous la politique « URL choisie » (ce qui résout vers l'intérieur est refusé,
+# sans exception possible).
+
+_HOTES_PHOTO = ("lh3.googleusercontent.com",)
+_SUFFIXE_PHOTO = ".googleusercontent.com"
+_DELAI_PHOTO = (3, 5)
+_REDIRECTIONS_PHOTO = 2
+
+
+def _hote_de_photo(url: str) -> bool:
+    morceaux = urlsplit(url or "")
+    hote = (morceaux.hostname or "").lower()
+    return (morceaux.scheme == "https" and not morceaux.username and not morceaux.password
+            and (hote in _HOTES_PHOTO or hote.endswith(_SUFFIXE_PHOTO)))
+
+
+def _adresse_de_photo(url: str) -> None:
+    """Refuse toute adresse qui n'est pas une image de Google publique."""
+    from .. import egress
+    if not _hote_de_photo(url):
+        raise AuthzDenied(400, "url_not_allowed")
+    try:
+        egress.check_url(url, connector="avatar_import", field="url",
+                         exceptions_declarees=False)
+    except egress.EgressRefused:
+        raise AuthzDenied(400, "url_not_allowed") from None
+
+
+def _telecharger_photo(url: str) -> bytes:
+    """Les octets de la photo. Lecture en flux, bornée PENDANT (la borne d'image du
+    stockage), aucune redirection suivie hors des hôtes de Google."""
+    import requests
+
+    from .. import media_store
+    borne = media_store.max_image_bytes()
+    courante = url
+    for _ in range(_REDIRECTIONS_PHOTO + 1):
+        _adresse_de_photo(courante)
+        try:
+            r = requests.get(courante, stream=True, allow_redirects=False,
+                             timeout=_DELAI_PHOTO)
+        except requests.RequestException:
+            raise AuthzDenied(502, "fetch_failed") from None
+        try:
+            if r.is_redirect or r.is_permanent_redirect:
+                courante = urljoin(courante, r.headers.get("Location") or "")
+                continue
+            if r.status_code != 200:
+                raise AuthzDenied(502, "fetch_failed")
+            if not (r.headers.get("Content-Type") or "").lower().startswith("image/"):
+                raise AuthzDenied(400, "unsupported_type")
+            morceaux, total = [], 0
+            for morceau in r.iter_content(chunk_size=65536):
+                total += len(morceau)
+                if total > borne:
+                    raise AuthzDenied(413, "image_too_large")
+                morceaux.append(morceau)
+            return b"".join(morceaux)
+        finally:
+            r.close()
+    raise AuthzDenied(502, "fetch_failed")
+
+
+def _avatar_import(ctx: ResolvedCtx, inp: AvatarImportInput) -> dict:
+    from .. import media_store
+    _adresse_de_photo(inp.url)
+    actuel = (db.get_user(ctx.sub) or {}).get("avatar_url")
+    if actuel:
+        return {"ok": True, "imported": False, "avatar_url": actuel}
+    donnees = _telecharger_photo(inp.url)
+    try:
+        neuve = media_store.upload_image("avatars", ctx.sub, donnees, "")
+    except media_store.MediaError as e:
+        raise AuthzDenied(e.status, e.code) from None
+    if db.set_avatar_url(ctx.sub, neuve, seulement_si_absent=True):
+        return {"ok": True, "imported": True, "avatar_url": neuve}
+    # Un upload est arrivé entre la lecture et l'écriture : il gagne, la copie part.
+    media_store.delete_by_url(neuve)
+    return {"ok": True, "imported": False,
+            "avatar_url": (db.get_user(ctx.sub) or {}).get("avatar_url")}
+
+
 def _org_logo_clear(ctx: ResolvedCtx, inp: OrgLogoClearInput) -> dict:
     """⚠️ Ordre des refus PRÉSERVÉ : id illisible (400) → org inconnue (404) → non-admin
     (403). Une règle d'autz déclarée (`ORG_ADMIN_OF`) rendrait 403 sur une org inconnue,
@@ -235,6 +341,12 @@ def _file_public(ctx: ResolvedCtx, inp: ProjectFilePublicInput) -> dict:
 
 _D_AVATAR = ("Efface mon avatar. L'objet stocké est supprimé avec la référence — pas "
              "d'orphelin dans le stockage.")
+_D_AVATAR_IMPORT = (
+    "Importe ma photo de profil Google comme avatar, si je n'en ai AUCUN. `url` : "
+    "l'adresse `picture` de mon jeton d'identité, sur un hôte d'images de Google (https, "
+    "`*.googleusercontent.com`) — toute autre adresse est refusée, et aucune "
+    "redirection n'en sort. L'image est récupérée et ré-hébergée. Si j'ai déjà un "
+    "avatar, rien ne change : `imported: false` et l'avatar actuel.")
 _D_LOGO = ("Efface le logo UPLOADÉ de l'org (org_admin). ⚠️ Le logo AFFICHÉ ne disparaît "
            "pas forcément : il retombe sur celui dérivé du domaine de marque déclaré. "
            "C'est l'upload qu'on retire, pas l'affichage.")
@@ -257,6 +369,20 @@ CAPABILITIES += [
         key="me.avatar.clear", handler=_avatar_clear, Input=AvatarClearInput,
         authz=SUB_ONLY, Output=Cleared, description=_D_AVATAR, mcp=None,
         rest=RestBinding("DELETE", "/api/me/avatar"),
+    ),
+    Capability(
+        key="me.avatar.import", handler=_avatar_import, Input=AvatarImportInput,
+        authz=SUB_ONLY, Output=AvatarImported, description=_D_AVATAR_IMPORT, mcp=None,
+        rest=RestBinding("POST", "/api/me/avatar/import"),
+        errors=(
+            DeclaredError(400, "url_not_allowed",
+                          "l'adresse n'est pas une image de Google en https, ou résout "
+                          "vers une adresse interne"),
+            DeclaredError(400, "unsupported_type", "l'adresse ne sert pas une image"),
+            DeclaredError(413, "image_too_large",
+                          "au-delà de la borne d'image (2 Mo par défaut)"),
+            DeclaredError(502, "fetch_failed", "l'image n'a pas pu être récupérée"),
+        ),
     ),
     Capability(
         key="org.logo.clear", handler=_org_logo_clear, Input=OrgLogoClearInput,

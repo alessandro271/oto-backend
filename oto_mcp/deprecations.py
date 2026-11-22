@@ -13,9 +13,9 @@ geste — changer cette constante — et non une chasse aux chaînes de caractè
 quarante descriptions, dont on oublierait trois.
 
 Pourquoi un TAG et pas une date de merge (`RETRAIT` se lit « premier tag `vX.Y.Z`
-posé à partir de cette date ») : `main` est la PREPROD. Un alias retiré au merge
-serait retiré du serveur que les intégrateurs sondent, deux mois de préavis
-annoncés et zéro jour servi. Le retrait est le lot D — issue #526, qui porte la
+posé à partir de cette date ») : seul un tag déploie, `main` n'est que le tronc. Une
+date de merge ne dit pas quand le retrait est SERVI : c'est le premier tag qui l'emporte
+qui le sert aux intégrateurs. Le retrait est le lot D — issue #526, qui porte la
 liste complète de ce que la date emporte.
 
 ⚠️ **Ce module n'est pas un fourre-tout de compatibilité.** Il ne porte que des
@@ -330,18 +330,22 @@ def _alias_datastore() -> tuple:
 #: Le préfixe REST du connecteur Custom API, avant et après son renommage.
 _API_ANCIEN = "/api/orgs/{id}/connectors/http/"
 _API_NOUVEAU = "/api/orgs/{id}/connectors/api/"
+# Les routes NÉES après le renommage n'ont jamais eu d'ancien chemin : les applications de
+# Custom API (`capabilities/connectors/api_apps.py`, 18/11/2026).
+_API_NEES_APRES = (_API_NOUVEAU + "apps",)
 
 
 def _alias_connecteur_api() -> tuple:
     """Un alias par route du connecteur `api` réellement montée — même dérivation que
-    `_alias_datastore` : une route ajoutée demain hérite de son ancien chemin, une route
-    retirée perd le sien. Le placeholder ne change pas de nom."""
+    `_alias_datastore` : une route retirée perd son ancien chemin. Une route NÉE après le
+    renommage (`_API_NEES_APRES`) n'en a jamais eu, et n'en reçoit pas. Le placeholder ne
+    change pas de nom."""
     from .capabilities.registry import CAPABILITIES  # tardif : évite un cycle
 
     out = []
     for cap in CAPABILITIES:
         for rest in cap.rest_bindings():
-            if rest.path.startswith(_API_NOUVEAU):
+            if rest.path.startswith(_API_NOUVEAU) and not rest.path.startswith(_API_NEES_APRES):
                 ancien = _API_ANCIEN + rest.path[len(_API_NOUVEAU):]
                 out.append(AliasRest(rest.verb, ancien, rest.path, {}, "",
                                      RETRAIT_CONNECTEUR_API))
@@ -429,47 +433,8 @@ def valeur_canonique(champ: str, valeur: Any) -> tuple:
         f"comme `{nouvelle}` ; envoie désormais `{nouvelle}`.")
 
 
-# ── Adresser un tableau par son NOM (lot 0 du retrait, 29/09/2026) ──────────
-#
-# Un tableau s'adresse par son IDENTIFIANT. Le nom résout encore — toutes les faces
-# `data_*`, les routes `/api/datastores/{datastore}/…`, `oto_project op=link`,
-# `oto_fleet op=create` — et chaque réponse obtenue par un nom le DIT, avec
-# l'identifiant à passer et le jour où le nom sera refusé. Rien n'est accepté en
-# silence : c'est un préavis servi, pas une tolérance.
-#
-# ⚠️ **L'annonce et la date ne sont pas le même jour, et c'est l'écart assumé.**
-# Le retrait du nom est servi en production depuis le 07/09/2026 (`v1.233.0` : « a
-# name still resolves… it is being retired »), mais SANS date. La date n'est servie
-# qu'à partir de ce lot. Alexis l'a alignée le 29/09/2026 sur le retrait de
-# `namespace` (`RETRAIT_DATASTORE`, un seul geste pour les deux), en sachant qu'elle
-# tombe à moins de deux mois du jour où elle devient lisible — écart à l'Art 8.2
-# décidé par le propriétaire du produit, pas une durée de préavis revue à la baisse :
-# `PREAVIS_MOIS` ne bouge pas, et le plancher compté depuis l'annonce tient
-# (`tests/test_tableau_par_numero.py`).
-ANNONCE_NOM_DE_TABLEAU = datetime.date(2026, 9, 7)
-RETRAIT_NOM_DE_TABLEAU = RETRAIT_DATASTORE
-
-
-def date_retrait_nom_de_tableau() -> str:
-    """Le jour où un nom de tableau sera refusé, tel qu'il est SERVI à l'agent : ISO
-    (AAAA-MM-JJ). Servi en JJ/MM/AAAA dans des phrases anglaises, il se lisait le 11 août."""
-    return RETRAIT_NOM_DE_TABLEAU.isoformat()
-
-
-def adresse_par_nom(adresse: Any, ns_id: Any) -> bool:
-    """L'adresse reçue a-t-elle résolu le tableau `ns_id` PAR SON NOM ?
-
-    Juge le résultat, pas la forme : des chiffres qui NOMMENT un tableau (« 2024 »)
-    sont un nom, et `slot:` n'arrive jamais jusqu'ici — il rend déjà l'identifiant."""
-    return str(adresse or "").strip() != str(ns_id)
-
-
-def avis_nom_de_tableau(nom: str, ns_id: int) -> str:
-    """L'avis servi à chaque réponse obtenue par un nom : l'identifiant et la date."""
-    return (f"⚠️ Table `{nom}` was addressed by its NAME: pass "
-            f"`datastore={ns_id}`. A table name will be REFUSED from "
-            f"{RETRAIT_NOM_DE_TABLEAU.isoformat()} on; the identifier never changes, "
-            f"even if the table is renamed.")
+# (Adresser un tableau par son NOM : préavis servi du 07/09 au 08/11/2026, puis RETIRÉ.
+# Un nom est désormais refusé, sans date ni repli : `datastore.errors.TableauParNom`.)
 
 
 # ── Clés de capacité (lot B2) ───────────────────────────────────────────────

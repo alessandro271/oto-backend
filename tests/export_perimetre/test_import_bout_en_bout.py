@@ -32,6 +32,7 @@ from psycopg.rows import dict_row  # noqa: E402
 
 from oto_mcp import credentials_store, runner_hook, transcription_worker  # noqa: E402
 from oto_mcp.crypto import decrypt_with_key, encrypt_with_key  # noqa: E402
+from oto_mcp.db import jetons_de_lien  # noqa: E402
 from oto_mcp.export_perimetre import commande  # noqa: E402
 from oto_mcp.export_perimetre.classement import CLASSEMENT, EXPORTEES  # noqa: E402
 from oto_mcp.export_perimetre.comptes import ComptesHorsRegle  # noqa: E402
@@ -132,14 +133,15 @@ def cible(source, export_a, pg_dsn):
 def test_le_fichier_ne_porte_que_des_secrets_pour_la_cible(export_a):
     chemin, manifeste = export_a
     assert manifeste["secrets"] == {"connector_credentials": 4, "runner_triggers": 1,
-                                    "transcription_jobs": 1}
+                                    "transcription_jobs": 1, "docs": 1,
+                                    "process_shares": 1}
     assert manifeste["cle_cible"] == empreinte_cle(CLE_CIBLE)
     texte = chemin.read_text(encoding="utf-8")
     assert "clair-" not in texte
     assert CLE_CIBLE.hex() not in texte and CLE_SOURCE.hex() not in texte
     transformation = Transformation.depuis(_schema_vide_de_tenant(), manifeste["comptes"])
     for x in map(json.loads, texte.splitlines()[:-1]):
-        if x["t"] in AAD:
+        if x["t"] in AAD and x["l"].get(AAD[x["t"]][0]) is not None:
             colonne, aad = AAD[x["t"]]
             ligne = transformation.appliquer(x["t"], x["l"])
             decrypt_with_key(CLE_CIBLE, ligne[colonne], aad(ligne))
@@ -299,6 +301,8 @@ def test_les_secrets_se_lisent_avec_la_cle_cible(cible):
         ("connector_credentials", "hunter"): SECRET.format(A, "hunter"),
         ("runner_triggers", None): SECRET.format(A, "hook"),
         ("transcription_jobs", None): SECRET.format(A, "transcription"),
+        ("docs", None): SECRET.format(A, "page"),
+        ("process_shares", None): SECRET.format(A, "lien"),
     }
 
 
@@ -328,6 +332,8 @@ def test_les_aad_viennent_du_code_qui_ecrit_les_secrets():
         credentials_store._aad("user", "s", "c")
     assert AAD["runner_triggers"][1]({"id": 7}) == runner_hook._aad_du_secret(7)
     assert AAD["transcription_jobs"][1]({"audio_key": "k"}) == transcription_worker._aad("k")
+    assert AAD["docs"][1]({"id": 7}) == jetons_de_lien.aad_page(7)
+    assert AAD["process_shares"][1]({"id": 7}) == jetons_de_lien.aad_partage(7)
 
 
 def test_la_transformation_denude_et_rattache_au_tenant_primaire():

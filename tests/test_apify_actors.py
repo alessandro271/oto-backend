@@ -176,6 +176,36 @@ def test_bills_the_finished_run_once_like_run_sync(name):
     assert traces == [{"quantity": 42100, "apify_run_id": RUN}]
 
 
+def test_company_employees_bills_every_profile_even_before_apify_books_them():
+    """Reported 12/11/2026: runs of `apify_linkedin_company_employees` that returned 25
+    profiles traced 0 — read at SUCCEEDED, before Apify booked the events, whose price
+    is by subscription tier. Shape of the actor's public card (15/11/2026), BRONZE:
+    actor start $0.02 + 25 short profiles × $0.003."""
+    tiers = lambda prix: {"eventTieredPricingUsd": {  # noqa: E731
+        "BRONZE": {"tieredEventPriceUsd": prix}, "GOLD": {"tieredEventPriceUsd": prix / 2}}}
+    fini = {"data": {
+        "id": RUN, "status": "SUCCEEDED", "usageTotalUsd": 0, "defaultDatasetId": "ds1",
+        "chargedEventCounts": {"actor-start": 1, "short-profile": 25},
+        "accountedChargedEventCounts": {},
+        "pricingInfo": {"pricingModel": "PAY_PER_EVENT", "pricingPerEvent": {
+            "actorChargeEvents": {"actor-start": tiers(0.02),
+                                  "short-profile": tiers(0.003)}}}}}
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
+            patch("oto.tools.apify.client.ApifyClient") as cls, \
+            patch.object(apify, "_palier", return_value="BRONZE") as palier, \
+            patch("oto_mcp.tools.apify.session_org.note_call_trace") as trace:
+        inst = cls.return_value
+        inst.api_key = "fake-key"
+        inst.run.return_value = fini
+        inst.dataset_items.return_value = [{"x": i} for i in range(25)]
+        out = _tool("apify_linkedin_company_employees").fn(
+            companies=["https://www.linkedin.com/company/acme"])
+    assert len(out) == 25
+    assert [c.kwargs for c in trace.call_args_list] == [
+        {"quantity": 95000, "apify_run_id": RUN}]
+    palier.assert_called_once_with("fake-key")   # the tier of the key that ran it
+
+
 def test_fields_reach_the_dataset_read():
     _, inst, _ = _lancer("apify_linkedin_profiles",
                          {"urls": ["a"], "fields": ["firstName", "headline"]})
@@ -286,3 +316,139 @@ def test_no_platform_usage_figure_is_written_in_the_module_or_served():
         assert "totalRuns" not in texte
         assert not re.search(r"\d[\d,.]*k?\s+runs\b|\bruns?\s+\d", texte), texte[:120]
         assert not re.search(r"\bmost used\b|\bwe run most\b", texte), texte[:120]
+
+
+# --- Welcome to the Jungle: one row per offer, a lean row by default ---------------
+
+def _wttj_fixture():
+    """Four rows of the actor's `get-jobs` output (made-up values, the shape of its
+    dataset schema): offer 001, the same offer again under its English URL and
+    another index record, offer 002, and offer 001 a third time."""
+    import json
+    import pathlib
+    p = pathlib.Path(__file__).resolve().parent / "fixtures" / "apify_wttj_jobs.json"
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def _wttj(items, **kwargs):
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
+            patch("oto.tools.apify.client.ApifyClient") as cls, \
+            patch("oto_mcp.tools.apify.session_org.note_call_trace"):
+        inst = cls.return_value
+        inst.run.return_value = {"data": {"id": RUN, "status": "SUCCEEDED",
+                                          "usageTotalUsd": 0.01,
+                                          "defaultDatasetId": "ds1"}}
+        inst.dataset_items.return_value = items
+        out = _tool("apify_welcome_to_the_jungle_jobs").fn(
+            **{"query": "engineer", **kwargs})
+    return out, inst
+
+
+def test_wttj_returns_each_offer_once_in_order():
+    out, _ = _wttj(_wttj_fixture())
+    assert [j["reference"] for j in out] == ["ACME_j0b001", "ACME_j0b002"]
+    # the first row seen wins: the French listing, not its English copy
+    assert "/fr/" in out[0]["publicUrl"]
+
+
+def test_wttj_falls_back_to_the_url_without_its_locale_then_keeps_rows_without_key():
+    rows = [{"publicUrl": "https://www.welcometothejungle.com/fr/companies/acme/jobs/x"},
+            {"publicUrl": "https://www.welcometothejungle.com/en/companies/acme/jobs/x/"},
+            {"name": "no key"}, {"name": "no key"}]
+    out, _ = _wttj(rows)
+    assert out == [rows[0], {"name": "no key"}, {"name": "no key"}]
+
+
+def test_wttj_default_row_summarises_the_company_and_keeps_the_job():
+    out, _ = _wttj(_wttj_fixture())
+    job = out[0]
+    assert job["organization"] == {
+        "name": "Acme Robotics", "slug": "acme-robotics", "reference": "ACME_r0b0t",
+        "url": "https://www.welcometothejungle.com/fr/companies/acme-robotics",
+        "website": "https://acme.example.test", "linkedin": "acme-robotics",
+        "nb_employees": 120, "size": "Between 50 and 250 employees",
+        "creation_year": 2019, "revenue": "12 M€", "jobs_count": 14,
+        "industry": "Robotics, Software, Logistics",
+        "sectors": ["Tech / Robotics", "Tech / Software"],
+        "headquarter": {"city": "Paris", "country_code": "FR"}}
+    # the job's essentials stay
+    for k in ("name", "publicUrl", "apply_url", "published_at", "contract_type", "remote",
+              "salary_min", "salary_max", "salary_currency", "experience_level",
+              "company_summary", "detailsFetched"):
+        assert k in job, k
+    # one rendering per body, one label per field
+    assert job["description_text"].startswith("We are looking for")
+    assert not {"description", "description_markdown", "profile", "profile_markdown",
+                "company_description", "company_description_text", "benefits",
+                "contract_type_names", "sectors_name", "urls", "_geoloc",
+                "salary_minimum", "companyUrl"} & set(job)
+    assert job["profession"] == "Tech / Software Engineering"
+    assert job["skills"] == ["Python", "Robotics"] and job["tools"] == ["Python", "ROS"]
+    assert job["office"] == {"address": "1 rue de l'Exemple, 75000 Paris, France",
+                             "city": "Paris", "zip_code": "75000", "country_code": "FR"}
+
+
+def test_wttj_sectors_stay_on_a_row_whose_company_does_not_take_them_over():
+    sectors = [{"name": {"en": "Robotics"}, "parent": {"en": "Tech"}}]
+    sectors_name = {"en": [{"Tech": "Robotics"}]}
+    for org in ({}, {"organization": None}):
+        row = {"reference": "R1", "sectors": sectors, "sectors_name": sectors_name, **org}
+        out, _ = _wttj([row])
+        assert out[0]["sectors"] == sectors and out[0]["sectors_name"] == sectors_name
+    out, _ = _wttj([{"reference": "R1", "sectors": sectors, "sectors_name": sectors_name,
+                     "organization": {"name": "Acme"}}])
+    assert out[0]["organization"]["sectors"] == ["Tech / Robotics"]
+    assert "sectors" not in out[0] and "sectors_name" not in out[0]
+
+
+def test_wttj_a_body_keeps_the_name_of_the_rendering_it_comes_in():
+    out, _ = _wttj([{"reference": "R1", "description": "<p>html</p>",
+                     "profile": "<p>html</p>", "profile_markdown": "md",
+                     "recruitment_process": "<p>html</p>", "recruitment_process_text": "txt"}])
+    assert out == [{"reference": "R1", "description": "<p>html</p>",
+                    "profile_markdown": "md", "recruitment_process_text": "txt"}]
+
+
+def test_wttj_default_row_is_a_fraction_of_the_raw_row():
+    import json
+    raw = _wttj_fixture()
+    lean, _ = _wttj(raw)
+    avant = len(json.dumps(raw, ensure_ascii=False))
+    apres = len(json.dumps(lean, ensure_ascii=False))
+    assert apres * 5 < avant, (avant, apres)
+
+
+def test_wttj_unknown_keys_pass_through_the_default_row():
+    out, _ = _wttj([{"reference": "R1", "a_new_field": 7, "organization": {"name": "Acme"}}])
+    assert out == [{"reference": "R1", "a_new_field": 7, "organization": {"name": "Acme"}}]
+
+
+def test_wttj_full_returns_the_raw_rows_deduplicated():
+    raw = _wttj_fixture()
+    out, _ = _wttj(raw, full=True)
+    assert out == [raw[0], raw[2]]
+    assert "equality_indexes" in out[0]["organization"]
+
+
+def test_wttj_fields_keep_the_actors_keys_and_still_deduplicate():
+    raw = _wttj_fixture()
+    out, inst = _wttj(raw, fields=["name", "organization"])
+    read = inst.dataset_items.call_args.kwargs["fields"]
+    assert read[:2] == ["name", "organization"] and "reference" in read
+    assert out == [{"name": raw[0]["name"], "organization": raw[0]["organization"]},
+                   {"name": raw[2]["name"], "organization": raw[2]["organization"]}]
+
+
+def test_wttj_a_failed_run_still_shapes_its_items_and_never_raises():
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
+            patch("oto.tools.apify.client.ApifyClient") as cls, \
+            patch("oto_mcp.tools.apify.session_org.note_call_trace"):
+        inst = cls.return_value
+        inst.run.return_value = {"data": {"id": RUN, "status": "TIMED-OUT",
+                                          "usageTotalUsd": 0.01,
+                                          "defaultDatasetId": "ds1"}}
+        inst.dataset_items.return_value = _wttj_fixture()
+        out = _tool("apify_welcome_to_the_jungle_jobs").fn(query="engineer")
+    assert out["status"] == "TIMED-OUT" and out["run_id"] == RUN
+    assert [j["reference"] for j in out["items"]] == ["ACME_j0b001", "ACME_j0b002"]
+    assert "equality_indexes" not in out["items"][0]["organization"]

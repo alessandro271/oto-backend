@@ -46,6 +46,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.procedures.PROCEDURES,    # procédures d'org, révisions, bibliothèque
     schema.orgs.GROUPS,              # équipes et leurs membres
     schema.unipile.UNIPILE_GROUP_GRANTS,  # grant de compte connecteur cible groupe (#55)
+    schema.unipile.SENDING_LIMITS,   # limites d'envoi LinkedIn posées par le titulaire du compte
     schema.connectors.CREDENTIALS,   # coffre des credentials (ADR 0002/0033)
     schema.connectors.INSTANCES,     # instances de connecteur (blueprint 0053-D9, L6)
     schema.billing.OPTION_COMPS,     # options offertes
@@ -104,6 +105,10 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.orgs.ORG_FAVORITES,       # pages et tableaux épinglés pour tous les membres d'une org
     schema.usage.USAGE_ORG,          # compteur du jour d'une org sur une clé plateforme à quota par org
     schema.credits.SPEND_BLOCKS,     # blocages du jour poussés par le commerce (limites de dépense)
+    schema.runs.AGENT_CAUSES,        # le catalogue des causes de panne d'agent, une par empreinte
+    schema.connectors.API_APPS,      # applications de Custom API : définition partagée par leurs clés
+    schema.runs.AGENT_HEALTH_SETTINGS,  # la réparation automatique des agents d'une org (coupée sans ligne)
+    schema.usage.JOURNAL_ARCHIVE_PASSAGES,  # passages de l'archive du journal : date du dernier réussi
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

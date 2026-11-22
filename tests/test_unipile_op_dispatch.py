@@ -64,11 +64,11 @@ def test_member_acts_route_to_the_right_client_method(client, op, kwargs, method
     getattr(client, method).assert_called_once()
 
 
-def test_profile_person_strips_diacritics(client):
-    """LinkedIn génère ses slugs en ASCII : un slug accentué fait répondre un 403
-    « Insufficient permissions » trompeur (#180)."""
+def test_profile_person_sends_the_accented_slug_as_given(client):
+    """Un slug peut porter une lettre non ASCII — il part tel quel d'abord ;
+    la forme sans accents n'est qu'un repli (#180, `test_unipile_slug_accents.py`)."""
     _tool("linkedin_unipile_profile")(op="person", identifier="chloé-dupré")
-    assert client.get_profile.call_args.args[0] == "chloe-dupre"
+    assert client.get_profile.call_args.args[0] == "chloé-dupré"
 
 
 def test_profile_company_is_cached(client):
@@ -215,6 +215,59 @@ def test_network_relations_cle_inconnue_refusee_pas_ecartee(client):
         "items": [{"name": "X", "member_id": "1"}], "cursor": None}
     with pytest.raises(McpError, match="full_name"):
         _tool("linkedin_unipile_network")(op="relations", fields=["full_name"])
+
+
+_RELATION_V2 = {
+    "id": "rel-1", "object": "UserRelation", "created_at": "2026-01-01T00:00:00.000Z",
+    "user": {"id": "person-1", "object": "User", "type": "individual",
+             "display_name": "Ada Example", "public_identifier": "ada-example",
+             "first_name": "Ada", "last_name": "Example",
+             "profile_url": "https://www.linkedin.com/in/ada-example",
+             "description": "Example headline"}}
+
+
+def test_network_relations_v2_nested_user_serves_the_documented_keys(client):
+    """Unipile v2 nests the person under `user`: the documented keys (`member_id`,
+    `name`, `headline`, `public_identifier`) were absent from the page, and every
+    projection naming them was refused (an hourly agent, every run)."""
+    client.list_relations.return_value = {"items": [_RELATION_V2], "cursor": "C"}
+    out = _tool("linkedin_unipile_network")(
+        op="relations", fields=["name", "headline", "public_identifier", "member_id"])
+    assert out["items"] == [{"name": "Ada Example", "headline": "Example headline",
+                             "public_identifier": "ada-example", "member_id": "person-1"}]
+    assert out["cursor"] == "C"
+
+
+def test_network_relations_v2_keeps_user_and_adds_the_flat_keys(client):
+    """Additive: a reader of `items[].user.display_name` is unchanged."""
+    client.list_relations.return_value = {"items": [_RELATION_V2], "cursor": None}
+    it = _tool("linkedin_unipile_network")(op="relations")["items"][0]
+    assert it["user"] == _RELATION_V2["user"]
+    assert it["id"] == "rel-1" and it["object"] == "UserRelation", "the relation's own"
+    assert it["member_id"] == "person-1" and it["display_name"] == "Ada Example"
+
+
+def test_network_relations_fields_user_still_works(client):
+    """The old refusal listed `user` as present: a caller adapted to it is unchanged."""
+    client.list_relations.return_value = {"items": [_RELATION_V2], "cursor": None}
+    out = _tool("linkedin_unipile_network")(op="relations", fields=["user"])
+    assert out["items"] == [{"user": _RELATION_V2["user"], "member_id": "person-1"}]
+
+
+def test_network_relations_sub_key_keeps_its_nesting(client):
+    """`parent.key` keeps the nesting, as elsewhere in the file: `user.id` is the
+    person's id under `user`, never the relation's `id`."""
+    client.list_relations.return_value = {"items": [_RELATION_V2], "cursor": None}
+    out = _tool("linkedin_unipile_network")(
+        op="relations", fields=["user.id", "user.display_name"])
+    assert out["items"] == [{"user": {"id": "person-1", "display_name": "Ada Example"},
+                             "member_id": "person-1"}]
+
+
+def test_network_relations_absent_sub_key_is_refused(client):
+    client.list_relations.return_value = {"items": [_RELATION_V2], "cursor": None}
+    with pytest.raises(McpError, match="user.nickname"):
+        _tool("linkedin_unipile_network")(op="relations", fields=["user.nickname"])
 
 
 def test_network_handle_requires_the_shared_secret(client):

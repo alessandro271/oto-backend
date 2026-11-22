@@ -29,11 +29,27 @@ deux refuserait un outil que l'agent voit, ou laisserait passer un outil qu'il n
 introuvable non plus. Seuls passent en plus les outils que l'HÔTE appelle lui-même avec le jeton
 pour encadrer le travail (`OUTILS_DE_L_HOTE`) — jamais un outil de connecteur.
 
+**Un outil COMPOSÉ accordé couvre ses étapes fixes** (`ouvrir_composite`). La liste dit ce que
+le MODÈLE peut appeler. Une cascade `waterfall_*` accordée appelle, pour lui, les outils de ses
+propres étapes : une table écrite dans le code (`waterfall/plan.STEPS_BY_NAMESPACE`), où ni le
+modèle ni une procédure ne nomment un outil — `providers=` ne fait que choisir parmi elles.
+Refuser ces étapes faute de les voir dans la liste rendait la cascade inutilisable par un
+agent, et les y ajouter les rendait appelables EN DIRECT, hors de la cascade et de ses bornes.
+Pendant la cascade, une étape passe donc si (1) l'outil en cours est la cascade elle-même
+(`verrou_org.outil_en_cours`, posé au bord, jamais un argument), (2) cette cascade est dans la
+liste du travail, relue ici, et (3) l'outil appelé est l'une de SES étapes. Les autres gardes
+de l'étape (activation du connecteur pour l'org, niveau d'accès, clé) ne changent pas.
+⚠️ Ce n'est PAS la règle d'`oto_call` ni des recettes : leur corps nomme n'importe quel outil,
+chacun reste exigé dans la liste. Et `manquants` reste la liste SEULE — ce qu'il faut DONNER
+à l'agent pour qu'il l'appelle lui-même (la collecte d'une réponse `pending`, par exemple).
+
 Hors jeton de délégation (une personne, une clé d'API, une clé d'org), rien ne change.
 """
 from __future__ import annotations
 
-from typing import Optional
+import contextlib
+import contextvars
+from typing import Iterable, Iterator, Optional
 
 from mcp.types import INVALID_PARAMS, ErrorData
 from starlette.concurrency import run_in_threadpool
@@ -52,6 +68,37 @@ OUTIL_DE_LECTURE = "oto_procedure"
 #: ouvrir le run technique du travail et le conclure (oto-runner `worker.py`,
 #: `conclusion.py`). Le modèle ne les reçoit que si la liste les nomme.
 OUTILS_DE_L_HOTE = frozenset({"run_start", "run_finish"})
+
+#: L'outil composé en cours et les outils de ses étapes, au canonique (`ouvrir_composite`)
+#: — None hors d'un tel outil. Par tâche : une requête voisine ne le voit pas.
+_COMPOSITE: contextvars.ContextVar[Optional[tuple[str, frozenset]]] = contextvars.ContextVar(
+    "oto_travail_composite", default=None)
+
+
+@contextlib.contextmanager
+def ouvrir_composite(noms: Iterable[str], etapes: Iterable[str]) -> Iterator[None]:
+    """Le temps du bloc, les outils `etapes` passent la garde du travail s'ils sont appelés
+    PAR l'outil composé en cours — à condition que cet outil soit l'un de `noms` (ses noms
+    servis : `waterfall_email`, `waterfall_email_act`) et qu'il soit lui-même dans la liste
+    du travail (relu au refus, jamais supposé). L'outil en cours se lit au bord
+    (`verrou_org.outil_en_cours`) : hors d'un appel d'outil, ou sous un autre outil, rien
+    n'est accordé. Hors travail hébergé, rien ne change (`refus` rend None de toute façon)."""
+    en_cours = verrou_org.outil_en_cours()
+    canon = deprecations.tool_canonique
+    if en_cours is None or en_cours not in {canon(n) for n in noms}:
+        yield
+        return
+    jeton = _COMPOSITE.set((en_cours, frozenset(canon(n) for n in etapes)))
+    try:
+        yield
+    finally:
+        _COMPOSITE.reset(jeton)
+
+
+def _accorde_par_le_composite(nom: str, permis: frozenset) -> bool:
+    """`nom` est une étape de l'outil composé en cours, et cet outil est permis au travail."""
+    composite = _COMPOSITE.get()
+    return composite is not None and composite[0] in permis and nom in composite[1]
 
 
 def outils_servis(charge: dict):
@@ -83,13 +130,17 @@ def _permis(charge: Optional[dict]) -> frozenset:
 
 def refus(name: str) -> Optional[str]:
     """Sync (base) : le message du refus si `name` est hors de la liste du travail de la
-    requête — None si l'appel passe (outil de la liste, outil de l'hôte, ou requête qui
-    n'est pas un travail hébergé)."""
+    requête — None si l'appel passe (outil de la liste, outil de l'hôte, étape de l'outil
+    composé en cours et permis (`ouvrir_composite`), ou requête qui n'est pas un travail
+    hébergé)."""
     verrou = verrou_org.travail_de_la_requete()
     if verrou is None:
         return None
     nom = deprecations.tool_canonique(name)
-    if nom in OUTILS_DE_L_HOTE or nom in _permis(_charge(verrou.job_id)):
+    if nom in OUTILS_DE_L_HOTE:
+        return None
+    permis = _permis(_charge(verrou.job_id))
+    if nom in permis or _accorde_par_le_composite(nom, permis):
         return None
     return (f"`{name}` is not in this hosted agent's tool list (job {verrou.job_id}). "
             "A job only calls the tools it declares, on every path — directly, through "
@@ -104,8 +155,9 @@ def permis_du_travail(job_id: Optional[int]) -> frozenset:
 
 
 def manquants(noms) -> Optional[dict]:
-    """Sync (base) : TOUS les outils de `noms` hors de la liste du travail de la requête,
-    en une lecture — `None` hors travail hébergé ou si rien ne manque. Rend
+    """Sync (base) : TOUS les outils de `noms` hors de la liste du travail de la requête
+    — la liste SEULE, jamais ce qu'un outil composé accorde à ses étapes : ce qui manque
+    ici est ce qu'il faut donner à l'agent pour qu'il l'appelle lui-même —, en une lecture — `None` hors travail hébergé ou si rien ne manque. Rend
     `{job_id, trigger_id, tools, missing}` (`tools` : la liste de l'agent telle que ce
     travail l'a reçue) : de quoi refuser une fois en nommant chaque outil et l'agent à
     compléter, plutôt qu'un refus par outil, une exécution chacun."""

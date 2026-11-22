@@ -38,6 +38,13 @@ L'org est celle sous laquelle l'appel **résout** (`access.current_org` : `_org`
 projet, run, `X-Oto-Org`, puis l'org par défaut) — jamais l'org « maison » à la place
 de l'org visée.
 
+**Une app se juge AUSSI par son org** (`org_suspension.exiger`, appelé par `me.app`,
+`me.app.call`, `me.app.consent` et le dépôt d'un fichier — `capabilities/apps.py`,
+`apps_appel._app_pour`). Une app vit dans l'org de son propriétaire, pas forcément celle
+de l'appel : un lecteur d'une autre org l'ouvre depuis la sienne. L'org de l'app
+suspendue la ferme à tous (403 `org_suspended`) ; l'org de l'appel reste gardée par
+l'adaptateur, comme partout — la seconde garde s'ajoute, elle n'ouvre rien.
+
 ## 3. Ce qui reste ouvert
 
 `org_suspension.OUVERTES` : se voir, lister ses orgs, lire l'org, en changer, la

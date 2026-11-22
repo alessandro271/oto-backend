@@ -219,7 +219,7 @@ def test_le_renouvellement_s_ecrit_sur_la_ligne_du_compte_qui_sert(env, monkeypa
     from oto_mcp.connectors import health
 
     _deux_comptes(env)
-    env.coffre.meta(B)["access_token"] = None
+    env.coffre.oublier(B)
     sante = []
     monkeypatch.setattr(health, "record_health",
                         lambda prov, scope, ok, err: sante.append(scope))
@@ -235,8 +235,13 @@ def test_le_renouvellement_s_ecrit_sur_la_ligne_du_compte_qui_sert(env, monkeypa
     monkeypatch.setattr(requests, "post", lambda *a, **k: _OK())
     creds = env.sous_compte(B, _creds, "gmail")
     assert creds.token == "AT-NEUF"
-    assert env.coffre.meta(B)["access_token"] == "AT-NEUF"
-    assert env.coffre.meta(A)["access_token"] == "AT-A"
+    # Gardé en mémoire pour LA ligne qui a servi, jamais rangé dans son meta.
+    assert env.coffre.jeton(B) == "AT-NEUF"
+    assert env.coffre.jeton(A) == "AT-A"
+    assert "access_token" not in env.coffre.meta(B)
+    # Le suivant sert le jeton gardé, sans renouveler.
+    monkeypatch.setattr(requests, "post", lambda *a, **k: pytest.fail("réseau"))
+    assert env.sous_compte(B, _creds, "gmail").token == "AT-NEUF"
     assert sante == [("member", MEMBRE, B)]
 
 

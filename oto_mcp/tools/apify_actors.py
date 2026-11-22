@@ -8,7 +8,8 @@ LinkedIn posts, Google Maps — cover most needs. Each gets a tool here: a name 
 says what it does, typed arguments, and the actor's input built for you.
 
 Every tool runs through `apify.lancer_acteur` — the same start → wait → bill → read
-path as `apify_run_sync`, so the run's real cost is traced the same way, once per run.
+path as `apify_run_sync`, so the run's real cost is traced the same way, once per run,
+and the answer carries the same receipt (`apify_recu`: run id, dataset id, status, cost).
 Every tool also caps the run: `max_items` (billed results) and `max_total_charge_usd`
 (hard ceiling, $5 by default, refused above the bound of the launch — `apify._plafond`,
 the one check of every launch, `apify_run_sync` included) — raise them for a big batch,
@@ -22,6 +23,7 @@ Anything else in the Store: `apify_store_search` then `apify_run_sync`.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Literal, Optional
 
 from fastmcp import FastMCP
@@ -70,6 +72,190 @@ def _au_moins_un(**listes: Optional[list]) -> None:
         raise _bad(f"Give at least one of: {', '.join(f'`{k}`' for k in listes)}.")
 
 
+# --- Welcome to the Jungle: one row per offer, a lean row by default ---------------
+#
+# The WTTJ actor (`includeDetails` on by default) can emit the same offer several
+# times in one run, and every row embeds the hiring company's whole profile —
+# `organization` alone carries ~90 nested keys (cover images in five sizes, equality
+# indexes, GDPR texts, social links…), on top of each body in three renderings (HTML,
+# Markdown, text) and labels in five languages. Read raw, a 50-job run fills an
+# agent's context with the same company profile 50 times.
+#
+# The key of an offer: `reference`, the WTTJ reference of the job — present from the
+# search index on every row, details or not. `wttj_reference` comes only with the
+# job details; `objectID` is a search-index record id, `publicUrl` carries the
+# listing's locale (`/fr/`, `/en/`): both are fallbacks. A row with none of them is
+# kept, never merged with another.
+_WTTJ_CLES = ("reference", "wttj_reference", "objectID", "publicUrl")
+_WTTJ_LOCALE = re.compile(r"^(https?://[^/]+)/[a-z]{2}(?:-[a-z]{2})?/", re.I)
+
+# Each body ships three times: one is kept, the most readable present, under its own
+# key — `<body>_text`, else `<body>_markdown`, else `<body>` (the HTML).
+_WTTJ_CORPS = ("description", "profile", "recruitment_process")
+# Dropped from the default row — denylist: a key not named here passes through.
+_WTTJ_RETIRES = frozenset({
+    # the company's presentation, in three renderings: `organization` is summarised
+    "company_description", "company_description_markdown", "company_description_text",
+    # labels in five languages, kept as one label below or redundant with a code
+    # (`sectors` and `sectors_name` go only when `organization` takes them over)
+    "contract_type_names", "profession_name",
+    # media, page furniture and the application form
+    "logo", "cover_image", "social_image", "videos", "cta_content", "urls",
+    "featured_page", "application_fields", "ats_questions", "benefits", "_geoloc",
+    "recruiter_proposal", "is_default",
+    # flags that only say whether the value next to them is set
+    "has_contract_duration", "has_education_level", "has_experience_level_minimum",
+    "has_salary_yearly_minimum",
+})
+# The search index and the job details both give these: the index copy goes when
+# the details say the same.
+_WTTJ_DOUBLONS = (("salary_minimum", "salary_min"), ("salary_maximum", "salary_max"),
+                  ("contract_duration_minimum", "contract_duration_min"),
+                  ("contract_duration_maximum", "contract_duration_max"))
+_WTTJ_BUREAU = ("address", "city", "zip_code", "country_code")
+
+
+def _wttj_cle(job: Any) -> Optional[tuple]:
+    if not isinstance(job, dict):
+        return None
+    for champ in _WTTJ_CLES:
+        v = job.get(champ)
+        if isinstance(v, (str, int)) and str(v).strip():
+            v = str(v).strip()
+            if champ == "publicUrl":
+                v = _WTTJ_LOCALE.sub(r"\1/", v).rstrip("/").lower()
+            return champ, v
+    return None
+
+
+def _wttj_dedoublonne(jobs: list) -> list:
+    """The offers in their order, each once — the first row seen wins."""
+    vus: set = set()
+    out = []
+    for job in jobs:
+        cle = _wttj_cle(job)
+        if cle is not None:
+            if cle in vus:
+                continue
+            vus.add(cle)
+        out.append(job)
+    return out
+
+
+def _libelle(v: Any) -> Any:
+    """One label out of a `{en, fr, es, cs, sk}` dict: English, else French, else any."""
+    if isinstance(v, dict):
+        return v.get("en") or v.get("fr") or next(
+            (x for x in v.values() if isinstance(x, str) and x), None)
+    return v
+
+
+def _noms(items: Any) -> Optional[list]:
+    if not isinstance(items, list):
+        return None
+    noms = [_libelle(i.get("name")) if isinstance(i, dict) else i for i in items]
+    return [n for n in noms if n] or None
+
+
+def _bureau(o: Any) -> Any:
+    if not isinstance(o, dict):
+        return o
+    return {k: o[k] for k in _WTTJ_BUREAU if o.get(k)} or None
+
+
+def _vide(v: Any) -> bool:
+    return v is None or v == "" or v == [] or v == {}
+
+
+def _wttj_societe(org: Any, job: dict) -> Any:
+    """The hiring company in a dozen keys — `full=True` returns its whole profile."""
+    if not isinstance(org, dict):
+        return org
+    secteurs = []
+    for s in job.get("sectors") or org.get("sectors") or []:
+        if isinstance(s, dict):
+            nom = _libelle(s.get("name"))
+            parent = _libelle(s.get("parent") or s.get("parent_name"))
+            if nom:
+                secteurs.append(f"{parent} / {nom}" if parent else nom)
+    siege = org.get("headquarter")
+    societe = {
+        "name": org.get("name"),
+        "slug": org.get("slug"),
+        "reference": org.get("reference"),
+        "url": job.get("companyUrl"),
+        "website": org.get("media_website_url"),
+        "linkedin": org.get("media_linkedin"),
+        "nb_employees": org.get("nb_employees"),
+        "size": _libelle(org.get("size")),
+        "creation_year": org.get("creation_year"),
+        "revenue": org.get("revenue"),
+        "jobs_count": org.get("jobs_count"),
+        "industry": org.get("industry"),
+        "sectors": secteurs,
+        "headquarter": ({k: siege[k] for k in ("city", "country_code") if siege.get(k)}
+                        if isinstance(siege, dict) else None),
+    }
+    return {k: v for k, v in societe.items() if not _vide(v)}
+
+
+def _wttj_allege(job: Any) -> Any:
+    """The default row of a WTTJ offer: the job's own facts, one rendering of each
+    body, one label per field, and the company as a summary. Empty values go —
+    nothing is lost, `full=True` returns the actor's row as is."""
+    if not isinstance(job, dict):
+        return job
+    out = {k: v for k, v in job.items() if k not in _WTTJ_RETIRES}
+    for corps in _WTTJ_CORPS:
+        rendus = [(cle, out.pop(cle, None))
+                  for cle in (f"{corps}_text", f"{corps}_markdown", corps)]
+        cle, garde = next(((c, r) for c, r in rendus if r), (None, None))
+        if garde:
+            out[cle] = garde
+    for index, detail in _WTTJ_DOUBLONS:
+        if index in out and out.get(detail) == out[index]:
+            del out[index]
+    if "profession" in out:
+        p = out["profession"]
+        out["profession"] = (" / ".join(x for x in (
+            _libelle(p.get("category") or p.get("category_name")),
+            _libelle(p.get("name"))) if x) or None) if isinstance(p, dict) else p
+    for cle in ("skills", "tools"):
+        if cle in out:
+            out[cle] = _noms(out[cle])
+    if "office" in out:
+        out["office"] = _bureau(out["office"])
+    if isinstance(out.get("offices"), list):
+        out["offices"] = [_bureau(o) for o in out["offices"]]
+    if "organization" in out:
+        out["organization"] = _wttj_societe(out["organization"], job)
+        out.pop("companyUrl", None)   # now `organization.url`
+        if isinstance(out["organization"], dict) and out["organization"].get("sectors"):
+            out.pop("sectors", None)        # now `organization.sectors`
+            out.pop("sectors_name", None)
+    return {k: v for k, v in out.items() if not _vide(v)}
+
+
+def _wttj_sortie(out: Any, *, full: bool, fields: Optional[list[str]]) -> Any:
+    """Deduplicate the run's rows, then shape them: the caller's `fields` (the actor's
+    own keys, as before), else the raw rows on `full`, else the lean row. Also inside
+    the `{error, run_id, status, items}` answer of a run that did not succeed."""
+    if isinstance(out, dict):
+        if isinstance(out.get("items"), list):
+            return {**out, "items": _wttj_sortie(out["items"], full=full, fields=fields)}
+        return out
+    if not isinstance(out, list):
+        return out
+    jobs = _wttj_dedoublonne(out)
+    if fields:
+        garde = set(fields)
+        return [{k: v for k, v in j.items() if k in garde} if isinstance(j, dict) else j
+                for j in jobs]
+    if full:
+        return jobs
+    return [_wttj_allege(j) for j in jobs]
+
+
 def register(mcp: FastMCP) -> None:
 
     # --- LinkedIn ------------------------------------------------------------
@@ -89,7 +275,7 @@ def register(mcp: FastMCP) -> None:
         $10 with the email search.
 
         Returns — the LIST of profiles, one per URL found (or `{error, run_id, status,
-            items}` for a run that did not succeed — billed too).
+            items, receipt}` for a run that did not succeed — billed too).
 
         Args:
             urls: profile URLs (`https://www.linkedin.com/in/<id>`) or bare public
@@ -129,7 +315,7 @@ def register(mcp: FastMCP) -> None:
         Keep only rows whose `currentPosition[0].companyUniversalName` is the target:
         LinkedIn search can return people from namesakes.
 
-        Returns — the LIST of employee profiles (or `{error, run_id, status, items}`).
+        Returns — the LIST of employee profiles (or `{error, run_id, status, items, receipt}`).
 
         Args:
             companies: company page URLs (`https://www.linkedin.com/company/<slug>`).
@@ -172,7 +358,7 @@ def register(mcp: FastMCP) -> None:
         returns the best match, which can be a namesake: check the returned
         `website` against the company's domain. harvestapi/linkedin-company.
 
-        Returns — the LIST of company pages (or `{error, run_id, status, items}`).
+        Returns — the LIST of company pages (or `{error, run_id, status, items, receipt}`).
 
         Args:
             urls: company page URLs (`https://www.linkedin.com/company/<slug>`).
@@ -209,7 +395,7 @@ def register(mcp: FastMCP) -> None:
         Benchmark what performs on a topic, watch what a competitor or a prospect
         posts, or find who talks about a subject.
 
-        Returns — the LIST of posts (or `{error, run_id, status, items}`).
+        Returns — the LIST of posts (or `{error, run_id, status, items, receipt}`).
 
         Args:
             queries: searches, as typed in LinkedIn's search bar (`"revops agency"`).
@@ -261,7 +447,7 @@ def register(mcp: FastMCP) -> None:
         structured, deduplicated postings across boards, try `theirstack_jobs_search`
         first.
 
-        Returns — the LIST of jobs (or `{error, run_id, status, items}`).
+        Returns — the LIST of jobs (or `{error, run_id, status, items, receipt}`).
 
         Args:
             keywords: job title or skills (`"head of growth"`).
@@ -301,7 +487,7 @@ def register(mcp: FastMCP) -> None:
         """Live job postings from Indeed — title, company, location, salary, date,
         description. Very cheap per job. valig/indeed-jobs-scraper.
 
-        Returns — the LIST of jobs (or `{error, run_id, status, items}`).
+        Returns — the LIST of jobs (or `{error, run_id, status, items, receipt}`).
 
         Args:
             title: the job title to search (`"sales manager"`).
@@ -333,13 +519,22 @@ def register(mcp: FastMCP) -> None:
             "TEMPORARY", "GRADUATE_PROGRAM", "VIE", "VOLUNTEER", "OTHER"]]] = None,
         max_items: int = 50,
         fields: Optional[list[str]] = None,
+        full: bool = False,
         max_total_charge_usd: float = _PLAFOND_USD,
     ) -> Any:
         """Live job postings from Welcome to the Jungle (France and Europe) — title,
         company, contract, remote policy, salary, full description.
         bebity/welcome-to-the-jungle-jobs-scraper.
 
-        Returns — the LIST of jobs (or `{error, run_id, status, items}`).
+        Each offer comes back once (by its WTTJ `reference`), so a run can return
+        fewer jobs than `max_items`. The default row keeps one rendering of each text
+        (`description_text`, else `description_markdown`, else the HTML `description`;
+        same for `profile`, `recruitment_process`), one label per field, and the
+        company as a summary in `organization` (name, slug, url, website, size,
+        creation_year, revenue, jobs_count, sectors, headquarter); `full=True` returns
+        the actor's rows whole, the company's full profile included.
+
+        Returns — the LIST of jobs (or `{error, run_id, status, items, receipt}`).
 
         Args:
             query: free-text search (`"business developer"`).
@@ -350,20 +545,26 @@ def register(mcp: FastMCP) -> None:
             posted_within_days: only listings published in the last N days.
             contract_types: keep these contracts.
             max_items: jobs to return.
-            fields: keep only these keys of each job.
+            fields: keep only these keys of each job, as the actor names them
+                (`["name", "publicUrl", "organization"]`) — the raw values.
+            full: the actor's rows as is, company profile and every rendering.
             max_total_charge_usd: hard cost ceiling of the run, $5 by default, at most
                 your organization's ceiling per run ($25 unless set otherwise).
         """
         if not (query or company_slugs):
             raise _bad("Give `query` or `company_slugs`.")
-        return lancer_acteur(
+        # The keys of an offer travel with the caller's `fields`, so the rows can be
+        # deduplicated; `_wttj_sortie` then keeps only the keys asked for.
+        lus = list(dict.fromkeys([*fields, *_WTTJ_CLES])) if fields else None
+        out = lancer_acteur(
             WTTJ_JOBS,
             _sans_vides({"action": "get-jobs", "query": query,
                          "companySlugs": company_slugs, "countryCode": country_code,
                          "city": city, "postedWithinDays": posted_within_days,
                          "contractType": contract_types, "maxItems": max_items}),
             outil="apify_welcome_to_the_jungle_jobs", max_items=max_items,
-            fields=fields, max_total_charge_usd=max_total_charge_usd)
+            fields=lus, max_total_charge_usd=max_total_charge_usd)
+        return _wttj_sortie(out, full=full, fields=fields)
 
     # --- websites ------------------------------------------------------------
 
@@ -385,7 +586,7 @@ def register(mcp: FastMCP) -> None:
         `apify_dataset_items` (the error names the run).
 
         Returns — the LIST of sites with `emails`, `phones`, `linkedIns`… (or
-            `{error, run_id, status, items}`).
+            `{error, run_id, status, items, receipt}`).
 
         Args:
             urls: website URLs (`https://www.example.com`).
@@ -423,7 +624,7 @@ def register(mcp: FastMCP) -> None:
         One page only? `web_read` is free and faster.
 
         Returns — the LIST of pages with `url`, `markdown`, `metadata` (or
-            `{error, run_id, status, items}`).
+            `{error, run_id, status, items, receipt}`).
 
         Args:
             urls: start URLs; the crawl stays under each one's path.
@@ -466,7 +667,7 @@ def register(mcp: FastMCP) -> None:
         For a quick look, `serper_maps_sample` is cheaper; use this one for full
         place records or a whole city/region (it splits big areas for you).
 
-        Returns — the LIST of places (or `{error, run_id, status, items}`).
+        Returns — the LIST of places (or `{error, run_id, status, items, receipt}`).
 
         Args:
             search_terms: what to search (`["bakery", "pastry shop"]`).
@@ -505,7 +706,7 @@ def register(mcp: FastMCP) -> None:
         """Google Maps reviews of given places — text, rating, date, owner reply.
         compass/Google-Maps-Reviews-Scraper.
 
-        Returns — the LIST of reviews (or `{error, run_id, status, items}`).
+        Returns — the LIST of reviews (or `{error, run_id, status, items, receipt}`).
 
         Args:
             place_urls: Google Maps place URLs (containing `/maps/place/`).

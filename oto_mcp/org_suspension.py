@@ -199,3 +199,16 @@ def garde_capacite(cap_key: str, ctx) -> None:
     if (texte := refus(ctx.org_id)):
         from .capabilities._types import AuthzDenied
         raise AuthzDenied(403, CODE, texte)
+
+
+def exiger(org_id: Optional[int]) -> None:
+    """Refuse (403 `org_suspended`) si `org_id` est suspendue. Les capacités d'une APP
+    l'appellent sur l'org de l'APP (`capabilities/apps.py`, `apps_appel._app_pour`), EN
+    PLUS de la garde de l'adaptateur sur l'org de l'appel (`garde_capacite`) : l'app
+    d'une org suspendue se ferme à tous ses lecteurs, invités d'une autre org compris.
+    Elle n'ouvre rien : une org d'appel suspendue reste refusée par l'adaptateur."""
+    if org_id is None:
+        return
+    if (texte := refus(int(org_id))):
+        from .capabilities._types import AuthzDenied
+        raise AuthzDenied(403, CODE, texte)

@@ -43,7 +43,7 @@ from ..datastore import par_reference as pr
 from ..mcp_errors import McpError
 from ..waterfall import entrees, qualification
 from ..waterfall.etape import _runnable
-from ..waterfall.moteur import _limits, _run_cascade
+from ..waterfall.moteur import _limits, _run_cascade, juger_comptes
 from ..waterfall.plan import STEPS_BY_NAMESPACE
 from .lecture import ACTE, documente
 
@@ -190,34 +190,21 @@ def _hors_liste(attempts: list[dict]) -> list[str]:
     return noms
 
 
-def _planifies(plan: Optional[dict]) -> list[str]:
-    """Les outils des étapes qu'un `dry_run` dit `planned` — variantes comprises."""
-    noms: list[str] = []
-    for a in (plan or {}).get("attempts") or []:
-        for p in [a, *(a.get("tried") or [])]:
-            if p.get("status") == "planned" and isinstance(p.get("tool"), str):
-                noms.append(p["tool"])
-    return noms
-
-
-def _outils_a_donner(refuses: list[str], *, dry_run: bool = False) -> dict:
+def _outils_a_donner(refuses: list[str]) -> dict:
     """Sync (base) : ce que le reçu dit des étapes refusées au travail — les outils à
     donner à l'agent et le geste qui les lui donne, la forme du refus d'une recette-code
     (`missing_tools`, `fix`, `recipes/code.refus_hors_liste`). Les autres étapes ont
     tourné : le reçu reste celui d'un passage, pas un refus. `fix` est un geste de
     personne (`tools_human_only`) ; `next_step` dit à l'agent de s'arrêter en les nommant,
-    pas de conclure à un quota.
-
-    `dry_run` : les étapes PLANIFIÉES que le travail refusera. Le plan les disait
-    `planned` sans un mot — c'est ce qui a fait conclure un agent à une panne de fournisseur
-    (vécu le 26/10/2026) : le plan mentait, l'agent a cru le plan."""
+    pas de conclure à un quota. Une cascade accordée couvre ses étapes
+    (`outils_du_travail.ouvrir_composite`) : ce reçu ne parle que d'un refus qui a
+    quand même eu lieu (un travail dont la liste ne se lit plus, par exemple)."""
     manque = outils_du_travail.manquants(refuses)
     if not manque:
         return {}
     noms = manque["missing"]
     agent = f"agent {manque['trigger_id']}" if manque.get("trigger_id") else "this agent"
-    sort = ("will be skipped on the real call" if dry_run
-            else "were skipped, and their rows stay pending")
+    sort = "were skipped, and their rows stay pending"
     return {"missing_tools": noms,
             "fix": outils_du_travail.correctif(manque.get("trigger_id"),
                                                manque.get("tools") or [], noms),
@@ -242,8 +229,8 @@ def _pas_un_verdict(out: dict, trouve: Any, attempts: list[dict],
         return None
     if any(a.get("status") == "unqualified" for a in attempts):
         return None
-    if any(a.get("status") == "skipped" and a.get("code") == "time_budget"
-           for a in attempts):
+    # Skipped for time — or a miss whose searches were cut short by it (`moteur._read_find`).
+    if any(a.get("code") == "time_budget" for a in attempts):
         return "time_budget"
     if _hors_liste(attempts):
         # Un fournisseur n'a pas tourné parce que l'agent n'a pas son outil : un `no_match`
@@ -285,6 +272,8 @@ async def fill_rows(mcp: FastMCP, ns: str, *, datastore, inputs: dict, output: d
         # Jev unusable: refused before a row is read — never rows written unjudged.
         sub = await run_in_threadpool(current_user_sub_from_token)
         await run_in_threadpool(qualification._require_qualification, sub, ns)
+    # The accounts named per connector (`_accounts` / `_account`): refused once, here.
+    await juger_comptes(ns, steps, providers, synchronous_only=True)
     # The table is read (and the write right checked) off the loop: it is the database.
     lot = await run_in_threadpool(pr.ouvrir, datastore, row_ids=row_ids, filter=filter,
                                   colonne_etat=status_column, limite=batch_size)
@@ -356,9 +345,6 @@ async def fill_rows(mcp: FastMCP, ns: str, *, datastore, inputs: dict, output: d
                 {k: v for k, v in a.items() if k != "arguments"}
                 for a in plan.get("attempts") or []]}
         recu.compter("would_look_up", len(groupes))
-        if plan is not None:
-            extra.update(await run_in_threadpool(
-                lambda: _outils_a_donner(_planifies(plan), dry_run=True)))
         # `rendre` counts what is left: the database, off the loop.
         return await run_in_threadpool(
             lambda: recu.rendre(lot, selectionnees=len(lot.lignes), dry_run=True,
@@ -472,15 +458,18 @@ _DOC = """Run the {label} waterfall over a TABLE's rows, on the server — op `u
         that runs out of time says `stopped: "time_budget"` and leaves the rest pending.
         ⚠️ The asynchronous steps ({asynchrones}) are left out here — they would answer
         after the row is written; the one-contact tool collects them.
+        `_accounts` (one account per connector) / `_account`: as on `{ns}`, for every
+        row — an account its connector lacks is refused before a row is read.
         The answer is counts plus `errors: [{{row_id, code}}]`; `dry_run` reads the rows,
         counts the lookups and returns the first one's plan, calling nothing.
-        From a hosted agent, a step whose tool the agent may not call is skipped and
-        its rows stay pending (`tool_not_in_job`, not a quota): the answer then names
-        them (`missing_tools`) with the owner's one-click `fix`.
+        From a hosted agent, listing this tool is enough: its steps run under it,
+        without their providers' tools in the agent's list (each step still needs its
+        connector and key). A step the job refuses all the same leaves its rows pending
+        (`tool_not_in_job`, not a quota), named in `missing_tools` with a `fix`.
 
         Args:
             op: `update_rows`.
-            datastore: the table, by name or number.
+            datastore: the table, by its NUMBER (`ns_id`) — a name is refused.
             inputs: {{input: column}} — inputs are {entrees}. Map every column
                 you have: more inputs open more (and cheaper) steps.
             output: {{field of the find: column}} — {champs}, or `provider`.

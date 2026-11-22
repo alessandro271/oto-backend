@@ -1,0 +1,1674 @@
+[
+ {
+  "publicUrl": "https://www.welcometothejungle.com/fr/companies/acme-robotics/jobs/robotics-software-engineer_paris",
+  "apply_url": "https://jobs.acme.example.test/apply/123",
+  "companyUrl": "https://www.welcometothejungle.com/fr/companies/acme-robotics",
+  "name": "Robotics Software Engineer",
+  "reference": "ACME_j0b001",
+  "objectID": "1000001",
+  "slug": "robotics-software-engineer_paris",
+  "wttj_reference": "00000000-0000-4000-8000-000000000001",
+  "published_at": "2026-09-11T08:00:00Z",
+  "updated_at": "2026-09-11T09:30:00Z",
+  "language": "fr",
+  "promoted": false,
+  "status": "published",
+  "ats": "external",
+  "contract_type": "full_time",
+  "contract_type_names": {
+   "en": "Full-Time",
+   "fr": "CDI",
+   "es": "Full-Time",
+   "cs": "Full-Time",
+   "sk": "Full-Time"
+  },
+  "remote": "partial",
+  "salary_min": 45000,
+  "salary_minimum": 45000,
+  "salary_max": 55000,
+  "salary_maximum": 55000,
+  "salary_yearly_minimum": 45000,
+  "salary_currency": "EUR",
+  "salary_period": "yearly",
+  "experience_level": "3_TO_4_YEARS",
+  "experience_level_minimum": 3,
+  "education_level": "bac_5",
+  "has_contract_duration": false,
+  "has_education_level": true,
+  "has_experience_level_minimum": true,
+  "has_salary_yearly_minimum": true,
+  "is_default": false,
+  "detailsFetched": true,
+  "description": "<p>We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. </p>",
+  "description_markdown": "We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. ",
+  "description_text": "We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. ",
+  "profile": "<ul><li>3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. </li></ul>",
+  "profile_markdown": "* 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. ",
+  "profile_text": "- 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. ",
+  "recruitment_process": "<p>Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. </p>",
+  "recruitment_process_markdown": "Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. ",
+  "recruitment_process_text": "Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. ",
+  "company_description": "<p>Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. </p>",
+  "company_description_markdown": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+  "company_description_text": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+  "company_summary": "Warehouse robots for mid-sized retailers.",
+  "skills": [
+   {
+    "name": {
+     "en": "Python",
+     "fr": "Python",
+     "es": "Python",
+     "cs": "Python",
+     "sk": "Python"
+    },
+    "reference": "sk1"
+   },
+   {
+    "name": {
+     "en": "Robotics",
+     "fr": "Robotique",
+     "es": "Robotics",
+     "cs": "Robotics",
+     "sk": "Robotics"
+    },
+    "reference": "sk2"
+   }
+  ],
+  "tools": [
+   {
+    "name": "Python",
+    "reference": "t1"
+   },
+   {
+    "name": "ROS",
+    "reference": "t2"
+   }
+  ],
+  "benefits": {
+   "FR": {
+    "count": 3,
+    "categories": [
+     {
+      "name": {
+       "en": "Remote work policy",
+       "fr": "Politique de télétravail",
+       "es": "Remote work policy",
+       "cs": "Remote work policy",
+       "sk": "Remote work policy"
+      },
+      "benefits": [
+       {
+        "name": {
+         "en": "Between 1-2 days at home",
+         "fr": "Entre 1-2 jours de télétravail",
+         "es": "Between 1-2 days at home",
+         "cs": "Between 1-2 days at home",
+         "sk": "Between 1-2 days at home"
+        }
+       }
+      ]
+     },
+     {
+      "name": {
+       "en": "Financial benefits",
+       "fr": "Avantages financiers",
+       "es": "Financial benefits",
+       "cs": "Financial benefits",
+       "sk": "Financial benefits"
+      },
+      "benefits": [
+       {
+        "name": {
+         "en": "Meal vouchers",
+         "fr": "Tickets restaurant",
+         "es": "Meal vouchers",
+         "cs": "Meal vouchers",
+         "sk": "Meal vouchers"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "office": {
+   "address": "1 rue de l'Exemple, 75000 Paris, France",
+   "city": "Paris",
+   "zip_code": "75000",
+   "district": "Paris",
+   "state": "Île-de-France",
+   "country": {
+    "en": "France",
+    "fr": "France",
+    "es": "France",
+    "cs": "France",
+    "sk": "France"
+   },
+   "country_code": "FR",
+   "latitude": 48.86,
+   "longitude": 2.34,
+   "local_address": "1 rue de l'Exemple",
+   "local_city": "Paris",
+   "local_district": "Paris"
+  },
+  "offices": [
+   {
+    "address": "1 rue de l'Exemple, 75000 Paris, France",
+    "city": "Paris",
+    "zip_code": "75000",
+    "country_code": "FR",
+    "latitude": 48.86,
+    "longitude": 2.34
+   }
+  ],
+  "_geoloc": [
+   {
+    "lat": 48.86,
+    "lng": 2.34
+   }
+  ],
+  "profession": {
+   "name": {
+    "en": "Software Engineering",
+    "fr": "Génie logiciel",
+    "es": "Software Engineering",
+    "cs": "Software Engineering",
+    "sk": "Software Engineering"
+   },
+   "category": {
+    "en": "Tech",
+    "fr": "Tech",
+    "es": "Tech",
+    "cs": "Tech",
+    "sk": "Tech"
+   },
+   "sub_category_name": {
+    "en": "Software Engineering",
+    "fr": "Génie logiciel",
+    "es": "Software Engineering",
+    "cs": "Software Engineering",
+    "sk": "Software Engineering"
+   },
+   "category_reference": "tech",
+   "sub_category_reference": "tech__software"
+  },
+  "profession_name": {
+   "en": {
+    "Tech": "Software Engineering"
+   },
+   "fr": {
+    "Tech": "Génie logiciel"
+   }
+  },
+  "sectors": [
+   {
+    "name": {
+     "en": "Robotics",
+     "fr": "Robotique",
+     "es": "Robotics",
+     "cs": "Robotics",
+     "sk": "Robotics"
+    },
+    "parent": {
+     "en": "Tech",
+     "fr": "Tech",
+     "es": "Tech",
+     "cs": "Tech",
+     "sk": "Tech"
+    }
+   },
+   {
+    "name": {
+     "en": "Software",
+     "fr": "Logiciels",
+     "es": "Software",
+     "cs": "Software",
+     "sk": "Software"
+    },
+    "parent": {
+     "en": "Tech",
+     "fr": "Tech",
+     "es": "Tech",
+     "cs": "Tech",
+     "sk": "Tech"
+    }
+   }
+  ],
+  "sectors_name": {
+   "en": [
+    {
+     "Tech": "Robotics"
+    },
+    {
+     "Tech": "Software"
+    }
+   ],
+   "fr": [
+    {
+     "Tech": "Robotique"
+    },
+    {
+     "Tech": "Logiciels"
+    }
+   ]
+  },
+  "social_image": "https://imagen.example.test/api/generate-image?data=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "urls": [
+   {
+    "kind": "canonical",
+    "language": "fr",
+    "href": "https://www.welcometothejungle.com/fr/companies/acme-robotics/jobs/robotics-software-engineer_paris"
+   },
+   {
+    "kind": "localized",
+    "language": "en",
+    "href": "https://www.welcometothejungle.com/en/companies/acme-robotics/jobs/robotics-software-engineer_paris"
+   }
+  ],
+  "videos": [
+   {
+    "name": "Meet the team",
+    "source": "youtube"
+   }
+  ],
+  "cta_content": {
+   "links": [
+    "/tech"
+   ],
+   "contents": []
+  },
+  "featured_page": {
+   "slug": "/tech",
+   "type": "custom"
+  },
+  "application_fields": [
+   {
+    "name": "resume",
+    "mode": "mandatory"
+   },
+   {
+    "name": "cover_letter",
+    "mode": "optional"
+   }
+  ],
+  "ats_questions": [],
+  "website": {
+   "reference": "wttj_fr"
+  },
+  "organization": {
+   "name": "Acme Robotics",
+   "slug": "acme-robotics",
+   "reference": "ACME_r0b0t",
+   "logo": {
+    "url": "https://cdn.example.test/logo.png",
+    "thumb": {
+     "url": "https://cdn.example.test/logo-thumb.jpg"
+    }
+   },
+   "cover_image": {
+    "url": "https://cdn.example.test/cover.jpg",
+    "large": {
+     "url": "https://cdn.example.test/cover-l.jpg"
+    },
+    "medium": {
+     "url": "https://cdn.example.test/cover-m.jpg"
+    },
+    "small": {
+     "url": "https://cdn.example.test/cover-s.jpg"
+    },
+    "social": {
+     "url": "https://cdn.example.test/cover-so.jpg"
+    }
+   },
+   "automatic_email": true,
+   "default_language": "fr",
+   "description": "<p>Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. </p>",
+   "description_markdown": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+   "description_text": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+   "descriptions": {
+    "fr": "Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. ",
+    "en": "Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. "
+   },
+   "website_organization": {
+    "slug": "acme-robotics",
+    "i18n_descriptions": {
+     "fr": "Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. ",
+     "en": "Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. "
+    }
+   },
+   "has_default_job": false,
+   "has_external_ats": true,
+   "headquarter": {
+    "address": "1 rue de l'Exemple, 75000 Paris, France",
+    "city": "Paris",
+    "zip_code": "75000",
+    "district": "Paris",
+    "country_code": "FR",
+    "latitude": 48.86,
+    "longitude": 2.34,
+    "local_address": "1 rue de l'Exemple",
+    "local_city": "Paris",
+    "local_district": "Paris"
+   },
+   "industry": "Robotics, Software, Logistics",
+   "jobs_count": 14,
+   "nb_employees": 120,
+   "profile_type": "standard",
+   "sectors": [
+    {
+     "name": "Robotics",
+     "parent_name": "Tech"
+    },
+    {
+     "name": "Software",
+     "parent_name": "Tech"
+    },
+    {
+     "name": "Logistics",
+     "parent_name": "Transport"
+    }
+   ],
+   "size": {
+    "en": "Between 50 and 250 employees",
+    "fr": "Entre 50 et 250 salariés",
+    "es": "Between 50 and 250 employees",
+    "cs": "Between 50 and 250 employees",
+    "sk": "Between 50 and 250 employees"
+   },
+   "creation_year": 2019,
+   "media_website_url": "https://acme.example.test",
+   "media_linkedin": "acme-robotics",
+   "media_facebook": "acme",
+   "media_instagram": "acme",
+   "media_twitter": "acme",
+   "media_youtube": "acme",
+   "media_pinterest": "acme",
+   "video_playlist_provider": "youtube",
+   "playlist_id": "PL000000",
+   "average_age": 31,
+   "revenue": "12 M€",
+   "turnover": 8,
+   "parity_men": 60,
+   "parity_women": 40,
+   "gdpr_setting": {
+    "consent_duration": 24,
+    "application_message": "Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. ",
+    "privacy_policy_url": "https://acme.example.test/privacy"
+   },
+   "equality_indexes": {
+    "equality_among_highest_earners": 5,
+    "gender_pay_gap": 39,
+    "published": true,
+    "workforce_range": "50-250",
+    "year": 2025,
+    "equality_index": 85,
+    "maternity_leave_return_raise": 15,
+    "gap_in_promotions": 15,
+    "gap_in_annual_raises_excluding_promotions": 20,
+    "gap_in_annual_raises": 20
+   },
+   "labels": [
+    "great-place-to-work",
+    "happy-at-work"
+   ],
+   "expansion_metadata": {
+    "has_enriched_profile": true,
+    "expansion_company_url": "https://acme.example.test/expansion"
+   }
+  }
+ },
+ {
+  "publicUrl": "https://www.welcometothejungle.com/en/companies/acme-robotics/jobs/robotics-software-engineer_paris",
+  "apply_url": "https://jobs.acme.example.test/apply/123",
+  "companyUrl": "https://www.welcometothejungle.com/fr/companies/acme-robotics",
+  "name": "Robotics Software Engineer",
+  "reference": "ACME_j0b001",
+  "objectID": "1000001-en",
+  "slug": "robotics-software-engineer_paris",
+  "wttj_reference": "00000000-0000-4000-8000-000000000001",
+  "published_at": "2026-09-11T08:00:00Z",
+  "updated_at": "2026-09-11T09:30:00Z",
+  "language": "en",
+  "promoted": false,
+  "status": "published",
+  "ats": "external",
+  "contract_type": "full_time",
+  "contract_type_names": {
+   "en": "Full-Time",
+   "fr": "CDI",
+   "es": "Full-Time",
+   "cs": "Full-Time",
+   "sk": "Full-Time"
+  },
+  "remote": "partial",
+  "salary_min": 45000,
+  "salary_minimum": 45000,
+  "salary_max": 55000,
+  "salary_maximum": 55000,
+  "salary_yearly_minimum": 45000,
+  "salary_currency": "EUR",
+  "salary_period": "yearly",
+  "experience_level": "3_TO_4_YEARS",
+  "experience_level_minimum": 3,
+  "education_level": "bac_5",
+  "has_contract_duration": false,
+  "has_education_level": true,
+  "has_experience_level_minimum": true,
+  "has_salary_yearly_minimum": true,
+  "is_default": false,
+  "detailsFetched": true,
+  "description": "<p>We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. </p>",
+  "description_markdown": "We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. ",
+  "description_text": "We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. ",
+  "profile": "<ul><li>3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. </li></ul>",
+  "profile_markdown": "* 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. ",
+  "profile_text": "- 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. ",
+  "recruitment_process": "<p>Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. </p>",
+  "recruitment_process_markdown": "Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. ",
+  "recruitment_process_text": "Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. ",
+  "company_description": "<p>Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. </p>",
+  "company_description_markdown": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+  "company_description_text": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+  "company_summary": "Warehouse robots for mid-sized retailers.",
+  "skills": [
+   {
+    "name": {
+     "en": "Python",
+     "fr": "Python",
+     "es": "Python",
+     "cs": "Python",
+     "sk": "Python"
+    },
+    "reference": "sk1"
+   },
+   {
+    "name": {
+     "en": "Robotics",
+     "fr": "Robotique",
+     "es": "Robotics",
+     "cs": "Robotics",
+     "sk": "Robotics"
+    },
+    "reference": "sk2"
+   }
+  ],
+  "tools": [
+   {
+    "name": "Python",
+    "reference": "t1"
+   },
+   {
+    "name": "ROS",
+    "reference": "t2"
+   }
+  ],
+  "benefits": {
+   "FR": {
+    "count": 3,
+    "categories": [
+     {
+      "name": {
+       "en": "Remote work policy",
+       "fr": "Politique de télétravail",
+       "es": "Remote work policy",
+       "cs": "Remote work policy",
+       "sk": "Remote work policy"
+      },
+      "benefits": [
+       {
+        "name": {
+         "en": "Between 1-2 days at home",
+         "fr": "Entre 1-2 jours de télétravail",
+         "es": "Between 1-2 days at home",
+         "cs": "Between 1-2 days at home",
+         "sk": "Between 1-2 days at home"
+        }
+       }
+      ]
+     },
+     {
+      "name": {
+       "en": "Financial benefits",
+       "fr": "Avantages financiers",
+       "es": "Financial benefits",
+       "cs": "Financial benefits",
+       "sk": "Financial benefits"
+      },
+      "benefits": [
+       {
+        "name": {
+         "en": "Meal vouchers",
+         "fr": "Tickets restaurant",
+         "es": "Meal vouchers",
+         "cs": "Meal vouchers",
+         "sk": "Meal vouchers"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "office": {
+   "address": "1 rue de l'Exemple, 75000 Paris, France",
+   "city": "Paris",
+   "zip_code": "75000",
+   "district": "Paris",
+   "state": "Île-de-France",
+   "country": {
+    "en": "France",
+    "fr": "France",
+    "es": "France",
+    "cs": "France",
+    "sk": "France"
+   },
+   "country_code": "FR",
+   "latitude": 48.86,
+   "longitude": 2.34,
+   "local_address": "1 rue de l'Exemple",
+   "local_city": "Paris",
+   "local_district": "Paris"
+  },
+  "offices": [
+   {
+    "address": "1 rue de l'Exemple, 75000 Paris, France",
+    "city": "Paris",
+    "zip_code": "75000",
+    "country_code": "FR",
+    "latitude": 48.86,
+    "longitude": 2.34
+   }
+  ],
+  "_geoloc": [
+   {
+    "lat": 48.86,
+    "lng": 2.34
+   }
+  ],
+  "profession": {
+   "name": {
+    "en": "Software Engineering",
+    "fr": "Génie logiciel",
+    "es": "Software Engineering",
+    "cs": "Software Engineering",
+    "sk": "Software Engineering"
+   },
+   "category": {
+    "en": "Tech",
+    "fr": "Tech",
+    "es": "Tech",
+    "cs": "Tech",
+    "sk": "Tech"
+   },
+   "sub_category_name": {
+    "en": "Software Engineering",
+    "fr": "Génie logiciel",
+    "es": "Software Engineering",
+    "cs": "Software Engineering",
+    "sk": "Software Engineering"
+   },
+   "category_reference": "tech",
+   "sub_category_reference": "tech__software"
+  },
+  "profession_name": {
+   "en": {
+    "Tech": "Software Engineering"
+   },
+   "fr": {
+    "Tech": "Génie logiciel"
+   }
+  },
+  "sectors": [
+   {
+    "name": {
+     "en": "Robotics",
+     "fr": "Robotique",
+     "es": "Robotics",
+     "cs": "Robotics",
+     "sk": "Robotics"
+    },
+    "parent": {
+     "en": "Tech",
+     "fr": "Tech",
+     "es": "Tech",
+     "cs": "Tech",
+     "sk": "Tech"
+    }
+   },
+   {
+    "name": {
+     "en": "Software",
+     "fr": "Logiciels",
+     "es": "Software",
+     "cs": "Software",
+     "sk": "Software"
+    },
+    "parent": {
+     "en": "Tech",
+     "fr": "Tech",
+     "es": "Tech",
+     "cs": "Tech",
+     "sk": "Tech"
+    }
+   }
+  ],
+  "sectors_name": {
+   "en": [
+    {
+     "Tech": "Robotics"
+    },
+    {
+     "Tech": "Software"
+    }
+   ],
+   "fr": [
+    {
+     "Tech": "Robotique"
+    },
+    {
+     "Tech": "Logiciels"
+    }
+   ]
+  },
+  "social_image": "https://imagen.example.test/api/generate-image?data=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "urls": [
+   {
+    "kind": "canonical",
+    "language": "fr",
+    "href": "https://www.welcometothejungle.com/fr/companies/acme-robotics/jobs/robotics-software-engineer_paris"
+   },
+   {
+    "kind": "localized",
+    "language": "en",
+    "href": "https://www.welcometothejungle.com/en/companies/acme-robotics/jobs/robotics-software-engineer_paris"
+   }
+  ],
+  "videos": [
+   {
+    "name": "Meet the team",
+    "source": "youtube"
+   }
+  ],
+  "cta_content": {
+   "links": [
+    "/tech"
+   ],
+   "contents": []
+  },
+  "featured_page": {
+   "slug": "/tech",
+   "type": "custom"
+  },
+  "application_fields": [
+   {
+    "name": "resume",
+    "mode": "mandatory"
+   },
+   {
+    "name": "cover_letter",
+    "mode": "optional"
+   }
+  ],
+  "ats_questions": [],
+  "website": {
+   "reference": "wttj_fr"
+  },
+  "organization": {
+   "name": "Acme Robotics",
+   "slug": "acme-robotics",
+   "reference": "ACME_r0b0t",
+   "logo": {
+    "url": "https://cdn.example.test/logo.png",
+    "thumb": {
+     "url": "https://cdn.example.test/logo-thumb.jpg"
+    }
+   },
+   "cover_image": {
+    "url": "https://cdn.example.test/cover.jpg",
+    "large": {
+     "url": "https://cdn.example.test/cover-l.jpg"
+    },
+    "medium": {
+     "url": "https://cdn.example.test/cover-m.jpg"
+    },
+    "small": {
+     "url": "https://cdn.example.test/cover-s.jpg"
+    },
+    "social": {
+     "url": "https://cdn.example.test/cover-so.jpg"
+    }
+   },
+   "automatic_email": true,
+   "default_language": "fr",
+   "description": "<p>Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. </p>",
+   "description_markdown": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+   "description_text": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+   "descriptions": {
+    "fr": "Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. ",
+    "en": "Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. "
+   },
+   "website_organization": {
+    "slug": "acme-robotics",
+    "i18n_descriptions": {
+     "fr": "Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. ",
+     "en": "Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. "
+    }
+   },
+   "has_default_job": false,
+   "has_external_ats": true,
+   "headquarter": {
+    "address": "1 rue de l'Exemple, 75000 Paris, France",
+    "city": "Paris",
+    "zip_code": "75000",
+    "district": "Paris",
+    "country_code": "FR",
+    "latitude": 48.86,
+    "longitude": 2.34,
+    "local_address": "1 rue de l'Exemple",
+    "local_city": "Paris",
+    "local_district": "Paris"
+   },
+   "industry": "Robotics, Software, Logistics",
+   "jobs_count": 14,
+   "nb_employees": 120,
+   "profile_type": "standard",
+   "sectors": [
+    {
+     "name": "Robotics",
+     "parent_name": "Tech"
+    },
+    {
+     "name": "Software",
+     "parent_name": "Tech"
+    },
+    {
+     "name": "Logistics",
+     "parent_name": "Transport"
+    }
+   ],
+   "size": {
+    "en": "Between 50 and 250 employees",
+    "fr": "Entre 50 et 250 salariés",
+    "es": "Between 50 and 250 employees",
+    "cs": "Between 50 and 250 employees",
+    "sk": "Between 50 and 250 employees"
+   },
+   "creation_year": 2019,
+   "media_website_url": "https://acme.example.test",
+   "media_linkedin": "acme-robotics",
+   "media_facebook": "acme",
+   "media_instagram": "acme",
+   "media_twitter": "acme",
+   "media_youtube": "acme",
+   "media_pinterest": "acme",
+   "video_playlist_provider": "youtube",
+   "playlist_id": "PL000000",
+   "average_age": 31,
+   "revenue": "12 M€",
+   "turnover": 8,
+   "parity_men": 60,
+   "parity_women": 40,
+   "gdpr_setting": {
+    "consent_duration": 24,
+    "application_message": "Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. ",
+    "privacy_policy_url": "https://acme.example.test/privacy"
+   },
+   "equality_indexes": {
+    "equality_among_highest_earners": 5,
+    "gender_pay_gap": 39,
+    "published": true,
+    "workforce_range": "50-250",
+    "year": 2025,
+    "equality_index": 85,
+    "maternity_leave_return_raise": 15,
+    "gap_in_promotions": 15,
+    "gap_in_annual_raises_excluding_promotions": 20,
+    "gap_in_annual_raises": 20
+   },
+   "labels": [
+    "great-place-to-work",
+    "happy-at-work"
+   ],
+   "expansion_metadata": {
+    "has_enriched_profile": true,
+    "expansion_company_url": "https://acme.example.test/expansion"
+   }
+  }
+ },
+ {
+  "publicUrl": "https://www.welcometothejungle.com/fr/companies/acme-robotics/jobs/fleet-data-engineer_paris",
+  "apply_url": "https://jobs.acme.example.test/apply/123",
+  "companyUrl": "https://www.welcometothejungle.com/fr/companies/acme-robotics",
+  "name": "Fleet Data Engineer",
+  "reference": "ACME_j0b002",
+  "objectID": "1000002",
+  "slug": "fleet-data-engineer_paris",
+  "wttj_reference": "00000000-0000-4000-8000-000000000002",
+  "published_at": "2026-09-11T08:00:00Z",
+  "updated_at": "2026-09-11T09:30:00Z",
+  "language": "fr",
+  "promoted": false,
+  "status": "published",
+  "ats": "external",
+  "contract_type": "full_time",
+  "contract_type_names": {
+   "en": "Full-Time",
+   "fr": "CDI",
+   "es": "Full-Time",
+   "cs": "Full-Time",
+   "sk": "Full-Time"
+  },
+  "remote": "partial",
+  "salary_min": 45000,
+  "salary_minimum": 45000,
+  "salary_max": 55000,
+  "salary_maximum": 55000,
+  "salary_yearly_minimum": 45000,
+  "salary_currency": "EUR",
+  "salary_period": "yearly",
+  "experience_level": "3_TO_4_YEARS",
+  "experience_level_minimum": 3,
+  "education_level": "bac_5",
+  "has_contract_duration": false,
+  "has_education_level": true,
+  "has_experience_level_minimum": true,
+  "has_salary_yearly_minimum": true,
+  "is_default": false,
+  "detailsFetched": true,
+  "description": "<p>We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. </p>",
+  "description_markdown": "We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. ",
+  "description_text": "We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. ",
+  "profile": "<ul><li>3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. </li></ul>",
+  "profile_markdown": "* 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. ",
+  "profile_text": "- 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. ",
+  "recruitment_process": "<p>Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. </p>",
+  "recruitment_process_markdown": "Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. ",
+  "recruitment_process_text": "Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. ",
+  "company_description": "<p>Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. </p>",
+  "company_description_markdown": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+  "company_description_text": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+  "company_summary": "Warehouse robots for mid-sized retailers.",
+  "skills": [
+   {
+    "name": {
+     "en": "Python",
+     "fr": "Python",
+     "es": "Python",
+     "cs": "Python",
+     "sk": "Python"
+    },
+    "reference": "sk1"
+   },
+   {
+    "name": {
+     "en": "Robotics",
+     "fr": "Robotique",
+     "es": "Robotics",
+     "cs": "Robotics",
+     "sk": "Robotics"
+    },
+    "reference": "sk2"
+   }
+  ],
+  "tools": [
+   {
+    "name": "Python",
+    "reference": "t1"
+   },
+   {
+    "name": "ROS",
+    "reference": "t2"
+   }
+  ],
+  "benefits": {
+   "FR": {
+    "count": 3,
+    "categories": [
+     {
+      "name": {
+       "en": "Remote work policy",
+       "fr": "Politique de télétravail",
+       "es": "Remote work policy",
+       "cs": "Remote work policy",
+       "sk": "Remote work policy"
+      },
+      "benefits": [
+       {
+        "name": {
+         "en": "Between 1-2 days at home",
+         "fr": "Entre 1-2 jours de télétravail",
+         "es": "Between 1-2 days at home",
+         "cs": "Between 1-2 days at home",
+         "sk": "Between 1-2 days at home"
+        }
+       }
+      ]
+     },
+     {
+      "name": {
+       "en": "Financial benefits",
+       "fr": "Avantages financiers",
+       "es": "Financial benefits",
+       "cs": "Financial benefits",
+       "sk": "Financial benefits"
+      },
+      "benefits": [
+       {
+        "name": {
+         "en": "Meal vouchers",
+         "fr": "Tickets restaurant",
+         "es": "Meal vouchers",
+         "cs": "Meal vouchers",
+         "sk": "Meal vouchers"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "office": {
+   "address": "1 rue de l'Exemple, 75000 Paris, France",
+   "city": "Paris",
+   "zip_code": "75000",
+   "district": "Paris",
+   "state": "Île-de-France",
+   "country": {
+    "en": "France",
+    "fr": "France",
+    "es": "France",
+    "cs": "France",
+    "sk": "France"
+   },
+   "country_code": "FR",
+   "latitude": 48.86,
+   "longitude": 2.34,
+   "local_address": "1 rue de l'Exemple",
+   "local_city": "Paris",
+   "local_district": "Paris"
+  },
+  "offices": [
+   {
+    "address": "1 rue de l'Exemple, 75000 Paris, France",
+    "city": "Paris",
+    "zip_code": "75000",
+    "country_code": "FR",
+    "latitude": 48.86,
+    "longitude": 2.34
+   }
+  ],
+  "_geoloc": [
+   {
+    "lat": 48.86,
+    "lng": 2.34
+   }
+  ],
+  "profession": {
+   "name": {
+    "en": "Software Engineering",
+    "fr": "Génie logiciel",
+    "es": "Software Engineering",
+    "cs": "Software Engineering",
+    "sk": "Software Engineering"
+   },
+   "category": {
+    "en": "Tech",
+    "fr": "Tech",
+    "es": "Tech",
+    "cs": "Tech",
+    "sk": "Tech"
+   },
+   "sub_category_name": {
+    "en": "Software Engineering",
+    "fr": "Génie logiciel",
+    "es": "Software Engineering",
+    "cs": "Software Engineering",
+    "sk": "Software Engineering"
+   },
+   "category_reference": "tech",
+   "sub_category_reference": "tech__software"
+  },
+  "profession_name": {
+   "en": {
+    "Tech": "Software Engineering"
+   },
+   "fr": {
+    "Tech": "Génie logiciel"
+   }
+  },
+  "sectors": [
+   {
+    "name": {
+     "en": "Robotics",
+     "fr": "Robotique",
+     "es": "Robotics",
+     "cs": "Robotics",
+     "sk": "Robotics"
+    },
+    "parent": {
+     "en": "Tech",
+     "fr": "Tech",
+     "es": "Tech",
+     "cs": "Tech",
+     "sk": "Tech"
+    }
+   },
+   {
+    "name": {
+     "en": "Software",
+     "fr": "Logiciels",
+     "es": "Software",
+     "cs": "Software",
+     "sk": "Software"
+    },
+    "parent": {
+     "en": "Tech",
+     "fr": "Tech",
+     "es": "Tech",
+     "cs": "Tech",
+     "sk": "Tech"
+    }
+   }
+  ],
+  "sectors_name": {
+   "en": [
+    {
+     "Tech": "Robotics"
+    },
+    {
+     "Tech": "Software"
+    }
+   ],
+   "fr": [
+    {
+     "Tech": "Robotique"
+    },
+    {
+     "Tech": "Logiciels"
+    }
+   ]
+  },
+  "social_image": "https://imagen.example.test/api/generate-image?data=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "urls": [
+   {
+    "kind": "canonical",
+    "language": "fr",
+    "href": "https://www.welcometothejungle.com/fr/companies/acme-robotics/jobs/fleet-data-engineer_paris"
+   },
+   {
+    "kind": "localized",
+    "language": "en",
+    "href": "https://www.welcometothejungle.com/en/companies/acme-robotics/jobs/fleet-data-engineer_paris"
+   }
+  ],
+  "videos": [
+   {
+    "name": "Meet the team",
+    "source": "youtube"
+   }
+  ],
+  "cta_content": {
+   "links": [
+    "/tech"
+   ],
+   "contents": []
+  },
+  "featured_page": {
+   "slug": "/tech",
+   "type": "custom"
+  },
+  "application_fields": [
+   {
+    "name": "resume",
+    "mode": "mandatory"
+   },
+   {
+    "name": "cover_letter",
+    "mode": "optional"
+   }
+  ],
+  "ats_questions": [],
+  "website": {
+   "reference": "wttj_fr"
+  },
+  "organization": {
+   "name": "Acme Robotics",
+   "slug": "acme-robotics",
+   "reference": "ACME_r0b0t",
+   "logo": {
+    "url": "https://cdn.example.test/logo.png",
+    "thumb": {
+     "url": "https://cdn.example.test/logo-thumb.jpg"
+    }
+   },
+   "cover_image": {
+    "url": "https://cdn.example.test/cover.jpg",
+    "large": {
+     "url": "https://cdn.example.test/cover-l.jpg"
+    },
+    "medium": {
+     "url": "https://cdn.example.test/cover-m.jpg"
+    },
+    "small": {
+     "url": "https://cdn.example.test/cover-s.jpg"
+    },
+    "social": {
+     "url": "https://cdn.example.test/cover-so.jpg"
+    }
+   },
+   "automatic_email": true,
+   "default_language": "fr",
+   "description": "<p>Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. </p>",
+   "description_markdown": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+   "description_text": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+   "descriptions": {
+    "fr": "Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. ",
+    "en": "Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. "
+   },
+   "website_organization": {
+    "slug": "acme-robotics",
+    "i18n_descriptions": {
+     "fr": "Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. ",
+     "en": "Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. "
+    }
+   },
+   "has_default_job": false,
+   "has_external_ats": true,
+   "headquarter": {
+    "address": "1 rue de l'Exemple, 75000 Paris, France",
+    "city": "Paris",
+    "zip_code": "75000",
+    "district": "Paris",
+    "country_code": "FR",
+    "latitude": 48.86,
+    "longitude": 2.34,
+    "local_address": "1 rue de l'Exemple",
+    "local_city": "Paris",
+    "local_district": "Paris"
+   },
+   "industry": "Robotics, Software, Logistics",
+   "jobs_count": 14,
+   "nb_employees": 120,
+   "profile_type": "standard",
+   "sectors": [
+    {
+     "name": "Robotics",
+     "parent_name": "Tech"
+    },
+    {
+     "name": "Software",
+     "parent_name": "Tech"
+    },
+    {
+     "name": "Logistics",
+     "parent_name": "Transport"
+    }
+   ],
+   "size": {
+    "en": "Between 50 and 250 employees",
+    "fr": "Entre 50 et 250 salariés",
+    "es": "Between 50 and 250 employees",
+    "cs": "Between 50 and 250 employees",
+    "sk": "Between 50 and 250 employees"
+   },
+   "creation_year": 2019,
+   "media_website_url": "https://acme.example.test",
+   "media_linkedin": "acme-robotics",
+   "media_facebook": "acme",
+   "media_instagram": "acme",
+   "media_twitter": "acme",
+   "media_youtube": "acme",
+   "media_pinterest": "acme",
+   "video_playlist_provider": "youtube",
+   "playlist_id": "PL000000",
+   "average_age": 31,
+   "revenue": "12 M€",
+   "turnover": 8,
+   "parity_men": 60,
+   "parity_women": 40,
+   "gdpr_setting": {
+    "consent_duration": 24,
+    "application_message": "Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. ",
+    "privacy_policy_url": "https://acme.example.test/privacy"
+   },
+   "equality_indexes": {
+    "equality_among_highest_earners": 5,
+    "gender_pay_gap": 39,
+    "published": true,
+    "workforce_range": "50-250",
+    "year": 2025,
+    "equality_index": 85,
+    "maternity_leave_return_raise": 15,
+    "gap_in_promotions": 15,
+    "gap_in_annual_raises_excluding_promotions": 20,
+    "gap_in_annual_raises": 20
+   },
+   "labels": [
+    "great-place-to-work",
+    "happy-at-work"
+   ],
+   "expansion_metadata": {
+    "has_enriched_profile": true,
+    "expansion_company_url": "https://acme.example.test/expansion"
+   }
+  }
+ },
+ {
+  "publicUrl": "https://www.welcometothejungle.com/fr/companies/acme-robotics/jobs/robotics-software-engineer_paris",
+  "apply_url": "https://jobs.acme.example.test/apply/123",
+  "companyUrl": "https://www.welcometothejungle.com/fr/companies/acme-robotics",
+  "name": "Robotics Software Engineer",
+  "reference": "ACME_j0b001",
+  "objectID": "1000001",
+  "slug": "robotics-software-engineer_paris",
+  "wttj_reference": "00000000-0000-4000-8000-000000000001",
+  "published_at": "2026-09-11T08:00:00Z",
+  "updated_at": "2026-09-11T09:30:00Z",
+  "language": "fr",
+  "promoted": false,
+  "status": "published",
+  "ats": "external",
+  "contract_type": "full_time",
+  "contract_type_names": {
+   "en": "Full-Time",
+   "fr": "CDI",
+   "es": "Full-Time",
+   "cs": "Full-Time",
+   "sk": "Full-Time"
+  },
+  "remote": "partial",
+  "salary_min": 45000,
+  "salary_minimum": 45000,
+  "salary_max": 55000,
+  "salary_maximum": 55000,
+  "salary_yearly_minimum": 45000,
+  "salary_currency": "EUR",
+  "salary_period": "yearly",
+  "experience_level": "3_TO_4_YEARS",
+  "experience_level_minimum": 3,
+  "education_level": "bac_5",
+  "has_contract_duration": false,
+  "has_education_level": true,
+  "has_experience_level_minimum": true,
+  "has_salary_yearly_minimum": true,
+  "is_default": false,
+  "detailsFetched": true,
+  "description": "<p>We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. </p>",
+  "description_markdown": "We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. ",
+  "description_text": "We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. We are looking for an engineer to build and run our fleet software. ",
+  "profile": "<ul><li>3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. </li></ul>",
+  "profile_markdown": "* 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. ",
+  "profile_text": "- 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. 3 years of Python, a taste for hardware. ",
+  "recruitment_process": "<p>Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. </p>",
+  "recruitment_process_markdown": "Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. ",
+  "recruitment_process_text": "Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. Two interviews and a case study. ",
+  "company_description": "<p>Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. </p>",
+  "company_description_markdown": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+  "company_description_text": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+  "company_summary": "Warehouse robots for mid-sized retailers.",
+  "skills": [
+   {
+    "name": {
+     "en": "Python",
+     "fr": "Python",
+     "es": "Python",
+     "cs": "Python",
+     "sk": "Python"
+    },
+    "reference": "sk1"
+   },
+   {
+    "name": {
+     "en": "Robotics",
+     "fr": "Robotique",
+     "es": "Robotics",
+     "cs": "Robotics",
+     "sk": "Robotics"
+    },
+    "reference": "sk2"
+   }
+  ],
+  "tools": [
+   {
+    "name": "Python",
+    "reference": "t1"
+   },
+   {
+    "name": "ROS",
+    "reference": "t2"
+   }
+  ],
+  "benefits": {
+   "FR": {
+    "count": 3,
+    "categories": [
+     {
+      "name": {
+       "en": "Remote work policy",
+       "fr": "Politique de télétravail",
+       "es": "Remote work policy",
+       "cs": "Remote work policy",
+       "sk": "Remote work policy"
+      },
+      "benefits": [
+       {
+        "name": {
+         "en": "Between 1-2 days at home",
+         "fr": "Entre 1-2 jours de télétravail",
+         "es": "Between 1-2 days at home",
+         "cs": "Between 1-2 days at home",
+         "sk": "Between 1-2 days at home"
+        }
+       }
+      ]
+     },
+     {
+      "name": {
+       "en": "Financial benefits",
+       "fr": "Avantages financiers",
+       "es": "Financial benefits",
+       "cs": "Financial benefits",
+       "sk": "Financial benefits"
+      },
+      "benefits": [
+       {
+        "name": {
+         "en": "Meal vouchers",
+         "fr": "Tickets restaurant",
+         "es": "Meal vouchers",
+         "cs": "Meal vouchers",
+         "sk": "Meal vouchers"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "office": {
+   "address": "1 rue de l'Exemple, 75000 Paris, France",
+   "city": "Paris",
+   "zip_code": "75000",
+   "district": "Paris",
+   "state": "Île-de-France",
+   "country": {
+    "en": "France",
+    "fr": "France",
+    "es": "France",
+    "cs": "France",
+    "sk": "France"
+   },
+   "country_code": "FR",
+   "latitude": 48.86,
+   "longitude": 2.34,
+   "local_address": "1 rue de l'Exemple",
+   "local_city": "Paris",
+   "local_district": "Paris"
+  },
+  "offices": [
+   {
+    "address": "1 rue de l'Exemple, 75000 Paris, France",
+    "city": "Paris",
+    "zip_code": "75000",
+    "country_code": "FR",
+    "latitude": 48.86,
+    "longitude": 2.34
+   }
+  ],
+  "_geoloc": [
+   {
+    "lat": 48.86,
+    "lng": 2.34
+   }
+  ],
+  "profession": {
+   "name": {
+    "en": "Software Engineering",
+    "fr": "Génie logiciel",
+    "es": "Software Engineering",
+    "cs": "Software Engineering",
+    "sk": "Software Engineering"
+   },
+   "category": {
+    "en": "Tech",
+    "fr": "Tech",
+    "es": "Tech",
+    "cs": "Tech",
+    "sk": "Tech"
+   },
+   "sub_category_name": {
+    "en": "Software Engineering",
+    "fr": "Génie logiciel",
+    "es": "Software Engineering",
+    "cs": "Software Engineering",
+    "sk": "Software Engineering"
+   },
+   "category_reference": "tech",
+   "sub_category_reference": "tech__software"
+  },
+  "profession_name": {
+   "en": {
+    "Tech": "Software Engineering"
+   },
+   "fr": {
+    "Tech": "Génie logiciel"
+   }
+  },
+  "sectors": [
+   {
+    "name": {
+     "en": "Robotics",
+     "fr": "Robotique",
+     "es": "Robotics",
+     "cs": "Robotics",
+     "sk": "Robotics"
+    },
+    "parent": {
+     "en": "Tech",
+     "fr": "Tech",
+     "es": "Tech",
+     "cs": "Tech",
+     "sk": "Tech"
+    }
+   },
+   {
+    "name": {
+     "en": "Software",
+     "fr": "Logiciels",
+     "es": "Software",
+     "cs": "Software",
+     "sk": "Software"
+    },
+    "parent": {
+     "en": "Tech",
+     "fr": "Tech",
+     "es": "Tech",
+     "cs": "Tech",
+     "sk": "Tech"
+    }
+   }
+  ],
+  "sectors_name": {
+   "en": [
+    {
+     "Tech": "Robotics"
+    },
+    {
+     "Tech": "Software"
+    }
+   ],
+   "fr": [
+    {
+     "Tech": "Robotique"
+    },
+    {
+     "Tech": "Logiciels"
+    }
+   ]
+  },
+  "social_image": "https://imagen.example.test/api/generate-image?data=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "urls": [
+   {
+    "kind": "canonical",
+    "language": "fr",
+    "href": "https://www.welcometothejungle.com/fr/companies/acme-robotics/jobs/robotics-software-engineer_paris"
+   },
+   {
+    "kind": "localized",
+    "language": "en",
+    "href": "https://www.welcometothejungle.com/en/companies/acme-robotics/jobs/robotics-software-engineer_paris"
+   }
+  ],
+  "videos": [
+   {
+    "name": "Meet the team",
+    "source": "youtube"
+   }
+  ],
+  "cta_content": {
+   "links": [
+    "/tech"
+   ],
+   "contents": []
+  },
+  "featured_page": {
+   "slug": "/tech",
+   "type": "custom"
+  },
+  "application_fields": [
+   {
+    "name": "resume",
+    "mode": "mandatory"
+   },
+   {
+    "name": "cover_letter",
+    "mode": "optional"
+   }
+  ],
+  "ats_questions": [],
+  "website": {
+   "reference": "wttj_fr"
+  },
+  "organization": {
+   "name": "Acme Robotics",
+   "slug": "acme-robotics",
+   "reference": "ACME_r0b0t",
+   "logo": {
+    "url": "https://cdn.example.test/logo.png",
+    "thumb": {
+     "url": "https://cdn.example.test/logo-thumb.jpg"
+    }
+   },
+   "cover_image": {
+    "url": "https://cdn.example.test/cover.jpg",
+    "large": {
+     "url": "https://cdn.example.test/cover-l.jpg"
+    },
+    "medium": {
+     "url": "https://cdn.example.test/cover-m.jpg"
+    },
+    "small": {
+     "url": "https://cdn.example.test/cover-s.jpg"
+    },
+    "social": {
+     "url": "https://cdn.example.test/cover-so.jpg"
+    }
+   },
+   "automatic_email": true,
+   "default_language": "fr",
+   "description": "<p>Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. </p>",
+   "description_markdown": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+   "description_text": "Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. Acme Robotics builds warehouse robots for mid-sized retailers. ",
+   "descriptions": {
+    "fr": "Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. ",
+    "en": "Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. "
+   },
+   "website_organization": {
+    "slug": "acme-robotics",
+    "i18n_descriptions": {
+     "fr": "Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. Acme Robotics conçoit des robots d'entrepôt. ",
+     "en": "Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. Acme Robotics builds warehouse robots. "
+    }
+   },
+   "has_default_job": false,
+   "has_external_ats": true,
+   "headquarter": {
+    "address": "1 rue de l'Exemple, 75000 Paris, France",
+    "city": "Paris",
+    "zip_code": "75000",
+    "district": "Paris",
+    "country_code": "FR",
+    "latitude": 48.86,
+    "longitude": 2.34,
+    "local_address": "1 rue de l'Exemple",
+    "local_city": "Paris",
+    "local_district": "Paris"
+   },
+   "industry": "Robotics, Software, Logistics",
+   "jobs_count": 14,
+   "nb_employees": 120,
+   "profile_type": "standard",
+   "sectors": [
+    {
+     "name": "Robotics",
+     "parent_name": "Tech"
+    },
+    {
+     "name": "Software",
+     "parent_name": "Tech"
+    },
+    {
+     "name": "Logistics",
+     "parent_name": "Transport"
+    }
+   ],
+   "size": {
+    "en": "Between 50 and 250 employees",
+    "fr": "Entre 50 et 250 salariés",
+    "es": "Between 50 and 250 employees",
+    "cs": "Between 50 and 250 employees",
+    "sk": "Between 50 and 250 employees"
+   },
+   "creation_year": 2019,
+   "media_website_url": "https://acme.example.test",
+   "media_linkedin": "acme-robotics",
+   "media_facebook": "acme",
+   "media_instagram": "acme",
+   "media_twitter": "acme",
+   "media_youtube": "acme",
+   "media_pinterest": "acme",
+   "video_playlist_provider": "youtube",
+   "playlist_id": "PL000000",
+   "average_age": 31,
+   "revenue": "12 M€",
+   "turnover": 8,
+   "parity_men": 60,
+   "parity_women": 40,
+   "gdpr_setting": {
+    "consent_duration": 24,
+    "application_message": "Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. Your data is kept for 24 months. ",
+    "privacy_policy_url": "https://acme.example.test/privacy"
+   },
+   "equality_indexes": {
+    "equality_among_highest_earners": 5,
+    "gender_pay_gap": 39,
+    "published": true,
+    "workforce_range": "50-250",
+    "year": 2025,
+    "equality_index": 85,
+    "maternity_leave_return_raise": 15,
+    "gap_in_promotions": 15,
+    "gap_in_annual_raises_excluding_promotions": 20,
+    "gap_in_annual_raises": 20
+   },
+   "labels": [
+    "great-place-to-work",
+    "happy-at-work"
+   ],
+   "expansion_metadata": {
+    "has_enriched_profile": true,
+    "expansion_company_url": "https://acme.example.test/expansion"
+   }
+  }
+ }
+]

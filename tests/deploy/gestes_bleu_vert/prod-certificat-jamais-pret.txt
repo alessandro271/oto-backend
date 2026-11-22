@@ -2,9 +2,10 @@
 ### code de sortie : 1
 ### commandes
 flock -w 900 9
+flock -w 600 8
 date +%H:%M:%S
 date +%H:%M:%S
-systemctl stop oto-mcp-drain-prod.service
+systemctl is-active --quiet oto-mcp-drain-prod.service
 systemctl stop oto-mcp@green
 date +%H:%M:%S
 git fetch --tags --force origin
@@ -71,7 +72,9 @@ date +%H:%M:%S
 date +%H:%M:%S
 date +%H:%M:%S
 journalctl -u oto-mcp@green -n 50 --no-pager
-systemctl stop oto-mcp@green
+ss -Htn state established ( sport = :9107 )
+systemd-run --collect --quiet --unit=oto-mcp-drain-prod --description=Vidange de la couleur green du backend oto prod /opt/deploy/oto-mcp-drain.sh oto-mcp green 9107 240
+date +%H:%M:%S
 date +%H:%M:%S
 ### sortie
 [12:00:00] verrou pris (/var/lock/oto-mcp-bluegreen-prod.lock)
@@ -98,7 +101,8 @@ date +%H:%M:%S
 [12:00:00] amont basculé sur blue (9103) — reload caddy gracieux
 [12:00:00] ÉCHEC: vérification du trafic public en échec après bascule
 [12:00:00] --- journal de la couleur green ---
-[12:00:00] couleur green arrêtée — prod reste servie par blue, rien n'a basculé
+[12:00:00] vidange de green (:9107) confiée à oto-mcp-drain-prod — 0 connexion(s) au moment de la bascule, plafond 240s (journalctl -u oto-mcp-drain-prod)
+[12:00:00] couleur green en vidange (elle a servi) — prod reste servie par blue, rien n'a basculé
 ### erreurs
 ### état final
 --- /etc/caddy/Caddyfile
@@ -209,4 +213,5 @@ dependencies = [
 ]
 --- /opt/oto-mcp-green/scripts/installer_bac_a_sable.py
 # installateur du tag
+--- /run/lock/oto-platform-memoire.lock
 --- /var/lock/oto-mcp-bluegreen-prod.lock

@@ -24,13 +24,35 @@ class Coffre:
 
     def poser(self, account, secret, *, entite=None, defaut=False, scopes=None,
               access_token="AT", expires_at="2999-01-01T00:00:00+00:00", client_id=None):
+        """`access_token` : le jeton que le processus détient DÉJÀ pour cette ligne (en
+        mémoire, `auth/google._JETONS`, jamais dans le coffre) ; `None` : aucun, le
+        premier appel renouvelle."""
+        from datetime import datetime
         from oto_mcp.auth import google as G
         tous = " ".join(sc for svc in G.SERVICE_SCOPES for sc in G.SERVICE_SCOPES[svc])
-        self.lignes[(*(entite or self.membre), account)] = {
+        scopes = tous if scopes is None else scopes
+        ligne = (*(entite or self.membre), account)
+        self.lignes[ligne] = {
             "secret": secret, "set_by": "test", "set_at": "2026-10-08T00:00:00Z",
-            "meta": {"is_default": defaut, "scopes": tous if scopes is None else scopes,
-                     "access_token": access_token, "expires_at": expires_at,
-                     "client_id": client_id}}
+            "meta": {"is_default": defaut, "scopes": scopes, "client_id": client_id}}
+        if access_token:
+            expire = datetime.fromisoformat(expires_at).timestamp() if expires_at else 0
+            G._garder(ligne, secret, scopes, access_token, expire)
+
+    def oublier(self, account, entite=None):
+        """Le processus ne détient plus de jeton pour la ligne : le prochain appel
+        renouvelle."""
+        from oto_mcp.auth import google as G
+        ligne = (*(entite or self.membre), account)
+        l = self.lignes[ligne]
+        G._JETONS.pop(G._cle(ligne, l["secret"], l["meta"].get("scopes")), None)
+
+    def jeton(self, account, entite=None):
+        """Le jeton d'accès que le processus détient pour la ligne (ou `None`)."""
+        from oto_mcp.auth import google as G
+        ligne = (*(entite or self.membre), account)
+        l = self.lignes[ligne]
+        return G._jeton_garde(ligne, l["secret"], l["meta"].get("scopes"))
 
     def meta(self, account, entite=None):
         return self.lignes[(*(entite or self.membre), account)]["meta"]
@@ -71,6 +93,8 @@ def installer(monkeypatch, *, org: int, sub: str, group=None):
     monkeypatch.setenv("OTO_MCP_OAUTH_STATE_SECRET", "state-secret-test")
     # La mesure à côté de la résolution (L7) lit la base : hors sujet ici.
     monkeypatch.setenv("OTO_L7_SHADOW", "0")
+    from oto_mcp.auth import google as G
+    monkeypatch.setattr(G, "_JETONS", {})
     coffre = Coffre(org, sub)
     monkeypatch.setattr(credentials_store, "get_credential_with_meta", coffre.get_with_meta)
     monkeypatch.setattr(credentials_store, "get_credential", coffre.get)

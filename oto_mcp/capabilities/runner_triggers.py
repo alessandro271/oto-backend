@@ -582,9 +582,13 @@ class RunnerModel(BaseModel):
     #: Où tourne le modèle (`runner_models.hebergement`) : ce que l'écran affiche pour
     #: que le client sache dans quel pays partent les données de son agent.
     hosting: Optional["RunnerModelHosting"] = None
-    #: False quand l'org a écarté la région où il tourne (`orgs.allow_cn_models`) :
-    #: l'écran ne le propose pas, et la pose le refuse (`model_region_blocked`).
+    #: False quand l'org a écarté la région où il tourne (`orgs.allow_cn_models`) ou
+    #: éteint le modèle (`orgs.disabled_models`) : l'écran ne le propose pas, et la pose
+    #: le refuse (`model_region_blocked`, `model_disabled`).
     allowed: bool = True
+    #: True quand un admin de l'org a éteint CE modèle (`orgs.disabled_models`) — ce qui
+    #: le distingue d'une région écartée : l'écran l'affiche éteint, interrupteur à côté.
+    disabled: bool = False
 
 
 class RunnerModelHost(BaseModel):
@@ -624,7 +628,8 @@ class Delivery(BaseModel):
     #: `refused_too_large` | `refused_stale` (signature valide, horodatage hors
     #: fenêtre — un rejeu ou une horloge dérivée) | `refused_no_model` (l'agent ne
     #: déclare aucun modèle : rien n'est enfilé) | `refused_requires` (un agent qu'il
-    #: exige n'a pas réussi aujourd'hui : l'échéance est sautée). Un refus garde son MOTIF : c'est lui qui rend une
+    #: exige n'a pas réussi aujourd'hui : l'échéance est sautée) | `refused_model_disabled`
+    #: (un admin de l'org a éteint le modèle de l'agent : rien n'est enfilé). Un refus garde son MOTIF : c'est lui qui rend une
     #: source mal branchée réparable plutôt que mystérieuse.
     #: ⚠️ Figé à la RÉCEPTION : `queued` = « acceptée, travail enfilé », jamais
     #: « encore en attente ». Ce que le travail est devenu depuis, c'est `job_status`.
@@ -1155,9 +1160,11 @@ def _outils_non_accordes(org: int, t: dict,
 def _outils_cites_par_la_procedure(org: int, slug: str,
                                    memo: dict) -> list[tuple[str, str]]:
     """Sync (base) : les outils que la procédure cite (`<tool:…>`, comme l'allowlist
-    déduite), ceux des recettes PUBLIÉES qu'elle nomme, puis ceux des étapes de cascade
-    dont elle écrit les fournisseurs (`waterfall_cites`) — `[(outil, qui l'appelle)]`.
-    Une recette nommée par plusieurs procédures se lit une fois par réponse (`memo`)."""
+    déduite), ceux des recettes PUBLIÉES qu'elle nomme, puis les outils qui collectent la
+    réponse `pending` des étapes de cascade dont elle écrit les fournisseurs
+    (`waterfall_cites`) — `[(outil, qui l'appelle)]`. Les étapes elles-mêmes n'y sont
+    pas : une cascade accordée les couvre (`outils_du_travail.ouvrir_composite`). Une
+    recette nommée par plusieurs procédures se lit une fois par réponse (`memo`)."""
     corps = _corps_de_la_procedure(org, slug)
     cites = [(n, f"procedure `{slug}`") for n in tool_registry.ref_names(corps)]
     for recette in outils_cites.recettes_citees(corps):
@@ -1181,15 +1188,17 @@ def _outils_de_la_recette_publiee(org: int, recette: str) -> list[str]:
 def _appeles_par_ses_outils(org: int, slug: str, outils: list[str]) -> list[str]:
     """Sync (base) : ce que les outils de l'agent appelleront POUR lui, et qu'il n'a pas —
     au canonique, dans l'ordre de la procédure. Les outils des recettes publiées qu'elle
-    lance, s'il a `oto_recipe` ; ceux des étapes de cascade qu'elle écrit, s'il a CETTE
-    cascade (`waterfall_cites`). Un outil que l'agent n'appellera pas ne lui manque pas.
+    lance, s'il a `oto_recipe` ; ceux qui collectent la réponse `pending` des étapes de
+    cascade qu'elle écrit, s'il a CETTE cascade (`waterfall_cites`) — jamais les outils des
+    étapes, que la cascade accordée couvre et qui, dans la liste, deviendraient appelables
+    en direct. Un outil que l'agent n'appellera pas ne lui manque pas.
 
     ⚠️ Une PROPOSITION (`tools_to_add`), jamais un ajout : ce qui la décide, la prose
     de la procédure et le corps des recettes, un agent peut l'écrire. D'une recette,
     seulement des LECTURES déclarées (`tool_registry.effet_de`, fail-closed : un effet
     inconnu n'est pas une lecture) — une recette-code appelle aussi les écritures qu'elle
     déclare (`writes`), et son corps peut nommer n'importe quel outil. D'une cascade,
-    seulement les outils d'étape de la liste blanche (`waterfall_cites.PROPOSABLES`).
+    seulement les outils de collecte de la liste blanche (`waterfall_cites.PROPOSABLES`).
 
     ⚠️ Jamais les marqueurs `<tool:…>` de la procédure : ceux-là sont la liste PAR DÉFAUT
     (`_outils_de_la_procedure`), et la personne qui écrit une liste a pu en écarter un
@@ -1205,7 +1214,7 @@ def _appeles_par_ses_outils(org: int, slug: str, outils: list[str]) -> list[str]
         for recette in outils_cites.recettes_citees(corps):
             candidats += [canon(n) for n in _outils_de_la_recette_publiee(org, recette)
                           if tool_registry.effet_de(canon(n)) == "read"]
-    candidats += [canon(nom) for cascade, nom in waterfall_cites.etapes_des_cascades(corps)
+    candidats += [canon(nom) for cascade, nom in waterfall_cites.collectes_des_cascades(corps)
                   if canon(cascade) in a and canon(nom) in waterfall_cites.PROPOSABLES]
     servis = a | outils_du_travail.OUTILS_DE_L_HOTE
     return [c for c in dict.fromkeys(candidats) if c not in servis]
@@ -1530,6 +1539,10 @@ def _exiger_lancable(ctx: ResolvedCtx, t: dict, procedure: Optional[str],
         raise AuthzDenied(409, "trigger_no_model",
                           f"{sans_famille}. Déclare un modèle du catalogue "
                           "(`op=update model=…`, liste : `runner.models`).")
+    # Un modèle ÉTEINT par un admin de l'org : le run ne part pas, et rien ne le
+    # remplace (même refus qu'à la pose, `model_disabled`).
+    if _modele.modele_eteint(ctx.org_id, model):
+        raise AuthzDenied(403, "model_disabled", _modele.RAISON_MODELE_ETEINT)
     famille = runner_models.famille(model)
     _modele.exige_servi(_modele.exige_un_runner(ctx.org_id), famille)
     _cle_exigee.exiger_a_la_pose(ctx.org_id, famille)
@@ -1711,7 +1724,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Un modèle inconnu se corrige dans l'appel, comme un cron : il se juge
         # avec lui, avant la présence du runner.
         famille = _modele.famille_declaree(inp.model)
-        _modele.exige_region_permise(ctx.org_id, inp.model)
+        _modele.exige_modele_permis(ctx.org_id, inp.model)
         # Le modèle est OBLIGATOIRE (24/09/2026) : il se corrige dans l'appel, comme
         # un modèle inconnu, donc il se juge avec lui.
         _modele.exige_un_modele(famille)
@@ -2127,7 +2140,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     famille = None
     if inp.model is not None:
         famille = _modele.famille_declaree(inp.model)
-        _modele.exige_region_permise(ctx.org_id, inp.model)
+        _modele.exige_modele_permis(ctx.org_id, inp.model)
         # `model=""` RETIRAIT le modèle pour revenir à celui du worker : un agent
         # hébergé déclare désormais le sien (24/09/2026), la retouche ne peut que
         # le changer.
@@ -3150,6 +3163,9 @@ CAPABILITIES += [
                           "automatisation inconnue dans l'org du porteur"),
             DeclaredError(400, "procedure_archived",
                           "`run_now` d'un agent dont la procédure est archivée"),
+            DeclaredError(403, "model_disabled",
+                          "pose, changement de modèle, `run_now` ou `rerun` sur un modèle "
+                          "qu'un admin de l'org a éteint (`oto_org_settings domain=models`)"),
             _procedure_du_travail.REFUS_INCONNUE,
             DeclaredError(400, "handoff_run_now_only", "`handoff` hors d'`op=run_now`"),
             DeclaredError(400, "chain_self",

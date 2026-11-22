@@ -27,9 +27,12 @@ the duplicate this work removes on the REST side.
 - `GET /api/me/unipile` **reconciles** before answering (it is THE linking path) —
   best-effort, never fatal for the status, and a no-op without a pending, hence with no
   network call;
-- `DELETE` is a **soft**-disconnect: the account survives at Unipile and the row
-  survives as PROOF OF OWNERSHIP, which makes the rebind deterministic on reconnection.
-  It is per-ORG, like the display: what you see is what you disconnect.
+- `DELETE` is a **soft**-disconnect of the BINDING (the row survives as proof of
+  ownership) and, for a seat of the PLATFORM key that no other org still uses, the
+  account is then DELETED at Unipile so it stops billing (`_free_platform_seat`).
+  The answer says which: `seat: deleted`, or `seat: alive` with its `reason` — a seat
+  left alive for any reason but another org's use raises an admin `gap`/`billing`
+  signal. It is per-ORG, like the display: what you see is what you disconnect.
 """
 from __future__ import annotations
 
@@ -41,7 +44,7 @@ from pydantic import BaseModel
 
 from .. import access, db
 from ._authz import SUB_ONLY
-from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
 logger = logging.getLogger(__name__)
@@ -63,6 +66,10 @@ class UnipileConnectInput(BaseModel):
     # the product that requested the connection. The dashboard does not send it and
     # therefore falls back on its own destination, unchanged.
     app: Optional[str] = None
+    # ADD another account on this channel instead of replacing the connected one (several
+    # accounts per channel). Each added account holds its own seat, billed as one more
+    # connection. Without it: the ordinary connection, which replaces the main account.
+    add_account: bool = False
 
 
 class UnipileReconcileInput(BaseModel):
@@ -80,15 +87,31 @@ class UnipileStatusInput(BaseModel):
 class UnipileDisconnectInput(BaseModel):
     # Front-end channel ('linkedin', 'whatsapp'…); UPPERCASED for the vault.
     channel: str = "linkedin"
+    # WHICH account of the channel, when several are connected here. Absent: the one
+    # served by default (the main account) — never all of them.
+    account_id: Optional[str] = None
 
 
 # --- Outputs ----------------------------------------------------------------
 
+class UnipileChannelAccount(BaseModel):
+    """One connected account of a channel. `is_default` = the account served when a
+    call names none (`_account=`)."""
+    account_id: str
+    account_name: Optional[str] = None
+    connected_at: Optional[str] = None
+    is_default: bool = False
+
+
 class UnipileChannel(BaseModel):
+    """The top-level fields describe the account served by default. `accounts` lists
+    EVERY account connected on the channel in this org (several accounts per channel),
+    one entry when there is a single account, empty when none."""
     connected: bool
     account_id: Optional[str] = None
     account_name: Optional[str] = None
     connected_at: Optional[str] = None
+    accounts: list[UnipileChannelAccount] = []
 
 
 class UnipileElsewhere(BaseModel):
@@ -113,6 +136,9 @@ class UnipileStatusView(BaseModel):
     byo: bool
     channels: dict[str, UnipileChannel]
     elsewhere: dict[str, UnipileElsewhere]
+    # Another account can be ADDED on a channel here (`me.unipile.connect`
+    # `add_account=true`). False until the database carries the slot key.
+    multi_account: bool = False
 
 
 class UnipileConnectView(BaseModel):
@@ -144,7 +170,17 @@ class UnipileReconcileView(BaseModel):
 
 
 class UnipileDisconnected(BaseModel):
+    """`ok` = the binding is unlinked in this org. `seat` = what became of a PLATFORM
+    seat it held: `deleted` at the provider, or still `alive` there, with `reason`
+    (`in_use_elsewhere` | `no_platform_key` | `platform_key_ambiguous` |
+    `provider_failed`). Absent when the binding held no platform seat (own key, or
+    nothing linked). `detail` = the sentence to show."""
     ok: bool
+    channel: str
+    account_id: Optional[str] = None        # the account unlinked (absent: nothing was)
+    seat: Optional[str] = None
+    reason: Optional[str] = None
+    detail: Optional[str] = None
 
 
 # --- Handlers ---------------------------------------------------------------
@@ -160,7 +196,8 @@ async def _connect(ctx: ResolvedCtx, inp: UnipileConnectInput) -> dict:
             ctx.sub, str(inp.channel or "linkedin"),
             force=bool(inp.force),
             premium=(str(inp.premium).strip().lower() if inp.premium else None),
-            app=(str(inp.app) if inp.app else None))
+            app=(str(inp.app) if inp.app else None),
+            add_account=bool(inp.add_account))
     except unipile_connect.ConnectRefused as e:
         # ⚠️ HISTORICAL shape kept: 502 (upstream failure) and 409 (cross-org duplicate,
         # #172) carry an actionable message, served INSTEAD OF the machine code in
@@ -202,19 +239,123 @@ async def _status(ctx: ResolvedCtx, inp: UnipileStatusInput) -> dict:
     return unipile.status_for(ctx.sub)
 
 
+def _platform_seat_here(sub: str, org_id: int, provider: str,
+                        account_id: str) -> Optional[str]:
+    """`account_id` when it is `sub`'s LIVE binding on this channel in this org AND holds
+    a seat of the PLATFORM key, else None. A BYO account (`platform_seat` false) lives on
+    the org's own Unipile subscription: never ours to delete."""
+    from ..connectors import identities as connector_identities
+    for a in connector_identities.comptes_du_canal_ici(sub, provider, org=org_id):
+        if a["account_id"] == account_id and a.get("platform_seat"):
+            return account_id
+    return None
+
+
+_DELETED = ("The account was deleted at the provider. Reconnecting requires a full new "
+            "login and creates a new account id; the old account's history is not "
+            "carried over.")
+_IN_USE_ELSEWHERE = ("Unlinked here. The account stays at the provider: another org "
+                     "still uses it.")
+_LEFT_ALIVE = ("Unlinked here, but the account could not be deleted at the provider "
+               "({reason}): it is still alive there, and the platform admins have been "
+               "notified.")
+
+
+def _seat_left_alive(sub: str, org_id: int, account_id: str, reason: str) -> dict:
+    """A platform seat unlinked but still alive at the provider keeps billing: the
+    admins hear of it (`gap`/`billing` signal, one subject per seat), no secret in it."""
+    db.insert_usage_signal(
+        sub=sub, org_id=org_id, signal="gap", kind="billing",
+        target=f"unipile_seat:{account_id}",
+        body=(f"Platform seat {account_id} was unlinked by its owner but is still alive "
+              f"at the provider ({reason}): it keeps billing until it is released "
+              "(oto_admin_unipile_seat release)."),
+        session_id=None, source="platform")
+    return {"seat": "alive", "reason": reason, "detail": _LEFT_ALIVE.format(reason=reason)}
+
+
+def _free_platform_seat(sub: str, org_id: int, account_id: str) -> dict:
+    """Delete the account at Unipile once NO live binding names it any more — the
+    platform key pays for a seat as long as it EXISTS there, used or not. Called after
+    the soft-disconnect, never before (`unipile_seats.liberer`: unlink first, delete
+    after). An account adopted in another org stays: that org still uses it.
+
+    Only under THE key that holds it (`unipile_seats.client_for_seat`): when it cannot
+    be named, nothing is tried. The person's disconnect stands whatever happens here;
+    what did not happen is said in the answer and signalled to the admins."""
+    if db.unipile_account_in_service(account_id):
+        return {"seat": "alive", "reason": "in_use_elsewhere", "detail": _IN_USE_ELSEWHERE}
+    from . import unipile_seats
+    client, reason = unipile_seats.client_for_seat()
+    if client is None:
+        logger.warning("unipile disconnect: seat %s left at the provider (%s)",
+                       account_id, reason)
+        return _seat_left_alive(sub, org_id, account_id, reason)
+    try:
+        client.delete_account(account_id)
+    except Exception:  # noqa: BLE001 — the disconnect stands; answered and signalled below
+        logger.warning("unipile disconnect: deleting seat %s at the provider failed",
+                       account_id, exc_info=True)
+        return _seat_left_alive(sub, org_id, account_id, "provider_failed")
+    logger.info("unipile disconnect: seat %s deleted at the provider", account_id)
+    return {"seat": "deleted", "detail": _DELETED}
+
+
+_NO_ORG = DeclaredError(400, "no_org_context",
+                        "the caller has no current org: there is no binding to unlink")
+
+
 def _disconnect(ctx: ResolvedCtx, inp: UnipileDisconnectInput) -> dict:
-    """SOFT-disconnects the channel WITHIN THIS ORG (does not delete the account at Unipile;
-    the row survives as proof of ownership → deterministic rebind on reconnection).
+    """SOFT-disconnects the channel WITHIN THIS ORG (the row survives as proof of
+    ownership), then, for a seat of the platform key that no other org still uses,
+    deletes the account at Unipile so it stops billing — reconnecting later is a full
+    provider login and yields a NEW account_id, which reconciliation binds by its
+    creation date like any first connection.
     Per-org: the binding is an act per org — and since the display shows ONLY the
     current org's bindings, what you see is what you disconnect (ex-#221)."""
     provider = str(inp.channel or "linkedin").upper()
-    db.clear_unipile_account(ctx.sub, access.current_org(ctx.sub), provider)
-    return {"ok": True}
+    org_id = access.current_org(ctx.sub)
+    if org_id is None:
+        raise AuthzDenied(400, "no_org_context",
+                          "No current org: there is no binding to unlink.")
+    from ..connectors import identities as connector_identities
+    mine = connector_identities.comptes_du_canal_ici(ctx.sub, provider, org=org_id)
+    if inp.account_id:
+        cible = next((a for a in mine if a["account_id"] == inp.account_id), None)
+        if cible is None:
+            raise AuthzDenied(404, "account_not_connected",
+                              f"`{inp.account_id}` is not one of your {provider.lower()} "
+                              "accounts connected in this org.")
+    else:
+        cible = db.default_unipile_account(mine)
+        if cible is None and mine:
+            raise AuthzDenied(409, "account_id_required",
+                              f"Your {provider.lower()} accounts connected here have no main "
+                              "one: name the one to unlink (`account_id`: "
+                              + ", ".join(f"`{a['account_id']}`" for a in mine) + ").")
+    out = {"ok": True, "channel": provider.lower()}
+    if cible is None:
+        # Nothing linked here: idempotent, as before (a repeated disconnect is an `ok`).
+        db.clear_unipile_account(ctx.sub, org_id, provider)
+        return out
+    seat = _platform_seat_here(ctx.sub, org_id, provider, cible["account_id"])
+    db.clear_unipile_account(ctx.sub, org_id, provider, account_id=cible["account_id"])
+    # The member's default pointed at the account just unlinked: drop the choice.
+    op = db.get_operated_account(ctx.sub, provider)
+    if op and op.get("owner_sub") == ctx.sub and op["account_id"] == cible["account_id"]:
+        db.clear_operated_account(ctx.sub, provider)
+    out["account_id"] = cible["account_id"]
+    if seat:
+        out.update(_free_platform_seat(ctx.sub, org_id, seat))
+    return out
 
 
 _DOC_CONNECT = (
     "Starts the connection of a hosted messaging account under my org's "
-    "subscription. Returns `{url}`: the consent page to open. ⚠️ Second possible outcome — "
+    "subscription. Returns `{url}`: the consent page to open. `add_account=true` adds "
+    "another account on the channel (its own seat) instead of replacing the connected "
+    "one; under the platform key it requires the org's own seat cap (403 "
+    "`unipile_seat_cap_required` otherwise). ⚠️ Second possible outcome — "
     "`{adopted: true, channel, account_name}` **with no url**: the account was already "
     "connected under my identity in another org and has just been attached here, there is "
     "nothing to consent to, you must refresh. `premium` activates a LinkedIn product "
@@ -234,10 +375,13 @@ _DOC_STATUS = (
     "then says so, with what is adoptable here in one click."
 )
 _DOC_DISCONNECT = (
-    "Unlinks a channel FROM THIS ORG. ⚠️ SOFT disconnect: the account survives at the "
-    "provider and the row survives as proof of ownership, which makes "
-    "reconnection deterministic. What is displayed is what is unlinked — never a "
-    "binding of another org."
+    "Unlinks ONE account of a channel FROM THIS ORG (`account_id` when several are "
+    "connected; without it, the default one); the row survives as proof of ownership. An "
+    "account on the PLATFORM key that no other org uses is then deleted at the "
+    "provider. ⚠️ IRREVERSIBLE: reconnecting is a full new login with a new account "
+    "id, and the old account's history is not carried over. `seat` says what "
+    "happened: `deleted`, or `alive` with its `reason`. What is displayed is what is "
+    "unlinked — never a binding of another org."
 )
 
 CAPABILITIES += [
@@ -262,7 +406,7 @@ CAPABILITIES += [
     Capability(
         key="me.unipile.disconnect", handler=_disconnect,
         Input=UnipileDisconnectInput, authz=SUB_ONLY, Output=UnipileDisconnected,
-        description=_DOC_DISCONNECT,
+        description=_DOC_DISCONNECT, errors=(_NO_ORG,),
         mcp=None,
         rest=RestBinding("DELETE", _ME),
     ),

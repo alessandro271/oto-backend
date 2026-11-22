@@ -1,0 +1,43 @@
+# Gabarit de l'archive du journal d'appels d'un rôle d'instance cible — RENDU par
+# deploy/cible/amorcer.sh (étape `maintenance`) après chaque bascule, sur l'arbre de la
+# couleur qui sert, comme maintenance.service. Même travail que
+# deploy/oto-journal-archive.service chez nous (rétention en ligne, mois sortis exportés
+# vers le seau du rôle puis supprimés), même timer (deploy/oto-journal-archive.timer, posé
+# sous le nom du rôle) ; les secrets (base, clés S3) arrivent par le lanceur, le seau et son
+# point d'accès par app.env.
+#
+# L'arbre servi n'est réécrit qu'à la montée SUIVANTE (une montée écrit l'autre couleur) :
+# un passage en cours pendant une bascule finit sur un arbre intact, et le passage du
+# lendemain prend la nouvelle couleur.
+[Unit]
+Description=Archive du journal d'appels oto — @UNITE@
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@UTILISATEUR@
+Group=@UTILISATEUR@
+WorkingDirectory=@ARBRE_ACTIF@
+EnvironmentFile=@ETC@/app.env
+EnvironmentFile=@ETC@/lanceur.env
+Environment=HOME=/var/lib/@UNITE@-journal-archive
+StateDirectory=@UNITE@-journal-archive
+LoadCredential=scw:@CLE_SCW@
+ExecStart=@ARBRE_ACTIF@/.venv/bin/python @ARBRE_ACTIF@/deploy/lanceur_secrets.py --script deploy/archive_tool_calls.py
+# Un export de plusieurs centaines de Mo et des suppressions par lots ne doivent pas
+# concurrencer le service.
+Nice=10
+IOSchedulingClass=idle
+# Même borne que chez nous. Un passage coupé reprend le lendemain : le script relit
+# l'état du mois avant d'agir et ne réécrit jamais une archive.
+TimeoutStartSec=3h
+SyslogIdentifier=@UNITE@-journal-archive
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=fe80::/10

@@ -139,7 +139,7 @@ def _get_pool() -> ConnectionPool:
             # capacités ayant sorti 285 handlers de la boucle, jusqu'à 40
             # traitements se disputent désormais le pool (mesuré : 7/8 en
             # heure CREUSE, avant tout pic).
-            max_size=int(os.environ.get("OTO_MCP_DB_POOL_MAX", "24")),
+            max_size=taille_du_pool(),
             # Le curseur MESURE la borne `statement_timeout` du processus (#1232) :
             # ce qu'elle couperait, ou a coupé — cf. `borne_sql`.
             kwargs={"row_factory": _str_dict_row, "options": _connect_options(),
@@ -161,6 +161,13 @@ def _get_pool() -> ConnectionPool:
             max_idle=_max_idle(),
         )
     return _pool
+
+
+def taille_du_pool() -> int:
+    """Le nombre MAXIMAL de connexions du pool (`OTO_MCP_DB_POOL_MAX`, 24 par défaut) —
+    lu sans ouvrir le pool, pour qu'un appelant qui borne sa concurrence dessus ne
+    touche pas la base pour autant."""
+    return int(os.environ.get("OTO_MCP_DB_POOL_MAX", "24"))
 
 
 def _max_idle() -> float:
@@ -241,10 +248,12 @@ def reuse_connection() -> Iterator[None]:
     appelants, et
     quatre seuls pour lesquels ces deux propriétés sont vérifiées : `status_for`,
     `connectors.me` (#1148), qui l'englobe, `org.list` (`GET /api/me/orgs`) et la liste
-    des tableaux (`GET /api/datastores`) — un banc relève chaque requête de leur chemin
+    des tableaux (`GET /api/datastores`), et l'enrichissement de `op=list` des tableaux
+    par `resources` — un banc relève chaque requête de leur chemin
     et rougit sur une écriture (`tests/test_connecteurs_me_une_connexion_1148.py`,
     `tests/orgs/test_list_orgs_lectures_groupees.py`,
-    `tests/datastore/test_liste_tableaux_lectures_groupees.py`).
+    `tests/datastore/test_liste_tableaux_lectures_groupees.py`,
+    `tests/test_resources_liste_en_lot_live.py`).
 
     Ré-entrant : un `reuse_connection()` imbriqué dans un autre ne fait rien (la
     connexion déjà empruntée par le bloc englobant sert aux deux).
@@ -275,6 +284,13 @@ _duree_bornee_ms: ContextVar[Optional[int]] = ContextVar("_duree_bornee_ms", def
 # La connexion d'une `transaction_d_ecriture()` en cours — vide en temps normal.
 _transaction_partagee: ContextVar[Optional[psycopg.Connection]] = ContextVar(
     "_transaction_partagee", default=None)
+
+
+def connexion_partagee() -> bool:
+    """Une portée `reuse_connection()` ou `transaction_d_ecriture()` est-elle ouverte ?
+    Ses `_connect()` passent alors tous par UNE connexion, qu'on ne partage pas entre
+    threads : qui voudrait paralléliser ses lectures les joue en série."""
+    return _emprunt_partage.get() is not None or _transaction_partagee.get() is not None
 
 
 class TransactionEnEchec(RuntimeError):

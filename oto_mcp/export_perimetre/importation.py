@@ -57,7 +57,7 @@ from pathlib import Path
 
 import psycopg
 
-from ..crypto import _load_master_key
+from ..crypto import CLE_PLATE, trousseau
 from .classement import CLASSEMENT, EXPORTEES, Table, sans_journal
 from .cles_du_primaire import ConversionRefusee, convertir
 from .decouverte import lire_schema, verifier_classement
@@ -213,14 +213,28 @@ def verser_archive(archive: Path | None, manifeste: dict, stockage, cle) -> None
 
 def cle_de_l_instance(manifeste: dict) -> bytes | None:
     """La clé de CETTE instance, si le fichier porte des secrets ou des objets — et c'est
-    la leur."""
+    la leur : la clé que désigne le `key_ref` des enveloppes du fichier.
+
+    L'export les écrit toutes sous `CLE_PLATE` (le chiffrement sous la clé cible) : seule une
+    clé plate existe en clair hors de son instance, une clé de données Key Manager ne
+    s'ouvre que chez elle. On compare donc l'empreinte du manifeste à la clé 0x01 de ce
+    trousseau, qu'elle soit ou non celle d'écriture : une instance en transition (0x01
+    et 0x02, écriture en 0x02) importe, et ses lignes migrent au rechiffrement de fond.
+    Une instance sous Key Manager seul (sans 0x01) ne peut pas recevoir d'export
+    chiffré : refus nommé (docs/connector-vault.md)."""
     if not manifeste["secrets"] and not manifeste["objets"]["liste"]:
         return None
-    cle = _load_master_key()
-    if cle is None:
+    cles = trousseau()
+    if not cles:
         raise ImportRefuse(f"le fichier porte des secrets {manifeste['secrets']} ou des "
                            "objets, et cette instance n'a pas de clé maîtresse "
                            "(OTO_MCP_MASTER_KEY)")
+    cle = cles.get(CLE_PLATE)
+    if cle is None:
+        raise ImportRefuse("les secrets et objets du fichier sont chiffrés sous la clé "
+                           "plate (key_ref 0x01) de la cible, et cette instance n'en a "
+                           "pas (clé sous Key Manager seule) : un export chiffré ne peut "
+                           "pas la viser")
     if empreinte_cle(cle) != manifeste["cle_cible"]:
         raise ImportRefuse("les secrets et objets du fichier sont chiffrés sous une autre "
                            "clé que "

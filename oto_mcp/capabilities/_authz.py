@@ -537,16 +537,27 @@ def ORG_ADMIN_OF_LIVE(field: str):
     409 (et non 403) : le droit est bien là — c'est l'ÉTAT de la ressource qui refuse.
     Un « Réservé à un org_admin » serait faux ET muet, et enverrait chercher du côté
     des permissions un problème qui n'y est pas."""
-    base = ORG_ADMIN_OF(field)
+    return _org_vivante(ORG_ADMIN_OF(field), "il ne se modifie plus")
 
+
+def ORG_MEMBER_OF_LIVE(field: str):
+    """`ORG_MEMBER_OF`, PLUS le refus d'une org **ARCHIVÉE** (409 `org_archived`, comme
+    `ORG_ADMIN_OF_LIVE`) : une vue d'org qu'aucun listing ne sert plus ne se lit pas non
+    plus par son id de path."""
+    return _org_vivante(ORG_MEMBER_OF(field), "ses vues ne se servent plus")
+
+
+def _org_vivante(base, refus: str):
+    """Enveloppe une règle d'org par id de path : refuse une org archivée, APRÈS la règle
+    de base (appartenance/escalade d'abord : un non-membre n'apprend pas au passage
+    qu'une org archivée existe)."""
     def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
-        ctx = base(raw, inp)   # appartenance/escalade d'abord : un non-admin n'apprend
-                               # pas au passage qu'une org archivée existe.
+        ctx = base(raw, inp)
         from .. import org_store
         if org_store.is_archived_org(ctx.org_id):
             raise AuthzDenied(
                 409, "org_archived",
-                f"Espace #{ctx.org_id} archivé : il ne se modifie plus. L'archivage l'a "
+                f"Espace #{ctx.org_id} archivé : {refus}. L'archivage l'a "
                 "sorti de tous les listings et a rendu sa place à ton quota de création — "
                 "le renommer ne récupère rien. Sa restauration n'est pas self-service "
                 "(les données restent en base) : crée un nouvel espace, ou fais restaurer "

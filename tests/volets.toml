@@ -113,9 +113,15 @@ chemins = [
   "oto_mcp/hang_watch.py",
   "oto_mcp/loop_watch.py",
   "oto_mcp/boucles_de_fond.py",
+  "oto_mcp/db/verrou_de_boucle.py",
   "oto_mcp/maintenance.py",
+  # Jetons de lien : pages publiques, partages de procédure et export de périmètre.
+  "oto_mcp/db/jetons_de_lien.py",
+  "oto_mcp/jetons_de_lien_rangement.py",
   "oto_mcp/alerte_agents_bloques.py",
+  "oto_mcp/alertes_equipe.py",
   "oto_mcp/medecin_agents.py",
+  "oto_mcp/causes_pannes.py",
   "oto_mcp/db/issues_des_travaux.py",
   "oto_mcp/alertes_slack_agents.py",
   "oto_mcp/capabilities/agent_alerts.py",
@@ -133,6 +139,7 @@ chemins = [
   "oto_mcp/bornes_processus.py",
   "oto_mcp/borne_corps.py",
   "oto_mcp/borne_session.py",
+  "oto_mcp/sessions_mcp.py",
   "oto_mcp/egress.py",
   "oto_mcp/crypto.py",
   "oto_mcp/env_inventory.py",
@@ -157,6 +164,9 @@ chemins = [
   "oto_mcp/auth/platform_worker.py",
   "oto_mcp/auth/service_identity.py",
   "oto_mcp/auth/token_scopes.py",
+  # lecteur et migration des secrets d'application de l'instance : sept connecteurs
+  "oto_mcp/auth/app_instance.py",
+  "oto_mcp/auth/app_instance_rangement.py",
   "oto_mcp/middleware/**",
   "oto_mcp/org_store/**",
   "oto_mcp/org_created_hook.py",
@@ -211,6 +221,8 @@ chemins = [
   "oto_mcp/capabilities/federated_oauth.py",
   "oto_mcp/capabilities/instance_health.py",
   "oto_mcp/capabilities/agent_repair.py",
+  "oto_mcp/capabilities/agent_health.py",
+  "oto_mcp/capabilities/agent_causes_admin.py",
   "oto_mcp/capabilities/me_account.py",
   "oto_mcp/capabilities/me_credentials.py",
   "oto_mcp/capabilities/microsoft_admin_consent.py",
@@ -293,6 +305,8 @@ chemins = [
   "oto_mcp/db/activation.py",
   "oto_mcp/db/alertes_agents.py",
   "oto_mcp/db/episodes_agents.py",
+  "oto_mcp/db/causes_agents.py",
+  "oto_mcp/db/sante_agents.py",
   "oto_mcp/db/alertes_credential.py",
   "oto_mcp/db/backlinks.py",
   "oto_mcp/db/blocks.py",
@@ -308,6 +322,7 @@ chemins = [
   "oto_mcp/db/contraintes_create_table.py",
   "oto_mcp/db/doc_grants.py",
   "oto_mcp/db/favoris.py",
+  "oto_mcp/db/api_apps.py",
   "oto_mcp/db/entitlements.py",
   "oto_mcp/db/estampille.py",
   # L'attestation d'export qu'exige une révision de retrait (#1169) : lue par la migration
@@ -499,6 +514,8 @@ sources = [
   "oto_mcp/tours_au_cout.py",
   # Où une org laisse tourner les modèles de ses agents (`orgs.allow_cn_models`).
   "oto_mcp/db/regions_de_modeles.py",
+  # Les modèles qu'un admin a éteints pour les agents de l'org (`orgs.disabled_models`).
+  "oto_mcp/db/modeles_eteints.py",
   "oto_mcp/anthropic_usage.py",
   "oto_mcp/time_saved.py",
   "oto_mcp/capabilities/runner_*.py",
@@ -522,6 +539,7 @@ tests = [
   "tests/**/test_slack_agent_posts_db.py",
   "tests/**/test_slack_reglage.py",
   "tests/**/test_migration_20261109_slack_mention_only.py",
+  "tests/**/test_migration_20261119_slack_mention_dflt.py",
   "tests/**/test_slack_post_note_l_agent.py",
   "tests/**/test_portee_runner.py",
   "tests/**/test_trigger*.py",
@@ -533,6 +551,8 @@ tests = [
   "tests/**/test_tours_au_cout*.py",
   "tests/**/test_regions_de_modeles*.py",
   "tests/api/test_regions_de_modeles_rest.py",
+  "tests/**/test_modeles_eteints*.py",
+  "tests/api/test_modeles_eteints_rest.py",
   "tests/**/test_modeles_ouverts_openrouter.py",
 ]
 
@@ -611,6 +631,7 @@ sources = [
   "oto_mcp/db/apps.py",
   "oto_mcp/db/app_versions.py",
   "oto_mcp/db/schema/apps.py",
+  "oto_mcp/apps_lecteurs_actifs.py",
 ]
 tests = ["tests/test_apps*.py", "tests/test_app_versions_db.py", "tests/test_remplacements.py",
          "tests/test_migrate_sub_inventory.py"]

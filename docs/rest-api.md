@@ -103,6 +103,11 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   2026-08-27 ; le `POST`, multipart, reste écrit à la main et **classé `NATURE`** —
   l'adaptateur lit du JSON, un corps binaire est hors du moule par construction. C'est la
   FORME qui tranche, pas le domaine. Effacer purge aussi l'objet stocké (pas d'orphelin).
+- `POST /api/me/avatar/import` `{url}` — capacité `me.avatar.import` (20/11/2026) : la photo
+  `picture` du jeton d'IDENTITÉ (le jeton d'accès ne la porte pas), récupérée côté serveur
+  et ré-hébergée comme avatar — **seulement sur un compte sans avatar** (un upload gagne,
+  `imported: false`). Hôtes fermés : https et `*.googleusercontent.com`, aucune redirection
+  hors de Google, garde d'egress « URL choisie » ; lecture bornée à la borne d'image.
 - `GET|DELETE /api/me/projects/{project_id}/files` + `POST …/files/{file_id}/public` —
   **les fichiers bruts d'un projet**, capacités `me.project_file.{list,delete,set_public}`
   depuis le 2026-08-27 (`capabilities/media_and_files.py`). Le **dépôt** (`POST …/files`,
@@ -585,6 +590,46 @@ page ou un tableau retire ses favoris dans la même transaction ; quitter l'org 
 (`org_store.remove_org_member`), la disparition du compte aussi (FK) ; une fusion de
 comptes garde un seul favori personnel par objet, à la date la plus ancienne.
 
+## Applications de Custom API — `/api/orgs/{id}/connectors/api/apps`
+
+Un outil qu'une org configure UNE fois pour toutes ses clés — adresse, mode
+d'authentification, actions —, quel que soit leur palier (`capabilities/connectors/
+api_apps.py`, `custom_api.apps.{list,get,create,update,import,remove}`, REST seule ; le
+concept : `docs/connector-vault.md` § Les applications de Custom API).
+
+- `GET …/apps` (membre) : les applications de l'org, chacune avec `access` = le palier
+  de la clé qui sert l'APPELANT (`member`, `group` — son équipe ACTIVE —, `org`), `null`
+  s'il n'en a aucune, et `masked_by` = le palier d'une carte du MÊME compte, non liée
+  (posée avant l'application), qui gagne la cascade et sert À LA PLACE de l'application
+  (`access` est alors `null`) ;
+- `GET …/apps/{account}` (membre) : une application — `connection` (base_url,
+  auth_mode et les autres champs NON secrets), `definition`, `access` ; pour un admin de
+  l'org, aussi `keys` (`{level, owner, set_at, set_by}` par clé liée, jamais un secret) ;
+- `POST …/apps` (admin d'org) : `{account, connection, label?, description?,
+  logo_domain?, headers?, variables?, operations?}`. Aucune clé n'est exigée. Une carte
+  d'org `api` du même compte existe : 409 `api_app_org_key_exists`, sauf
+  `adopt_org_key: true`, qui reprend sa connexion et sa définition et en fait la clé
+  d'org de l'application ;
+- `PATCH …/apps/{account}` (admin d'org) : les parties données ; `connection` se
+  complète par l'existant puis REMPLACE (un champ que le nouveau mode écarte part).
+  `stale_keys` compte les clés à reposer quand l'hôte ou le mode change ;
+- `POST …/apps/{account}/import` (admin d'org) : `{source: url|inline, url?,
+  document?}` → actions CANDIDATES, rien d'enregistré ;
+- `DELETE …/apps/{account}` (admin d'org) : archivée ; `keys_left` = clés encore liées,
+  qui refusent `api_app_removed` jusqu'à leur retrait.
+
+**Poser une clé de l'application** : les routes de toujours, sous le `account` de
+l'application, avec ses SEULS champs de clé (`token`, ou `username`/`password`, ou
+`client_id`/`client_secret`) — `POST /api/settings/api-keys/api` (la sienne), `PUT
+/api/groups/{id}/secrets/api` (chef d'équipe), `PUT /api/orgs/{id}/secrets/api` (admin
+d'org). Un champ de connexion envoyé qui diffère de l'application : 400
+`api_app_field_fixed`. Seule une pose NEUVE se lie : une carte non liée qui existe
+déjà sous ce compte le reste à chaque repose, partielle ou complète (elle garde son
+hôte ; pour rejoindre l'application, la retirer puis poser la clé). Les clés liées
+restent listées par `GET /api/connectors/api/identities?scope=` comme toute clé du
+coffre. Les routes de définition d'une carte (`…/connectors/api/
+{operations,definition}`) refusent une clé liée : 409 `api_app_owns_definition`.
+
 ## Surface nœuds (PROVISOIRE) — `/api/me/shell`, `/api/me/nodes/{id}`, `/api/me/nodes/{id}/rows`
 
 Trois lectures précoces du modèle de nœuds (`capabilities/shell.py`, `node_view.py`,
@@ -688,21 +733,22 @@ document `openapi._alias_deprecies`, garde `tests/api/test_alias_deprecies_rest.
 ⚠️ **Quand retirer : pas de délai fixe** (Alexis, 25/09/2026). L'ancienne forme part
 quand **tous les consommateurs déclarés ont suivi** — ce que la garde de contrat constate
 (ci-dessous) : tant qu'un contrat épinglé lit encore l'ancienne forme, son retrait rougit
-`contrat-front-code` en nommant le consommateur, et la préproduction ne part pas.
+`contrat-front-code` en nommant le consommateur, et aucun tag ne part de ce commit.
 
 ## Les consommateurs déclarés du contrat (#966)
 
 Qui appelle cette API hors de ce dépôt se DÉCLARE dans `.github/contrat-consommateurs.json`
 (nom, dépôt, chemin du contrat qu'il épingle, secret de lecture — `null` pour un dépôt
-public). Les deux jobs de contrat de `deploy-canari.yml` tournent en matrice sur cette
+public). Le job de contrat de `ci.yml` tourne en matrice sur cette
 liste, une jambe par consommateur, `fail-fast: false` : un rouge ne masque pas les
 suivants, et chaque verdict **nomme** le consommateur (`scripts/contrat-front.py
 --consommateur`).
 
-- **avant déploiement** (`contrat-front-code`, une garde : `deploy-preprod` attend toutes
-  ses jambes) — le document est dérivé sans serveur de `server.routes_rest`, la source du
-  montage, facturation activée comme en préproduction et en production ;
-- **après la préproduction** (`contrat-front`, un constat) — le document réellement servi.
+- **avant déploiement** (`contrat-front-code`, une garde : un rouge rend le run « CI »
+  rouge, et la garde du tronc refuse alors tout tag de ce sha) — le document est dérivé sans
+  serveur de `server.routes_rest`, la source du montage, facturation activée comme en
+  production. Depuis le retrait de la préproduction (19/11/2026), il n'y a plus de constat
+  sur un document servi.
 
 Seul le CONTENU d'un contrat peut rougir. Un secret déclaré mais absent rougit aussi
 (défaut chez nous, #823) ; un dépôt illisible ou un fichier déplacé chez le consommateur
@@ -710,7 +756,7 @@ avertit sans rougir (`scripts/lire-contrat-consommateur.sh`). Sur une PR venue d
 GitHub ne transmet aucun secret : la garde d'avant déploiement y retire de sa matrice les
 consommateurs à secret et l'annonce en avertissement (job `consommateurs`) ; sans
 consommateur lisible, elle est sautée. Ni vert ni rouge : ils sont jugés à la poussée sur
-`main`, avant la préproduction.
+`main`, avant tout tag.
 
 Déclarés au 25/09/2026 : un front tiers (extrait des opérations qu'il appelle) et le
 dashboard (**l'instantané complet** de l'API : tout retrait ou changement de forme d'une
@@ -747,8 +793,8 @@ ci-dessus). Le document est complet ; **le jugement ne porte que sur ce qu'il é
   juge le second contrat dans ses propres étapes, qui tournent même si le contrat public a
   rougi (`!cancelled()`) — un rouge sur l'un ne tait pas l'autre ; le second verdict se
   nomme `« <consommateur> (admin) »` ;
-- **pas après la préproduction** : le document servi exige un jeton d'admin, et **aucun
-  jeton d'admin n'entre dans les secrets de la CI**. `contrat-front` ignore `chemin_admin`.
+- **jamais contre une instance servie** : le document servi exige un jeton d'admin, et
+  **aucun jeton d'admin n'entre dans les secrets de la CI**.
 
 Mêmes règles de verdict que le contrat public (`scripts/contrat-front.py`), même lecteur
 (`scripts/lire-contrat-consommateur.sh`, appelé une seconde fois sur `chemin_admin`) : un
@@ -1196,10 +1242,8 @@ déploiement : **`docs/version-servie.md`**.
   - La table des routes autorisées (`auth.token_scopes._ALLOWED`) est la **seule** porte : une
     route ajoutée demain est refusée sans qu'on ait à y penser.
   - La portée nomme le tableau par son **identifiant** (oto#158, 29/09/2026) : un renommage
-    ne déplace plus ce que le jeton atteint. L'émission accepte encore un nom et le range
-    sous son identifiant (la réponse rend la portée rangée ; un nom porté par deux tableaux
-    visibles → `400 ambiguous_namespace`). Une URL qui adresse le tableau par son nom est
-    jugée sur l'identifiant que ce nom résout pour le porteur, jusqu'au 08/11/2026. ⚠️ Une
+    ne déplace plus ce que le jeton atteint. Depuis le 08/11/2026, un nom de tableau est
+    refusé à l'émission comme dans une URL (`400 datastore_by_name`), sans rien résoudre. ⚠️ Une
     portée émise avant qui nomme encore un tableau par son nom n'ouvre plus rien :
     `403 token_scope_by_name`, qui les liste — elle se migre
     (`scripts/tableaux_par_numero.py --seulement jetons`) ou se réémet.

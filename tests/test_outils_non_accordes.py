@@ -218,7 +218,7 @@ def test_une_liste_lit_chaque_procedure_et_ses_recettes_une_fois(monkeypatch):
         "la lecture est partagée, le calcul reste celui de CHAQUE agent")
 
 
-# ── les étapes d'une cascade que la procédure écrit ──────────────────────────
+# ── une cascade que la procédure écrit : ses étapes sont couvertes, pas ses collectes ──
 
 _PROC_CASCADE = (
     'Répéter `waterfall_email_act(op="update_rows", datastore="12", '
@@ -227,46 +227,55 @@ _PROC_CASCADE = (
     'providers=["apollo","aiark"], batch_size=50)` une fois à la fois.')
 
 
-def test_une_cascade_cite_les_outils_des_fournisseurs_qu_elle_nomme():
+def test_les_etapes_d_une_cascade_ne_manquent_jamais_a_l_agent():
+    """La cascade accordée couvre ses étapes (`outils_du_travail.ouvrir_composite`) : les
+    citer dans `missing_tools` pousserait la personne à les ouvrir EN DIRECT au modèle."""
     from oto_mcp.waterfall import cites
-    assert cites.outils_des_cascades(_PROC_CASCADE) == [
-        ("apollo_match_person", "`waterfall_email_act` (providers)"),
-        ("linkedin_aiark_person", "`waterfall_email_act` (providers)")]
+    assert cites.outils_des_cascades(_PROC_CASCADE) == []
+    assert cites.outils_des_cascades('`waterfall_email(providers=["hunter", "kaspr"])`') == []
+
+
+def test_une_etape_asynchrone_cite_son_outil_de_collecte_hors_mode_tableau():
+    """Une réponse `pending` se collecte par un appel du MODÈLE : cet outil-là peut
+    manquer. Le mode tableau n'en laisse jamais (ses étapes asynchrones sont écartées)."""
+    from oto_mcp.waterfall import cites
+    assert cites.outils_des_cascades('waterfall_email providers=["fullenrich"]') == [
+        ("fullenrich_result", "`waterfall_email` (pending answers)")]
+    assert cites.outils_des_cascades('waterfall_email_act providers=["fullenrich"]') == []
 
 
 def test_une_cascade_sans_fournisseurs_ecrits_ne_cite_rien():
     """Sans `providers=`, l'ordre se résout au run : toute la table serait une liste trop
     large, pas un outil qui manque."""
     from oto_mcp.waterfall import cites
-    assert cites.outils_des_cascades('`waterfall_email_act(op="update_rows")`') == []
-    assert cites.outils_des_cascades('providers=["apollo"] sans cascade') == []
+    assert cites.outils_des_cascades('`waterfall_email(op="x")`') == []
+    assert cites.outils_des_cascades('providers=["fullenrich"] sans cascade') == []
 
 
 def test_les_fournisseurs_appartiennent_a_la_cascade_qui_les_precede():
     """Deux cascades : chacune lit SES fournisseurs, et une clé qu'elle ne porte pas est
     ignorée (l'outil la refusera au run)."""
     from oto_mcp.waterfall import cites
-    texte = ('`waterfall_phone(providers=["kaspr"])`, puis '
-             '`waterfall_email(providers=["hunter", "inconnu"])`.')
+    texte = ('`waterfall_phone(providers=["apollo"])`, puis '
+             '`waterfall_email(providers=["lemlist", "inconnu"])`.')
     assert [n for n, _ in cites.outils_des_cascades(texte)] == [
-        "kaspr_enrich_linkedin", "hunter_email_finder"]
+        "apollo_reveal_phone_result", "lemlist_enrich_result"]
 
 
-def test_une_etape_asynchrone_cite_aussi_son_outil_de_collecte():
+def test_les_outils_internes_d_une_cascade_sont_ses_etapes_et_rien_d_autre():
     from oto_mcp.waterfall import cites
-    noms = [n for n, _ in cites.outils_des_cascades(
-        'waterfall_email_act providers=["fullenrich"]')]
-    assert noms[0] == "fullenrich_enrich_linkedin" and len(noms) == 2
-    assert noms[1] != noms[0], "la collecte est un autre outil, appelé lui aussi"
+    internes = cites.outils_internes("waterfall_person")
+    assert {"lemlist_enrich", "lemlist_enrich_result", "jev_items"} <= internes
+    assert "oto_call" not in internes and "oto_recipe" not in internes
+    assert "jev_items" not in cites.outils_internes("waterfall_email"), (
+        "la qualification n'est couverte que là où la cascade la demande")
+    assert cites.outils_internes("oto_call") == frozenset()
 
 
-def test_l_agent_dit_les_fournisseurs_de_sa_cascade_qu_il_n_a_pas(monkeypatch):
-    """L'agent a la cascade, pas ses étapes : chaque étape serait refusée au travail et la
-    ligne reviendrait sans réponse. Il le dit avant le run."""
+def test_l_agent_qui_a_la_cascade_ne_se_voit_pas_manquer_ses_etapes(monkeypatch):
     monkeypatch.setattr(RT.db, "get_guide_db", lambda *a: {"body_md": _PROC_CASCADE})
-    t = {"procedure": "p", "tools": ["waterfall_email_act", "linkedin_aiark_person"]}
-    assert RT._outils_non_accordes(77, t) == [
-        ("apollo_match_person", "`waterfall_email_act` (providers)")]
+    t = {"procedure": "p", "tools": ["waterfall_email_act"]}
+    assert RT._outils_non_accordes(77, t) == []
 
 
 # ── posé par une personne : ce que ses outils appellent pour lui ─────────────
@@ -275,9 +284,8 @@ _RECETTE_DECLARATIVE = {"tool": "lemlist_database", "source": {"items": "results
 _PROC_RECETTE_ET_CASCADE = (
     'Lire <tool:data_aggregate>. Sourcer : <tool:oto_recipe> `op="run"`, '
     '`slug="sourcing"`. Puis ' + _PROC_CASCADE)
-#: Les effets tels que les outils les déclarent : `apollo_match_person` ne déclare rien
-#: (comme la plupart des outils d'étape), `linkedin_aiark_person` et `lemlist_database`
-#: se déclarent lectures.
+#: Les effets tels que les outils les déclarent : `linkedin_aiark_person` et
+#: `lemlist_database` se déclarent lectures.
 _LECTURES = {"lemlist_database", "linkedin_aiark_person", "data_rows", "data_aggregate"}
 
 
@@ -296,10 +304,10 @@ def _procedure_outillee(monkeypatch):
                         lambda n: "read" if n in _LECTURES else None)
 
 
-def test_ses_outils_appellent_la_recette_et_les_etapes_qui_lui_manquent(_procedure_outillee):
+def test_ses_outils_appellent_la_recette_mais_jamais_les_etapes_de_sa_cascade(
+        _procedure_outillee):
     outils = ["oto_recipe", "waterfall_email_act", "linkedin_aiark_person"]
-    assert RT._appeles_par_ses_outils(77, "p", outils) == [
-        "lemlist_database", "apollo_match_person"]
+    assert RT._appeles_par_ses_outils(77, "p", outils) == ["lemlist_database"]
 
 
 def test_sans_l_outil_qui_appelle_rien_ne_lui_manque(_procedure_outillee):
@@ -351,8 +359,7 @@ def test_une_personne_qui_change_la_liste_voit_ce_qui_manque_sans_rien_d_ajoute(
     rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
         op="update", trigger_id=8, tools=demandee))
     assert _agent_8["tools"] == demandee
-    assert rep["tools_to_add"] == [
-        "lemlist_database", "apollo_match_person", "linkedin_aiark_person"]
+    assert rep["tools_to_add"] == ["lemlist_database"]
 
 
 def test_une_retouche_qui_ne_touche_ni_liste_ni_procedure_ne_dit_rien(_agent_8, monkeypatch):
@@ -393,13 +400,13 @@ def test_une_prose_ecrite_par_un_agent_n_elargit_pas_la_liste_a_la_retouche_suiv
 
 def test_un_registre_d_effets_vide_n_ouvre_rien(_agent_8, monkeypatch):
     """Registre non réchauffé : aucune lecture de recette n'est proposée (fail-closed),
-    seules les étapes de la liste blanche le sont, et la liste écrite ne bouge pas."""
+    et la liste écrite ne bouge pas."""
     monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
     monkeypatch.setattr(RT.tool_registry, "effet_de", lambda n: None)
     rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
         op="update", trigger_id=8, tools=["oto_recipe", "waterfall_email_act"]))
     assert _agent_8["tools"] == ["oto_recipe", "waterfall_email_act"]
-    assert rep["tools_to_add"] == ["apollo_match_person", "linkedin_aiark_person"]
+    assert "tools_to_add" not in rep
 
 
 def test_un_calcul_qui_echoue_leve_au_lieu_de_poser_la_liste_a_l_aveugle(
@@ -423,35 +430,30 @@ def test_a_la_pose_sous_le_jeton_d_un_travail_rien_n_est_propose(_procedure_outi
     assert RT._a_ajouter_par_une_personne(2, "p", ["oto_recipe", "waterfall_email_act"]) == []
     monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
     assert RT._a_ajouter_par_une_personne(2, "p", ["oto_recipe", "waterfall_email_act"]) == [
-        "lemlist_database", "apollo_match_person", "linkedin_aiark_person"]
+        "lemlist_database"]
 
 
-def test_chaque_outil_d_etape_est_range_proposable_ou_non():
-    """La liste blanche est écrite à la main : une étape neuve doit y être rangée."""
+def test_chaque_outil_de_collecte_est_range_proposable_ou_non():
+    """La liste blanche est écrite à la main : une collecte neuve doit y être rangée."""
     from oto_mcp.waterfall import cites
     from oto_mcp.waterfall.plan import STEPS_BY_NAMESPACE
     tous = {n for etapes in STEPS_BY_NAMESPACE.values() for s in etapes
-            for n in cites.outils_de_l_etape(s)}
+            for n in cites.collectes_de_l_etape(s)}
     assert not cites.PROPOSABLES & cites.NON_PROPOSES
     assert tous == cites.PROPOSABLES | cites.NON_PROPOSES, (
         tous ^ (cites.PROPOSABLES | cites.NON_PROPOSES))
 
 
-def test_seule_la_liste_blanche_des_etapes_est_proposee(monkeypatch):
-    """Ce qui décide, c'est `PROPOSABLES`, pas l'effet déclaré : `hunter_email_finder`
-    (qui ne déclare rien) et `kaspr_enrich_linkedin` (même déclaré acteur) sont des
-    étapes de la liste ; `apify_run_sync` (n'importe quel acteur) jamais."""
+def test_seule_la_liste_blanche_des_collectes_est_proposee(monkeypatch):
+    """`pipecorn` collecte par une opération d'un outil qui soumet aussi, facturé : jamais
+    proposé, toujours dit. Les étapes elles-mêmes (`hunter_email_finder`) jamais."""
     monkeypatch.setattr(RT.db, "get_guide_db", lambda *a: {"body_md": (
-        '`waterfall_email(providers=["hunter", "kaspr"])` puis '
-        '`waterfall_company(providers=["linkedin"])`')})
-    monkeypatch.setattr(RT.tool_registry, "effet_de",
-                        lambda n: "act" if n == "kaspr_enrich_linkedin" else None)
-    assert RT._appeles_par_ses_outils(
-        77, "p", ["waterfall_email", "waterfall_company"]) == [
-        "hunter_email_finder", "kaspr_enrich_linkedin"]
-    assert ("apify_run_sync", "`waterfall_company` (providers)") in RT._outils_non_accordes(
-        77, {"procedure": "p", "tools": ["waterfall_company"]}), (
-        "jamais d'office, mais toujours dit : le geste reste à la personne")
+        '`waterfall_email(providers=["hunter", "fullenrich", "pipecorn"])`')})
+    monkeypatch.setattr(RT.tool_registry, "effet_de", lambda n: None)
+    assert RT._appeles_par_ses_outils(77, "p", ["waterfall_email"]) == ["fullenrich_result"]
+    assert RT._outils_non_accordes(77, {"procedure": "p", "tools": ["waterfall_email"]}) == [
+        ("fullenrich_result", "`waterfall_email` (pending answers)"),
+        ("pipecorn", "`waterfall_email` (pending answers)")]
 
 
 def test_sans_recette_ni_cascade_la_procedure_n_est_pas_lue(monkeypatch):

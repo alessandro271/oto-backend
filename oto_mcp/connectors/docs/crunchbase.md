@@ -1,7 +1,8 @@
-## prerequisite — capture your crunchbase session (cookie)
+## prerequisite — connect your crunchbase session
 
-Crunchbase has no public API key: oto replays your **logged-in session**. capture the session cookies (+ user-agent) of your [Crunchbase](https://www.crunchbase.com) account from the **account** page of the oto dashboard.
-- without a configured session, the `crunchbase_*` tools return a message pointing to the account page
+Crunchbase has no public API key: oto calls it from a browser logged in to your [Crunchbase](https://www.crunchbase.com) account. connect it once from the oto dashboard (**Connect** button): a hosted browser window opens, log in there as usual (SSO, captcha, second factor included). the session is then kept in the vault.
+- without a connected session, the `crunchbase_*` tools return a message pointing to `crunchbase_connect_start`
+- an expired session marks the connector "to reconnect": log in again the same way
 
 ## usage — crunchbase companies, funding and people
 

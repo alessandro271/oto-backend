@@ -24,6 +24,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from _app_instance_simule import coffre_depuis_les_reglages
+
 from oto_mcp import providers
 from oto_mcp.mcp_errors import McpError
 
@@ -229,6 +231,7 @@ def env(monkeypatch):
                             {"scope_type": "platform", "scope_id": "platform",
                              "connector": PORTEUR, "key": k, "value": v}
                             for k, v in _COORDONNEES.items()])
+    coffre_depuis_les_reglages(monkeypatch)
     coffre = _Coffre()
     monkeypatch.setattr(credentials_store, "get_credential_with_meta", coffre.get_with_meta)
     monkeypatch.setattr(credentials_store, "get_credential", coffre.get)
@@ -556,6 +559,20 @@ def test_reconnecter_le_meme_compte_remplace_sa_ligne_meme_renommee(env):
     assert env.coffre.lignes[("member", MEMBRE, "client-a")]["secret"] == "RT-JOHN-2"
     assert "health_ko" not in env.coffre.meta("client-a"), "la reconnexion démarque"
     assert env.coffre.meta("client-a")["is_default"] is False, "le défaut ne bouge pas"
+
+
+def test_reconnecter_ne_recopie_aucune_cle_secrete_de_l_ancien_meta(env):
+    """La reconnexion repasse les satellites de l'ancienne ligne, jamais une clé de la
+    liste fermée des secrets (`credentials_store._SECRET_META_KEYS`)."""
+    from oto_mcp import credentials_store
+    _connecter(env, JANE, "RT-JANE")
+    env.coffre.meta("jane@contoso.example").update(
+        {cle: "VALEUR-" + cle for cle in credentials_store._SECRET_META_KEYS},
+        etiquette="gardee")
+    _connecter(env, JANE, "RT-JANE-2")
+    meta = env.coffre.meta("jane@contoso.example")
+    assert not set(credentials_store._SECRET_META_KEYS) & set(meta)
+    assert meta["etiquette"] == "gardee", "les satellites non secrets suivent"
 
 
 def test_reconnecter_un_compte_par_son_nom_vise_son_adresse_et_son_annuaire(env):

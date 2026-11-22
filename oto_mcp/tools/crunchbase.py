@@ -1,34 +1,31 @@
-"""Crunchbase — company / person records via the frontend's PRIVATE API.
+"""Crunchbase — company / person records, on the lib's connector (`oto.tools.crunchbase`).
 
-⚠️ Private API (the one used by the web UI `www.crunchbase.com/v4/data/*`), auth = **live
-browser session** (login cookies). It mirrors the documented schema of the v4 public
-API (`api.crunchbase.com/v4/data/*`: same `field_ids`/`card_ids`,
-endpoints `entities/organizations|people/{permalink}`, `searches/*`,
-`autocompletes`) but without `user_key` — the logged-in session stands in for auth. May
-break without notice on Crunchbase's side.
+The lib carries what is proper to Crunchbase: its private data API
+(`www.crunchbase.com/v4/data`, the v4 schema without `user_key`), the login probe, and
+what a refusal means. It executes in the HOST's browser
+(`oto.tools.common.browser_session`): oto 1 provides that browser and keeps the session.
 
-Execution — **Browserbase** (`oto_mcp/browserbase.py`), same substrate as `brevo`:
-the token is only accepted from a **live browser session** (a raw `httpx`
-is rejected, a session cannot be transplanted by cookie export, and an
-in-process browser on the box = OOM + dependency on a local Chrome). So we rent a
-remote Chrome: the user logs in ONCE via the **Live View**
-(`crunchbase_connect_start`, they handle SSO/captcha/2FA), their session persists in a
-Browserbase **Context** (= the per-user credential, `crunchbase` vault), and each
-`/v4/data` call runs as a `fetch()` INSIDE an ephemeral session of the Context
-(`browserbase.run_fetch`, same-origin `www.crunchbase.com`). Platform creds = env
-`BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID`.
-
-Replaces the old in-process DOM scraping (o-browser `CrunchbaseClient`), silently
-broken on the box without a browser binary (see ADR 0026).
+- The browser is **Browserbase** (`browserbase.run`): each call is a `fetch()` inside an
+  ephemeral session of the user's Browserbase **Context**, which holds their logged-in
+  Crunchbase session (the per-user credential, `crunchbase` vault).
+- The connection is the shared flow of `browser_session` (Live View, REST and MCP): the
+  lib probes the login window and hands the confirmed session back through `on_jar`,
+  which writes it to the vault.
+- A refused session (`SessionRejected`) marks the vault row that served "to reconnect"
+  (`connector_health.mark_rejected`): only a person logging in again renews it.
 """
 from __future__ import annotations
 
-from typing import Optional
-from urllib.parse import quote, urlencode
+import asyncio
+from typing import Callable
 
 from fastmcp import Context, FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS, INTERNAL_ERROR
+from oto.tools.common.errors import UpstreamHTTPError
+from oto.tools.common.host_session import SessionRejected
+from oto.tools.crunchbase import CrunchbaseClient
+from oto.tools.crunchbase.client import LOGIN_URL
 from starlette.concurrency import run_in_threadpool
 
 from .. import access, browser_session, browserbase
@@ -36,59 +33,24 @@ from ..auth.hooks import current_user_sub_from_token
 from ..access import ResolvedCredential
 from ..connectors import health as connector_health
 
-# (Private API, origin page) pair specific to Crunchbase. The `fetch` is
-# same-origin with the app (www.crunchbase.com) → it carries the session cookies;
-# the `/v4/data` API lives under the SAME host (not a separate subdomain like brevo).
-_API = "https://www.crunchbase.com/v4/data"
-_APP = "https://www.crunchbase.com/"
-
 
 async def _verify_session(session_id: str) -> browser_session.Verdict:
-    """Crunchbase login confirmed? Probes the private API FROM the live session
-    (same-origin): it only answers 200 when logged in. Shared by the two connection
-    surfaces (REST dashboard + MCP) via `browser_session`.
-
-    ⚠️ **Known debt, named on 2026-09-03**: this probe hits a BUSINESS route (a
-    specific entity's record, `organizations/crunchbase`). This is EXACTLY the
-    coupling that made `pennylaneged` unconnectable when Pennylane moved the
-    probed route. Here it is no longer fatal — a status that is not an authentication
-    signal raises `ProbeUnavailable` and `finalize` persists while saying so —
-    but the probe remains to be moved to a SESSION route (profile / current
-    user), to be found in the SPA bundle."""
-    from patchright.async_api import async_playwright
-    async with async_playwright() as p:
-        b = await browserbase.connect_cdp(p, browserbase.connect_url(session_id))
-        try:
-            c = b.contexts[0] if b.contexts else await b.new_context()
-            pg = c.pages[0] if c.pages else await c.new_page()
-            await pg.goto(_APP, wait_until="domcontentloaded", timeout=40000)
-            res = await pg.evaluate(
-                """async (base) => {
-                    try {
-                        const r = await fetch(base + "/entities/organizations/crunchbase"
-                            + "?field_ids=identifier", {credentials: "include",
-                            headers: {"content-type": "application/json"}});
-                        return r.status;
-                    } catch (e) { return 0; }
-                }""", _API)
-        finally:
-            await b.close()
-    if res == 200:
-        return browser_session.Verdict(True, browser_session.LOGGED_IN)
-    if res in (401, 403, 0):
-        return browser_session.Verdict(
-            False, browser_session.AUTH_REJECTED if res else browser_session.NO_SESSION,
-            f"Crunchbase did not recognize the session (probe → {res}): finish logging in "
-            "in the Live View, then re-run `crunchbase_connect_status`.")
-    raise browser_session.ProbeUnavailable(
-        f"the Crunchbase login probe could not decide (it answered {res}) — "
-        "its route has probably moved. Your session was saved anyway, WITHOUT "
-        "login confirmation: do not restart the connection, try a call.")
+    """The lib's login probe, on a live session (`browser_session.sonder`)."""
+    def evaluate(page_url, page_function, arg=None):
+        return asyncio.run(browserbase.run_session_eval(session_id, page_url,
+                                                        page_function, arg))
+    return await asyncio.to_thread(CrunchbaseClient.probe, evaluate)
 
 
-# Declares Crunchbase as a browser-session connector (generic start + this
-# verify) — feeds the REST (dashboard) AND MCP connection flows. At import.
-browser_session.register("crunchbase", _verify_session, login_url=f"{_APP}login")
+def _finish_login(run, jar: str, on_jar: Callable[[str], None]) -> browser_session.Verdict:
+    """The lib finishes the login: it probes `jar` and hands it to `on_jar` (the vault)."""
+    return CrunchbaseClient(run, on_jar=on_jar).finish_login(jar)
+
+
+# Declares Crunchbase as a browser-session connector — feeds the REST (dashboard) AND MCP
+# connection flows. At import.
+browser_session.register("crunchbase", _verify_session, login_url=LOGIN_URL,
+                         finish=_finish_login)
 
 
 def _err(msg: str, code: int = INVALID_PARAMS) -> McpError:
@@ -127,40 +89,30 @@ def _session() -> ResolvedCredential:
                    "log in (once) via the Live View.")
 
 
-def _permalink(value: str, kind: str) -> str:
-    """Extract the permalink (slug) from a value that may be a full URL.
-    `kind` = 'organization' | 'person'."""
-    v = (value or "").strip()
-    marker = f"/{kind}/"
-    if marker in v:
-        v = v.split(marker, 1)[1]
-    return v.split("/")[0].split("?")[0]
-
-
-async def _api(method: str, path: str, body: Optional[dict] = None) -> dict:
-    """Run a `/v4/data` call in the user's Browserbase session. Returns the decoded
-    `data`. Raises an actionable McpError otherwise."""
+async def _call(read: Callable[[CrunchbaseClient], dict]) -> dict:
+    """Run one read of the lib's client in the user's Browserbase session."""
     if not browserbase.is_configured():
         raise _err("Browserbase not configured on the platform side "
                    "(BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID).", code=INTERNAL_ERROR)
     rc = await run_in_threadpool(_session)
+    client = CrunchbaseClient(browserbase.run, jar=rc.key)
     try:
-        res = await browserbase.run_fetch(rc.key, method, path, body, base=_API, app=_APP)
-    except browserbase.BrowserbaseError as e:
-        raise _err(f"Browserbase execution failed: {e}", code=INTERNAL_ERROR)
-    st = res.get("status")
-    if st in (401, 403):
+        return await run_in_threadpool(read, client)
+    except SessionRejected as e:
         # Signals #1070/#1076/#1149/#1163: the expiry only showed up to
         # agents, run after run, for six days. Marking the row that ACTUALLY
         # served makes the card "to reconnect" for the person who can act;
         # reconnecting rewrites the row and clears the mark.
         await run_in_threadpool(connector_health.mark_rejected, rc.entity_type,
-                                rc.entity_id, "crunchbase", rc.account,
-                                f"session expired (HTTP {st})")
+                                rc.entity_id, "crunchbase", rc.account, str(e))
         raise _err(SESSION_EXPIREE)
-    if not (200 <= (st or 0) < 300):
-        raise _err(f"Crunchbase returned {st}: {str(res.get('data'))[:200]}", code=INTERNAL_ERROR)
-    return res["data"]
+    except browserbase.BrowserbaseError as e:
+        raise _err(f"Browserbase execution failed: {e}", code=INTERNAL_ERROR)
+    except UpstreamHTTPError as e:
+        raise _err(f"Crunchbase returned {e.status_code}: {str(e.body)[:200]}",
+                   code=INTERNAL_ERROR)
+    except ValueError as e:
+        raise _err(str(e))
 
 
 def register(mcp: FastMCP) -> None:
@@ -190,7 +142,8 @@ def register(mcp: FastMCP) -> None:
         """Finalize the Crunchbase connection. Checks that you actually logged in
         in the Live View (by calling the private API from your session); if so,
         **saves** your session (the Context) for subsequent calls. Returns
-        `{connected}`. Call it again if `connected=false` (not logged in yet)."""
+        `{connected, reason}`. `connected=false` with `retry=true`: not logged in yet,
+        call it again; `retry=false`: calling again cannot help (`hint` says why)."""
         sub = _sub()
         try:
             res = await browser_session.finalize(sub, "crunchbase", context_id, session_id)
@@ -221,9 +174,7 @@ def register(mcp: FastMCP) -> None:
                 `crunchbase.com/organization/anthropic`) — a full URL is also
                 accepted (the slug is extracted from it).
         """
-        permalink = _permalink(slug, "organization")
-        qs = urlencode({"card_ids": "founders,raised_funding_rounds"})
-        return await _api("GET", f"/entities/organizations/{quote(permalink)}?{qs}")
+        return await _call(lambda c: c.get_company(slug))
 
     @mcp.tool()
     async def crunchbase_get_person(slug: str) -> dict:
@@ -236,8 +187,7 @@ def register(mcp: FastMCP) -> None:
             slug: permalink from `crunchbase.com/person/<slug>` (full URL
                 accepted).
         """
-        permalink = _permalink(slug, "person")
-        return await _api("GET", f"/entities/people/{quote(permalink)}")
+        return await _call(lambda c: c.get_person(slug))
 
     @mcp.tool()
     async def crunchbase_search_companies(query: str, limit: int = 10) -> dict:
@@ -245,11 +195,9 @@ def register(mcp: FastMCP) -> None:
 
         Returns `{entities}` (raw): each entry carries an `identifier` with
         `permalink` (→ slug for `crunchbase_get_company`), `value` (name) and
-        `entity_def_id`.
+        `entity_def_id`. `limit` from 1 to 25.
         """
-        qs = urlencode({"query": query, "collection_ids": "organization.companies",
-                        "limit": max(1, min(int(limit), 25))})
-        return await _api("GET", f"/autocompletes?{qs}")
+        return await _call(lambda c: c.search_companies(query, limit))
 
     @mcp.tool()
     async def crunchbase_search_people(query: str, limit: int = 10) -> dict:
@@ -257,11 +205,9 @@ def register(mcp: FastMCP) -> None:
 
         Returns `{entities}` (raw): each entry carries an `identifier` with
         `permalink` (→ slug for `crunchbase_get_person`), `value` (name) and
-        `entity_def_id`.
+        `entity_def_id`. `limit` from 1 to 25.
         """
-        qs = urlencode({"query": query, "collection_ids": "person.people",
-                        "limit": max(1, min(int(limit), 25))})
-        return await _api("GET", f"/autocompletes?{qs}")
+        return await _call(lambda c: c.search_people(query, limit))
 
     @mcp.tool()
     async def crunchbase_get_funding_rounds(slug: str) -> dict:
@@ -273,6 +219,4 @@ def register(mcp: FastMCP) -> None:
         Args:
             slug: the organization's permalink (full URL accepted).
         """
-        permalink = _permalink(slug, "organization")
-        qs = urlencode({"card_ids": "raised_funding_rounds"})
-        return await _api("GET", f"/entities/organizations/{quote(permalink)}?{qs}")
+        return await _call(lambda c: c.get_funding_rounds(slug))

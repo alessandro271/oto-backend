@@ -127,9 +127,10 @@ def peupler() -> Jeu:
     _cle("org", org, "google", account="equipe@example.invalid",
          meta={"scopes": gmail_drive, "is_default": True, "connected_by": SUB,
                "granted_at": "2026-09-03T00:00:00"})
-    for cle in ("client_id", "client_secret"):
-        connector_settings.set_connector_setting("platform", "", auth_microsoft.CONNECTOR,
-                                                 cle, f"factice-{cle}")
+    connector_settings.set_connector_setting("platform", "", auth_microsoft.CONNECTOR,
+                                             "client_id", "factice-client_id")
+    credentials_store.set_app_secret(auth_microsoft.CONNECTOR, "client_secret",
+                                     "factice-client_secret")
     ms = auth_microsoft.service_scopes(auth_microsoft.SERVICES[0])
     _cle("member", moi, auth_microsoft.CONNECTOR, account="moi@example.invalid",
          meta={"scopes": " ".join(ms), "is_default": True})

@@ -304,6 +304,43 @@ def current_call_account() -> Optional[str]:
     return _CALL_ACCOUNT.get()
 
 
+# ── Comptes des ÉTAPES d'une cascade (`waterfall_*`) ─────────────────────────
+# Une cascade appelle PLUSIEURS connecteurs : un `_account` unique y serait lu par
+# chacun d'eux (`resolve_credential` lit `_CALL_ACCOUNT`), donc jamais posé là. Ces
+# deux-là ne sont lus que par la cascade (`waterfall/comptes.py`), qui passe à chaque
+# étape le compte de SON connecteur, en argument de l'appel de l'étape.
+_CALL_STEP_ACCOUNTS: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "oto_call_step_accounts", default=None)
+_CALL_CASCADE_ACCOUNT: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "oto_call_cascade_account", default=None)
+
+
+def set_call_step_accounts(accounts: dict) -> contextvars.Token:
+    return _CALL_STEP_ACCOUNTS.set(dict(accounts))
+
+
+def reset_call_step_accounts(token: contextvars.Token) -> None:
+    _CALL_STEP_ACCOUNTS.reset(token)
+
+
+def current_call_step_accounts() -> Optional[dict]:
+    """`{connecteur: compte}` posé par `_accounts=` sur une cascade, ou None."""
+    return _CALL_STEP_ACCOUNTS.get()
+
+
+def set_call_cascade_account(account: str) -> contextvars.Token:
+    return _CALL_CASCADE_ACCOUNT.set(account)
+
+
+def reset_call_cascade_account(token: contextvars.Token) -> None:
+    _CALL_CASCADE_ACCOUNT.reset(token)
+
+
+def current_call_cascade_account() -> Optional[str]:
+    """Le `_account=` passé à une cascade (jamais posé en `_CALL_ACCOUNT`), ou None."""
+    return _CALL_CASCADE_ACCOUNT.get()
+
+
 # ── Relevé de résolution de l'appel (« ce que le SERVEUR a résolu ») ─────────
 # Sens inverse des axes ci-dessus : ceux-là portent ce que l'APPELANT a fourni,
 # celui-ci ce que le serveur a résolu PENDANT l'appel — aujourd'hui le `ns_id` d'un
@@ -372,6 +409,49 @@ def noter_avis(texte: str) -> None:
     holder = _CALL_AVIS.get()
     if holder is not None and texte and texte not in holder:
         holder.append(texte)
+
+
+# ── La FORME sous laquelle l'appel a désigné un tableau (`ref_kind`) ──────────
+# Le journal cite le tableau RÉSOLU (`ns_id`, nom canonique) : `957`, `slot:vivier` et
+# `mes_leads` y laissaient la même trace. Un nom est REFUSÉ depuis le retrait
+# (`datastore_by_name`) : la forme `name` compte ces refus. La forme est notée au point
+# où l'adresse reçue est jugée — `access.resolve_datastore_ref` pour `slot:`, les
+# résolutions par numéro (store `_resolve`, lien de projet, automatisation, portée d'un
+# jeton) pour `number`, le refus d'un nom (`datastore.errors.refus_tableau_par_nom`, par
+# où passent toutes les faces qui le refusent) pour `name` — et rejoint le journal :
+#   - face MCP : le relevé de l'appel (`_CALL_TRACE`), versé dans `args` par
+#     `calllog.apply_call_trace` (`server._TRACED_ARGS`) ;
+#   - face REST : le holder posé par le journal des routes (`api.routes.RestCallLogger`),
+#     versé dans les `args` de la ligne de route. Un holder À PART, et non le relevé
+#     MCP : ce relevé, posé en REST, ferait lire `key_mode`/`quantity` aux gardes de
+#     crédit et de budget qui le prennent pour un appel MCP.
+# Jamais le nom lui-même : seulement sa forme. Plusieurs tableaux désignés dans un même
+# appel : la forme la plus dépréciée l'emporte (`name` > `slot` > `number`).
+REF_NUMBER = "number"
+REF_SLOT = "slot"
+REF_NAME = "name"
+_RANG_REF = {REF_NUMBER: 0, REF_SLOT: 1, REF_NAME: 2}
+
+_REF_REST: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "oto_ref_rest", default=None)
+
+
+def set_ref_rest(holder: dict) -> contextvars.Token:
+    """Pose le holder de la requête REST (dict vide, relu par le journal des routes)."""
+    return _REF_REST.set(holder)
+
+
+def reset_ref_rest(token: contextvars.Token) -> None:
+    _REF_REST.reset(token)
+
+
+def noter_forme_tableau(forme: str) -> None:
+    """Note la forme d'une désignation de tableau dans les holders posés. No-op hors
+    appel MCP et hors requête REST. Une forme inconnue est une faute de l'appelant."""
+    rang = _RANG_REF[forme]
+    for holder in (_CALL_TRACE.get(), _REF_REST.get()):
+        if holder is not None and rang > _RANG_REF.get(holder.get("ref_kind"), -1):
+            holder["ref_kind"] = forme
 
 
 # ── L'ancien nom sous lequel l'appel est arrivé (`deprecations.TOOLS`) ─────────

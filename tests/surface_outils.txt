@@ -71,7 +71,7 @@ apify_run_sync	-	434bbdbbb0304469
 apify_store_search	-	004753210a0c87e8
 apify_website_contacts	-	9e71eecdb2beadea
 apify_website_crawl	-	f9f005f7f1242536
-apify_welcome_to_the_jungle_jobs	-	f19daefe24a5ea99
+apify_welcome_to_the_jungle_jobs	-	97acb577bda1ffc6
 apollo_act	send_email	eec04b0567b0dd19
 apollo_bulk_enrich_organizations	-	6d0cc5b001c7fa68
 apollo_bulk_match	-	8aa2e56316a5e889
@@ -84,7 +84,7 @@ apollo_enrich_organization	-	9acf0d99d656beeb
 apollo_job_postings	-	bfa1788adc54ff19
 apollo_match_person	-	117bcc3ac7b12870
 apollo_reveal_phone	-	4c139adc1c64e67b
-apollo_reveal_phone_result	-	ff4004d8410547d9
+apollo_reveal_phone_result	-	438d56a2fa354104
 apollo_search_organizations	-	e819263103d0c487
 apollo_search_people	-	9958eeab79276065
 apollo_sequence	activate archive create deactivate search update	200f3ed9ea504337
@@ -170,6 +170,7 @@ cognism_redeem	account contact	4faca235a21b467f
 cognism_search	account contact	b78d5ef6baaa3556
 compliance	check_mutual_termination	ed2e3bf36e1b43a2
 crisp	conversation conversation_meta conversations helpdesk helpdesk_content helpdesk_entry helpdesk_locales helpdesk_metadata helpdesk_pages helpdesk_tree inbox inboxes messages people person person_conversations person_data search_conversations search_people website	a06f342b70caec3f
+crisp_act	add_note add_segments remove_segments send_message set_state update_conversation update_person update_person_data	d2b9eaa29e6204e5
 crunchbase_connect_start	-	99334726611ccf58
 crunchbase_connect_status	-	473cd19bf52403e4
 crunchbase_get_company	-	3424e64c4f9b1f5e
@@ -183,7 +184,7 @@ culture_spectacle_search	-	4ce6460f6b5c39d9
 culture_spectacle_stats	-	2fd6662175afe112
 data_aggregate	-	58a286eda3b17608
 data_app	-	55a83086f59a4714
-data_claim_next	-	53777e0228e2e141
+data_claim_next	-	25a961eb74db89e4
 data_create_datastore	-	736f2c4165de88d5
 data_delete_datastore	-	632bf49e514495b8
 data_delete_row	-	3bd33ab88b24457a
@@ -202,7 +203,7 @@ data_set_schema	-	c73fd901556af0aa
 data_share	-	1b3219a98c95204e
 data_update_where	-	720d8bde36782b8e
 data_url	-	4459136daa442990
-data_write	-	5a2fa2bc2d4e80bc
+data_write	-	7b5b41b867b744ad
 drive_access	-	4bba7137749a5e35
 drive_file	create_folder delete download export list metadata update upload	79d525f5f3d575b0
 dropcontact_credits	-	99334726611ccf58
@@ -310,8 +311,8 @@ github_orgs	add_collaborator add_team_member collaborators get is_collaborator i
 github_pulls	commits create files get merge merged remove_reviewers request_review review review_comment review_comments reviewers reviews search submit_review update update_branch	859355bc42715359
 github_repos	branches commit commits compare contributors create_release get languages latest_release mine org release releases tags topics update_release user	56e360c3072b00ce
 github_search	code commits issues repos users	48102a71899e53e0
-gmail	accounts attachment draft drafts get search	e2280a2d86d7c4e9
-gmail_act	archive delete_draft send trash	e4fa31d15362c266
+gmail	accounts attachment draft drafts get search	a4f78d0f9ac98fbc
+gmail_act	archive delete_draft send trash	d7323019750c5de9
 gocardless_creditors	-	99334726611ccf58
 gocardless_events	-	bdc3f81b4f1b4e56
 gocardless_failed	-	dc999a592296d551
@@ -345,7 +346,7 @@ hellostock_offre	get list	58fb614b1be522a7
 hellostock_offre_update	-	443a0d1788efde7e
 hellostock_positionnements	-	2da8a2cd2cc486c0
 higgsfield	estimate get_request list_models	7c3e71836acdd960
-higgsfield_act	cancel create_generation create_upload delete	5e5bd378805d8612
+higgsfield_act	cancel create_generation create_upload delete	9126ff4ea024ebc6
 hithorizons_company	-	36fc9a5218e00cb1
 hithorizons_search_company	-	530beeeaa3916bf0
 hithorizons_search_unstructured	-	0f6e4340c8bcc0b0
@@ -355,7 +356,7 @@ hubspot_object	add_note associations create delete get list merge search update	
 hubspot_owners	-	99334726611ccf58
 hubspot_pipeline	get list	040ec5ffc0b3e249
 hubspot_property	create delete get groups list update	ab96d7bc74dbf04f
-hubspot_push_rows	-	af2e7b920510d037
+hubspot_push_rows	-	c28e63b876b09c11
 hubspot_visits	companies contacts event_types page_views	2171f4f72120422a
 hunter_domain_search	-	401adcea8eb89398
 hunter_email_finder	-	af18718078a5820e
@@ -392,14 +393,14 @@ klaviyo_metrics	get list	1688eb6b74aaa8e9
 klaviyo_profiles	get list upsert	36830019a7799090
 klaviyo_reports	campaigns flows metric	c80811cf07de87d6
 klaviyo_segments	get list members	4f0b31b7ebd0d826
-leexi_calls	create get presign search	df76029bb9c9411f
+leexi_calls	create get presign search	d79a963460f0380f
 leexi_meetings	create delete get launch_bot list	95ef33dccb79e98d
 leexi_notes	delete get list update	39cecba23622cbd7
 leexi_teams	create delete get list update	ac4733fa900884fc
 leexi_users	create deactivate get list update	05c116a9c187cad3
 lemlist_act	create_persona delete_persona send_email send_linkedin send_whatsapp	1e5f55d5e8d7f4fc
 lemlist_add_lead_variables	-	c031defa598058a0
-lemlist_campaign	batch_stats create duplicate export_email export_leads export_start export_status pause reports statutes update	76ad4db3fb76e135
+lemlist_campaign	batch_stats create duplicate export_email export_leads export_start export_status pause reports statutes update	1c2c7b36f1dd8adc
 lemlist_campaign_auto_review	-	9b13aa770fb0e63d
 lemlist_campaign_start	-	0fcf76c93412d4a7
 lemlist_company	delete list note_create notes upsert	c15f227b415cd75b
@@ -421,7 +422,7 @@ lemlist_launch_lead	-	b19e3816a4b3f9fa
 lemlist_lead	delete get import_crm interested list not_interested pause resume unsubscribe update upload_audio vars_delete vars_update	001a5346d251b8f7
 lemlist_list_campaigns	-	760775c6ee4684ff
 lemlist_mailbox	connect disconnect lemwarm lemwarm_pause lemwarm_start lemwarm_update test	d3abed1ef259892e
-lemlist_push_rows	-	97cd1b9cf7568a46
+lemlist_push_rows	-	9c0e25390b020090
 lemlist_schedule	associate create delete for_campaign get list update	403939940042c245
 lemlist_sequence	ab_create ab_delete ab_get ab_update ab_winner add_step delete_step get update_step	b9708663a1ac2982
 lemlist_status	-	99334726611ccf58
@@ -458,17 +459,18 @@ lighton_upload_document	-	91250c6c64a685e0
 lighton_workspaces	-	16701a5579193983
 linear_comment	create delete get list update	90ee8713dab5a6a8
 linear_cycle	get list	5c6905c8b058c2f2
-linear_issue	archive create delete get list search update	367e72b30f7fa2f7
+linear_issue	archive create delete get list search update	4295b289d4b2e5e5
 linear_label	create delete get list	0f6538924d92ccfe
 linear_project	create delete get list update	991108116da84b5b
 linear_team	get list states	40292427ffc1df6a
 linear_user	get list viewer	be1e6e9058aef1d3
 linear_webhook	create delete list update	abe54b7271848af6
+linkedin_ads	account_roles analytics get_account get_campaign get_campaign_group get_creative list_accounts list_campaign_groups list_campaigns list_creatives	84958572ff197e4f
 linkedin_aiark_credits	-	99334726611ccf58
 linkedin_aiark_person	export mobile reverse	9adfa3fdba15ff01
 linkedin_aiark_search	companies people	c74775d2b65b1130
 linkedin_unipile	attendees contacts list read	c8bc5859a80c9c16
-linkedin_unipile_account	contracts inmail_balance select status	a901cd3463191413
+linkedin_unipile_account	contracts inmail_balance limits select status	709d30bcaab7a0a1
 linkedin_unipile_act	accept_invitation cancel_invitation comment_post decline_invitation endorse invite publish_post react_message react_post send update update_member	be16f1f2a0971556
 linkedin_unipile_facets	-	388aab50d10d9796
 linkedin_unipile_job	applicant applicants posting postings projects	919926efcfcfd869
@@ -499,7 +501,7 @@ lusha_search_and_enrich	-	e86d72ca8cc28d6e
 mailpool_account	slots warmup warmup_available warmup_inbox	552b0a74bd7d7499
 mailpool_domain_fix	-	3539e4aca88c21f5
 mailpool_domains	audit availability dns get google_workspace_check list microsoft_365_check owners suggestions	1526c667c1fa1a3e
-mailpool_mailboxes	create export export_batch export_batches export_login get list	4057be9e209b16a1
+mailpool_mailboxes	create export export_batch export_batches export_login get list update	0ea0ae4778c32ddc
 mailpool_spam_checks	delete get list run	be330a34d38bd97c
 make_get_scenario	-	c3aaa574e143cf35
 make_get_scenario_blueprint	-	c3aaa574e143cf35
@@ -598,7 +600,7 @@ osm_pois	-	485c2d67473c59a3
 oto_account_access	grant list revoke	e61dc66d7a63346a
 oto_admin_access_shadow	read	870877d4d2d3f931
 oto_admin_account	resume suspend	0c85c3eeb402068b
-oto_admin_agent_repair	add_tool close diagnose escalate get list rerun	e63e2844f4db5fac
+oto_admin_agent_repair	add_tool causes close diagnose escalate get list rerun set_cause	ae5e64aa17f5ea4e
 oto_admin_connector_setting	-	73541a3b652d11e2
 oto_admin_guide	delete get list set	930751362a9526d9
 oto_admin_guides_semis	-	fd3168d48576c83d
@@ -607,7 +609,7 @@ oto_admin_invite	create list revoke	bb4850d048dbcda5
 oto_admin_key_grant	grant list revoke	a4591a8e64d38811
 oto_admin_legal_proof	-	cd6506165b4b05e2
 oto_admin_model_spend	-	9b0f7fac164f4d44
-oto_admin_monitoring	agents_en_echec call calls connecteurs_orphelins connectors funnel gaps rest rest_calls run runs summary tool_quality transport	ce1681895ea2b1bd
+oto_admin_monitoring	agents_en_echec call calls connecteurs_orphelins connectors funnel gaps journal_archive rest rest_calls run runs summary tool_quality transport	cf77e2f39700e6f6
 oto_admin_org	archive create entitlements get list	2b55f899e73afb50
 oto_admin_org_member	add connectors events list remove set_role	91d575ef65d01d59
 oto_admin_platform_balances	-	545b8382c47a76a4
@@ -632,7 +634,7 @@ oto_disable_tool	-	1149380513abd0af
 oto_doc	archive backlinks bulk_create create delete get list move outline patch revert revisions search set_public shared_with_me unarchive update verify	ee93f6ed6a49cc89
 oto_doc_app	-	380bde4997dd0aa4
 oto_enable_tool	-	1149380513abd0af
-oto_fleet	ack_stop beat create get launch list state stop take update	5c192086a0806dea
+oto_fleet	ack_stop beat create get launch list state stop take update	b2bd85379bb31135
 oto_function	create get list propose publish refuse run test versions	e5de6de16514ec0e
 oto_group	add_member create get invite list list_invites remove_member set_instruction	b28094b32d45870b
 oto_guide	delete list patch read restore revisions write	ffa0ef883e25bb71
@@ -647,7 +649,7 @@ oto_node_edit	create delete move update	e8856bdb2454bfca
 oto_node_rows	-	047893f7d081bd5b
 oto_org	accept_invite archive create invite list_invites list_loans reject_invite update	5c434083bbbc6421
 oto_org_monitoring	adoption agents_en_echec call calls connectors export gaps run runs signals summary tool_quality	52f8af9af69f2165
-oto_org_settings	get preview set	ad720edfff1c3c29
+oto_org_settings	get preview set	c1dde528b1cb0895
 oto_procedure	archive create delete describe fork get library_get library_list list publish rename set share_get share_publish share_readers share_set share_unpublish unarchive unpublish	95e5d9b6e91cef3a
 oto_procedure_comment	-	147f9e0286ed060e
 oto_procedure_comments	-	f9d839e28803009d
@@ -656,7 +658,7 @@ oto_project	activity archive copy create get handoff inventory link lint list li
 oto_project_files	delete list	21fe316bf162e607
 oto_recipe	create describe get list propose publish run sample test versions	ede9e37c55ae35be
 oto_resource	get list share transfer unshare	40a9d7eaa2b6e5f8
-oto_resource_v2	get list share transfer unshare	637bc809e5097167
+oto_resource_v2	get list share transfer unshare	2f58c80585346ce6
 oto_run_thread	append read	44bbcd76833e2fd0
 oto_scheduled_emails	cancel list	8667993dedb8c784
 oto_search	-	18ffe4e9d63c0a93
@@ -819,10 +821,12 @@ salesforce_describe	-	b08f321a0ab3d244
 salesforce_note	create list	8fb225c1a4a92370
 salesforce_query	soql sosl	af4c2a14ce5b1c7e
 salesforce_record	bulk_create bulk_update create delete get list update upsert	904320010b7c3a53
+sante	get_clinicaltrial get_ctis_trial get_europepmc_article get_medicine get_pubmed_article interest_totals_by_company search_clinicaltrials search_ctis_trials search_europepmc search_interest_declarations search_medicines search_pubmed	bc7cd8215e869981
 sante_essms_dimensions	-	99334726611ccf58
 sante_essms_search	-	ac3078711024b515
 sante_finess	-	eb5f0f708f494079
 sante_finess_search	-	e78e593b22b6226d
+search_console	get_sitemap inspect_url list_sitemaps list_sites query_search_analytics	7645228005af9ca4
 searchapi_search	-	2b9dd2c6d3e47679
 sellsy_contact	companies create custom_fields delete get list search update	40cd5958584016dd
 sellsy_document	create custom_fields delete get linked list payments search status update validate	755dd2ee1d3bc759
@@ -871,17 +875,17 @@ sivan_salaries	-	9726bafdee46a266
 sivan_timesheets	-	dd47c8051bea3a69
 sivan_timesheets_summary	-	dd47c8051bea3a69
 slack	usergroup_members usergroups	e2066e35c5e79309
-slack_act	add_usergroup_members create_usergroup disable_usergroup enable_usergroup remove_usergroup_members set_usergroup_members update_usergroup	cac7baff16f60f16
-slack_add_reaction	-	5d412f458a90a442
-slack_delete_message	-	5bd9b437b782237f
+slack_act	add_usergroup_members create_usergroup disable_usergroup enable_usergroup remove_usergroup_members set_usergroup_members update_usergroup	c1dde031f8e7c03a
+slack_add_reaction	-	f30aa80da2756c65
+slack_delete_message	-	f3d8f5e295c6fc07
 slack_download_file	-	3c3a5da24d84f3ad
 slack_find_user_by_email	-	e554a85546f6e8cd
 slack_join_channel	-	72d6ebe96ed7ed97
 slack_list_channels	-	052f6eff30556b87
 slack_open_dm	-	b61f549022ade21c
-slack_post_message	-	64c7e44a595db56f
+slack_post_message	-	119726ce0826ce42
 slack_read_history	-	cedd83c9468b2b5a
-slack_read_thread	-	ee9f39b0b0ee8b0f
+slack_read_thread	-	d77990df53c80330
 snitcher_contact	list reveal_email	8f181b8dcce6c61b
 snitcher_custom_field	clear create delete get list set set_many update values	22cb706b7c5708e8
 snitcher_organisation	get list search tag untag	1d174e1619d9504a
@@ -953,7 +957,7 @@ ubersuggest_keyword_lists	add create get list remove rename	9a09ca349eac0058
 ubersuggest_keywords	content_ideas estimate_clicks google match metric overview serp suggestions	81113cf7d5dd537f
 ubersuggest_projects	add_competitors add_keywords article_titles brand_config brand_overview brand_prompts business_summary create generate_article get get_article list opportunities positions	5092c59f8d39c6fb
 ubersuggest_site_audit	pages pagespeed results start status	75717fd818c05ea0
-unipile_connect_start	-	289e08a61e7291d5
+unipile_connect_start	-	c2d5e47a4c8eee19
 urba_annuaire	maires presidents_epci services	b7ec0f9aaf3fa01f
 urba_argiles	-	53239cafb65230b5
 urba_epfif	-	258ae38fe9255d5d
@@ -969,17 +973,17 @@ waalaxy_campaign	list	6215948d0e47063e
 waalaxy_prospect	add	81e9828aeb14d98f
 waalaxy_prospect_list	list	6215948d0e47063e
 waterfall_company	-	1fcf4a56842c95d6
-waterfall_company_act	update_rows	6256e1a77c51cf89
+waterfall_company_act	update_rows	1188d9200be89e92
 waterfall_email	-	2f5865a1895be61d
-waterfall_email_act	update_rows	28c941aadca3a078
+waterfall_email_act	update_rows	dffc0fc077b7bcbc
 waterfall_people	-	47e896d4db2ae010
-waterfall_people_act	update_rows	980d38657903d49b
+waterfall_people_act	update_rows	9bd5984393db780c
 waterfall_person	-	8db9f705f533f51b
-waterfall_person_act	update_rows	c5ef707d31a7d820
+waterfall_person_act	update_rows	ff610c47bdf03e5f
 waterfall_phone	-	2f5865a1895be61d
-waterfall_phone_act	update_rows	e041b3fd8db2474d
+waterfall_phone_act	update_rows	43779b8f947b0266
 waterfall_tech	-	7d286fa48bc28748
-waterfall_tech_act	update_rows	5aed4679b0a187c0
+waterfall_tech_act	update_rows	4d97297bcf84a013
 web_image	-	4095dc190e35842e
 web_read	-	9e2d3f2be32caac2
 webflow_cms	collection collections create delete item items site update	510a38cfa8c2c12b

@@ -59,6 +59,34 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                             défaut ; jamais les credentials sans
                                             `--credentials --preavis-echu AAAA-MM-JJ`
                                             échu — PAS un travail : voir plus bas
+    oto-mcp maintenance jetons-en-meta [--appliquer] [--connecteur NOM ...]
+                                            retire de `connector_credentials.meta` les
+                                            clés de forme jeton (liste fermée
+                                            `BEARER_META_KEYS`) des connecteurs google,
+                                            memento, atlassian, folkmcp — À BLANC par
+                                            défaut ; pour google, APRÈS le déploiement
+                                            du code qui n'y range plus le jeton — PAS
+                                            un travail : voir plus bas
+    oto-mcp maintenance secrets-d-application [--appliquer] [--sans-effacer]
+                                            scelle au coffre les secrets d'application
+                                            OAuth de l'instance encore en clair dans
+                                            `connector_settings`, puis efface le clair —
+                                            À BLANC par défaut — PAS un travail : voir
+                                            plus bas
+    oto-mcp maintenance jetons-de-lien [--appliquer] [--sans-effacer]
+                                            scelle les jetons de lien (page publique,
+                                            procédure partagée) encore en clair :
+                                            enveloppe et empreinte, relecture vérifiée,
+                                            puis clair vidé — À BLANC par défaut —
+                                            PAS un travail : voir plus bas
+    oto-mcp maintenance apps-lecteurs-actifs [--appliquer] [--jours N]
+                                            les partages d'app `viewer` par lesquels
+                                            quelqu'un a fait un geste (écrire, lancer,
+                                            déposer) dans les N derniers jours (30), et
+                                            qui ne cliquerait plus sans Use : à blanc,
+                                            l'audit ; `--appliquer` les passe en
+                                            `contributor`, APRÈS `migrer upgrade head`
+                                            — PAS un travail : voir plus bas
     oto-mcp maintenance copies-du-coffre
                                             copie le coffre d'un connecteur renommé
                                             sous son nouveau nom — l'étape que le
@@ -93,7 +121,7 @@ import logging
 import os
 import sys
 import time
-from typing import Callable
+from typing import Callable, Optional
 
 logger = logging.getLogger("oto_mcp.maintenance")
 
@@ -455,7 +483,8 @@ def _cles_ko_par_org() -> dict[int, list[dict]]:
 def _agents_nommes(triggers: list[dict]) -> list[dict]:
     """`[{id, label}]` des déclencheurs : l'alerte NOMME chaque agent et le relie à sa
     page — un nombre seul laisse le destinataire chercher lesquels."""
-    return [{"id": t.get("id"), "label": t.get("label") or t.get("procedure")}
+    return [{"id": t.get("id"), "label": t.get("label") or t.get("procedure"),
+             "proprietaire": t.get("sub")}
             for t in triggers]
 
 
@@ -464,6 +493,23 @@ def _agents_du_retrait(org_id: int, connecteurs: list) -> dict[str, list[dict]]:
     from .db import runner_triggers
     return {c: _agents_nommes(runner_triggers.triggers_actifs_utilisant(org_id, c))
             for c in connecteurs or []}
+
+
+def _cles_du_membre(org_id: int, sub: str, cles_ko: list[dict]) -> list[dict]:
+    """Ce que l'alerte de clé montre à un MEMBRE non admin : ses clés personnelles dans
+    l'org (palier `member`, `<org>:<sub>`) en panne, avec ses seuls agents. Plus
+    étroit que ce qu'il a le droit de voir (`_acces_agent.niveaux`) : un agent qu'on lui
+    partage tourne sous son propriétaire, donc sur la clé de ce dernier, pas sur la
+    sienne. Une clé d'org ou d'équipe relève des admins."""
+    a_lui = f"{int(org_id)}:{sub}"
+    out = []
+    for l in cles_ko:
+        if l.get("entity_type") != "member" or str(l.get("entity_id")) != a_lui:
+            continue
+        siens = [a for a in l.get("agents") or [] if a.get("proprietaire") == sub]
+        if siens:
+            out.append({**l, "agents": siens})
+    return out
 
 
 def alertes_credential(*, dry_run: bool = False) -> dict:
@@ -500,24 +546,43 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
 
     ⚠️ Le marquage vient APRÈS l'envoi. Marquer d'abord transformerait un envoi raté en
     silence définitif, c'est-à-dire en la panne même que ce travail supprime.
+
+    **Qui** (`alerte_agents_bloques.destinataires`) : les titulaires des agents touchés
+    encore membres, puis les admins clients. Un admin reçoit tout ; un membre, sa seule
+    clé personnelle en panne sous ses agents (`_cles_du_membre`), ou rien. L'équipe de la
+    plateforme — ses admins de plateforme (`alertes_equipe.destinataires`) — reçoit un
+    courriel SÉPARÉ par org, envoi ouvert et hors `dry_run` ; sans aucun admin de
+    plateforme, une ligne ERROR par org, et les clients reçoivent le leur.
     """
     # Le gabarit vit dans `email_templates` et part par son `_envoyer`, le seul point
     # d'envoi d'un gabarit : cette alerte partait de ce module par `_email._send`, sous
     # le nom et la langue de l'INSTANCE, et oubliait l'expéditeur du tenant de l'org.
     from . import email_templates as _gabarits
     from .db import alertes_credential as db_alertes
-    from .alerte_agents_bloques import destinataire_admin
+    from .alerte_agents_bloques import destinataires
     from .db import users as db_users
-    from . import org_store
+    from . import alertes_equipe, org_store
 
+    actif = _alerte_activee()
+    # Le courriel d'équipe (les admins de plateforme), lu au premier courriel d'équipe
+    # à envoyer : jamais à blanc ni envoi fermé.
+    equipe: Optional[list] = None
     retraits = {int(g["org_id"]): g for g in db_alertes.a_notifier()}
     cles_ko = _cles_ko_par_org()
-    actif = _alerte_activee()
     envoyes, marques, sans_destinataire = 0, 0, 0
+    equipe_partis, equipe_rates = 0, 0
     for org_id in sorted(set(retraits) | set(cles_ko)):
         g, ko = retraits.get(org_id), cles_ko.get(org_id, [])
-        dest = destinataire_admin(org_id)
-        if dest is None:
+        if g:
+            g = {**dict(g), "agents": _agents_du_retrait(org_id, list(g.get("connectors") or []))}
+        # Les titulaires des agents touchés, puis tous les admins CLIENTS de l'org
+        # (`alerte_agents_bloques.destinataires`) — plus le seul premier admin, qui était
+        # souvent un opérateur de la plateforme.
+        touches = [a for l in ko for a in l.get("agents") or []]
+        for agents in ((g or {}).get("agents") or {}).values():
+            touches += agents
+        dest = destinataires(org_id, proprietaires=[a.get("proprietaire") for a in touches])
+        if not dest:
             # On ne marque PAS : sans destinataire, la ligne reste à notifier. Le jour
             # où l'org gagne un admin, elle partira — la perdre ici serait la perdre
             # exactement quand elle devient délivrable.
@@ -530,21 +595,48 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
         # (`users.locale`) prime sur la langue de la marque. Le gabarit vit dans
         # `email_templates` et part par `_envoyer`, comme tous les autres.
         _base, marque = org_store.org_front(org_id)
-        destinataire, adresse = dest
-        fiche = db_users.get_user(destinataire) or {}
-        if g:
-            g = {**dict(g), "agents": _agents_du_retrait(org_id, list(g.get("connectors") or []))}
-        if _gabarits.send_credential_alert_email(
-                adresse, retrait=g, cles_ko=ko, brand=marque,
-                locale=fiche.get("locale"), org_id=org_id, sub=destinataire):
+        partis = 0
+        for d in dest:
+            # Un admin reçoit tout. Ce qui relève de l'org (retraits, clés d'org ou
+            # d'équipe, gestes d'admin) ne part qu'aux admins : un membre ne reçoit que
+            # SA clé en panne sous SES agents (`_cles_du_membre`), ou rien.
+            retrait, siennes = (g, ko) if d.admin else (None, _cles_du_membre(org_id, d.sub, ko))
+            if not retrait and not siennes:
+                continue
+            fiche = db_users.get_user(d.sub) or {}
+            partis += bool(_gabarits.send_credential_alert_email(
+                d.adresse, retrait=retrait, cles_ko=siennes, brand=marque,
+                locale=fiche.get("locale"), org_id=org_id, sub=d.sub))
+        # Marqué dès qu'UN destinataire l'a reçu : rejouer pour celui qu'un envoi a raté
+        # renverrait le même message à tous les autres.
+        if partis:
             envoyes += 1
             if g:
                 marques += db_alertes.marquer_notifie(list(g["ids"] or []))
             if ko:
                 marques += db_alertes.marquer_cles_annoncees(ko)
+            # L'équipe : un courriel SÉPARÉ, le contenu de l'org, sous la marque de
+            # l'instance et sans lien (aucun compte de l'org derrière). Raté : dit,
+            # compté, jamais rejoué (l'épisode est marqué pour le client).
+            if equipe is None:
+                equipe = alertes_equipe.destinataires()
+            if not equipe:
+                alertes_equipe.signaler_sans_equipe("alertes-credential", org_id)
+                continue
+            entete = alertes_equipe.entete(org_id, partis)
+            for adresse in equipe:
+                if _gabarits.send_credential_alert_email(
+                        adresse, retrait=g, cles_ko=ko, brand=None, locale="fr",
+                        entete=entete):
+                    equipe_partis += 1
+                else:
+                    equipe_rates += 1
+                    logger.warning("alertes-credential : courriel d'équipe refusé pour "
+                                   "l'org %s (non rejoué)", org_id)
     return {"orgs_a_prevenir": len(set(retraits) | set(cles_ko)),
             "cles_en_panne": sum(len(v) for v in cles_ko.values()),
             "envoyes": envoyes, "marques": marques,
+            "equipe": equipe_partis, "equipe_rates": equipe_rates,
             "sans_destinataire": sans_destinataire,
             "actif": actif,
             "note": (None if actif else
@@ -859,6 +951,9 @@ def orphelins(argv: list[str]) -> int:
                          "instances) — exige --preavis-echu"))
     p.add_argument("--preavis-echu", type=date.fromisoformat, metavar="AAAA-MM-JJ",
                    help="fin du préavis aux propriétaires des clés, antérieure à aujourd'hui")
+    p.add_argument("--connecteur", action="append", metavar="NOM",
+                   help=("ne traite que cet orphelin (répétable) ; les autres orphelins "
+                         "ne sont ni lus ni touchés"))
     args = p.parse_args(argv)
     if args.preavis_echu is not None and not args.credentials:
         p.error("--preavis-echu ne vaut qu'avec --credentials")
@@ -868,8 +963,9 @@ def orphelins(argv: list[str]) -> int:
     from .connectors import orphelins_nettoyage as on
     try:
         rapport = on.nettoyer(appliquer=args.appliquer, credentials=args.credentials,
-                              preavis_echu=args.preavis_echu)
-    except on.PreavisNonEchu as e:
+                              preavis_echu=args.preavis_echu,
+                              seuls=frozenset(args.connecteur) if args.connecteur else None)
+    except (on.PreavisNonEchu, on.ConnecteurServi) as e:
         print(f"REFUS : {e}", file=sys.stderr)
         return ORPHELINS_REFUS
     except Exception:
@@ -879,6 +975,150 @@ def orphelins(argv: list[str]) -> int:
     print("\n".join(on.lignes_du_rapport(rapport)))
     return ORPHELINS_RESTE if on.reste(rapport) else ORPHELINS_FAIT
 
+
+# Codes de sortie de `jetons-en-meta`, alignés sur ceux d'`orphelins` : un geste
+# d'exploitant joué une fois depuis le commit, hors `all` et hors timer.
+JETONS_FAIT = 0
+JETONS_REFUS = 1       # connecteur hors de la liste fermée : rien n'est lu ni écrit
+JETONS_ERREUR = 2      # base injoignable, écriture en échec (rien n'est écrit : une transaction)
+JETONS_RESTE = 3       # appliqué, mais la relecture trouve encore une clé : relancer
+
+
+def jetons_en_meta(argv: list[str]) -> int:
+    """`oto-mcp maintenance jetons-en-meta` : retire de `connector_credentials.meta` les
+    clés de forme jeton (`connectors/jetons_en_meta.py`). À blanc par défaut."""
+    from .connectors import jetons_en_meta as jm
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance jetons-en-meta",
+        description=(
+            "Retire de connector_credentials.meta les clés de forme jeton ("
+            + ", ".join(jm.cles()) + ") des connecteurs " + ", ".join(jm.CONNECTEURS)
+            + ". Ne supprime aucune ligne, n'imprime aucune valeur. À blanc par défaut. "
+            "Pour google : seulement APRÈS le déploiement du code qui ne range plus le "
+            "jeton dans meta, l'ancienne couleur arrêtée (elle l'y réécrirait)."))
+    p.add_argument("--appliquer", action="store_true",
+                   help="écrit ; sans lui, imprime ce qui serait retiré et ne touche à rien")
+    p.add_argument("--connecteur", action="append", metavar="NOM",
+                   help=("restreint à ce connecteur (répétable) ; parmi : "
+                         + ", ".join(jm.CONNECTEURS) + " — tous par défaut"))
+    args = p.parse_args(argv)
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    try:
+        rapport = jm.nettoyer(appliquer=args.appliquer,
+                              connecteurs=args.connecteur or jm.CONNECTEURS)
+    except jm.ConnecteurHorsListe as e:
+        print(f"REFUS : {e}", file=sys.stderr)
+        return JETONS_REFUS
+    except Exception:
+        logger.error("jetons-en-meta : ERREUR — rien n'est à tenir pour retiré ; relancer "
+                     "à blanc pour voir ce qui reste", exc_info=True)
+        return JETONS_ERREUR
+    print("\n".join(jm.lignes_du_rapport(rapport)))
+    return JETONS_RESTE if jm.reste(rapport) else JETONS_FAIT
+
+
+# Codes de sortie de `secrets-d-application` — ceux d'`orphelins`. Un geste d'exploitant
+# joué depuis le commit (la clé maître est requise : une révision ne peut pas chiffrer).
+SECRETS_FAIT = 0
+SECRETS_REFUS = 1      # un écart (le coffre porte une autre valeur) ou un secret hors palier
+                       # plateforme : rien n'est touché pour ces lignes, à trancher à la main
+SECRETS_ERREUR = 2     # clé maître absente, base injoignable, relecture en échec (les lignes
+                       # déjà traitées le restent ; la ligne en échec est intacte)
+SECRETS_RESTE = 3      # à blanc : il y a à faire ; appliqué : relancer
+
+
+def secrets_d_application(argv: list[str]) -> int:
+    """`oto-mcp maintenance secrets-d-application` : scelle au coffre les secrets
+    d'application OAuth de l'instance encore en clair dans `connector_settings`
+    (`auth/app_instance_rangement.py`). À blanc par défaut."""
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance secrets-d-application",
+        description=("Scelle au coffre les secrets d'application OAuth de l'instance "
+                     "encore en clair dans connector_settings, vérifie leur relecture, "
+                     "puis efface le clair. À blanc par défaut ; n'imprime jamais une "
+                     "valeur."))
+    p.add_argument("--appliquer", action="store_true",
+                   help="écrit ; sans lui, imprime ce qui serait fait et ne touche à rien")
+    p.add_argument("--sans-effacer", action="store_true",
+                   help=("scelle et vérifie, mais garde la ligne en clair (1re phase : le "
+                         "code servi lit encore connector_settings)"))
+    args = p.parse_args(argv)
+    if args.sans_effacer and not args.appliquer:
+        p.error("--sans-effacer ne vaut qu'avec --appliquer")
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from . import crypto
+    from .auth import app_instance_rangement as rangement
+    if not crypto.encryption_enabled():
+        print("REFUS : OTO_MCP_MASTER_KEY absente — rien ne peut être scellé (lancer la "
+              "commande sous le lanceur de l'instance)", file=sys.stderr)
+        return SECRETS_ERREUR
+    try:
+        rapport = rangement.ranger(appliquer=args.appliquer, effacer=not args.sans_effacer)
+    except Exception:
+        logger.error("secrets-d-application : ERREUR — les lignes déjà traitées le restent, "
+                     "la ligne en échec est intacte ; relancer à blanc pour voir ce qui "
+                     "reste", exc_info=True)
+        return SECRETS_ERREUR
+    print("\n".join(rangement.lignes_du_rapport(rapport)))
+    if rangement.refus(rapport):
+        return SECRETS_REFUS
+    return SECRETS_RESTE if rangement.reste(rapport) else SECRETS_FAIT
+
+
+# Codes de sortie de `jetons-de-lien` — ceux d'`orphelins`. Un geste d'exploitant joué
+# depuis le commit (la clé maître est requise : une révision ne peut pas chiffrer).
+LIENS_FAIT = 0
+LIENS_REFUS = 1       # un écart (l'enveloppe porte un autre jeton) : la ligne n'est pas
+                       # touchée, à trancher à la main
+LIENS_ERREUR = 2      # clé maître absente, colonnes absentes, base injoignable, relecture
+                       # en échec (les lignes déjà traitées le restent ; celle en échec est
+                       # intacte)
+LIENS_RESTE = 3       # à blanc : il y a à faire ; appliqué : relancer
+
+
+def jetons_de_lien(argv: list[str]) -> int:
+    """`oto-mcp maintenance jetons-de-lien` : scelle les jetons de lien encore rangés en
+    clair (`jetons_de_lien_rangement.py`). À blanc par défaut."""
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance jetons-de-lien",
+        description=("Scelle les jetons de lien (page publique, procédure partagée) encore "
+                     "rangés en clair : enveloppe chiffrée et empreinte, relecture "
+                     "vérifiée, puis clair vidé. À blanc par défaut ; n'imprime jamais un "
+                     "jeton."))
+    p.add_argument("--appliquer", action="store_true",
+                   help="écrit ; sans lui, imprime ce qui serait fait et ne touche à rien")
+    p.add_argument("--sans-effacer", action="store_true",
+                   help="scelle et vérifie, mais garde le clair")
+    args = p.parse_args(argv)
+    if args.sans_effacer and not args.appliquer:
+        p.error("--sans-effacer ne vaut qu'avec --appliquer")
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from . import crypto
+    from . import jetons_de_lien_rangement as rangement
+    if not crypto.encryption_enabled():
+        print("REFUS : OTO_MCP_MASTER_KEY absente — rien ne peut être scellé (lancer la "
+              "commande sous le lanceur de l'instance)", file=sys.stderr)
+        return LIENS_ERREUR
+    try:
+        rapport = rangement.ranger(appliquer=args.appliquer, effacer=not args.sans_effacer)
+    except rangement.ColonnesAbsentes as e:
+        print(f"REFUS : {e}", file=sys.stderr)
+        return LIENS_ERREUR
+    except Exception:
+        logger.error("jetons-de-lien : ERREUR — les lignes déjà traitées le restent, la "
+                     "ligne en échec est intacte ; relancer à blanc pour voir ce qui reste",
+                     exc_info=True)
+        return LIENS_ERREUR
+    print("\n".join(rangement.lignes_du_rapport(rapport)))
+    if rangement.refus(rapport):
+        return LIENS_REFUS
+    return LIENS_RESTE if rangement.reste(rapport) else LIENS_FAIT
 
 
 # ── Les copies du coffre des connecteurs renommés ─────────────────────────────────────
@@ -934,14 +1174,64 @@ def copies_du_coffre(argv: list[str]) -> int:
         print(f"copies-du-coffre {nom} : {bilan}")
     return COPIES_FAITES
 
+# Codes de sortie d'`apps-lecteurs-actifs` — ceux d'`orphelins`. Un geste d'exploitant
+# joué depuis le commit, avant que le code qui refuse le clic d'un `viewer` ne serve.
+LECTEURS_FAIT = 0
+LECTEURS_ERREUR = 2    # base injoignable, `contributor` pas encore admis par la base,
+                        # écriture en échec (la transaction est annulée : rien n'est promu)
+LECTEURS_RESTE = 3     # à blanc : il y a des partages à promouvoir ; appliqué : relancer
+
+
+def apps_lecteurs_actifs(argv: list[str]) -> int:
+    """`oto-mcp maintenance apps-lecteurs-actifs` : les partages d'app `viewer` par
+    lesquels quelqu'un cliquait (`apps_lecteurs_actifs.py`). À blanc par défaut."""
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance apps-lecteurs-actifs",
+        description=("Les partages d'app `viewer` (nominatifs, d'équipe, d'org) par "
+                     "lesquels quelqu'un a fait un geste dans la fenêtre et ne cliquerait "
+                     "plus sans le rôle Use. À blanc par défaut ; n'imprime que des "
+                     "identifiants et des comptes."))
+    p.add_argument("--appliquer", action="store_true",
+                   help="promeut ces partages en `contributor` ; sans lui, n'écrit rien")
+    p.add_argument("--jours", type=int, default=None,
+                   help="la fenêtre des gestes, en jours (défaut 30)")
+    args = p.parse_args(argv)
+    from . import apps_lecteurs_actifs as lecteurs
+    jours = lecteurs.JOURS_DEFAUT if args.jours is None else args.jours
+    if jours < 1:
+        p.error("--jours compte au moins un jour")
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    try:
+        rapport = lecteurs.passer(appliquer=args.appliquer, jours=jours)
+    except lecteurs.BaseSansRoleUse as e:
+        print(f"REFUS : {e}", file=sys.stderr)
+        return LECTEURS_ERREUR
+    except Exception:
+        logger.error("apps-lecteurs-actifs : ERREUR — la transaction est annulée, rien "
+                     "n'est promu ; relancer à blanc", exc_info=True)
+        return LECTEURS_ERREUR
+    print("\n".join(lecteurs.lignes_du_rapport(rapport)))
+    return LECTEURS_RESTE if lecteurs.reste(rapport) else LECTEURS_FAIT
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "index-concurrents":
         return index_concurrents(argv[1:])
     if argv and argv[0] == "orphelins":
         return orphelins(argv[1:])
+    if argv and argv[0] == "jetons-en-meta":
+        return jetons_en_meta(argv[1:])
+    if argv and argv[0] == "secrets-d-application":
+        return secrets_d_application(argv[1:])
+    if argv and argv[0] == "jetons-de-lien":
+        return jetons_de_lien(argv[1:])
     if argv and argv[0] == "copies-du-coffre":
         return copies_du_coffre(argv[1:])
+    if argv and argv[0] == "apps-lecteurs-actifs":
+        return apps_lecteurs_actifs(argv[1:])
     p = argparse.ArgumentParser(
         prog="oto-mcp maintenance",
         description="Les travaux de maintenance du backend (ADR 0065, lot 0).")

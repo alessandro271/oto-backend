@@ -13,7 +13,7 @@ import time
 
 import psycopg
 
-from . import (_prerequis, org_d_inscription, slack_reglage, regions_de_modeles, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, attribution_cellules, regles_de_comptes,
+from . import (_prerequis, org_d_inscription, slack_reglage, regions_de_modeles, modeles_eteints, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, attribution_cellules, regles_de_comptes,
                projects, recipes, revision, runner_fleets, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
@@ -694,6 +694,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `20261023_1040_echec_annonce` : ordre indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", alertes_agents.COLONNE_ECHEC_ANNONCE):
         conn.execute(alertes_agents.DDL_COLONNE_ECHEC_ANNONCE)
+    # L'attente d'abonnement annoncée d'un agent — la même que pose la révision
+    # `20261119_1530_forfait_annonce` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "runner_triggers", alertes_agents.COLONNE_FORFAIT_ANNONCE):
+        conn.execute(alertes_agents.DDL_COLONNE_FORFAIT_ANNONCE)
     # L'affichage d'une recette (ses étapes, pour une page) — le même que pose la
     # révision `20261022_2100_recipes_display` : ordre indifférent entre elles.
     if _colonne_absente(conn, "recipes", recipes.COLONNE_DISPLAY):
@@ -721,12 +725,22 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # la même que pose la révision `20261109_2110_note_de_reparation` : ordre indifférent.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_REPARATION):
         conn.execute(runner_triggers.DDL_COLONNE_REPARATION)
+    # Les outils qu'une personne a retirés après le médecin (`runner_triggers.
+    # outils_annules`) — la même que pose la révision `20261119_1600_repar_consentie` :
+    # ordre indifférent.
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_OUTILS_ANNULES):
+        conn.execute(runner_triggers.DDL_COLONNE_OUTILS_ANNULES)
     # Le message au client et les messages Slack partis, sur l'épisode (`alertes_slack`) —
     # les mêmes que pose la révision `20261109_2120_alertes_slack` : ordre indifférent.
     from . import alertes_slack
     for _col, _ddl in zip(alertes_slack.COLONNES_EPISODES, alertes_slack.DDL_EPISODES):
         if _colonne_absente(conn, "agent_episodes", _col):
             conn.execute(_ddl)
+    # L'empreinte de l'épisode, clé du catalogue des causes (`causes_agents`) — la même
+    # que pose la révision `20261116_2200_causes_agents` : ordre indifférent.
+    from . import causes_agents
+    if _colonne_absente(conn, "agent_episodes", causes_agents.COLONNE_EMPREINTE):
+        conn.execute(causes_agents.DDL_COLONNE_EMPREINTE)
     if _colonne_absente(conn, "runner_jobs", issues_des_travaux.COLONNE_ISSUE):
         conn.execute(issues_des_travaux.DDL_COLONNE_ISSUE)
     if _colonne_absente(conn, "runner_jobs", issues_des_travaux.COLONNE_NOTE):
@@ -1192,6 +1206,13 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
           AND COALESCE(config->>'identity_id', '') <> ''
     """)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_docs_public_token ON docs(public_token) WHERE public_token IS NOT NULL")
+    # Les jetons de lien rangés chiffrés (`db/jetons_de_lien.py`) : l'enveloppe et
+    # l'empreinte du lien public d'une page et du lien d'une procédure partagée. La
+    # colonne en clair ci-dessus n'est plus écrite ; `oto-mcp maintenance
+    # jetons-de-lien` la scelle puis la vide, une révision la retirera.
+    from .jetons_de_lien import DDL_DEMARRAGE as _DDL_JETONS_DE_LIEN
+    for _ordre in _DDL_JETONS_DE_LIEN:
+        conn.execute(_ordre)
     # ADR 0032 §5/§6 (B3) : un run est rattaché au projet actif gelé à son ouverture.
     conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS project_id BIGINT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id, started_at DESC)")
@@ -1242,6 +1263,9 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # La clé d'un tour au coût (dédoublonnage d'un rapport rejoué) : même régime,
     # révision 20261113_1200_tours_au_cout_cle ou à la main.
     index_concurrent.poser_au_demarrage(conn, index_releve.TOUR_AU_COUT)
+    # Les désignations d'un tableau par son nom (mesure avant le retrait du nom) : même
+    # régime, révision 20261120_2210_tableau_par_nom ou à la main.
+    index_concurrent.poser_au_demarrage(conn, index_releve.TABLEAU_PAR_NOM)
     # Application OAuth cliente porteuse du grant (`azp` du JWT — claude.ai,
     # Claude Code, ChatGPT…) : axe de télémétrie par surface, extension OTO-LOCALE.
     conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS client_id TEXT")
@@ -1322,6 +1346,20 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS entitlement_lost_at TIMESTAMPTZ")
     conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS entitlement_notice_at TIMESTAMPTZ")
     conn.execute("ALTER TABLE unipile_pending ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'LINKEDIN'")
+    # Plusieurs comptes par canal (lot A, additif) : l'EMPLACEMENT du compte ('' = le
+    # principal, celui de toute ligne existante) et la demande qui en ajoute un. L'index
+    # unique à quatre colonnes est l'ARBITRE `ON CONFLICT` du code neuf ; la PK à trois
+    # colonnes reste, parce que le code en production arbitre encore dessus
+    # (`docs/live-migrations.md` § basculer l'arbitre). Tant qu'elle est là, un second
+    # emplacement ne peut pas naître : `unipile.slots_ouverts()` le dit, et l'ajout
+    # refuse. La révision `20261118_1500_unipile_slots` la remplace (lot B).
+    # Catalogue seul : colonnes à défaut constant (PG ≥ 11, aucune réécriture).
+    conn.execute("ALTER TABLE unipile_accounts ADD COLUMN IF NOT EXISTS slot TEXT NOT NULL DEFAULT ''")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_unipile_accounts_slot "
+                 "ON unipile_accounts(sub, org_id, provider, slot)")
+    conn.execute("ALTER TABLE unipile_pending ADD COLUMN IF NOT EXISTS add_account BOOLEAN NOT NULL DEFAULT FALSE")
+    conn.execute("ALTER TABLE connector_account_grants ADD COLUMN IF NOT EXISTS slot TEXT NOT NULL DEFAULT ''")
+    conn.execute("ALTER TABLE connector_account_group_grants ADD COLUMN IF NOT EXISTS slot TEXT NOT NULL DEFAULT ''")
     # ADR 0044 (B0) : l'entrée du coffre devient une INSTANCE de connecteur (config
     # possédée). Colonnes DORMANTES — non lues par la résolution avant B2/B3 (canari
     # additif). `version` = verrou optimiste (B1) ; `share_down` = ouverture au
@@ -1411,9 +1449,11 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # dérivée du rôle à l'écriture (grant_resource) — le plan contenu est inchangé.
     conn.execute("ALTER TABLE resource_grants ADD COLUMN IF NOT EXISTS role TEXT "
                  "NOT NULL DEFAULT 'editor'")
+    # ⚠️ `contributor` (Use d'une app, projection `read`) n'est pas un rôle à
+    # recalculer : sans lui dans la liste, chaque boot le ramènerait à `viewer`.
     conn.execute("UPDATE resource_grants SET role = "
                  "CASE permission WHEN 'read' THEN 'viewer' ELSE 'editor' END "
-                 "WHERE role NOT IN ('viewer', 'manager')")
+                 "WHERE role NOT IN ('viewer', 'contributor', 'manager')")
     # Préférence de langue de l'UI dashboard (2026-07-07) : NULL = pas de
     # préférence explicite (le front retombe sur la langue du navigateur).
     # Validée à 'en'|'fr' en amont (capacité me.locale.set) ; colonne libre.
@@ -1503,6 +1543,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # même que pose la révision `20261112_1900_allow_cn_models` : ordre indifférent.
     if _colonne_absente(conn, "orgs", regions_de_modeles.COLONNE):
         conn.execute(regions_de_modeles.DDL_COLONNE)
+    # Les modèles éteints par un admin de l'org (`db/modeles_eteints.py`) — la même que
+    # pose la révision `20261115_2100_disabled_models` : ordre indifférent.
+    if _colonne_absente(conn, "orgs", modeles_eteints.COLONNE):
+        conn.execute(modeles_eteints.DDL_COLONNE)
     # SUSPENSION d'une org (`org_suspension`) : l'org ne peut plus agir — outils,
     # capacités, travaux de fond — et rien de ce qui lui appartient n'est touché.
     # Même forme que `users.suspended_*`. NULL = active.

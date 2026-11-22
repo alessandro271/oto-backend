@@ -37,6 +37,7 @@ from oto_mcp.auth import meta_ads as meta_ads_oauth  # noqa: F401,E402
 from oto_mcp.auth import microsoft as microsoft_oauth  # noqa: F401,E402
 from oto_mcp.auth import ubersuggest as ubersuggest_oauth  # noqa: F401,E402
 from oto_mcp.auth import jefacture as jefacture_oauth  # noqa: F401,E402
+from oto_mcp.auth import linkedin_ads as linkedin_ads_oauth  # noqa: F401,E402
 
 
 def _federated() -> set[str]:
@@ -70,11 +71,12 @@ def test_le_perimetre_est_celui_quon_croit():
     # `ubersuggest` (2026-10-08) : connexion Ubersuggest par personne, même patron.
     # `onenote`, `entra` (2026-10-21) : services Microsoft suivants, même lecture.
     # `jefacture` (2026-10-22) : connexion jefacture.com par personne, même patron.
+    # `linkedin_ads` (2026-11-17) : connexion LinkedIn par personne, même patron.
     assert _federated() == {"google", "instagram_meta", "meta_ads", "microsoft", "sharepoint",
                             "outlook", "outlook_calendar", "teams", "onenote", "entra", "powerbi", "ubersuggest",
-                            "jefacture",
+                            "jefacture", "linkedin_ads",
                             "gmail", "drive", "sheets", "calendar", "tasks", "chat",
-                            "bigquery", "google_ads"}
+                            "bigquery", "google_ads", "search_console"}
 
 
 # --- la forme émise, contrat lu par le dashboard -------------------------------

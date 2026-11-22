@@ -102,6 +102,9 @@ class AccountGrantsListInput(BaseModel):
 class AccountGrantInput(BaseModel):
     channel: Channel
     grantee: str                         # sub, email, or `group:<id>` (live fan-out)
+    # Which of my accounts on this channel to lend, when I have connected several. Absent:
+    # the one served by default (the main account).
+    account_id: Optional[str] = None
 
 
 class GrantedByMe(BaseModel):
@@ -208,18 +211,33 @@ def _grant(ctx: ResolvedCtx, inp: AccountGrantInput) -> dict:
     provider = _provider_for(inp.channel)
     # Member scope (ADR 0033): the owner's account lives in THEIR context
     # org — `ctx.org_id` is injected by SUB_ONLY (= access.current_org).
-    account_id = db.get_unipile_account_id(ctx.sub, ctx.org_id, provider)
-    if not account_id:
+    from ...connectors import identities as connector_identities
+    mine = connector_identities.comptes_du_canal_ici(ctx.sub, provider, org=ctx.org_id)
+    if inp.account_id:
+        lent = next((a for a in mine if a["account_id"] == inp.account_id), None)
+        if lent is None:
+            raise AuthzDenied(404, "account_not_connected",
+                              f"`{inp.account_id}` is not one of your {inp.channel} accounts "
+                              "connected in this org.")
+    else:
+        lent = db.default_unipile_account(mine)
+        if lent is None and mine:
+            raise AuthzDenied(409, "account_id_required",
+                              f"Your {inp.channel} accounts connected here have no main one: "
+                              "name the one to lend (`account_id`: "
+                              + ", ".join(f"`{a['account_id']}`" for a in mine) + ").")
+    if lent is None:
         raise AuthzDenied(404, "channel_not_connected",
                           f"You have no {inp.channel} account connected — connect it "
                           "first (dashboard, connector card).")
+    account_id, slot = lent["account_id"], lent.get("slot") or ""
     group_id = _parse_group_target(inp.grantee)
     if group_id is not None:
         group = group_store.get_group(group_id)
         if not group:
             raise AuthzDenied(404, "unknown_group", f"Unknown group: {inp.grantee}")
         db.set_account_group_grant(ctx.sub, provider, account_id, group_id,
-                                   granted_by=ctx.sub)
+                                   granted_by=ctx.sub, slot=slot)
         return {
             "ok": True, "channel": inp.channel, "account_id": account_id,
             "grantee_group_id": group_id, "grantee_group_name": group["name"],
@@ -228,7 +246,8 @@ def _grant(ctx: ResolvedCtx, inp: AccountGrantInput) -> dict:
                     "pin — access follows group membership, live.",
         }
     user = _resolve_grantee(ctx, inp.grantee)
-    db.set_account_grant(ctx.sub, provider, account_id, user["sub"], granted_by=ctx.sub)
+    db.set_account_grant(ctx.sub, provider, account_id, user["sub"], granted_by=ctx.sub,
+                         slot=slot)
     return {
         "ok": True, "channel": inp.channel, "account_id": account_id,
         "grantee_sub": user["sub"], "grantee_email": user.get("email"),

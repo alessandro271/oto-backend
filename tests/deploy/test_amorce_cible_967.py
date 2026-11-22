@@ -127,3 +127,23 @@ def test_la_maintenance_suit_la_couleur_active(banc):
     assert banc.lire("/etc/systemd/system/exemple-prod-maintenance.timer") == \
         (banc.tag / "deploy/oto-mcp-maintenance.timer").read_text()
     assert "systemctl enable --now exemple-prod-maintenance.timer" in banc.commandes()
+
+
+def test_l_archive_du_journal_suit_la_couleur_active(banc):
+    """Sans elle, la rétention du journal d'appels ne tourne jamais sur une instance
+    cible : le journal grossit sans que rien ne le signale."""
+    assert banc.lancer("amorcer.sh", "prod").returncode == 0
+    (banc.racine / "etc/exemple/prod/active").write_text("green\n")
+    fini = banc.lancer("amorcer.sh", "prod", "maintenance")
+    assert fini.returncode == 0, fini.stderr
+    service = banc.lire("/etc/systemd/system/exemple-prod-journal-archive.service")
+    arbre = f"{banc.racine}/opt/exemple/prod-green"
+    assert (f"ExecStart={arbre}/.venv/bin/python {arbre}/deploy/lanceur_secrets.py "
+            "--script deploy/archive_tool_calls.py") in service
+    assert "User=oto-exemple" in service
+    assert f"EnvironmentFile={banc.racine}/etc/exemple/prod/lanceur.env" in service
+    assert not re.search(r"@[A-Z_]+@", service)
+    assert (banc.tag / "deploy/archive_tool_calls.py").is_file()
+    assert banc.lire("/etc/systemd/system/exemple-prod-journal-archive.timer") == \
+        (banc.tag / "deploy/oto-journal-archive.timer").read_text()
+    assert "systemctl enable --now exemple-prod-journal-archive.timer" in banc.commandes()

@@ -124,12 +124,19 @@ CREATE INDEX IF NOT EXISTS idx_doctrine_library_category ON doctrine_library(cat
 # par un schéma FERMÉ : énumérations et slugs seulement, aucun texte libre ne
 # peut y entrer. `shape_version` = la version de procédure dont elle vient ; la
 # vitrine ne la sert que si elle égale la version courante.
+#
+# Le jeton du lien est rangé CHIFFRÉ (`db/jetons_de_lien.py`) : `token_enc` (clé maître,
+# AAD de la ligne) pour le réafficher au propriétaire, `token_hash` (index unique posé
+# dans `_init`) pour résoudre un lien entrant. `token`, la colonne en clair d'avant,
+# n'est plus écrit (ni `NOT NULL`) ; sa révision de retrait viendra.
 PROCESS_SHARES = """
 CREATE TABLE IF NOT EXISTS process_shares (
     id BIGSERIAL PRIMARY KEY,
     instruction_id BIGINT NOT NULL,
     org_id BIGINT REFERENCES orgs(id) ON DELETE CASCADE,
-    token TEXT NOT NULL UNIQUE,
+    token TEXT UNIQUE,
+    token_enc TEXT,
+    token_hash TEXT,
     show_readers BOOLEAN NOT NULL DEFAULT TRUE,
     preview_shape JSONB,
     shape_version INTEGER,

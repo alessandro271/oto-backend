@@ -22,7 +22,7 @@ adr:
 # Connector vault — registre + coffre chiffré + résolution
 
 Substrat unique des connecteurs, credentials et accès d'oto-mcp. Déployé en prod (2026-06).
-Chiffrement **obligatoire** : tous les secrets vivent chiffrés (`secret_enc`), plus aucune colonne plaintext ni dual-write (purge legacy 2026-06-11). Un serveur sans `OTO_MCP_MASTER_KEY` boote mais tout write de credential échoue fort.
+Chiffrement **obligatoire** : tous les secrets vivent chiffrés (`secret_enc`), plus aucune colonne plaintext ni dual-write (purge legacy 2026-06-11). Un serveur sans aucune clé déclarée refuse de démarrer (`crypto.charger_trousseau`, §Les modes de clé) ; un autre processus sans clé (script, maintenance) échoue fort au premier chiffrement ou déchiffrement.
 
 ## Registre — source unique (package `providers/`)
 
@@ -290,7 +290,7 @@ connector_credentials(entity_type, entity_id, connector, account, secret_enc,
 ```
 - `entity_type` ∈ {`member`, `user`, `org`, `group`, `tenant`, `platform`} ; `entity_id` = `org:sub` (member, ADR 0033) | `sub` (user, résidu OAuth) | `org_id::text` | `group_id::text` | **slug du tenant** (L-clés PR 1, 2026-08-29 — façade `tenant_vault`) | label de la clé (platform, ADR 0044 §F). Toujours requêter `(entity_type, entity_id)` ENSEMBLE. ⚠️ Cette ligne a dit `{user, org}` du 2026-06 au 2026-08-29 alors que quatre valeurs de plus étaient servies.
 - `account` = discriminant **multi-compte** ('' = mono ; ex. email Google). 1 ligne par compte connecté.
-- `secret_enc` = enveloppe chiffrée (pas de colonne plaintext). `meta` = satellites NON-secrets (user_agent linkedin/crunchbase, access_token/expires_at/scopes/is_default google).
+- `secret_enc` = enveloppe chiffrée (pas de colonne plaintext). `meta` = satellites NON-secrets (user_agent linkedin/crunchbase, scopes/is_default/client_id google). Aucune clé de forme jeton (`credentials_store.BEARER_META_KEYS` : `access_token`, `refresh_token`, `id_token`) : un jeton d'accès vit en mémoire, par processus, un satellite secret qui doit durer se scelle (`seal_satellite`, §Le jar de session). Cette liste fermée sert trois fois : les surfaces de statut la masquent, les relais qui recopient `meta` sur une autre ligne (`copy_connector_rows`, reconnexion Microsoft) ne la recopient pas, et `oto-mcp maintenance jetons-en-meta` la retire des lignes d'avant (`docs/commands.md`).
 
 Store = `credentials_store.py` (calqué sur le palier org, réutilise `db._connect`, jamais d'import circulaire) :
 `get_credential` / `get_credential_with_meta` (secret+meta+set_at, déchiffre) / `credential_status` (présence+meta SANS déchiffrer, pour /api/me) / `has_credential` / `set_credential` (chiffre) / `clear_credential` / `update_meta` (merge JSONB sans re-chiffrer) / `list_accounts`.
@@ -303,7 +303,101 @@ Store = `credentials_store.py` (calqué sur le palier org, réutilise `db._conne
 Enveloppe **AES-256-GCM**, **obligatoire** (`set_credential`/`_pk_encrypt` chiffrent toujours ; `crypto.encrypt`/`decrypt` lèvent si master key absente — pas de stockage ni lecture plaintext). Master key **hors-DB** (env `OTO_MCP_MASTER_KEY`, hex64 ou base64-32o ; en prod fetchée de Scaleway Secret Manager au boot, cible KMS unwrap, cf. `ADR 0002 (meta privé otomata-private/docs/adr)`). AAD = `connector_credentials:{entity_type}:{entity_id}:{connector}[:{account}]` (anti-transplant ; segment account omis si vide → compat ascendante mono-compte). Envelope = `key_ref(1o)‖nonce(12o)‖ct`.
 - Déchiffrement **JIT** dans `resolve_api_key`/`get_credential` uniquement, jamais loggé ; `status_for` lit la présence (`has_credential`/`credential_status`), ne déchiffre pas. Échec de déchiffrement = LÈVE (pas de fallback silencieux).
 - `platform_keys` : secret dans `api_key_enc` (même pattern, AAD `platform_keys:{provider}:{label}`).
-- Dump Postgres = **ciphertext only**. Pas de rotation de clé (key_ref réservé). Perte de master key = perte totale → Secret Manager versionné + escrow.
+- **Le trousseau et `key_ref`** : le premier octet de l'enveloppe (`key_ref`) nomme la clé qui l'a scellée. `crypto.trousseau()` rend `{key_ref: clé}`, les clés que l'instance sait ouvrir ; `decrypt` lit `key_ref` et y prend sa clé (`cle_du_trousseau`), `encrypt` écrit sous le `key_ref` d'écriture déclaré (`key_ref_d_ecriture`, `OTO_MCP_CLE_ECRITURE`, `01` par défaut = `KEY_REF_ECRITURE`). `0x01` (`CLE_PLATE`) = `OTO_MCP_MASTER_KEY`, que portent toutes les enveloppes écrites avant le mode Key Manager ; les autres `key_ref` sont des clés de données enveloppées par Key Manager (§Les modes de clé). Un `key_ref` absent du trousseau lève `crypto.CleInconnue`, distincte d'une enveloppe qui ne s'ouvre pas (`EnveloppeIndechiffrable`, clé périmée ou AAD fausse) : un appelant qui jette un cache illisible ne l'avale pas. `key_ref` n'entre pas dans l'AAD : changer la clé d'une ligne ne change pas son identité. Personne d'autre ne lit la clé : l'export de périmètre aussi passe par le trousseau (l'import vérifie la clé `0x01` de la cible, §Les modes de clé).
+- **La liste des valeurs chiffrées** est `export_perimetre/rechiffrement.COLONNES_CHIFFREES` (colonne et AAD de la ligne) : `connector_credentials.secret_enc` (clés d'instance comprises), les satellites `meta.<nom>_enc`, `runner_triggers.hook_signing_secret_enc`, `transcription_jobs.api_key_enc`, `docs.public_token_enc`, `process_shares.token_enc`. `tests/export_perimetre/test_colonnes_chiffrees.py` refuse une colonne `*_enc` du schéma ou un appel à `crypto.encrypt` qu'elle ne couvre pas.
+- **`oto_admin_vault_health`** (`GET /api/admin/vault/health`) : en plus des lignes du coffre qui ne se déchiffrent pas, `by_key_ref` compte, pour chaque valeur de `COLONNES_CHIFFREES`, les lignes par `key_ref` (premier octet lu en base, rien d'autre ; « illisible » si l'enveloppe n'a pas la forme base64).
+- Dump Postgres = **ciphertext only**. Perte de master key = perte totale → Secret Manager versionné + escrow.
+
+
+### Les modes de clé : plate et Key Manager
+
+Le mode est **déclaré**, jamais deviné : `crypto.declaration()` lit l'environnement, et
+`crypto.charger_trousseau()`, au démarrage du serveur (`server.main`, avant la base),
+refuse de démarrer sur toute incohérence, avec un message qui la nomme.
+
+| mode | variables | clés du trousseau |
+| --- | --- | --- |
+| **plate** | `OTO_MCP_MASTER_KEY` seule (`OTO_MCP_CLE_ECRITURE` absente ou `01`) | `0x01` |
+| **Key Manager, transition** | `OTO_MCP_MASTER_KEY` + `OTO_MCP_TROUSSEAU` + `OTO_MCP_KMS_CLE` + `OTO_MCP_KMS_REGION`, écriture `01` puis `02` | `0x01` et `0x02` |
+| **Key Manager seul** (après le rechiffrement de fond et le retrait de la clé plate) | les trois variables Key Manager, écriture `02` | `0x02` |
+
+- `OTO_MCP_TROUSSEAU` (secret, tiré du Secret Manager par le lanceur comme les autres,
+  déclaré dans `OTO_SECRETS_OPTIONNELS`) : `{"02": "<ciphertext rendu par GenerateDataKey>"}`.
+  Le `key_ref` s'écrit en deux chiffres hexadécimaux, `01` y est interdit (c'est la clé
+  plate). `OTO_MCP_KMS_CLE` (l'id de la clé Key Manager qui enveloppe) et
+  `OTO_MCP_KMS_REGION` ne sont pas secrets : ils vont dans le `.env`.
+- **Le déchiffrement** se fait dans `crypto`, une fois par processus et par clé :
+  `POST https://api.scaleway.com/key-manager/v1alpha1/regions/{region}/keys/{id}/decrypt`,
+  corps `{"ciphertext": …}`, réponse `{"plaintext": <base64>}`, en-tête `X-Auth-Token`
+  (`urllib`, comme `deploy/lanceur_secrets.py`). Délai de 15 s par essai, 3 essais sur une
+  panne réseau, un 429 ou un 5xx ; un autre refus (403, 404, 400) ne se rejoue pas. La clé
+  de données ne vit qu'en RAM : ni disque, ni environnement, ni journal. Le lanceur ne
+  déchiffre rien : la clé en clair ne passe jamais par `/proc/<pid>/environ`.
+- **La clé d'API** de `Decrypt` (une application IAM dont la seule permission est
+  `KeyManagerKeyDecrypt`, dans le projet Scaleway dédié à la clé) arrive par
+  `LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key` : un fichier 0600, root, lu dans
+  `$CREDENTIALS_DIRECTORY/scw-kms`. **Aucune unité du dépôt ne porte cette ligne** : elle se
+  pose À LA MAIN, au passage à Key Manager, et seulement une fois le fichier en place, car
+  un chemin absent fait échouer l'unité. On garde la forme avec chemin, portable : la forme
+  sans chemin (recherche dans `/etc/credstore/`) n'existe qu'à partir de systemd 250. La
+  ligne se pose par un **fichier de complément** (drop-in), pas dans l'unité elle-même :
+  `oto-mcp-maintenance.service` est reposée à chaque déploiement de prod
+  (`install_timers`), et les unités d'une instance cible à chaque amorce ; un complément
+  survit à ces reposes :
+  ```
+  # /etc/systemd/system/<unité>.d/scw-kms.conf, puis systemctl daemon-reload
+  [Service]
+  LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key
+  ```
+  Unités concernées : le service bleu/vert de chaque rôle (`oto-mcp@.service`,
+  `oto-mcp-canari@.service`), `oto-mcp-maintenance.service`, `oto-journal-archive.service`.
+  Un `systemd-run` qui lance le lanceur à la main ajoute
+  `-p LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key` (docs/commands.md §mode Key Manager).
+- **Au démarrage**, le journal dit, pour chaque clé, son `key_ref`, son origine et une
+  empreinte courte (`crypto.empreinte_cle`, 12 caractères), puis le mode et le `key_ref`
+  d'écriture. Jamais la clé, jamais le jeton.
+- **Les autres processus** (maintenance, scripts par `lanceur_secrets.py --script`,
+  `oto-mcp perimetre`) passent par le même `crypto.trousseau()`, qui ouvre les clés
+  enveloppées à leur premier usage.
+
+**Refus nommés** (le serveur ne démarre pas) :
+
+- aucune clé déclarée (ni `OTO_MCP_MASTER_KEY`, ni `OTO_MCP_TROUSSEAU`) ;
+- `OTO_MCP_CLE_ECRITURE` qui nomme un `key_ref` absent du trousseau (`02` sans trousseau,
+  `01` sans clé plate) ou qui n'est pas un `key_ref` ;
+- `OTO_MCP_TROUSSEAU` illisible ou vide, qui porte `01`, un `key_ref` mal écrit ou une
+  valeur vide ; trousseau sans `OTO_MCP_KMS_CLE` ou sans `OTO_MCP_KMS_REGION` ;
+  `OTO_MCP_KMS_CLE` ou `OTO_MCP_KMS_REGION` sans trousseau ;
+- clé d'API absente (`LoadCredential=scw-kms`), Key Manager qui refuse (HTTP 4xx), clé
+  ouverte qui ne fait pas 32 octets ;
+- « Key Manager injoignable : clé <id>, région <r> — démarrage refusé » après 3 essais.
+  En bleu/vert, la couleur qui sert garde son trousseau en RAM : la bascule échoue
+  proprement, rien ne s'arrête.
+
+**L'ordre de bascule** (chaque étape est réversible jusqu'au retrait de la clé plate) :
+
+1. Infra pose la clé Key Manager, l'application IAM `Decrypt` et
+   `/etc/oto-mcp/scw-kms.key` (0600, root) ; PUIS, le fichier en place, le complément
+   `LoadCredential=scw-kms:/etc/oto-mcp/scw-kms.key` de chaque unité (ci-dessus) et
+   `systemctl daemon-reload` ; puis le secret `OTO_MCP_TROUSSEAU` (`/prod` et `/preprod`),
+   qu'elle ajoute à `OTO_SECRETS_OPTIONNELS`, et `OTO_MCP_KMS_CLE`, `OTO_MCP_KMS_REGION` dans
+   le `.env`.
+2. Redémarrage (un déploiement) **en restant en écriture `01`** : le journal doit montrer
+   `key_ref=0x01` et `key_ref=0x02` chargées, avec leurs empreintes. Rien n'est encore écrit
+   sous `0x02`.
+3. Vérifier : `oto_admin_vault_health` sain, aucune erreur au journal.
+4. Passer `OTO_MCP_CLE_ECRITURE=02` dans le `.env`, redéployer : toute écriture neuve est
+   sous `0x02` (`by_key_ref` de `oto_admin_vault_health` le montre).
+5. Retour arrière : remettre `OTO_MCP_CLE_ECRITURE=01` suffit tant que la clé plate reste au
+   trousseau ; les lignes déjà en `0x02` restent lisibles tant que le trousseau est posé.
+6. Ensuite (hors de ce mode) : le rechiffrement de fond des lignes `0x01`, puis le retrait
+   de `OTO_MCP_MASTER_KEY`.
+
+**Export de périmètre** : l'export rechiffre chaque secret sous la clé **plate** de la cible
+(`OTO_EXPORT_CLE_CIBLE`, `key_ref 0x01`) ; l'import compare l'empreinte du manifeste à la
+clé `0x01` de son trousseau, qu'elle soit ou non la clé d'écriture. Une cible en transition
+importe donc normalement. Une cible sous Key Manager seul ne peut pas recevoir d'export
+chiffré : sa clé de données n'existe en clair nulle part, l'import refuse nommément.
 
 ## Résolution + accès (`access/`)
 
@@ -319,7 +413,7 @@ Tables `orgs`/`org_members`(index partiel `org_members_one_active`)/`org_entitle
 ## Folds des secrets de session (cible : coffre unique)
 
 - **LinkedIn / Crunchbase** : cookie chiffré dans `secret_enc`, UA dans `meta` ; `db.set/get/clear_linkedin_cookie`/`crunchbase_session` sur le coffre ; statut /api/me via `credential_status` (sans déchiffrer).
-- **Google OAuth multi-compte** : `connector='google'`, `account=email` ; refresh_token chiffré, access_token/expires_at/scopes/is_default/granted_at dans `meta`. Les fns db (`set/get/list/set_default/delete_google_oauth`) sur le coffre ; le refresh écrit par `credentials_store.update_meta` sur la ligne du compte résolu (merge, sans re-chiffrer), quelle que soit son entité (membre, équipe, org). Le compte d'un appel se choisit par la résolution commune `access.resolve_credential` (`account`/`_account=` > épinglage projet > compte unique > défaut, oto-backend#1160). Flow OAuth `auth/google.py` inchangé (seule la couche stockage change). ⚠️ access_token reste en **clair dans `meta`** (bearer ~1h, dérivé) ; seul le refresh_token (`secret_enc`) est chiffré.
+- **Google OAuth multi-compte** : `connector='google'`, `account=email` ; refresh_token chiffré, scopes/is_default/granted_at/client_id dans `meta`. Les fns db (`set/get/list/set_default/delete_google_oauth`) sur le coffre. **Le jeton d'accès n'est pas rangé dans le coffre** (hygiène du coffre, comme Microsoft, HubSpot, LinkedIn Ads) : chaque processus le tire par refresh au premier usage et le garde en mémoire jusqu'à une minute de son terme (`auth/google._JETONS`, clé = la ligne du compte résolu, quelle que soit son entité, son refresh_token et ses scopes enregistrés — une reconnexion ou un changement de droits en tire un neuf). Coût : un refresh de plus par processus et par heure et par compte servi ; deux refreshs simultanés rendent chacun un jeton valide (Google ne fait pas tourner le refresh_token), le dernier gardé l'emporte. Le jeton d'échange du consentement ne sert qu'à lire l'adresse : il n'est pas gardé, le premier usage en tire un borné aux scopes de la ligne. Le compte d'un appel se choisit par la résolution commune `access.resolve_credential` (`account`/`_account=` > épinglage projet > compte unique > défaut, oto-backend#1160). Les lignes posées avant ce changement portent encore `access_token`/`expires_at` dans `meta` : plus rien ne les lit ; `oto-mcp maintenance jetons-en-meta` retire la clé `access_token`, APRÈS le déploiement du code qui ne l'écrit plus (le code d'avant l'y réécrit à son prochain refresh).
 
 ## Connecteurs remote — bridges (ADR 0003, pilote : un bridge back-office client)
 
@@ -621,6 +715,65 @@ relisibles).
 l'intérieur du coffre, un relevé AST par FONCTION qui n'admet que les cinq primitives
 d'écriture. Un lecteur de credential qui se mettrait à lire les instances ferait dépendre
 la désignation d'une clé d'autre chose que du quadruplet ; c'est le lot L7, avec sa revue.
+
+### Les applications de Custom API (18/11/2026)
+
+**Le besoin.** Un connecteur personnalisé ÉTAIT une ligne du coffre : son adresse, son
+mode d'authentification (champs chiffrés) et ses actions (`config` de son instance)
+vivaient sur la clé. Une org qui veut que chacun se serve de l'outil avec SES droits chez
+le fournisseur — une API interne qui applique elle-même les rôles de ses utilisateurs, un
+jeton par personne ou par équipe — se retrouvait avec autant de connecteurs que de clés,
+sans actions hors de la carte d'org, et ne pouvait pas faire exister un outil sans clé
+d'org (une clé d'org donne la même identité à tout le monde : c'est précisément ce que
+l'org ne veut pas).
+
+**Le modèle.** Deux objets, comme pour un connecteur natif où la définition est le code :
+
+- l'**application** (`api_apps`, `db/schema/connectors.API_APPS`) : par org et par nom de
+  compte, sa `connection` (`base_url`, `auth_mode`, `header_name`, `query_param`,
+  `doc_path`, `token_url`, `scope`, `session`) et sa `definition` (même format que celle
+  d'une instance, `custom_ops_definition`). Jamais un secret. Créée, changée, retirée par
+  un admin de l'org seul (`capabilities/connectors/api_apps.py`) ; archivée, jamais
+  supprimée ; le nom se réutilise après retrait ;
+- ses **clés** : des lignes ORDINAIRES du coffre (membre, équipe, org), sous le compte de
+  l'application, posées par les trois surfaces de toujours. La cascade ne change pas :
+  perso > équipe ACTIVE > org.
+
+**La liaison se fait à la POSE, et seulement là** (`connectors/api_apps.completer_la_pose`,
+appelée par `me.credential.set`, `group.secret.set`, `org.secret.set`) : une clé posée sous
+le nom d'une application VIVANTE de son org reçoit la connexion de l'application (un champ
+de connexion envoyé qui diffère : `api_app_field_fixed`, jamais écrasé en silence) et
+`meta.api_app = <id>`. ⚠️ **Jamais par la seule rencontre des noms** : une clé posée AVANT
+l'application, du même nom, reste une carte ordinaire (et la cascade la sert d'abord à son
+titulaire, comme avant) ; l'`id`, pas le nom, désigne l'application — recréer une
+application du même nom après un retrait n'adopte pas les clés de l'ancienne.
+
+**À l'appel** (`servie`, branchée à `tools/api_ops._resolved` et `tools/api._resolve`) :
+la ligne résolue garde ses secrets ; la connexion et la définition sont celles de
+l'application. ⚠️ **Le secret ne suit jamais un changement d'hôte** : la clé garde dans le
+coffre l'adresse et le mode de sa pose ; si l'application a changé d'hôte (ou de mode)
+depuis, la clé REFUSE (`api_app_key_stale`) au lieu de partir vers un hôte pour lequel
+personne ne l'a posée, jusqu'à ce que son titulaire la repose. Application retirée :
+`api_app_removed`. La définition d'une application ne s'écrit que par un admin de l'org,
+quel que soit le palier de la clé qui la résout (`api_act op=set_definition`,
+`_require_admin`) ; les routes de définition d'une CARTE refusent une clé liée
+(`api_app_owns_definition`).
+
+**Compatibilité avec la base partagée.** Une clé liée porte TOUS ses champs dans le coffre
+(adresse et mode compris, recopiés à la pose) : un code qui ignore les applications la sert
+comme une carte ordinaire, sans ses actions. Aucune donnée n'est reprise d'office : une
+carte d'org existante devient une application par un geste d'admin (`adopt_org_key`),
+qui reprend sa connexion et sa définition et lie sa clé. La définition laissée sur son
+instance n'est plus lue pour elle.
+
+**Ce que le modèle ne fait pas.** Pas de liste d'accès propre à l'application : qui y
+accède est qui détient une clé qui se résout pour lui (les règles de comptes, #1499, la
+porteront). ⚠️ La clé d'ÉQUIPE ne sert que les membres dont c'est l'équipe ACTIVE
+(`current_group`) : quelqu'un dans plusieurs équipes pose `_group=` ou change d'équipe
+active, ou prend une clé personnelle. ⚠️ Un agent hébergé appelle avec la clé de SON
+propriétaire : un agent monté sur une application à droits étendus, partagé à d'autres,
+leur rend ce que son propriétaire voit. Pas d'import GraphQL (l'import lit OpenAPI ; une
+API GraphQL se décrit par une action `POST /graphql`).
 
 ### Le renommage `http` → `api` (12/11/2026)
 
@@ -997,6 +1150,49 @@ consentement.
 - ⚠️ Rangée au palier plateforme, elle **ne part pas** avec un export de périmètre de son
   org (`export_perimetre` ne prend jamais `platform`) : l'org importée la repose.
 
+### Secrets de l'application de l'INSTANCE — l'app d'éditeur sans région (19/11/2026)
+
+Les connecteurs dont l'application OAuth est celle de l'instance, enregistrée une fois par
+l'exploitant chez le fournisseur — `microsoft` (et ses services, dont `sharepoint`),
+`jefacture`, `instagram_meta`, `hubspot`, `slack`, `linkedin_ads`, `meta_ads` — rangent les
+secrets de cette application comme l'app d'éditeur : au coffre, chiffrés par la clé maître.
+Leurs réglages publics restent des réglages.
+
+- **Partage public / secret, par le NOM de la clé** : `connector_settings.a_la_forme_d_un_secret`,
+  liste FERMÉE de motifs (`secret`, `password`, `token`, `api_key`, `private_key`…). Une
+  clé de cette forme (`client_secret`, `app_secret`, `user_client_secret`,
+  `signing_secret`) va au coffre ; les autres (`client_id`, `app_id`, `config_id`) restent
+  au palier plateforme de `connector_settings` — elles voyagent de toute façon dans chaque
+  URL d'autorisation. Le `client_id` ne suit pas le secret, contrairement au blob de l'app
+  d'éditeur : celle-ci se pose en un geste (`client_id` + `client_secret` ensemble), ces
+  coordonnées se posent clé par clé par la console, et une clé publique n'a rien à gagner au
+  chiffrement.
+- **Rangement** : scope `PLATFORM`, `entity_id = app:instance` (préfixe `app:` des apps
+  dédiées, propriétaire `instance` qu'aucune app dédiée ne peut porter, absent de
+  `list_editor_apps`), **une ligne par secret**, la clé du réglage en `account` (donc dans
+  l'AAD). Accesseurs `credentials_store.{set_app_secret, get_app_secrets, app_secrets_set,
+  clear_app_secret}` ; `app_secrets_set` dit la présence sans déchiffrer, mémoïsée par
+  appel (une lecture pour toutes les cartes d'une liste).
+- **Même invariant que l'app d'éditeur** : aucun de ces connecteurs ne déclare
+  `auth_modes ∋ 'platform'` ⟹ `walk_cascade` ne sert jamais ces lignes comme credential
+  d'appel (`tests/test_editor_app.py`).
+- **Un lecteur** : `auth/app_instance.{reglages, manquantes}`, appelé par chaque module
+  `auth/*` concerné. Un secret ne se lit QU'au coffre : une ligne en clair de la même clé
+  n'est jamais lue, un secret absent est dit manquant par le refus nommé du connecteur
+  (« not configured… missing client_secret… sets them with `oto_admin_connector_setting` »).
+  Un déchiffrement en échec lève.
+- **Pose** : la console admin, inchangée pour l'exploitant — `oto_admin_connector_setting
+  op=set connector=<c> key=<clé> value=…` (REST `POST /api/admin/connectors/settings`) —
+  route une clé de forme secret au coffre, au palier plateforme seulement (`org_id` refusé) ;
+  `op=clear` la retire du coffre ; `op=list` la rend « posé », jamais sa valeur.
+- **Garde** : `db/connector_settings.set_connector_setting`, écrivain unique de la table,
+  REFUSE une clé de forme secret (`ReglageSecretRefuse`), et la copie entre cartes
+  (`copy_platform_settings`) aussi. Une exception nommée : `planity` / `firebase_api_key`,
+  clé publique par conception (servie au navigateur par le site du fournisseur). Sonde sur
+  le code : `tests/test_connector_settings_sans_secret.py`.
+- **Les lignes d'avant** se scellent par `oto-mcp maintenance secrets-d-application`
+  (`docs/commands.md`), qui demande la clé maître — une révision Alembic ne le peut pas.
+
 ### Grant mort : marquer, plus jamais purger (oto#25 lot a, 2026-09-04)
 
 Un refresh token révoqué (`invalid_grant`) n'efface plus la ligne du coffre — ça la
@@ -1051,7 +1247,8 @@ sur `invalid_grant` (`GoogleReauthRequired`, même règle `oauth_flow.grant_is_d
 puis **relève toujours** — contrairement à atlassian/folk (alors encore au catalogue,
 retirés le 2026-09-09, ADR 0069), `credentials_for` n'a
 jamais rendu de `None` muet et ce lot ne change pas ce contrat. Démarque
-explicitement au refresh réussi : le refresh MERGE le meta
+explicitement au refresh réussi (depuis que le jeton d'accès vit en mémoire, le refresh
+n'écrit plus rien dans `meta` : l'appel explicite est le seul démarquage) : le refresh MERGEAIT le meta
 (`credentials_store.update_meta`, JSONB `||`), donc un `health_ko` posé plus tôt n'aurait jamais
 disparu tout seul (même raison que le point 3 ci-dessous pour Salesforce —
 contrairement à atlassian/folk, dont le remplacement total du meta démarquait déjà

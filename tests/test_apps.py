@@ -49,6 +49,8 @@ def seams(monkeypatch):
                         lambda sub, t, rid, want="read": (projet if t == "project" else rights)[want])
     monkeypatch.setattr(ownership, "can_access_many",
                         lambda sub, t, owners, want="read": {k: k != "8" for k in owners})
+    # Le rôle Use (`contributor`) : aucun par défaut ; `can_use` suit alors `can_edit`.
+    monkeypatch.setattr(ownership, "has_role_grant", lambda sub, t, rid, roles: False)
     monkeypatch.setattr(db.apps, "get", lambda i: dict(ROW, id=i) if i == 5 else None)
     # Aucun brouillon par défaut : une app d'avant, publiée à chaque écriture.
     monkeypatch.setattr(db.app_versions, "draft", lambda i: None)
@@ -59,6 +61,9 @@ def seams(monkeypatch):
     rec["filed"] = {5: [7]}
     monkeypatch.setattr(db.apps, "projects_of",
                         lambda ids: {int(i): rec["filed"].get(int(i), []) for i in ids})
+    rec["vis"] = {}
+    monkeypatch.setattr(db.apps, "visibilites", lambda orgs: {
+        int(i): rec["vis"].get(int(i), {"org": None, "people": 0}) for i in orgs})
     monkeypatch.setattr(db.apps, "file", lambda a, p, by: rec["filed"].setdefault(a, []).append(p))
     monkeypatch.setattr(db.apps, "unfile", lambda a, p: rec["filed"].get(a, []).remove(p) or True)
     rec["grants"] = []
@@ -169,6 +174,21 @@ def test_projet_sans_org_ne_declare_rien(seams):
 def test_manifeste_trop_lourd():
     _, problems = M.forme({"title": "x" * (M.MAX_MANIFEST + 1)})
     assert problems and "characters" in problems[0]
+
+
+def test_une_app_porte_jusqu_a_100_tableaux_et_100_agents():
+    """Une seule app qui couvre tous les cas d'usage d'une org : 100 tableaux et
+    100 agents passent, le 101ᵉ est refusé."""
+    tables = {f"t{i}": {"table": str(i)} for i in range(M.MAX_TABLES)}
+    agents = {f"a{i}": i + 1 for i in range(M.MAX_AGENTS)}
+    assert M.MAX_TABLES == 100 and M.MAX_AGENTS == 100
+    _, problems = M.forme({"tables": tables, "agents": agents})
+    assert not [p for p in problems if p.startswith("At most")]
+    tables["trop"] = {"table": "999"}
+    agents["trop"] = 999
+    _, problems = M.forme({"tables": tables, "agents": agents})
+    assert f"At most {M.MAX_TABLES} tables." in problems
+    assert f"At most {M.MAX_AGENTS} agents." in problems
 
 
 # ── La capacité ─────────────────────────────────────────────────────────────
@@ -402,6 +422,23 @@ def test_list_sans_projet_rend_les_apps_de_l_org(seams, monkeypatch):
     assert {a["id"]: a["can_edit"] for a in out["apps"]} == {3: False, 1: True, 2: True, 4: True}
     assert all("permission" not in a for a in out["apps"])
     assert vus == {"owners": [("org", "42")], "createur": ("u1", 42, False)}
+
+
+def test_chaque_carte_dit_qui_la_voit_en_une_lecture(seams, monkeypatch):
+    """L'écran des apps dit « Vous seul » d'une app que personne d'autre ne voit, comme
+    les tableaux et les agents : chaque carte porte `visibility`, lue UNE fois pour
+    toute la liste."""
+    lus = []
+    seams["vis"] = {59: {"org": "viewer", "people": 0}}
+    monkeypatch.setattr(db.apps, "visibilites", lambda ids: lus.append(sorted(ids)) or {
+        int(i): seams["vis"].get(int(i), {"org": None, "people": 0}) for i in ids})
+    monkeypatch.setattr(ownership, "can_access", lambda sub, t, rid, want="read": True)
+    out = A._app(CTX, A.AppInput(op="list", project_ids=[7, 8, 9]))
+    assert {a["id"]: a["visibility"] for a in out["apps"]} == {
+        57: {"org": None, "people": 0}, 59: {"org": "viewer", "people": 0}}
+    assert lus == [[57, 59]]
+    # Et l'app ouverte le dit aussi (`op=get`, la même carte).
+    assert A._app(CTX, A.AppInput(op="get", app_id=5))["app"]["visibility"] == {"org": None, "people": 0}
 
 
 def test_vignette_image_seulement_sur_notre_stockage(seams, monkeypatch):

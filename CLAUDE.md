@@ -3,7 +3,7 @@
 Le backend d'oto, **produit central et déployable** (SaaS ou on-premise : `Dockerfile`, config 100 % par env) : un
 serveur MCP (Streamable HTTP, toujours authentifié Logto) qui expose les connecteurs **oto-core** (`oto.tools`, importés
 directement — aucune dépendance à la CLI) et une face REST `/api/*` sur le même service. **Prod** = `mcp.oto.cx`,
-**preprod** = `mcp.oto.ninja` (ADR 0040, dépôt `infra`) ; le tableau de bord servi aux utilisateurs vient de `config.dashboard_url()`.
+seule instance servie : `main` n'est que le tronc (CI seule), un tag `vX.Y.Z` est le seul déploiement (dépôt `infra`) ; le tableau de bord servi aux utilisateurs vient de `config.dashboard_url()`.
 
 > **Ce fichier est une CARTE, pas un journal** : où vit quoi, les règles en vigueur, les pointeurs — ni date ni récit
 > d'incident ; l'histoire qui a produit chaque règle vit dans `docs/` (index en bas). **Un lot qui change un concept
@@ -55,7 +55,7 @@ argument MCP** ; la table de routes est **figée** (`docs/architecture.md`, `doc
 JWT Logto **ES384**, discovery RFC 9728 qui annonce l'émetteur Logto, client MCP inscrit chez Logto par **CIMD** (Logto ≥ 1.44 exigé), DCR RFC 7591 pour les clients sans CIMD sous le domaine de l'émetteur (`auth/inscription_dynamique.py`) ; au-dessus des orgs, l'étage **tenant** (ADR 0052 : un partenaire
 sert oto sous sa marque) · ⚠️ **on n'étend plus le tenant** : ni capacité, route, table,
 colonne, rang de cascade, marque ou réglage par tenant neufs — un besoin « par tenant » se traite par instance ou
-par org, retirer reste permis ; gelé par `tests/test_tenant_ne_s_etend_plus.py` (`docs/tenants.md` §Convention). ⚠️ Logto prod/preprod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **on n'annonce que ce qui SIGNE** :
+par org, retirer reste permis ; gelé par `tests/test_tenant_ne_s_etend_plus.py` (`docs/tenants.md` §Convention). ⚠️ Logto de prod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **on n'annonce que ce qui SIGNE** :
 le PRM porte l'`issuer` (`LOGTO_ENDPOINT` + `/oidc`), jamais un autre domaine du même Logto — l'`iss` de RFC 9207
 et la métadonnée RFC 8414 divergeraient sinon ; « openid » sans `resource` = jeton opaque, 401 (`docs/auth-logto.md`) · ⚠️ **un env-liste s'ÉTEND, ne se
 remplace jamais** (`MCP_AUDIENCE_ALT`, `OTO_MCP_CORS_ORIGINS`, `MAILER_FROM_DOMAINS`, SPF, redirect URIs), chaque env
@@ -63,7 +63,8 @@ ayant la sienne (`docs/auth-logto.md`, `docs/tenants.md`).
 Paliers `member < admin < super_admin` ; clé résolue à chaque appel par le **walker unique** `access.walk_cascade`
 (`perso > cross-org > équipe active > org > tenant > plateforme`), jamais recopié ; un credential qui se **pose** est
 **multi-compte** · ⚠️ compte nommé introuvable ⇒ « introuvable », **jamais un repli plateforme silencieux**
-(`docs/roles-and-resolution.md`, `docs/connector-vault.md`).
+(`docs/roles-and-resolution.md`, `docs/connector-vault.md`) · ⚠️ `connector_settings` est en clair et **refuse toute clé
+de forme secret** : un secret d'application OAuth de l'instance va au coffre (`auth/app_instance`, `docs/connector-vault.md`).
 **Mettre un compte en pause** (03/09/2026) : le cran qui manquait entre « vivant » et « supprimé » — et **la
 suppression n'existe pas** comme geste de produit, le seul `DELETE FROM users` étant l'étape 4 de `migrate_sub`. Un
 compte en pause ne peut plus rien faire **dès la requête suivante, jeton déjà émis compris** (les deux branches
@@ -144,7 +145,7 @@ base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis p
   n'est pas un droit à obtenir · ⚠️ **une colonne peut EXIGER sa provenance** (`required_layers: ["comment"]`, oto#75) : la valeur non
   vide ne s'écrit pas sans la couche, sur les deux faces — capacité livrée, **aucun tableau n'exige de couche**
   (quatre la déclarent VIDE, ce qui n'exige rien et **reste accepté à la pose**) · ⚠️ **un tableau s'adresse par son
-  NUMÉRO** (`ns_id`) : le nom résout encore jusqu'au 08/11/2026 et chaque réponse obtenue par lui le dit, mais les remises (réservation, écriture,
+  NUMÉRO** (`ns_id`) : un nom est REFUSÉ depuis le 08/11/2026 (`400 datastore_by_name`, `datastore/errors.TableauParNom`, aucun repli) ; les remises (réservation, écriture,
   libération, page, schéma) portent le numéro et `namespace` y est le nom CANONIQUE, plus l'écho de l'adresse reçue
   (`docs/datastore.md`).
 - **Browser & cookie-bound** (ADR 0026) : aucun browser sur la box — **Browserbase** pour l'API privée cookie-bound,
@@ -152,7 +153,7 @@ base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis p
 - **Messagerie** : `unipile` = le **compte**, plus six **connexions** au nom du réseau, noms de tools inchangés ·
   ⚠️ `namespace_of` résout au **plus long préfixe déclaré**, pas au 1er token (`docs/unipile.md`).
 - **Google** : `google` = le **compte** (coffre, rappel, app du tenant), plus des **services** (`gmail`, `drive`,
-  `sheets`, `calendar`, `tasks`, `chat`, `bigquery`, `google_ads`) qui l'empruntent (`credential_of`) et demandent chacun **ses seuls scopes**
+  `sheets`, `calendar`, `tasks`, `chat`, `bigquery`, `google_ads`, `search_console`) qui l'empruntent (`credential_of`) et demandent chacun **ses seuls scopes**
   en autorisation incrémentale (`auth/google.SERVICE_SCOPES`) · ⚠️ un outil de service refuse un compte qui n'a pas
   autorisé CE service en nommant sa carte, jamais un 403 Google muet (`connectors/docs/google.md`, `docs/connector-model.md`).
   · ⚠️ un compte peut être **partagé** par l'org ou l'équipe (consentement d'admin, `scope=org|group`) : résolution membre → équipe active → org, jamais le compte personnel d'un autre.
@@ -210,8 +211,9 @@ propre niveau** — une borne posée au plus profond ne borne rien si les envelo
 <raison>` (`docs/silences-2026-08-27.md`).
 **Box Scaleway dédiée** (ADR 0002, dépôt `infra`) : oto-backend isolé + Caddy ; DB = PG managé partagé (`otomata-main-enc`, DB `oto_mcp`) ;
 coffre `connector_credentials` chiffré au repos (AES-256-GCM, master key en Secret Manager au boot) ; S3 pour
-avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on écrit depuis la preprod est la donnée de prod
-(`docs/live-migrations.md`), et seule la prod fait tourner les boucles de fond qui agissent sur un tiers (`boucles_de_fond.py`) · **détails machine et procédure de déploiement = repo privé `otomata-tech/infra`**, pas ici
+avatars/logos · ⚠️ **aucun serveur ne suit le tronc** : un geste `avant` se joue depuis un arbre du SHA du tag, juste avant la
+bascule (`docs/deploiement.md`) ; seule une instance déclarée `OTO_ENV=prod` fait tourner les boucles de fond qui agissent
+sur un tiers (`boucles_de_fond.py`, `config.est_la_production()`) · **détails machine et procédure de déploiement = repo privé `otomata-tech/infra`**, pas ici
 (ce repo est public) ; intervention prod = skill `prod-init`.
 
 ## Docs
@@ -243,7 +245,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   applique la liste poussée aux seules clés refacturées (`daily_spend_limit`), fail-open, et rend au commerce la
   personne de chaque appel
 - `contributions-forks.md` — recevoir une PR de fork : trois pièges, pin oto-core sur le tronc
-- `deploiement.md` — le modèle tronc unique : main = préprod, tag = prod, garde « préprod verte », domaines servis, pièges du tag
+- `deploiement.md` — le modèle tronc unique : main = tronc (CI seule), tag = prod, garde « tronc vert », domaines servis, pièges du tag, gestes d'exploitation
 - `namespace-fr.md` — sources `fr_`, deux stocks SIRENE, `dirigeants` vide à trois lectures, `data.oto.zone`
 - `rest-api.md` — endpoints, OpenAPI, jetons, CORS
 - `version-servie.md` — dater un changement : les 3 surfaces, les 3 coordonnées qui mentent
@@ -301,6 +303,9 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   d'autre (chaque table classée, un schéma non couvert REFUSE), puis l'importer dans une base née par
   `oto-mcp perimetre naitre`, AVANT le premier démarrage de l'app (sinon refus nommé, #1161) : tenant en ligne 1, comptes dénudés, secrets rechiffrés, vérification par relecture ; le
   journal d'appels hors de la fenêtre de coupure, par tranches de dates poussées puis diff (#1088)
+- `purge-de-tenant.md` — effacer de l'instance partagée un tenant parti sur sa propre instance, en un passage
+  (`scripts/purger_tenant.py tout`) : périmètre figé au compte à blanc, base en une transaction, puis journal par lots,
+  archives froides réécrites, objets par préfixes de propriétaire ; refus nommés, constat par élément ; annuaire et sauvegardes hors script
 - `droits-declares.md` — ce que le cœur applique sans savoir qui paie : catalogue, trois portées (org,
   personne dans l'org, personne partout),
   `value_for` (le plus généreux gagne), défauts déclarés par l'instance (`OTO_ENTITLEMENT_DEFAULTS`)

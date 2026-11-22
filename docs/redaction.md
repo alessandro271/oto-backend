@@ -377,6 +377,24 @@ Côté sandboxes (`claude-sandbox-manager`), `MAX_MCP_OUTPUT_TOKENS=10000` fait 
 ces résultats par ce rangement ligne à ligne plutôt que par un autre, en blocs JSON sur
 une ligne, que `Read` ne sait pas lire.
 
+## Un surrogate isolé se remplace, il ne fait pas échouer l'appel
+
+Un amont peut rendre, dans un JSON, la séquence d'échappement d'une MOITIÉ de paire
+UTF-16 (un extrait coupé au milieu d'un emoji ou d'un caractère mathématique) :
+`json.loads` l'accepte, le `str` Python la porte, mais l'UTF-8 refuse de l'encoder — et
+la sérialisation MCP levait `PydanticSerializationError … surrogates not allowed`, ce qui
+faisait échouer l'appel entier pour un caractère. Vécu sur une recherche web.
+
+Elle casse à DEUX endroits, d'où deux gestes dans `middleware/sans_surrogate.py` :
+la conversion d'un dict rendu en texte (`Tool.convert_result`), qui a lieu DANS l'outil,
+avant tout middleware — couverte par le **sérialiseur** que `poser_le_serialiseur` pose
+sur chaque outil après le dernier montage (chemin heureux inchangé à l'octet : il ne
+nettoie que si `default_serializer` lève sur un surrogate) ; et l'encodage de la réponse
+au transport, qu'atteignent un `str` rendu ou un canal structuré gardé — couvert par
+`SansSurrogateMiddleware`, le plus externe de ce qui touche au résultat. La moitié
+orpheline devient U+FFFD ; une paire écrite en deux points de code se recompose. Banc :
+`tests/middleware/test_sans_surrogate.py`.
+
 ## Face REST : allow-list explicite sur une route anonyme (oto#86)
 
 `FieldRedactionMiddleware` et `EmptyResultMiddleware` n'ont qu'un point d'accroche,

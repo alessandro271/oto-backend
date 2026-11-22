@@ -19,6 +19,7 @@ import oto_mcp.capabilities.orgs.mfa  # noqa: F401 — org.mfa.{get,set} (MFA ob
 import oto_mcp.capabilities.orgs.favoris  # noqa: F401 — org.favorites.{list,add,remove} (pages et tableaux épinglés pour l'org)
 import oto_mcp.capabilities.orgs.model_subscriptions  # noqa: F401 — org.model_subscriptions.{get,set,set_mode} (plafond, pool d'org)
 import oto_mcp.capabilities.orgs.model_regions  # noqa: F401 — org.model_regions.{get,set} (modèles qui tournent en Chine)
+import oto_mcp.capabilities.orgs.models  # noqa: F401 — org.models.{get,set} (modèles éteints par l'org)
 from . import scheduled_emails  # noqa: F401 — org.scheduled_email.{list,cancel} (envoi différé)
 import oto_mcp.capabilities.orgs.invites  # noqa: F401 — org.invite.{create,list,revoke,accept}
 # Invitation PLATEFORME (feature cascade, sommet) — onboarding admin, org cible optionnelle.
@@ -31,6 +32,8 @@ from . import instance_health  # noqa: F401 — admin.instance_health (session d
 from . import vault_health  # noqa: F401 — admin.vault_health (scan credentials indéchiffrables, #72)
 from . import agent_repair  # noqa: F401 — admin.agent_repair (épisodes de panne des agents hébergés, et leurs soins)
 from . import agent_alerts  # noqa: F401 — org.agent_alerts.* (Réglages ▸ Alertes : où une org est prévenue qu'un agent ne fonctionne plus)
+from . import agent_health  # noqa: F401 — org.agent_health.get (l'onglet Santé : ce qui attend le client, ce qui est à nous, ce que le médecin a réparé)
+from . import agent_causes_admin  # noqa: F401 — admin.agent_causes.* (approuver les causes que le médecin propose)
 from . import platform_balances  # noqa: F401 — admin.platform_balances (solde de chaque clé plateforme)
 from . import platform_model_spend  # noqa: F401 — admin.model_spend (relevé Anthropic contre le journal)
 from . import guides_semis  # noqa: F401 — admin.guides_semis (le dépôt est-il servi ?, oto#236)
@@ -101,6 +104,7 @@ from . import platform_connectors  # noqa: F401 — platform.connector.{activati
 # délier. Ex-routes écrites à la main ; le WEBHOOK reste écrit à la main (non
 # authentifié par nature, gardé par un nonce).
 from . import unipile_me  # noqa: F401 — me.unipile.{connect,reconcile,status,disconnect}
+from . import unipile_limits  # noqa: F401 — me.unipile.{limits,limits_set} (limites d'envoi LinkedIn)
 # VERBES du consentement OAuth per-user (#121) — démarrer / lire / déconnecter, pour les
 # Google (multi-compte). ⚠️ Ce module a porté deux fédérations MCP (atlassian,
 # folkmcp) jusqu'au 2026-09-09 — d'où son nom, gardé avec les clés servies
@@ -136,6 +140,7 @@ import oto_mcp.capabilities.connectors.force  # noqa: F401 — connectors.force.
 # Projection lecture du coffre en instances possédées nommées (ADR 0038 B4).
 import oto_mcp.capabilities.connectors.instances  # noqa: F401 — connectors.instances.list (ADR 0038 B4)
 import oto_mcp.capabilities.connectors.api_operations  # noqa: F401 — custom_api.operations.{get,set,import} (connecteur `api`)
+import oto_mcp.capabilities.connectors.api_apps  # noqa: F401 — custom_api.apps.{list,get,create,update,import,remove} (applications du connecteur `api`)
 # Console admin consolidée par concept (ADR 0009, fusion *_op) — réutilise les handlers
 # de domaine. À importer APRÈS eux (orgs_admin/reads/members, users_admin).
 from . import admin_console  # noqa: F401 — admin.{org,org_member,user,key_grant,guide,signal}

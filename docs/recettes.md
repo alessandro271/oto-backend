@@ -121,7 +121,10 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   run), leur ligne dans `tool_calls`. Le pont rétrécit ce que le code leur passe, il
   n'ouvre jamais le store lui-même.
 - **Le budget** est `limits` : unités facturées (`max_units`, obligatoire), appels,
-  secondes. Atteint, les appels suivants sont refusés et le reçu le dit (`stopped`).
+  secondes. Les `units` du reçu additionnent la `quantity` de chaque appel, **dans l'unité
+  de chaque outil** (crédits Serper, profils AI Ark… ; **micro-dollars** pour Apify,
+  1 $ = 1 000 000 — `docs/monitoring.md` §Le coût des runs Apify) : une recette qui mêle
+  deux outils additionne deux unités. Atteint, les appels suivants sont refusés et le reçu le dit (`stopped`).
 - **Une place dans le bac à sable** : une recette-code en prend une, comme une fonction
   (`docs/fonctions.md` §Combien d'exécutions à la fois) — au plus une par compte, au plus
   `OTO_FUNCTIONS_MAX_SIMULTANEES` par processus. Pas de place : 429 `sandbox_busy` avec
@@ -203,6 +206,11 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   nom de l'outil avec sa `quantity`** — donc facturé comme un appel direct — et
   rédaction. Les lignes sont fabriquées depuis le résultat RÉDIGÉ ; un résultat retenu
   par la politique de l'org arrête l'exécution.
+- **Un ancien nom d'outil se lit sous le nom d'aujourd'hui** (`deprecations.TOOLS`,
+  comme `oto_call`) : `tool`, chaque `oto.call` d'une recette-code, `writes` et `via`
+  (`moteur.sous_le_nom_d_aujourd_hui`). Le journal compte l'alias
+  (`args.deprecated_name`), l'avis tombe une fois en tête de la réponse
+  (`docs/alias-deprecies.md`).
 - **`limits.max_units` est obligatoire** (au moins 1, sans plafond de plateforme : la
   borne de dépense est celle de qui écrit la recette) et se compte sur ce que l'outil
   **FACTURE** : la `quantity` de sa ligne `tool_calls` (profils AI Ark, crédits

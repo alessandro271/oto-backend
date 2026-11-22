@@ -157,6 +157,7 @@ def test_les_metadonnees_de_decouverte_sont_inchangees(apps, chemin):
     "mcp.partenaire.test",        # une instance servie ailleurs (ADR 0070)
     "mcp.acme.test",              # l'hôte d'un tenant (ADR 0052)
     "acme--mcp.oto.ninja",        # l'endpoint d'une org
+    "mcp.oto.ninja",              # l'hôte de l'ancienne préproduction (retirée le 19/11/2026)
     "projet.mcp.oto.cx",          # un projet publié en portée org
 ])
 def test_hors_de_l_hote_principal_le_401_est_celui_d_avant(apps, host):
@@ -165,12 +166,6 @@ def test_hors_de_l_hote_principal_le_401_est_celui_d_avant(apps, host):
     assert r.status_code == ref.status_code == 401
     assert r.content == ref.content == b""
     assert r.headers["www-authenticate"] == ref.headers["www-authenticate"]
-
-
-def test_la_preproduction_nomme_son_propre_endpoint(apps):
-    servie, _ = apps
-    r = _post_init(servie, host="mcp.oto.ninja")
-    assert "https://mcp.oto.ninja/mcp" in r.text and LLMS_TXT in r.text
 
 
 def test_un_401_hors_de_mcp_n_est_pas_touche():

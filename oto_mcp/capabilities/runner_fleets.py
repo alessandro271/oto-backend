@@ -41,8 +41,11 @@ et laisse passer tout le reste.
 
 Ce qui reste vrai, et qui est la vraie asymétrie : **`launch` ARME**, il ne
 démarre aucun processus, et il demande un ADMIN d'org ; **`stop` DEMANDE**
-l'arrêt et l'ouvre à tout membre — attendre un admin pendant qu'une flotte
-dépense est le mauvais échange.
+l'arrêt, et l'ouvre au propriétaire de la flotte comme aux admins — attendre un
+admin pendant qu'une flotte dépense est le mauvais échange. `update` et `stop`
+suivent le droit par objet (`_exiger_d_ecrire`) : la flotte s'exécute sous
+l'identité de son propriétaire, aucun autre membre ne la retouche ni ne
+l'interrompt.
 
 Et les trois verbes de l'ORDONNANCEUR sont servis ici aussi (`take`, `beat`,
 `ack_stop`). Ils ont manqué au contrat d'entrée du 30/08 au 02/09 pendant que la
@@ -60,11 +63,13 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import (_abonnement, _cle_exigee, _descriptions_outils, _instruction,
+from . import (_abonnement, _acces_agent, _cle_exigee, _descriptions_outils, _instruction,
                _limites_du_run, _lignes_de_campagne, _lignes_reservables, _modele,
                _ordonnanceur_de_campagne, _outils_manquants, _outils_plateforme)
-from .. import (db, deprecations, output_projection, runner_models, session_org,
+from .. import (db, output_projection, runner_models, session_org,
                tool_alias, verrou_org)
+from ..datastore.errors import est_un_nom_de_tableau
+from .datastore.common import refus_nom_de_tableau
 
 logger = logging.getLogger(__name__)
 from ._authz import ORG_MEMBER
@@ -126,10 +131,9 @@ class FleetInput(BaseModel):
     procedure: Optional[str] = None
     tools: Optional[list[str]] = None
     namespace: Optional[str] = Field(None, description=(
-        "create: the target table, by id or name. Resolved ONCE, at declaration, in "
-        "the declarer's scope, and kept as the table's id — served back in "
-        "`namespace`. A name that several tables carry at the same rank is refused "
-        "(`datastore_ambigu`)."))
+        "create: the target table, by its NUMBER (`ns_id`) — a table name is refused "
+        "(`datastore_by_name`). Checked ONCE, at declaration, in the declarer's scope, "
+        "and served back in `namespace`."))
     row_filter: Optional[dict] = None
     project_id: Optional[int] = None
     input: Optional[str] = None
@@ -397,10 +401,12 @@ def _cible_a_la_declaration(ctx: ResolvedCtx, adresse: Optional[str]) -> Optiona
     IDENTIFIANT (#1067) — `None` sans cible. Un nom se résout dans la portée du
     déclarant (`_lignes_reservables.cle_a_la_declaration`) : ce qui lit l'automatisation
     ensuite passe par l'identifiant, et un homonyme apparu plus tard n'y change rien.
-    Rien ne répond → 404 ; plusieurs tableaux à ce nom au même rang → 409 nommé."""
+    Un NOM est refusé (`datastore_by_name`, 08/11/2026) ; rien ne répond → 404."""
     adresse = (adresse or "").strip()
     if not adresse:
         return None
+    if est_un_nom_de_tableau(adresse):
+        raise refus_nom_de_tableau(adresse)
     try:
         cle = _lignes_reservables.cle_a_la_declaration(
             adresse, sub=ctx.sub, org_id=ctx.org_id)
@@ -411,8 +417,7 @@ def _cible_a_la_declaration(ctx: ResolvedCtx, adresse: Optional[str]) -> Optiona
             404, "datastore_not_found",
             f"aucun tableau « {adresse} » dans ta portée : une automatisation vise un "
             "tableau qui existe, désigné par son identifiant.")
-    if deprecations.adresse_par_nom(adresse, cle):
-        session_org.noter_avis(deprecations.avis_nom_de_tableau(adresse, cle))
+    session_org.noter_forme_tableau(session_org.REF_NUMBER)
     return str(cle)
 
 
@@ -432,6 +437,37 @@ def _agent_declarant(org_id: int) -> Optional[int]:
     if v is None or v.job_id is None:
         return None
     return db.agent_du_travail(v.job_id, org_id)
+
+
+def _exiger_d_ecrire(ctx: ResolvedCtx, fleet_id: int,
+                     geste: Literal["update", "stop"]) -> dict:
+    """Modifier ou arrêter une automatisation est réservé à son propriétaire (celui
+    qui l'a déclarée, `runner_fleets.sub`) et aux admins de son org — les niveaux des
+    agents (`_acces_agent`). Elle s'exécute sous l'identité de son propriétaire : la
+    retoucher ou l'interrompre, c'est agir en son nom. Une automatisation ne se
+    partage pas : aucun autre membre n'y a de niveau d'écriture. La LIRE reste
+    ouvert à tout membre."""
+    f = db.get_fleet(fleet_id, ctx.org_id)
+    if not f:
+        raise AuthzDenied(404, "fleet_not_found", "automatisation inconnue")
+    n = _acces_agent.niveaux_d_objets(ctx.sub, ctx.org_id, [f], None)[int(f["id"])]
+    if n in _acces_agent.ECRIRE:
+        return f
+    # Deux refus littéraux, pas un code calculé : le cliquet des refus déclarés ne
+    # lit que `AuthzDenied(<status>, "<code>")` écrit en toutes lettres.
+    if geste == "stop":
+        raise AuthzDenied(
+            403, "fleet_stop_forbidden",
+            "arrêter une automatisation est réservé à la personne qui l'a déclarée "
+            "et aux admins de l'org : elle s'exécute sous l'identité de cette "
+            "personne. La lire reste ouvert à tout membre ; pour la faire arrêter, "
+            "préviens sa déclarante ou un admin.")
+    raise AuthzDenied(
+        403, "fleet_edit_forbidden",
+        "modifier une automatisation est réservé à la personne qui l'a déclarée "
+        "et aux admins de l'org : elle s'exécute sous l'identité de cette "
+        "personne. La lire reste ouvert à tout membre ; une autre configuration, "
+        "c'est une automatisation que tu déclares.")
 
 
 def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
@@ -476,7 +512,7 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # promettrait une attribution fausse. `provider` ne choisit plus rien, il
         # se déduit du modèle ; fourni, il doit le confirmer.
         famille = _modele.famille_declaree(inp.model, inp.provider)
-        _modele.exige_region_permise(ctx.org_id, inp.model)
+        _modele.exige_modele_permis(ctx.org_id, inp.model)
         # Le modèle est OBLIGATOIRE (24/09/2026) : sans lui, le passage tournerait
         # sur le modèle du worker — notre clé — et aucune clé d'org ne serait exigée.
         _modele.exige_un_modele(famille)
@@ -536,7 +572,7 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
                 403, "org_admin_required",
                 "lancer une automatisation est réservé aux administrateurs de l'org : il "
                 "engage une dépense et des écritures chez un tiers. L'ARRÊTER, en "
-                "revanche, est ouvert à tout membre.")
+                "revanche, est aussi ouvert à la personne qui l'a déclarée.")
         # ⚠️ Un déroulé ne LANCE pas. Un agent qui se relance lui-même coûte un
         # budget en boucle — pire qu'un arrêt de trop, qui ne coûte qu'une reprise.
         if _run_courant():
@@ -648,18 +684,18 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
                                       if lignes and par_ligne else None)}
 
     if inp.op == "stop":
-        # Ouvert à TOUT MEMBRE : un passage qui part en vrille doit pouvoir être
-        # stoppé par la première personne qui le voit, pas par celle qui a le bon
-        # rôle. Attendre un admin pendant qu'une flotte dépense est le mauvais
-        # échange.
-        # ⚠️ Mais un déroulé n'arrête pas CELLE QUI L'EXÉCUTE : la garde nomme le
-        # cas plutôt que de fermer le verbe à tout le monde — fermer, ce serait
-        # payer le prix sur tous les usages légitimes.
+        # Réservé au propriétaire et aux admins de l'org, comme `update` : arrêter
+        # interrompt un travail qui agit sous l'identité de son propriétaire. Pas de
+        # plancher admin pour autant : le propriétaire arrête la sienne sans attendre.
+        # ⚠️ Et un déroulé n'arrête pas CELLE QUI L'EXÉCUTE : la garde nomme le cas
+        # plutôt que de fermer le verbe — fermer, ce serait payer le prix sur tous
+        # les usages légitimes.
         run = _run_courant()
         if run and db.run_appartient_a_flotte(run, inp.fleet_id):
             raise AuthzDenied(
                 403, "not_your_own_fleet",
                 "un run ne peut pas arrêter l'automatisation qui l'exécute.")
+        _exiger_d_ecrire(ctx, inp.fleet_id, "stop")
         f = db.demander_arret(inp.fleet_id, ctx.org_id,
                               inp.reason or "arrêt demandé")
         if not f:
@@ -747,10 +783,11 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
             "champs se déclarent à la création et ne se retouchent pas — une autre "
             "valeur, c'est une autre automatisation. Les champs modifiables sont : "
             f"{', '.join(f'`{c}`' for c in db.CHAMPS_MODIFIABLES)}.")
+    # Le droit par objet, une fois l'entrée jugée : un refus de forme ne lit rien.
+    actuelle = _exiger_d_ecrire(ctx, inp.fleet_id, "update")
     # `tools` reste modifiable, `descriptions_outils` non : une allowlist qui retirerait un
     # outil que le réglage nomme le rendrait inerte sans un mot (oto#241).
     if inp.tools is not None:
-        actuelle = db.get_fleet(inp.fleet_id, ctx.org_id)
         # Depuis un agent hébergé, la liste d'une campagne ne s'élargit pas (#1499) :
         # chaque passage relit SA liste (`campagne_a_servir`), donc une campagne armée
         # par une personne s'élargissait au passage suivant. Même règle qu'un agent ;
@@ -758,10 +795,9 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # la pose pas) : la liste servie ne bouge que par `tools`. Lancer ou armer une
         # campagne plus outillée que le travail appelant reste permis (relais) : sa
         # liste, elle, est posée par une personne.
-        if actuelle:
-            _outils_plateforme.exiger_aucun_ajout_d_agent(actuelle, inp.tools)
+        _outils_plateforme.exiger_aucun_ajout_d_agent(actuelle, inp.tools)
         retires = _descriptions_outils.outils_nommes_retires(
-            (actuelle or {}).get("descriptions_outils"), inp.tools)
+            actuelle.get("descriptions_outils"), inp.tools)
         if retires:
             raise AuthzDenied(
                 400, _descriptions_outils.CODE,
@@ -830,13 +866,22 @@ CAPABILITIES += [
             DeclaredError(404, "datastore_not_found",
                           "`create` sur un `namespace` qu'aucun tableau de la portée "
                           "du déclarant ne porte"),
+            DeclaredError(400, "datastore_by_name",
+                          "`create` qui désigne son tableau (`namespace`) par son NOM, "
+                          "refusé depuis le 08/11/2026 : on passe son numéro"),
             DeclaredError(409, "datastore_ambigu",
-                          "`create` sur un nom que plusieurs tableaux portent au même "
-                          "rang de la portée du déclarant, ou `launch` d'une "
+                          "`create` sur un numéro qui est aussi le NOM d'un autre "
+                          "tableau de la portée du déclarant, ou `launch` d'une "
                           "automatisation d'avant #1067 dont le nom ne désigne plus un "
                           "seul tableau"),
             DeclaredError(404, "fleet_not_found",
                           "automatisation inconnue dans l'org du porteur"),
+            DeclaredError(403, "fleet_stop_forbidden",
+                          "`stop` d'une automatisation par un membre qui n'en est "
+                          "ni le déclarant ni un admin de l'org"),
+            DeclaredError(403, "fleet_edit_forbidden",
+                          "`update` d'une automatisation par un membre qui n'en est "
+                          "ni le déclarant ni un admin de l'org"),
             DeclaredError(409, "not_launchable",
                           "`launch` d'une automatisation déjà armée ou en cours"),
             DeclaredError(409, "max_rows_reached",

@@ -349,11 +349,18 @@ dont la clé est consommée (`heritage.org_des_cles` ; `user:<sub>` sans org ; l
 projet pour l'endpoint anonyme) dans la table `platform_key_rate`, par fenêtre FIXE
 sur l'horloge de la base. Au-delà de `OTO_PLATFORM_KEY_ORG_RATE_LIMIT` (120) appels par
 `OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S` (60 s), surchargeable par porteur
-(`OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES=serper=600,aiark=0`) :
+(`OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES=serper=600,aiark=0`, au-dessus des défauts du code
+`DEFAULT_OVERRIDES`) :
 `OTO_PLATFORM_KEY_ORG_RATE=report` (défaut) journalise une fois par fenêtre,
 `enforce` refuse (`platform_key_org_rate_limited`, « réessayez, ou posez votre clé »),
 `off` ne compte rien. Un appel, pas des `units` : la limite protège le débit du
 fournisseur, le volume reste au quota du jour. Compteur en panne ⟹ appel servi, journalisé.
+Le même compte sert un quota tiers partagé qui n'est PAS une clé plateforme : `google_ads`
+(le jeton de la personne, le projet Google Cloud de la plateforme) appelle `enforce` à chaque
+requête Google avec `shared_quota=True` (compté sous `google_ads`, pas sous `google`,
+porteur de son compte ; aucune clé à soi ne lève la borne), défaut `google_ads=30`
+par minute ; son plafond du jour pour toute la plateforme (`OTO_GOOGLE_ADS_DAILY_OPS`) reste
+une garde propre à Google, toujours appliquée.
 Les comptes **privés / byo-only**
 (`attio/lemlist/pennylane/fullenrich/slack`) **n'ont PAS de clé plateforme** :
 les clés résiduelles du seed SOPS ont été supprimées, et le compte partagé de

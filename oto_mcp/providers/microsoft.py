@@ -13,8 +13,8 @@ the account from here (`credential_of="microsoft"`, see `service` below).
 What the account keeps for itself: the vault (one row per linked Microsoft account,
 the refresh token, the directory it signs in to — a person's, or the org's or a team's when
 an admin connected it on their behalf), the `/api/microsoft/oauth/callback`
-callback, the coordinates of oto's Entra application (`connector_settings`, platform
-scope), the list of accounts and the default account. Its own consent requests the
+callback, the coordinates of oto's Entra application (`auth/app_instance`: the id in
+`connector_settings`, the secret in the vault), the list of accounts and the default account. Its own consent requests the
 identity only: each service adds its scopes from its card (`auth/microsoft.scopes_for`).
 The application is oto's own, multi-tenant: the client registers none. The Graph
 host is fixed: no egress guard to set.

@@ -511,10 +511,17 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # projet. `run_start` la pose lui-même : l'agent passe `guide=` (le nom documenté), et
 # le journal, qui garde les arguments tels que passés, n'écrivait jamais la clé lue —
 # la procédure passait pour « jamais déroulée ». Même clé que la face REST.
+#
+# `ref_kind` (17/11/2026) — la FORME sous laquelle l'appel a désigné un tableau
+# (`number`|`slot`|`name`, `session_org.noter_forme_tableau`), jamais le nom : `ns_id`
+# cite le tableau résolu, il ne dit pas si l'agent l'a nommé. C'est ce qui compte
+# les désignations par nom, refusées depuis le retrait (`datastore_by_name`).
+# Même clé sur la ligne de route REST (`api.routes.RestCallLogger`).
 _TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced",
                 "readonly_forced_bilan", "found_work_emails", "found_personal_emails", "found_phones",
                 "apify_run_id", "higgsfield_request_id", "guide_scope",
-                db.usage._ARG_PROCEDURE)
+                db.usage._ARG_PROCEDURE, "recipe_bridge_refusals",
+                "ref_kind")
 
 
 _PREPARED = False
@@ -705,6 +712,11 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # outils au même titre, font LEVER la construction (`tool_alias.poser_les_titres`).
     from . import tool_alias
     tool_alias.poser_les_titres(instance)
+    # Après le DERNIER montage, lui aussi : chaque outil sérialise son résultat sans
+    # lever sur un surrogate isolé venu d'un amont (remplacé par U+FFFD) — la conversion
+    # d'un dict en texte casse DANS l'outil, avant tout middleware.
+    from .middleware.sans_surrogate import SansSurrogateMiddleware, poser_le_serialiseur
+    poser_le_serialiseur(instance)
 
     # oto-backend#534 : chronomètre TOUTE la chaîne de middlewares ci-dessous, sans
     # toucher un seul de ses appels ni leur ordre (contrat figé, cf. les commentaires
@@ -730,6 +742,14 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # 0 dans la boucle après.
     from .middleware.identity_scope import IdentityScopeMiddleware
     instance.add_middleware(IdentityScopeMiddleware())
+
+    # -1 bis. Aucun surrogate isolé ne part au transport : le PLUS EXTERNE de ce qui
+    # touche au RÉSULTAT, donc le dernier à le voir au retour — plus interne, un
+    # middleware au-dessus pourrait encore porter le caractère que l'encodage UTF-8 de
+    # la réponse refuse. Il ne lit ni nom ni identité. Son jumeau, le sérialiseur posé
+    # sur chaque outil (`poser_le_serialiseur`, plus haut), couvre la conversion d'un
+    # dict en texte, qui casse AVANT tout middleware.
+    instance.add_middleware(SansSurrogateMiddleware())
 
     # 0. Nom des outils au nom du PRODUIT du tenant (ADR 0052) — OUTERMOST de tout ce
     # qui touche au NOM (la portée d'identité au-dessus n'en lit aucun) :
@@ -1001,8 +1021,9 @@ def build_root_app(app, anon_app):
        au-dessus du compteur des refus du transport : la TAILLE DU CORPS (`borne_corps`,
        routes d'upload reconnues à leur contrat dans la table vivante de `app`), puis
        l'INACTIVITÉ des sessions MCP (`borne_session`, qui arme aussi, en application,
-       le gestionnaire de session des deux faces au démarrage). Mode mesure par défaut,
-       sous le même interrupteur que la limite de débit.
+       le gestionnaire de session des deux faces au démarrage, et les équipe dans tous
+       les modes : `sessions_mcp`, libération des réponses et ligne de contrôle).
+       Mode mesure par défaut, sous le même interrupteur que la limite de débit.
     6. **garde de déconnexion client** (#352), la couche la plus EXTERNE — entre uvicorn
        et tout le reste. Un POST `/mcp` dont le client est parti en cours de route
        laissait une réponse ASGI incomplète ; uvicorn fermait alors le transport, et
@@ -1034,7 +1055,7 @@ def build_root_app(app, anon_app):
                         VersionHeader(
                             ResponseCharset(
                                 subdomain_project.HostDispatch(app, anon_app)))),
-                    faces=(app, anon_app)),
+                    faces=(app, anon_app), noms_faces=("authentifiee", "anonyme")),
                 routes=routes)))
 
 
@@ -1122,6 +1143,9 @@ def main():
     # Budget d'unités : même garde (`access/credits.verifier_reglages`).
     from .access import credits as budget
     budget.verifier_reglages()
+    # Budget d'opérations Google Ads (`OTO_GOOGLE_ADS_DAILY_OPS`) : même garde.
+    from .tools import google_ads as google_ads_outils
+    google_ads_outils.verifier_reglages()
     # Chemins des liens de l'instance (`OTO_DASHBOARD_LINK_PATHS`) : une déclaration
     # illisible ou un type de lien inconnu refuse le démarrage ici, jamais nos chemins
     # par défaut en silence. Cf. `links.verifier_reglages`.
@@ -1144,6 +1168,13 @@ def main():
     # écrit. Cf. `identite_instance`.
     from . import identite_instance
     identite_instance.verifier()
+
+    # Le trousseau du coffre : les modes de clé sont DÉCLARÉS (plate, Key Manager) ; une
+    # déclaration incohérente, aucune clé, ou Key Manager injoignable refuse le démarrage
+    # ICI, avant d'avoir rien écrit. Les clés enveloppées sont ouvertes une fois, en RAM ;
+    # le journal nomme chaque `key_ref` et son empreinte, jamais la clé. Cf. `crypto`.
+    from . import crypto
+    crypto.charger_trousseau()
 
     # Les boucles de fond, composées AVANT de préparer la base : un process qui ne sait
     # pas s'il est la production refuse de démarrer ICI, sans avoir rien écrit (plus
@@ -1287,6 +1318,9 @@ def main():
             # Revue de sécurité 2026-08-29 (oto-backend#572, point informatif n°9) :
             # ne pas annoncer la pile en clair sur chaque réponse anonyme.
             server_header=False,
+            # Sur SIGTERM (fin de vidange bleu/vert, arrêt de l'unité) : les requêtes en
+            # cours finissent, au plus ce délai — cf. `bornes_processus.ARRET_GRACIEUX_S`.
+            timeout_graceful_shutdown=bornes_processus.ARRET_GRACIEUX_S,
         )
         return
 

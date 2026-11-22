@@ -57,10 +57,15 @@ connecteur d'**API privée cookie-bound**. État réel (2026-06-24) :
   - **`crunchbase`** (`tools/crunchbase.py`) — fiches société/personne via l'API privée
     du frontend `www.crunchbase.com/v4/data` (schéma v4 sans `user_key` ; lookup
     `entities/organizations|people/{slug}` + cards `founders`/`raised_funding_rounds`,
-    recherche via `autocompletes`). **Migré du scraping DOM in-process** (ADR 0026,
-    `BROWSER_PROVIDERS` désormais vide, plus de `CrunchbaseClient` o-browser ni de Chrome
-    sur la box). ⚠️ **Reste à smoke en live** (Browserbase + login crunchbase réel) :
-    confirmer `field_ids`/`card_ids`/`collection_ids` et l'absence de header anti-CSRF.
+    recherche via `autocompletes`). **Le client est celui de la lib**
+    (`oto.tools.crunchbase`, exécuté dans le navigateur de l'hôte,
+    `oto.tools.common.browser_session`) : oto 1 lui fournit le navigateur
+    (`browserbase.run`, le Context du coffre en `jar`) et garde la session. Sa connexion
+    s'enregistre avec `finish` (`browser_session.register(…, finish=…)`) : la lib sonde la
+    fenêtre de login et rend la session confirmée par `on_jar`, qui l'écrit au coffre ;
+    une sonde sans verdict (`ProbeUnavailable`) n'écrit rien et le dit (`force` reste
+    l'échappatoire) ; une session refusée (`SessionRejected`) marque la ligne servie
+    « à reconnecter ». ⚠️ **Reste à smoke en live** (Browserbase + login crunchbase réel).
   - **`pennylaneged`** (`tools/pennylaneged.py`, issue otomata-private#31) — GED (DMS)
     Pennylane via l'API interne de la SPA (`/companies/{cid}/dms/…`, CSRF tournant lu
     in-page à chaque appel via `browserbase.run_page_eval` — l'eval générique, `run_fetch`

@@ -43,7 +43,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .. import db, interrupteurs, ownership
+from .. import db, interrupteurs, org_suspension, ownership
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .apps_html import avertissements
@@ -123,6 +123,12 @@ class AppCard(BaseModel):
     project_ids: list[int] = Field(default_factory=list)
     # L'appelant peut-il la modifier (éditeur, gérant, propriétaire) ?
     can_edit: bool = False
+    # Qui la voit au-delà de son propriétaire (`db.apps.visibilites`) : `{"org":
+    # "editor"|"contributor"|"viewer"|None, "people": n}` — « Vous seul » quand personne.
+    visibility: Optional[dict] = None
+    # Peut-il en cliquer les boutons (Use, ou la modifier) ? Servi par `op=get` seul ;
+    # absent d'une liste. Faux = View : le front désactive les gestes.
+    can_use: Optional[bool] = None
     title: str
     thumbnail: Optional[dict] = None
     created_by: Optional[str] = None
@@ -279,6 +285,19 @@ def _projets_lisibles(sub: str, filed: dict[int, list[int]]) -> set[int]:
     return {int(pid) for pid, ok in lus.items() if ok}
 
 
+def _orgs_des_apps(rows: list[dict]) -> dict[int, Optional[int]]:
+    """L'org où vit chaque app (`org_de_l_app`), lue une fois par propriétaire : une
+    liste d'apps d'une même équipe ne relit pas l'équipe à chaque carte."""
+    vues: dict[tuple, Optional[int]] = {}
+    out: dict[int, Optional[int]] = {}
+    for r in rows:
+        cle = (r.get("owner_type"), r.get("owner_id"), r.get("context_org_id"))
+        if cle not in vues:
+            vues[cle] = org_de_l_app(r)
+        out[int(r["id"])] = vues[cle]
+    return out
+
+
 def _cards(sub: str, rows: list[dict], writable: Optional[set[int]] = None) -> list[dict]:
     """Les cartes servies : de quoi dessiner la tuile, où l'app est rangée (parmi les
     projets que l'appelant lit), et s'il peut la modifier. `writable` : les apps que la
@@ -287,13 +306,17 @@ def _cards(sub: str, rows: list[dict], writable: Optional[set[int]] = None) -> l
     rangees = db.apps.projects_of(r["id"] for r in rows)
     lus = _projets_lisibles(sub, rangees)
     filed = {a: [p for p in pids if p in lus] for a, pids in rangees.items()}
+    vis = db.apps.visibilites(_orgs_des_apps(rows))
     return [{**r, "project_ids": filed.get(int(r["id"]), []),
+             "visibility": vis[int(r["id"])],
              "can_edit": (int(r["id"]) in writable if writable is not None
                           else _can(sub, r["id"], "write"))} for r in rows]
 
 
 def _view(sub: str, row: dict) -> dict:
+    from . import apps_appel
     row = _cards(sub, [row])[0]
+    row["can_use"] = bool(row.get("can_edit")) or apps_appel.peut_cliquer(sub, int(row["id"]))
     return {k: row[k] for k in AppView.model_fields if k in row}
 
 
@@ -373,6 +396,8 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         # manifeste à corriger (chaque appel y paraîtrait hors manifeste).
         app = _app_or_404(sub, inp.app_id, "read") if inp.app_id is not None else None
         org = org_de_l_app(app) if app is not None else ctx.org_id
+        if app is not None:
+            org_suspension.exiger(org)
         clean, problems = _problemes(sub, org, inp.manifest)
         out: dict = {"ok": not problems, "problems": problems}
         if not problems:
@@ -404,6 +429,9 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
 
     row = _app_or_404(sub, inp.app_id,
                       "read" if inp.op in ("get", "revisions", "read_file", "put_file") else "write")
+    # L'org de l'APP, en plus de celle de l'appel (gardée par l'adaptateur) : l'app d'une
+    # org suspendue se ferme à tous, invités d'une autre org compris.
+    org_suspension.exiger(org_de_l_app(row))
 
     if inp.op == "get":
         view = _view(sub, row)

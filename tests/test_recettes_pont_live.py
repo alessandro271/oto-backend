@@ -86,6 +86,25 @@ def test_un_outil_en_lecture_est_appele_et_son_resultat_rendu(serveur):
     assert appels == ["acme_people"]
 
 
+def test_un_ancien_nom_est_servi_par_l_outil_d_aujourd_hui_et_compte(serveur, monkeypatch):
+    """Nommé par un ancien nom (`deprecations.TOOLS`), l'outil d'aujourd'hui répond, comme
+    par `oto_call` : le journal écrit le nom d'aujourd'hui et compte l'alias dans
+    `args.deprecated_name` — l'usage qui décide de son retrait."""
+    from oto_mcp import deprecations
+    from oto_mcp.db._conn import _connect
+    m, appels = serveur
+    ancien = f"acme_gens_{uuid.uuid4().hex[:6]}"
+    monkeypatch.setitem(deprecations.TOOLS, ancien, "acme_people")
+    reponse = _appeler(m, ancien, {"company": ancien})
+    assert reponse["ok"] and reponse["result"]["content"][0]["name"] == f"{ancien} 0"
+    assert appels == ["acme_people"]
+    with _connect() as conn:
+        lignes = conn.execute(
+            "SELECT tool, args->>'deprecated_name' AS ancien FROM tool_calls "
+            "WHERE sub = %s AND args->>'company' = %s", (SUB, ancien)).fetchall()
+    assert [(r["tool"], r["ancien"]) for r in lignes] == [("acme_people", ancien)]
+
+
 def test_un_outil_qui_ecrit_est_refuse_avant_tout_appel(serveur):
     m, appels = serveur
     reponse = _appeler(m, "acme_post", {"text": "x"})
@@ -151,8 +170,7 @@ def tableaux(serveur, monkeypatch):
 def _table() -> str:
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = f"recettes-pont-{uuid.uuid4().hex[:6]}"
-    db.create_datastore("user", SUB, ns)
+    ns = str(db.create_datastore("user", SUB, f"recettes-pont-{uuid.uuid4().hex[:6]}"))
     make_store(SUB).set_schema(ns, SCHEMA)
     return ns
 
@@ -207,7 +225,7 @@ def test_data_rows_du_pont_est_un_appel_journalise_et_son_refus_aussi(tableaux):
     page = _de_recette(tableaux, ns, "data_rows", {"datastore": ns, "limit": 10})
     assert page["ok"] and [r["slug"] for r in page["result"]["rows"]] == ["a"]
     assert [r["ok"] for r in _journal("data_rows", ns)] == [True]
-    absent = f"absent-{uuid.uuid4().hex[:6]}"
+    absent = "999999999"
     refus = _de_recette(tableaux, ns, "data_rows", {"datastore": absent})
     assert refus["ok"] is False
     assert [r["ok"] for r in _journal("data_rows", absent)] == [False]
@@ -590,8 +608,7 @@ def test_via_d_une_recette_est_prouve_par_ses_propres_appels(tableaux):
     with _connect() as conn:
         cases = conn.execute(
             "SELECT c.champ, c.outil FROM datastore_cell_sources c "
-            "JOIN user_datastores u ON u.id = c.ns_id WHERE u.namespace = %s "
-            "ORDER BY 1", (ns,)).fetchall()
+            "WHERE c.ns_id = %s ORDER BY 1", (int(ns),)).fetchall()
     assert [(c["champ"], c["outil"]) for c in cases] == [
         ("name", "acme_people"), ("slug", "acme_people")]
 
@@ -614,6 +631,7 @@ def test_via_d_une_recette_sans_geste_en_cours_attribue_quand_meme(tableaux):
     assert asyncio.run(scenario())["ok"]
     with _connect() as conn:
         outils = {r["outil"] for r in conn.execute(
-            "SELECT c.outil FROM datastore_cell_sources c JOIN user_datastores u "
-            "ON u.id = c.ns_id WHERE u.namespace = %s", (ns,)).fetchall()}
+            "SELECT c.outil FROM datastore_cell_sources c "
+            "WHERE c.ns_id = %s", (int(ns),)).fetchall()}
+
     assert outils == {"acme_people"}

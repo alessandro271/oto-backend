@@ -23,6 +23,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 
+from _app_instance_simule import coffre_depuis_les_reglages
+
 ORG = 42
 SUB = "user-de-test"
 MEMBRE = f"{ORG}:{SUB}"
@@ -75,6 +77,7 @@ def env(monkeypatch):
                             for k, v in (("client_id", "cid"), ("client_secret", "csec"),
                                          ("user_client_id", "ucid"),
                                          ("user_client_secret", "ucsec"))])
+    coffre_depuis_les_reglages(monkeypatch)
     coffre = _Coffre()
     monkeypatch.setattr(credentials_store, "get_credential_with_meta", coffre.get)
     monkeypatch.setattr(credentials_store, "set_credential", coffre.set)

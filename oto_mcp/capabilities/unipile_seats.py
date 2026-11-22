@@ -131,10 +131,32 @@ def _platform_client():
     insts = credentials_store.list_platform_instances("unipile")
     if not insts:
         return None
-    api_key = credentials_store.get_credential(
-        credentials_store.PLATFORM, insts[0]["label"], "unipile")
+    return _client_on(insts[0]["label"])
+
+
+def _client_on(label: str):
+    from .. import credentials_store
+    api_key = credentials_store.get_credential(credentials_store.PLATFORM, label, "unipile")
     from oto.tools.unipile import UnipileClient
     return UnipileClient(api_key=api_key)  # dsn=None → client default, api.unipile.com
+
+
+def client_for_seat() -> tuple:
+    """`(client, None)` on THE platform key that holds a platform seat, or `(None,
+    reason)` when that key cannot be named: `no_platform_key` | `platform_key_ambiguous`.
+
+    A binding does not record which platform key created its account (an `account_id`
+    only exists on the tenant of that key). It is known only when the platform has ONE
+    unipile key — the same rule as the parent of a seat's sub-instance
+    (`db/sous_instances._PARENT`). With several, deleting under one of them would be a
+    blind try: we name none and the caller says the seat is still alive."""
+    from .. import credentials_store
+    insts = credentials_store.list_platform_instances("unipile")
+    if not insts:
+        return None, "no_platform_key"
+    if len(insts) > 1:
+        return None, "platform_key_ambiguous"
+    return _client_on(insts[0]["label"]), None
 
 
 def _seat_state(rows: list[dict]) -> str:
@@ -214,7 +236,8 @@ def liberer(client, account_id: str, rows: list[dict]) -> int:
     unbound = 0
     for r in rows:
         if r.get("disconnected_at") is None and r.get("org_id") is not None:
-            db.clear_unipile_account(r["sub"], r["org_id"], r.get("provider") or "LINKEDIN")
+            db.clear_unipile_account(r["sub"], r["org_id"], r.get("provider") or "LINKEDIN",
+                                     account_id=account_id)
             unbound += 1
     client.delete_account(account_id)
     return unbound

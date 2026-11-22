@@ -21,6 +21,7 @@ COMPTES et des CODES, jamais une valeur lue.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import re
@@ -29,7 +30,7 @@ from typing import Any, Optional
 
 from starlette.concurrency import run_in_threadpool
 
-from .. import outils_du_travail, redaction
+from .. import deprecations, outils_du_travail, redaction, session_org
 from ..datastore import par_reference as pr
 from ..mcp_errors import McpError
 from ..tool_visibility import namespace_of
@@ -150,6 +151,29 @@ async def _appeler(tool, sub: Optional[str], outil: str, args: dict):
     return await meta.executer_cible(tool, sub, outil, outil, args)
 
 
+@contextlib.contextmanager
+def sous_le_nom_d_aujourd_hui(nom: str):
+    """Le nom sous lequel une recette APPELLE `nom` : celui d'aujourd'hui quand `nom` est
+    un ancien nom d'outil (`deprecations.TOOLS`), `nom` sinon.
+
+    Même traduction qu'`oto_call` et que le bord du protocole (`middleware.alias`),
+    par la même table : mêmes arguments, même effet. Tout ce qui juge l'appel (outils
+    de plateforme, liste des écritures, lecture déclarée, `executer_cible`) ne voit que
+    le nom d'aujourd'hui ; le journal compte l'alias (`args.deprecated_name`, ce qui
+    décide de son retrait) et la réponse de l'appel MCP qui joue la recette porte
+    l'avis en tête, une fois (`session_org.noter_avis`)."""
+    canonique = deprecations.tool_canonique(nom)
+    if canonique == nom:
+        yield nom
+        return
+    jeton = session_org.set_nom_deprecie(nom)
+    try:
+        yield canonique
+    finally:
+        session_org.reset_nom_deprecie(jeton)
+    session_org.noter_avis(deprecations.avis_d_appel(nom))
+
+
 def _arguments(corps: dict, params: dict, etat: dict, restant: int,
                row: Optional[dict] = None, reste_ligne: Optional[int] = None) -> dict:
     args = co.rendre(corps.get("arguments") or {}, co._portees(params, row))
@@ -260,7 +284,7 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
     recu = _recu()
     etat = lire_reprise(reprise, corps)
     recu["units"] = etat["u"]
-    outil = await _outil(fastmcp, corps["tool"])
+    outil = await _outil(fastmcp, deprecations.tool_canonique(corps["tool"]))
     col_cle = corps["key"]["column"]
     mappees = list(corps["map"])
     remplissage = {c: 0 for c in mappees}
@@ -270,7 +294,7 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
     # correspondance) comptent dans le budget de l'appel.
     fin = time.monotonic() + budget_s
     try:
-        # Comparées RÉSOLUES : un numéro et un nom désignent le même tableau.
+        # Comparées RÉSOLUES : `slot:<nom>` et le numéro qu'il lie désignent le même tableau.
         if fe and datastore is not None and await run_in_threadpool(
                 ecriture.meme_tableau, datastore, fe["datastore"]):
             raise RecetteRefusee("for_each_same_table",
@@ -336,7 +360,8 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
                               reste_ligne=None if cap is None else cap - pris)
             appels["n"] += 1
             try:
-                issue = await _appeler(outil, sub, corps["tool"], dict(args))
+                with sous_le_nom_d_aujourd_hui(corps["tool"]) as nom:
+                    issue = await _appeler(outil, sub, nom, dict(args))
             except McpError as e:
                 # Arguments refusés par le schéma de l'outil, garde d'activation : rien n'a
                 # été appelé pour cette page.
@@ -592,7 +617,8 @@ async def echantillon(fastmcp, sub: Optional[str], outil: str, arguments: dict,
     """UN appel de l'outil, et la FORME de ses éléments : chaque chemin, son type,
     sur combien d'éléments il est rempli. Rien n'est écrit. L'appel est facturé comme
     tout appel de l'outil — passe la plus petite taille de page."""
-    issue = await _appeler(await _outil(fastmcp, outil), sub, outil, dict(arguments or {}))
+    with sous_le_nom_d_aujourd_hui(outil) as nom:
+        issue = await _appeler(await _outil(fastmcp, nom), sub, nom, dict(arguments or {}))
     if not issue.ok:
         raise RecetteRefusee(issue.code or "tool_failed", issue.message or "tool failed")
     if issue.retenu:

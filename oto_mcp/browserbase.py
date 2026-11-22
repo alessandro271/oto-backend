@@ -197,8 +197,6 @@ async def run_page_eval(context_id: str, app: str, page_function: str,
     Note coût : 1 session browser par appel. L'optimisation (réutiliser une session
     pour N appels d'un même run) est différée — corrige plus tard si le volume le justifie.
     """
-    from patchright.async_api import async_playwright
-
     # Ouverture et libération de session sont des appels HTTP SYNCHRONES (urllib,
     # 30 s de délai d'attente) au milieu d'une fonction `async def` : appelés
     # nûment, ils figent tout le processus le temps que Browserbase réponde
@@ -208,17 +206,39 @@ async def run_page_eval(context_id: str, app: str, page_function: str,
     sess = await asyncio.to_thread(start_session, context_id)
     sid = sess["id"]
     try:
-        async with async_playwright() as p:
-            b = await connect_cdp(p, sess["connectUrl"])
-            try:
-                ctx = b.contexts[0] if b.contexts else await b.new_context()
-                pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                await pg.goto(app, wait_until="domcontentloaded", timeout=40000)
-                return await pg.evaluate(page_function, arg)
-            finally:
-                await b.close()
+        return await _eval_in(sess["connectUrl"], app, page_function, arg)
     finally:
         await asyncio.to_thread(release_session, sid)
+
+
+async def run_session_eval(session_id: str, app: str, page_function: str,
+                           arg: Any = None) -> Any:
+    """`run_page_eval`, dans une session VIVANTE déjà ouverte (la fenêtre de login d'une
+    Live View) : c'est elle qui porte le login tant que le Context n'est pas persisté.
+    N'ouvre ni ne libère rien."""
+    return await _eval_in(connect_url(session_id), app, page_function, arg)
+
+
+async def _eval_in(cdp_url: str, app: str, page_function: str, arg: Any) -> Any:
+    from patchright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        b = await connect_cdp(p, cdp_url)
+        try:
+            ctx = b.contexts[0] if b.contexts else await b.new_context()
+            pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            await pg.goto(app, wait_until="domcontentloaded", timeout=40000)
+            return await pg.evaluate(page_function, arg)
+        finally:
+            await b.close()
+
+
+def run(jar: str, page_url: str, page_function: str, arg: Any = None) -> Any:
+    """Le navigateur que l'hôte fournit à un connecteur de la lib exécuté dans son
+    navigateur (`oto.tools.common.browser_session`) : `jar` est le Context Browserbase
+    gardé au coffre. SYNCHRONE, comme la lib qui l'appelle : à appeler hors de la
+    boucle d'événements (thread)."""
+    return asyncio.run(run_page_eval(jar, page_url, page_function, arg))
 
 
 async def fetch_page(context_id: str, url: str, *, as_html: bool = False,

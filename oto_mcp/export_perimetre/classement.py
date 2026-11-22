@@ -145,7 +145,7 @@ CLASSEMENT: dict[str, Table] = {
     "project_links": indirecte(_PROJETS),
     "project_files": indirecte(_PROJETS, hors_base=("s3_key", "public_url")),
     "project_file_texts": indirecte(Via("project_files", ("file_id",))),
-    "docs": indirecte(_PROJETS),
+    "docs": indirecte(_PROJETS, secrets=("public_token_enc",)),
     "doc_revisions": indirecte(_DOCS),
     "apps": possedee(ParEntite()),
     "app_projects": indirecte(_APPS),
@@ -244,6 +244,11 @@ CLASSEMENT: dict[str, Table] = {
     # ── messagerie hébergée ────────────────────────────────────────────────────
     "unipile_accounts": possedee(ParOrg(), comptes=("sub",)),
     "unipile_operated_accounts": possedee(ParSub()),
+    # limites d'envoi posées par le titulaire du compte : un réglage à lui, il part avec lui.
+    "unipile_sending_limits": possedee(ParSub()),
+    "unipile_sending_log": exclue(ParSub(), "compte glissant des envois des 7 derniers "
+                                  "jours : il ne sert que la fenêtre en cours, purgé "
+                                  "au-delà de 8 jours"),
     "unipile_pending": exclue(ParSub(), "connexion en cours : un état éphémère, qui ne "
                               "survit pas à une bascule"),
     # ── runner, abonnements de modèle, transcription ───────────────────────────
@@ -259,10 +264,16 @@ CLASSEMENT: dict[str, Table] = {
     # où l'org est prévenue qu'un agent ne fonctionne plus (canal ou personne Slack) :
     # un réglage de l'org, il part avec elle.
     "agent_alert_settings": possedee(ParOrg()),
+    # le choix de l'org sur la réparation automatique de ses agents : un réglage de
+    # l'org, il part avec elle.
+    "agent_health_settings": possedee(ParOrg()),
     # les pages et tableaux épinglés dans l'org : partagés (`owner_sub` NULL) ou
     # PERSONNELS d'un membre (`owner_sub` = son compte, la ligne est celle d'UN compte
     # dans l'org) ; `added_by` = l'auteur du geste, pas un compte. Ils partent avec elle.
     "org_favorites": possedee(ParOrg(), comptes=("owner_sub",)),
+    # les applications de Custom API de l'org (adresse, mode, actions — jamais un secret) :
+    # un réglage de l'org, elles partent avec elle ; `created_by`/`updated_by` = auteurs.
+    "api_apps": possedee(ParOrg()),
     "apify_runs": exclue(ParOrg(), "suivi de la clé PLATEFORME de l'instance d'origine : "
                          "ses runs ne se relèvent qu'avec cette clé, et le coût relevé "
                          "part avec le journal"),
@@ -272,6 +283,9 @@ CLASSEMENT: dict[str, Table] = {
     "agent_episodes": exclue(ParOrg(), "état d'exploitation de la PLATEFORME sur les agents "
                              "de l'org (pannes, relances, diagnostics d'opérateur) : la "
                              "boucle le reconstruit sur la cible à partir de `runner_jobs`"),
+    "agent_causes": instance("catalogue de la PLATEFORME des causes de panne d'agent, une "
+                             "par empreinte de motif, sans org ni propriétaire : la boucle "
+                             "le remplit sur la cible, un opérateur y redécide"),
     "access_requests": possedee(ParOrg()),
     "copilot_threads": exclue(ParOrg(), "conversation de l'agent intégré : un état de travail éphémère (le journal des appels, lui, part)"),
     "copilot_undos": exclue(ParSub(), "annulation offerte, valable une heure"),
@@ -298,6 +312,8 @@ CLASSEMENT: dict[str, Table] = {
                            "voyage à part, par tranches (`JOURNAL`)"),
     "journal_archives": instance("registre des mois archivés au froid : les archives "
                                  "mêlent tous les propriétaires, hors base"),
+    "journal_archive_passages": instance("passages de l'archive du journal de "
+                                         "l'instance : son exploitation, sans propriétaire"),
     # Les totaux par jour (#1147) sont DÉRIVÉS du journal : la cible les recalcule du
     # sien (`scripts/rattraper_journal_jour.py`) une fois le journal versé — ses lecteurs
     # refusent d'ici là une fenêtre qui couvre un journal non consolidé.
@@ -333,7 +349,7 @@ CLASSEMENT: dict[str, Table] = {
     "signal_digest_optouts": possedee(ParSub()),
     # Partage d'une procédure par lien : le lien est à l'org de la procédure, ses
     # lecteurs suivent leur lien, le refus du résumé est à la personne.
-    "process_shares": possedee(ParOrg()),
+    "process_shares": possedee(ParOrg(), secrets=("token_enc",)),
     "procedure_comments": indirecte(Via("org_instructions", ("instruction_id",), fk=False)),
     "process_share_readers": indirecte(Via("process_shares", ("share_id",)),
                                        "un lecteur part avec le lien qu'il a lu"),

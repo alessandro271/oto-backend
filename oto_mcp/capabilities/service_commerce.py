@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, field_validator
 from .. import db, entitlements_catalogue as catalogue, group_store, org_store
 from ..db import entitlements as db_entitlements
 from ._authz import COMMERCE_SERVICE
+from ._lecture_bornee import bornee
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding, cap_limit
 from .registry import CAPABILITIES
 
@@ -105,6 +106,16 @@ class ServiceOrgInput(BaseModel):
     org_id: int
 
 
+class ServiceMembersInput(BaseModel):
+    org_id: int
+    # Défaut `false` : les membres seuls, `last_activity_at` à `None`, sans lire le
+    # registre des totaux — la population ne dépend pas de son retard (aucun 503).
+    # `true` : la dernière activité, lue sur les totaux ; registre en retard = 503 nommé
+    # (`bornee`). Le consommateur qui autorise ses gestes de facturation sur les membres
+    # ne lit pas l'activité et ne doit pas dépendre du registre.
+    activity: bool = False
+
+
 class ServiceMemberRow(BaseModel):
     sub: str
     email: Optional[str] = None
@@ -112,22 +123,27 @@ class ServiceMemberRow(BaseModel):
     is_active: bool
     joined_at: str
     last_activity_at: Optional[str] = None
+    locale: Optional[str] = Field(
+        default=None, description="The account's chosen language (`users.locale`, "
+                                  "e.g. `fr`/`en`), `None` when never set.")
 
 
 class ServiceMembers(BaseModel):
     """Les membres de l'org PAR ANCIENNETÉ (`joined_at`, puis `sub`) — l'ordre dans
     lequel le commerce désigne les membres payants. `last_activity_at` = dernier appel
-    d'outil émis sous CETTE org, `None` s'il n'y en a jamais eu."""
+    d'outil émis sous CETTE org, `None` s'il n'y en a jamais eu — lue sur `activity=true`
+    seulement, `None` partout sinon (le défaut)."""
     org_id: int
     members: list[ServiceMemberRow]
 
 
-def _members(ctx: ResolvedCtx, inp: ServiceOrgInput) -> dict:
+def _members(ctx: ResolvedCtx, inp: ServiceMembersInput) -> dict:
     _org_ou_404(inp.org_id)
+    rows = db.org_members_by_seniority(inp.org_id, activity=inp.activity)
     return {"org_id": inp.org_id,
             "members": [{**r, "joined_at": _iso(r["joined_at"]),
                          "last_activity_at": _iso(r["last_activity_at"])}
-                        for r in db.org_members_by_seniority(inp.org_id)]}
+                        for r in rows]}
 
 
 # ── Les équipes ──────────────────────────────────────────────────────────────
@@ -532,11 +548,15 @@ CAPABILITIES += [
                description="[service commerce] The org's teams by name, each with every "
                            "member's `sub` (whichever team each has active).",
                rest=RestBinding("GET", "/api/service/orgs/{id}/groups", _ID)),
-    Capability(key="service.org.members", handler=_members, Input=ServiceOrgInput,
+    Capability(key="service.org.members", handler=bornee(_members),
+               Input=ServiceMembersInput,
                authz=COMMERCE_SERVICE, mcp=None, Output=ServiceMembers,
                errors=(_ORG_INCONNUE,),
                description="[service commerce] Members of an org by seniority "
-                           "(`joined_at`), with email and last activity under this org.",
+                           "(`joined_at`), with email. `activity=true`: also the last "
+                           "activity under this org (503 `aggregate_incomplete` while the "
+                           "daily totals lag); default: members only, "
+                           "`last_activity_at` null.",
                rest=RestBinding("GET", "/api/service/orgs/{id}/members", _ID)),
     Capability(key="service.org.usage", handler=_usage, Input=ServiceUsageInput,
                authz=COMMERCE_SERVICE, mcp=None, Output=ServiceUsage,

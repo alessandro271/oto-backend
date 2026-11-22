@@ -380,15 +380,38 @@ def test_toute_colonne_sub_sous_index_unique_est_pre_traitee():
         "par couvrir un trou qu'on croit fermé.")
 
 
+def _ddl_des_modules() -> str:
+    """Les DDL que `_init.py` exécute par leur NOM (`runner_triggers.DDL_COLONNE_…`) :
+    les constantes `DDL_*` des modules de `oto_mcp.db`, valeurs résolues. Une colonne posée
+    par une constante, et non écrite en clair dans `_init.py`, échappait au parse."""
+    import importlib
+    import pkgutil
+
+    import oto_mcp.db as paquet
+    morceaux: list[str] = []
+    for mod in pkgutil.iter_modules(paquet.__path__):
+        if mod.ispkg:
+            continue
+        m = importlib.import_module(f"oto_mcp.db.{mod.name}")
+        for nom, v in vars(m).items():
+            if not nom.startswith("DDL"):
+                continue
+            for x in (v if isinstance(v, (list, tuple)) else [v]):
+                if isinstance(x, str):
+                    morceaux.append(x)
+    return "\n".join(morceaux)
+
+
 def _colonnes_jsonb() -> set[tuple[str, str]]:
     """{(table, colonne)} de type JSONB : blocs CREATE de `_SCHEMA`, et les
-    `ALTER TABLE … ADD COLUMN IF NOT EXISTS … JSONB` de `_SCHEMA` et de `_init.py`."""
+    `ALTER TABLE … ADD COLUMN IF NOT EXISTS … JSONB` de `_SCHEMA`, de `_init.py` et des
+    constantes `DDL*` des modules de `oto_mcp.db`."""
     cols: set[tuple[str, str]] = set()
     for m in re.finditer(r"CREATE TABLE IF NOT EXISTS (\w+)\s*\((.*?)\n\);",
                          _SCHEMA, re.S):
         for lm in re.finditer(r"^\s*(\w+)\s+JSONB\b", m.group(2), re.M):
             cols.add((m.group(1), lm.group(1)))
-    for source in (_SCHEMA, _INIT_SRC):
+    for source in (_SCHEMA, _INIT_SRC, _ddl_des_modules()):
         for am in re.finditer(
                 r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+)\s+JSONB\b", source):
             cols.add((am.group(1), am.group(2)))
@@ -464,6 +487,15 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("user_api_tokens", "scopes"), ("user_datastores", "schema"),
         # Le profil de la personne : il suit SA ligne (étape 2), rien à réécrire dedans.
         ("user_account_profile", "profile"),
+        # La copie d'une cause au client : des phrases, jamais un compte.
+        ("agent_causes", "copie"),
+        # Les outils qu'une personne a retirés après le médecin, et jusqu'à quand : des
+        # noms d'outils et des dates — l'auteur du retrait vit sur l'épisode.
+        ("runner_triggers", "repair_undone_tools"),
+        # Ce que le médecin dit au client : la note de réparation de l'agent (`{at, what}`)
+        # et le message d'un épisode (`{headline, todo, link, action}`) — des phrases et
+        # un lien du tableau de bord, jamais un compte.
+        ("runner_triggers", "repair_note"), ("agent_episodes", "message_client"),
     }
     # Journaux et instantanés : une trace historique garde ce qui a été dit au moment
     # du geste — on ne la réécrit pas (même règle que `connector_loan_events.target`).
@@ -475,11 +507,15 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("access_shadow_l7", "sample"), ("credential_disparitions", "agents"),
         # Qui a soigné un agent (`medecin`, ou le sub de l'opérateur) : un journal du geste.
         ("agent_episodes", "reparations"),
+        # Qui a décidé d'une cause du catalogue (le sub de l'opérateur) : même règle.
+        ("agent_causes", "gestes"),
         ("portee_elargissements", "destinataires"),
         # Un transfert de solde entre deux comptes fusionnés nomme les deux payeurs.
         ("credit_movements", "meta"),
     }
-    allow = sans_personne | journaux
+    # L'application de Custom API : son adresse, son mode, ses actions — aucune personne.
+    applications = {("api_apps", "connection"), ("api_apps", "definition")}
+    allow = sans_personne | journaux | applications
 
     manquantes = jsonb - set(_JSONB_SUB_COLUMNS) - allow
     assert not manquantes, (

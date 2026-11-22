@@ -51,6 +51,30 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.242.0 = `oto.tools.fod.compact` (connectors#264) : compactage entreprise et ICPE,
+    # repris de france-opendata (>=0.51.0, verrouillé en 0.54.0) ; sert fr_search, fr_get
+    # et foncier_icpe, qui n'en gardent plus de copie. Aucun extra.
+    # v1.241.0 = crisp 1.1.0 : écriture (note interne, état, méta de conversation, segments,
+    # contact, envoi de message ; connectors#266), servie par `crisp_act`. Passe aussi
+    # v1.240.0 (Custom API : profil, import OpenAPI ; connectors#259/#260). Aucun extra.
+    # v1.239.0 = sessions gardées par l'hôte pour les connecteurs exécutés dans son
+    # navigateur (`common/host_session.py`, `common/browser_session.py`), Crunchbase porté
+    # dans la lib (connectors#257). Aucun extra.
+    # v1.238.0 = lemlist 1.6.1 (désinscriptions par les routes v2, absente = `unsubscribed: false`,
+    # casse ; connectors#251, #256), apify (un 429 rejoué avec backoff, jamais un départ
+    # ambigu ; #253), mailpool 1.2.0 (`update_mailbox` ; #255). v1.237.0 = Sheets (structure,
+    # mise en forme, graphiques ; client découpé en modules), fillout. Aucun extra.
+    # v1.236.0 = linkedin_ads : client de l'API Advertising de LinkedIn, en lecture seule
+    # (scopes `r_ads` et `r_ads_reporting`, GET seulement, connectors#249). Aucun extra.
+    # v1.234.0 = gr : une panne de VIES répondue en 200 (`userError` MS_UNAVAILABLE…) n'est plus
+    # lue comme un numéro invalide ; nommée dans `vat_check_error` (connectors#247). Aucun extra.
+    # v1.233.0 = clients infosec (`InfosecClient`), searchapi (`SearchApiClient`) et gr
+    # (`GrClient`) basculés depuis le backend (oto-now/connectors#244) : `tools/{infosec,
+    # searchapi,gr}.py` ne sont plus que des enveloppes MCP. Aucun extra.
+    # v1.232.0 = lemlist 1.5.0 : le pool d'expéditeurs d'une campagne (`get_campaign_senders`,
+    # `add_campaign_senders`, `replace_campaign_senders`) ; `list_unsubscribes` lit la liste v2
+    # (la liste v1 ne se sert plus). linkedin_unipile 1.3.2 : un slug non ASCII, encodé,
+    # décodé ou en adresse, donne le même profil. Aucun extra.
     # v1.231.0 = lemlist 1.4.0 : une vue des activités (`fields`, `compact`, `activity_views`)
     # pour `get_activities` et `sync_activities`, appliquée par le client, jamais envoyée à
     # lemlist ; `list_all_campaigns` ne se dit plus tronquée quand la liste est complète.
@@ -558,7 +582,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.231.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.242.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

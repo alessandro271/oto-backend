@@ -30,8 +30,8 @@ from typing import Any, Optional
 ALIAS = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 MAX_HEIGHT = 4000
 DEFAULT_HEIGHT = 480
-MAX_TABLES = 20
-MAX_AGENTS = 20
+MAX_TABLES = 100
+MAX_AGENTS = 100
 # Le manifeste sérialisé, en caractères : il est relu à CHAQUE appel d'une app ouverte.
 MAX_MANIFEST = 32_000
 # Ce qu'une app trie et filtre toujours, déclaré ou non.
@@ -185,6 +185,7 @@ def auteur(sub: str, project_org: Optional[int], clean: dict) -> list[str]:
     chaque tableau résolu dans `clean` (`table`)."""
     from .. import db
     from ..datastore.core import DatastoreAmbigu, DatastoreNotFound, make_store
+    from ..datastore.errors import TableauParNom
 
     problems: list[str] = []
     store = make_store(sub)
@@ -192,6 +193,9 @@ def auteur(sub: str, project_org: Optional[int], clean: dict) -> list[str]:
         try:
             ns_id = store._resolve(t["table"])
             schema = store.get_schema(t["table"])
+        except TableauParNom as e:
+            problems.append(f"tables.{alias}: {e.indice}")
+            continue
         except (DatastoreNotFound, DatastoreAmbigu):
             # Même phrase qu'un tableau absent ou invisible : rien ne dit lequel.
             problems.append(f"tables.{alias}: table `{t['table']}` isn't one you can read here.")

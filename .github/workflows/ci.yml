@@ -1,0 +1,481 @@
+name: CI
+
+# Le tronc ne déploie plus (décision du 19/11/2026) : `main` n'a plus de préproduction.
+# Ce workflow juge chaque PR vers `main` et chaque poussée sur `main`, et ne déploie
+# rien. La PROD ne se déploie QUE sur un tag `v*` (deploy.yml), et sa garde
+# (`scripts/garde_tronc_vert.py`) exige que le job `test` de CE workflow ait conclu
+# `success` sur le sha exact du tag, poussé sur `main`. Le job `test` est aussi le check
+# requis de la protection de branche : son nom est un contrat.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # Chaque job porte un `timeout-minutes` : sans lui, le défaut de GitHub est de SIX
+  # heures. Ce workflow part à chaque poussée sur le tronc ET à chaque PR — c'est le
+  # plus exécuté du dépôt — et RIEN ne rattrape un job suspendu : il n'y a aucun
+  # `concurrency` de workflow, donc pas d'annulation du run précédent, et les runs
+  # suspendus s'empilent en parallèle.
+  # Plafonds calés sur 60 runs terminés (05→07/09/2026), durée d'exécution maximale
+  # observée par job — rappelée devant chaque valeur. Le 07/09, un job de tests s'est
+  # suspendu 45 min sans écrire une ligne, jusqu'à une annulation à la main.
+
+  # La syntaxe est vérifiée sur le Python du SERVEUR, pas sur celui de la CI.
+  # Le 27/08, un boot de préproduction est mort sur « f-string expression part cannot include
+  # a backslash » : légal en 3.12 (CI) et en 3.13 (poste), SyntaxError en 3.10 (box).
+  # Ni les tests ni la CI ne pouvaient le voir — les deux tournaient sur un Python
+  # plus récent que ce qui sert. `ast.parse(feature_version=(3,10))` ne l'attrape pas
+  # non plus (vérifié : PEP 701 a changé le tokenizer, le drapeau ne le restaure pas),
+  # donc il FAUT un vrai interpréteur 3.10. `compileall` suffit et coûte ~15 s : on ne
+  # rejoue pas la suite, on vérifie que ça se COMPILE là où ça tournera.
+  syntaxe-plancher:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # max observé 9 s
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          # DOIT rester égal au `requires-python` du pyproject ET à la box.
+          python-version: "3.10"
+      - name: Compiler sous le Python le plus ancien supporté
+        run: python -m compileall -q oto_mcp
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # UNE RÉFÉRENCE POUSSÉE SANS SON OBJET.
+  #
+  # Le 02/09/2026, `oto_mcp/billing.py` importait `billing_grants` : l'import était
+  # dans le commit, le fichier n'y était pas — il n'existait que sur le disque de son
+  # auteur. Toute la suite échouait à la COLLECTE (pas quelques tests : tous), et plus
+  # rien ne pouvait partir en production.
+  #
+  # ⚠️ Cette classe est INVISIBLE POUR SON AUTEUR et visible pour tous les autres :
+  # son répertoire de travail complète le commit, donc chez lui tout s'importe. Deux
+  # sessions ont mesuré en même temps et conclu l'inverse, chacune ayant raison sur ce
+  # qu'elle regardait. Et elle naît d'une BONNE pratique — le staging sélectif, imposé
+  # parce que plusieurs sessions écrivent dans le même checkout : rien, au moment du
+  # commit, ne dit qu'on vient de pousser un import sans son fichier.
+  #
+  # Ce job ne juge donc jamais un répertoire de travail. Le script extrait l'arbre
+  # depuis git (`git archive`) dans un emplacement neuf, l'importe DE LÀ, et vérifie
+  # pour chaque module que ce qui vient d'entrer dans `sys.modules` sort bien de cet
+  # arbre — la première version du script se contentait de `sys.path`, et le chercheur
+  # de l'installation éditable résolvait le fichier manquant depuis le checkout de
+  # l'auteur : le garde-fou sortait VERT sur le commit même qui avait cassé le tronc.
+  #
+  # PROFONDEUR — tous les modules, pas seulement la racine du serveur. Mesuré :
+  # importer `oto_mcp.server` en charge 554 sur 590 et coûte 2,7 s ; monter à 590 coûte
+  # 3,3 s. La profondeur complète est donc gratuite, et les 36 modules que la racine
+  # n'atteint pas sont précisément ceux où une référence sans objet dort jusqu'au
+  # runtime, sans que rien ne la révèle avant la production.
+  #
+  # OÙ — sur les PR *ET* sur le tronc, délibérément : le commit qui a cassé le tronc
+  # n'est passé par aucune PR. Sur une PR, `actions/checkout` donne le commit de
+  # FUSION, donc ce job juge l'arbre qui atterrirait — ce qui couvre aussi le cas où
+  # l'un ajoute la référence pendant que l'autre déplace le fichier.
+  #
+  # COÛT — nul sur le chemin critique : `test` tient la chaîne à ~6 min 40, ce job
+  # tourne en parallèle et rend son verdict en ~1 min. Il n'a délibérément PAS été
+  # fondu dans une étape de `test` : une ligne de check distincte est observable (un
+  # job absent de la liste n'est pas un job vert), et un rouge caché dans `test` se
+  # lirait « des tests échouent » — exactement la confusion qu'on retire ici.
+  arbre-importable:
+    name: L'arbre poussé s'importe
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # max observé 1 min 13 s
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Dépendances de RUNTIME seulement (pas l'extra `dev`) : ce que le serveur
+      # importe au boot ne doit rien devoir à l'outillage de test. Si l'installation
+      # échoue, l'étape échoue et le job est ROUGE — jamais un « je n'ai rien pu
+      # juger » déguisé en succès.
+      - name: Install (dépendances de runtime, par le verrou)
+        uses: ./.github/actions/installer-par-le-verrou
+        with:
+          # Le même que `test`, dont l'installation est éprouvée. Ce job répond à UNE
+          # question — « l'arbre poussé s'importe-t-il ? » — et n'endosse pas en plus
+          # celle du plancher de version, que `syntaxe-plancher` couvre déjà en 3.10.
+          python-version: "3.12"
+      - name: Importer l'arbre du commit, extrait de git
+        run: python scripts/arbre-importable.py
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # CE QUE CE PUSH JOUE (#1185, décision du 08/10/2026).
+  #
+  # La suite complète (~20 000 tests, 9 à 13 min) ne tourne plus qu'au TAG, une seule fois,
+  # avant la prod (`deploy.yml`). Ici, `test` ne joue que les volets touchés par le diff,
+  # PLUS le socle de gardes transverses — c'est lui qui couvre les rouges nés loin du fichier
+  # modifié (constat de #1111). Table et règles : `tests/volets.toml` ; le script dit dans le
+  # résumé du run ce qu'il a retenu et pourquoi.
+  #
+  # Base du diff : `before` au push (un push peut porter plusieurs commits ; le parent seul
+  # n'en verrait qu'un), la base de la PR sur une PR. Base inconnue (nouvelle branche,
+  # poussée forcée), fichier hors volet, relance manuelle : `cible` est VIDE, donc suite
+  # complète. Jamais l'inverse : un script qui échoue fait échouer le job, et `test` avec.
+  selection:
+    name: Ce que ce push joue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      cible: ${{ steps.selection.outputs.cible }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0  # la base du diff doit être dans l'historique
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - id: selection
+        name: Volets touchés + socle
+        env:
+          # Passés par l'environnement, jamais interpolés dans le script.
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before || '') }}
+          TETE: ${{ github.sha }}
+        run: python3 scripts/selection_tests.py --base "$BASE" --tete "$TETE"
+
+  # LA SÉLECTION DU PUSH, RÉPARTIE EN PARTS PARALLÈLES (#1111) : `suite-tests.yml`. La
+  # répartition par durée mesurée, le `-n` dérivé de la mémoire de CHAQUE machine (leçon de
+  # l'OOM du 07/09), `OTO_TEST_PG_PLACES`, `--dist loadgroup` (#963) et l'agrégateur qui
+  # refuse un test perdu y vivent, avec leur histoire. `cible` vide = la suite complète.
+  suite:
+    needs: [selection]
+    uses: ./.github/workflows/suite-tests.yml
+    with:
+      cible: ${{ needs.selection.outputs.cible }}
+
+  # LE NOM `test` EST UN CONTRAT, DOUBLE. La garde de mise en production
+  # (`scripts/garde_tronc_vert.py`) exige un job nommé EXACTEMENT `test` qui conclut
+  # `success`, et la protection de branche de `main` le requiert sous ce nom ; or un job appelé par `uses:` s'affiche « suite / <job interne> », jamais
+  # `test`. Ce job porte donc le nom, et ne conclut `success` que si la suite entière a
+  # conclu `success`. `always()` : il tourne aussi quand la suite a rougi ou a été sautée,
+  # pour le DIRE en rouge au lieu d'apparaître `skipped` — un job sauté ne rend pas un run
+  # rouge, c'est exactement le trou que la garde ferme.
+  test:
+    needs: [suite]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: La suite a conclu « success »
+        env:
+          RESULTAT: ${{ needs.suite.result }}
+        run: |
+          if [ "$RESULTAT" != success ]; then
+            echo "::error title=Suite de tests : $RESULTAT::suite-tests.yml conclut « $RESULTAT » — le détail est dans ses jobs (suite / …)."
+            exit 1
+          fi
+          echo "suite-tests.yml : success"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # CE QUE PÈSE UNE COLLECTE, SUR LA MACHINE QUI L'EXÉCUTE.
+  #
+  # Le 07/09, quatre workers figés — calibrés sur un poste à 28 cœurs — ont fait tuer
+  # `pytest` par l'OOM killer sept fois de suite sur un runner 4 vCPU / 16 Go, tronc
+  # rouge six heures. La leçon inscrite dans le revert est qu'un nombre de workers se
+  # dérive de la MÉMOIRE de la machine qui exécute. Sauf que cette règle était
+  # inapplicable : personne n'avait jamais mesuré ce que pèse une collecte, et le
+  # cadre de l'OOM lui-même est une déduction depuis la mort, pas une mesure.
+  #
+  # Ce job produit ce chiffre. Il ne règle rien et ne décide rien.
+  #
+  # ⚠️ `continue-on-error` N'EST PAS UNE PRÉCAUTION DE STYLE. La garde de mise en
+  # production exige que le run de CE workflow sur le sha du tag conclue `success` : un
+  # job qui échoue ici bloquerait une release. Un instrument ne doit jamais pouvoir faire
+  # ça. D'où la double ceinture — ce drapeau, ET un script qui ne sort jamais en échec.
+  # Il tourne en parallèle de `test` (~9 min) et ne coûte donc aucune seconde de mur.
+  empreinte-collecte:
+    name: Ce que pèse une collecte
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install (deps + dev, par le verrou)
+        uses: ./.github/actions/installer-par-le-verrou
+        with:
+          # Le même que `test` : on mesure ce que `test` paie, pas autre chose.
+          python-version: "3.12"
+          extra: dev
+      - name: Mesurer
+        # Le relevé va AUSSI dans le résumé du run : un chiffre qu'il faut déplier un
+        # journal pour lire n'est pas lu.
+        run: |
+          {
+            echo '```'
+            python scripts/empreinte_collecte.py
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # LA GARDE S'EXÉCUTE SOUS LE PLANCHER PYTHON.
+  #
+  # Le 21/09/2026, #1039 lisait `code.co_qualname` (Python 3.11+) : la prod tourne en 3.10,
+  # `AttributeError` à chaque accès base depuis la boucle, revert en 3 min. `test` (3.12)
+  # était vert ; `syntaxe-plancher` compile en 3.10 mais n'EXÉCUTE rien, et un attribut
+  # absent n'est pas de la syntaxe. Ce job exécute, sous l'interpréteur de la box, ce qui a
+  # cassé : l'import complet de l'arbre et les bancs de la garde d'exécution.
+  #
+  # COÛT — ~1 min 30 hors chemin critique (parallèle à `test`, ~7 min) : install runtime + dev
+  # (sans le bac à sable ni les bancs Postgres : aucun n'est requis par ces fichiers).
+  # Ce n'est PAS la suite entière en 3.10 : elle coûterait un second `test` de ~7 min.
+  # Un défaut 3.11+ ailleurs, hors de ce périmètre, reste possible : quand il se produit,
+  # ajouter ici le banc qui l'aurait vu.
+  garde-plancher-python:
+    name: La garde s'exécute sous le plancher Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Le verrou installé sous l'interpréteur de la box : c'est aussi la preuve, à
+      # chaque poussée, que `uv sync --frozen` du déploiement passe en 3.10.
+      - name: Install (deps + dev, par le verrou)
+        uses: ./.github/actions/installer-par-le-verrou
+        with:
+          # DOIT rester égal au `requires-python` du pyproject ET à la box
+          # (comme `syntaxe-plancher` de deploy.yml).
+          python-version: "3.10"
+          extra: dev
+      - name: Importer l'arbre du commit sous 3.10
+        run: python scripts/arbre-importable.py
+      - name: Bancs de la garde d'exécution sous 3.10
+        run: pytest -q tests/test_db_hors_boucle.py tests/test_lot1_sql_hors_boucle.py
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # LES CONSOMMATEURS DÉCLARÉS DE NOTRE API (#966).
+  #
+  # Un front (le dashboard) ou un service (le commerce) épingle dans SON
+  # dépôt ce qu'il appelle et lit de notre OpenAPI. Le job de contrat ci-dessous
+  # confronte CHAQUE contrat épinglé à ce que ce code servirait : celui qui casse l'apprend
+  # le premier, ici, et non le lendemain dans le travail de quelqu'un d'autre (mesuré le
+  # 31/08/2026 : deux blocages de livraison chez un front tiers dans la journée, pour
+  # des changements venus de nous).
+  #
+  # La liste vit dans `.github/contrat-consommateurs.json` : nom, dépôt, chemin du
+  # contrat (ou, pour un dépôt privé qui ne doit pas être nommé, `depot_ref`/`chemin_ref` :
+  # les noms des SECRETS qui les portent, jamais des variables — voir
+  # `scripts/lire-contrat-consommateur.sh`), secret de lecture (`null` = dépôt public, lu
+  # sans clé), et depuis #1196 un
+  # `chemin_admin` FACULTATIF — le contrat qu'il épingle sur la console `/api/admin/*`,
+  # qui a son propre document (`build(admin=True)`), jugé avant déploiement seulement. Jusqu'au 25/09 ce
+  # mécanisme était écrit au singulier — un dépôt, un chemin, un secret en dur : un
+  # second consommateur aurait été INVISIBLE, jamais lu ni jugé, et on se serait cru
+  # gardé. Déclarer un consommateur, c'est ajouter une entrée ; rien d'autre.
+  #
+  # Chaque consommateur est jugé dans sa propre jambe (`fail-fast: false`) : un rouge
+  # sur l'un n'empêche pas de juger les autres, et chaque verdict le NOMME.
+  #
+  # ⚠️ Un retrait d'ancienne forme n'a pas de délai fixe (Alexis, 25/09) : il part quand
+  # tous les consommateurs déclarés ont suivi — et c'est ce contrôle qui le constate.
+  consommateurs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      liste_code: ${{ steps.liste.outputs.liste_code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: liste
+        env:
+          # Une PR venue d'un fork ne reçoit aucun secret du dépôt (règle de GitHub).
+          EST_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          set -euo pipefail
+          # La liste se lit dans le dépôt, donc une PR peut la modifier : chaque champ est
+          # vérifié contre une forme stricte AVANT de devenir une matrice.
+          # Une entrée nomme son dépôt EN CLAIR (`depot` + `chemin`) OU par RÉFÉRENCE
+          # (`depot_ref` + `chemin_ref`, noms de secrets, dépôt privé donc `secret` requis,
+          # sans `chemin_admin`) — jamais les deux : `scripts/lire-contrat-consommateur.sh`.
+          if ! jq -e 'type == "array" and length > 0 and all(.[];
+                 type == "object" and
+                 (keys - ["nom", "depot", "depot_ref", "chemin", "chemin_ref", "chemin_admin", "secret"] | length == 0) and
+                 (.nom | test("^[A-Za-z0-9._-]+$")) and
+                 ((has("depot") and (has("depot_ref") | not) and (has("chemin_ref") | not) and
+                   (.depot | test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")) and
+                   (.chemin | test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")) and
+                   ((.chemin_admin // null) == null or (.chemin_admin | test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"))) and
+                   (.secret == null or (.secret | test("^[A-Z][A-Z0-9_]*$"))))
+                  or
+                  ((has("depot") | not) and (has("chemin") | not) and (has("chemin_admin") | not) and
+                   (.depot_ref | test("^[A-Z][A-Z0-9_]*$")) and
+                   (.chemin_ref | test("^[A-Z][A-Z0-9_]*$")) and
+                   (.secret | test("^[A-Z][A-Z0-9_]*$")))))' \
+               .github/contrat-consommateurs.json > /dev/null; then
+            echo "::error title=Liste des consommateurs refusée::.github/contrat-consommateurs.json ne respecte pas la forme attendue (nom ; dépôt owner/repo et chemin relatif, chemin_admin relatif facultatif, secret en MAJUSCULES ou null ; OU depot_ref, chemin_ref et secret, noms de secrets en MAJUSCULES) — aucun contrat n'est jugé."
+            exit 1
+          fi
+          # La garde d'avant déploiement (`contrat-front-code`) ne juge que ce qu'elle PEUT
+          # lire. Sur une PR de fork, un consommateur à secret est illisible : il quitte sa
+          # matrice, et ce retrait est DIT (annotation), jamais rendu en vert. Il est jugé,
+          # secret en main, à la poussée sur main — dont le run vert conditionne le tag.
+          if [ "$EST_FORK" = "true" ]; then
+            non_juges="$(jq -r '[.[] | select(.secret != null) | .nom] | join(", ")' .github/contrat-consommateurs.json)"
+            if [ -n "$non_juges" ]; then
+              echo "::warning title=Contrat NON JUGÉ sur cette PR de fork::GitHub ne transmet aucun secret à une PR venue d'un fork : le contrat de $non_juges n'est pas confronté ici (jambes sautées). Rien à corriger côté contributeur — il est jugé à la poussée sur main, avant toute mise en production."
+            fi
+            echo "liste_code=$(jq -c '[.[] | select(.secret == null)]' .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "liste_code=$(jq -c . .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # LE CONTRÔLE AVANT LE DÉPLOIEMENT — une GARDE, pas un constat.
+  #
+  # Ce job-ci juge le contrat que CE CODE servirait, sans rien déployer : le document
+  # est dérivé par simple import, sans serveur ni base, des routes que le serveur monte
+  # (`server.routes_rest`, la source unique du montage). `OTO_BILLING_ENABLED=1` : la
+  # production sert la facturation ; la dériver sans elle ferait
+  # juger un document que personne ne sert (mesuré le 25/09 : 43 routes « disparues »
+  # pour le dashboard, toutes servies).
+  #
+  # 21/09/2026 — il ne tournait QUE sur les PR, or le tronc reçoit ses commits par
+  # poussée directe : il était `skipped` à chaque déploiement réel, et deux retraits de
+  # champs lus par le front sont partis en préproduction puis en production sans
+  # l'arrêter. Il tourne aussi sur la poussée ; un rouge d'une de ses jambes rend le run
+  # rouge, et la production, qui exige un run de CE workflow vert sur le sha du tag
+  # (`scripts/garde_tronc_vert.py`), est gardée par ricochet.
+  #
+  # Mêmes règles de verdict : seule une rupture d'appel ou de lecture bloque. Un ajout
+  # compatible sort en avertissement et n'empêche PAS de fusionner.
+  #
+  # Un « je n'ai pas pu juger » n'est jamais un « jugé conforme » (#823). GitHub ne
+  # transmet aucun secret à une PR venue d'un fork : un consommateur à secret y est
+  # illisible. Il ne sort ni VERT (rien jugé) ni ROUGE (rien à voir avec le code) : il
+  # quitte la matrice (`liste_code`, filtrée par `consommateurs`, qui l'annonce en
+  # annotation), et si plus rien n'est lisible le job est SAUTÉ. Le même job rejuge le
+  # code, secret en main, à la poussée sur le tronc, avant tout tag. Ailleurs
+  # (PR interne, poussée), un secret déclaré mais absent reste un échec nommé.
+  # ⚠️ Un job sauté compte comme réussi pour un contrôle REQUIS : ne pas rendre ce job
+  # requis sans revoir ce point.
+  contrat-front-code:
+    name: Contrat avant déploiement — ${{ matrix.consommateur.nom }}
+    needs: [consommateurs]
+    if: needs.consommateurs.outputs.liste_code != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        consommateur: ${{ fromJSON(needs.consommateurs.outputs.liste_code) }}
+    timeout-minutes: 10  # max observé 54 s
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install (deps + dev, par le verrou)
+        uses: ./.github/actions/installer-par-le-verrou
+        with:
+          python-version: "3.12"
+          extra: dev
+
+      - name: Dériver le contrat que CE code servirait
+        env:
+          OTO_BILLING_ENABLED: "1"
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/openapi-de-la-pr.json
+          import json
+          from oto_mcp import openapi, server
+          print(json.dumps(openapi.build(server.routes_rest(object()))))
+          PY
+          echo "contrat dérivé : $(wc -c < /tmp/openapi-de-la-pr.json) octets"
+
+      - name: Lire le contrat épinglé
+        id: contrat
+        env:
+          CLE_LECTURE: ${{ matrix.consommateur.secret && secrets[matrix.consommateur.secret] || '' }}
+          NOM: ${{ matrix.consommateur.nom }}
+          # Référence indirecte : le dépôt et le chemin sont des SECRETS (masqués d'office
+          # dans l'en-tête `env:` du journal), lus par leur nom déclaré.
+          DEPOT: ${{ matrix.consommateur.depot_ref && secrets[matrix.consommateur.depot_ref] || matrix.consommateur.depot }}
+          DEPOT_REF: ${{ matrix.consommateur.depot_ref || '' }}
+          CHEMIN_REF: ${{ matrix.consommateur.chemin_ref || '' }}
+          CHEMIN: ${{ matrix.consommateur.chemin_ref && secrets[matrix.consommateur.chemin_ref] || matrix.consommateur.chemin }}
+          SECRET: ${{ matrix.consommateur.secret || '' }}
+        # Valeurs de la liste passées par l'environnement, jamais interpolées dans le
+        # script : une PR peut modifier la liste.
+        run: scripts/lire-contrat-consommateur.sh "$NOM" "$DEPOT" "$CHEMIN" "$SECRET"
+
+      - name: Confronter
+        if: steps.contrat.outputs.lu == 'oui'
+        env:
+          NOM: ${{ matrix.consommateur.nom }}
+          CONTRAT: ${{ steps.contrat.outputs.contrat }}
+        run: |
+          set -uo pipefail
+          code=0
+          python3 scripts/contrat-front.py --consommateur "$NOM" \
+            "$CONTRAT" /tmp/openapi-de-la-pr.json || code=$?
+          if [ "$code" = "2" ]; then
+            echo "::error title=Contrat de $NOM — confrontation impossible::Document illisible — le contrat N'A PAS été jugé."; exit 1
+          fi
+          if [ "$code" != "0" ]; then
+            echo "::error title=Ce code casserait $NOM::Une opération qu'il épingle disparaît, change d'entrée, ou ne rend plus ce qu'il lit. Garder la compatibilité, ou le prévenir AVANT de livrer."; exit 1
+          fi
+
+      - name: Effacer la clé de lecture
+        if: always()
+        env:
+          TRAVAIL: ${{ steps.contrat.outputs.travail }}
+        run: rm -rf "$TRAVAIL"
+
+      # ── Le contrat ADMIN du consommateur, s'il en épingle un (#1196) ──────────────
+      # `/api/admin/*` est absent du document public ; le consommateur qui appelle la
+      # console (un front d'instance, un service d'usage) épingle ces opérations dans
+      # un SECOND contrat, `chemin_admin`, jugé ICI contre le document admin dérivé du
+      # même code (`build(admin=True)`) — avant déploiement seulement, jamais sur une
+      # instance servie : pas de clé admin en CI (décision du 09/10/2026). Mêmes
+      # règles de verdict, même outil de lecture, même secret. Sans `chemin_admin`,
+      # ces quatre étapes sont sautées et rien ne change.
+      - name: Dériver le contrat ADMIN que CE code servirait
+        # `!cancelled()` : un rouge sur le contrat PUBLIC ne saute pas le verdict admin — les
+        # deux se rendent, un consommateur lit ses deux casses d'un coup.
+        if: ${{ !cancelled() && matrix.consommateur.chemin_admin }}
+        env:
+          OTO_BILLING_ENABLED: "1"
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/openapi-admin-de-la-pr.json
+          import json
+          from oto_mcp import openapi, server
+          print(json.dumps(openapi.build(server.routes_rest(object()), admin=True)))
+          PY
+          echo "contrat admin dérivé : $(wc -c < /tmp/openapi-admin-de-la-pr.json) octets"
+
+      - name: Lire le contrat ADMIN épinglé
+        id: contrat_admin
+        if: ${{ !cancelled() && matrix.consommateur.chemin_admin }}
+        env:
+          CLE_LECTURE: ${{ matrix.consommateur.secret && secrets[matrix.consommateur.secret] || '' }}
+          NOM: ${{ matrix.consommateur.nom }}
+          # Référence indirecte : le dépôt et le chemin sont des SECRETS (masqués d'office
+          # dans l'en-tête `env:` du journal), lus par leur nom déclaré.
+          DEPOT: ${{ matrix.consommateur.depot_ref && secrets[matrix.consommateur.depot_ref] || matrix.consommateur.depot }}
+          DEPOT_REF: ${{ matrix.consommateur.depot_ref || '' }}
+          CHEMIN_REF: ${{ matrix.consommateur.chemin_ref || '' }}
+          CHEMIN: ${{ matrix.consommateur.chemin_admin }}
+          SECRET: ${{ matrix.consommateur.secret || '' }}
+        run: scripts/lire-contrat-consommateur.sh "$NOM" "$DEPOT" "$CHEMIN" "$SECRET"
+
+      - name: Confronter (admin)
+        if: ${{ !cancelled() && steps.contrat_admin.outputs.lu == 'oui' }}
+        env:
+          NOM: ${{ matrix.consommateur.nom }}
+          CONTRAT: ${{ steps.contrat_admin.outputs.contrat }}
+        run: |
+          set -uo pipefail
+          code=0
+          python3 scripts/contrat-front.py --consommateur "$NOM (admin)" \
+            "$CONTRAT" /tmp/openapi-admin-de-la-pr.json || code=$?
+          if [ "$code" = "2" ]; then
+            echo "::error title=Contrat admin de $NOM — confrontation impossible::Document illisible — le contrat admin N'A PAS été jugé."; exit 1
+          fi
+          if [ "$code" != "0" ]; then
+            echo "::error title=Ce code casserait la console chez $NOM::Une opération /api/admin/* qu'il épingle disparaît, change d'entrée, ou ne rend plus ce qu'il lit. Garder la compatibilité, ou le prévenir AVANT de livrer."; exit 1
+          fi
+
+      - name: Effacer la clé de lecture (admin)
+        if: always()
+        env:
+          TRAVAIL: ${{ steps.contrat_admin.outputs.travail }}
+        run: if [ -n "$TRAVAIL" ]; then rm -rf "$TRAVAIL"; fi

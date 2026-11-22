@@ -46,11 +46,29 @@ nom entier est désormais un candidat ; aucun outil existant ne change de namesp
 
 **Chaque étape passe par `meta.executer_cible`**, la couture d'`oto_call` et des
 recettes. Elle garde donc tout ce qu'un appel direct a : la garde d'activation du
-connecteur pour l'org et l'équipe de l'appel, la cascade de clé, le niveau d'accès, la
-liste d'outils d'un travail hébergé, **sa** ligne dans `tool_calls` (donc sa `quantity`
+connecteur pour l'org et l'équipe de l'appel, la cascade de clé, le niveau d'accès,
+**sa** ligne dans `tool_calls` (donc sa `quantity`
 et son `key_mode` : la facturation reste sur la ligne du fournisseur, jamais sur celle
 du waterfall), et la rédaction de **son** namespace. Le waterfall n'a ni clé ni
 facturation propres.
+
+**Sous un travail hébergé, la cascade accordée couvre ses étapes** (18/11/2026). La
+liste d'outils d'un agent dit ce que le MODÈLE appelle. Un agent qui a `waterfall_person`
+(ou `waterfall_person_act`) fait tourner ses étapes sans lister `lemlist_database`,
+`apollo_match_person`… : pendant la cascade (`moteur._run_cascade`), la garde du travail
+(`outils_du_travail.refus`) laisse passer un outil s'il est l'une des étapes de CETTE
+cascade (`waterfall/cites.outils_internes` : outils d'étape, de collecte, de révélation,
+de variantes, et `jev_items` là où `qualify=` se demande), que l'outil en cours est la
+cascade elle-même (`verrou_org.outil_en_cours`, posé au bord) et qu'elle est dans la
+liste du travail, relue. La table d'étapes est fixée dans le code : `providers=` ne fait
+que choisir parmi elle. Le reste de la garde de l'étape ne bouge pas (activation, niveau
+d'accès, clé). Le modèle, lui, n'appelle toujours que sa liste : `lemlist_database` en
+direct ou par `oto_call` reste refusé. Ce n'est PAS la règle d'`oto_call` ni des
+recettes, dont le corps nomme n'importe quel outil. Avant, chaque étape était refusée
+(`tool_not_in_job`) faute d'être listée, et la parade proposait de lister ses outils, ce
+qui les ouvrait en direct, hors des bornes de la cascade. Seule exception : une réponse
+`pending` se collecte plus tard par un appel du modèle ; si son outil de collecte n'est
+pas dans la liste, le reçu le dit (`missing_tools`, `fix`, `next_step`).
 
 ## Ce que l'ordre par défaut optimise
 
@@ -98,7 +116,12 @@ comprise : du point de vue de l'org, c'est une clé payée par l'opérateur de l
 refacturée sur le tenant primaire, pas la sienne,
 chaque groupe dans l'ordre de la table (tri stable). Un ordre ÉCRIT — celui de l'appel ou
 du réglage — est gardé tel quel : quelqu'un l'a choisi. Un fournisseur sans clé utilisable
-(`forbidden`, `over_quota`) est sauté sans être appelé. ⚠️ Ce mode est une lecture
+(`forbidden`, `over_quota`) est sauté sans être appelé — sauf une étape **sans clé**
+(`Step.keyless` : le registre français, `fr_get` / `fr_search`, de l'open data) : son
+connecteur (`sirene`) porte une clé pour d'AUTRES outils (l'INSEE, `fr_siret`), dont le mode
+ne dit rien d'elle ; elle est lue `open`, jamais sautée `no_key` (registre
+sauté dans une org où il répondait en direct, la cascade finissait sur un homonyme d'un
+autre pays). ⚠️ Ce mode est une lecture
 proche de la résolution réelle, pas exacte (il ignore un `_instance` épinglé, un compte
 nommé, l'option payante) : il ORDONNE, il ne garde rien — la garde reste l'appel de
 l'étape.
@@ -326,6 +349,21 @@ poste ACTUEL est ailleurs, et des faux profils : gardés seulement si
 sur `linkedin.com/in`, un titre « Nom – Poste – Société | LinkedIn », gardé seulement s'il
 nomme la société).
 
+⚠️ **Google : UNE recherche par rôle, jamais un OU entre parenthèses**.
+Serper rend une liste VIDE pour `"Acme" (a OR "b c" OR d)` là où `"Acme" "a"` trouve
+(mesuré) : l'étape ratait en silence la plupart des recherches. Elle envoie donc
+`"Acme" "<rôle>"` par rôle (`Step.fan_out`, rôles dédoublonnés, au plus
+`GOOGLE_MAX_QUERIES` — les suivants nommés `not_sent`), fusionne les résultats et
+dédoublonne les profils par leur slug `/in/<slug>` (un même profil revient sous
+`fr.linkedin.com` et `www.linkedin.com/…/`). Sans rôle : une seule recherche sur la société.
+Chaque recherche envoyée est facturée par `serper_search` et compte dans
+`max_paid_steps` ; elles partent l'une après l'autre et s'arrêtent dès que la trouvaille
+tient `limit` personnes (`stopped: limit_reached`), à `max_paid_steps` ou au budget de
+temps — un échec ainsi coupé porte le `code` de la limite (le mode tableau laisse la
+ligne à reprendre). Une recherche qui échoue après d'autres garde ce qu'elles ont trouvé
+(`stopped` = son code). Le reçu dit `calls` ; un `dry_run` liste chaque recherche
+(`fan_out`). Sous `qualify_min`, la page suivante se lit pour CHAQUE recherche.
+
 ### La base de personnes de lemlist (21/10/2026)
 
 Mesuré sur une vraie société (~360 personnes en base) :
@@ -441,6 +479,57 @@ optionnels, sur chacun des outils, pour l'agent qui veut une limite :
 Restent les bornes de forme, pas de dépense : la réponse (`limit` des gens, jusqu'à 100),
 le délai de la cascade (40 s, la route REST coupe à 45 s) et celui d'une exécution Apify.
 
+## Plusieurs comptes d'un même fournisseur : `_accounts`
+
+Le besoin : une org qui tient DEUX comptes d'un même fournisseur (deux espaces lemlist)
+appelait `lemlist_database(_account=…)` sans peine, mais une cascade n'avait aucun moyen
+de dire sous lequel ses étapes lemlist devaient partir. L'axe `_account` ordinaire ne
+convient pas : il pose le compte de L'APPEL (`session_org._CALL_ACCOUNT`), que lit la
+résolution de clé de CHAQUE étape — une cascade qui traverse lemlist, Apollo, AI Ark
+chercherait ce nom chez chacun.
+
+La règle (`oto_mcp/waterfall/comptes.py`) :
+
+- **`_accounts={"lemlist": "<compte>"}`** — un compte par CONNECTEUR, jamais par étape :
+  `waterfall_person` a deux étapes lemlist (`lemlist_db`, `lemlist`) et
+  `waterfall_company` une complétion (`lemlist_linkedin`) ; toutes partent sous le compte
+  nommé pour lemlist. Le nom du connecteur ou de son porteur au coffre est accepté
+  (`linkedin_unipile` ou `unipile`). Chaque appel d'une étape de ce connecteur — la recherche, ses
+  pages, la révélation, la relève d'une étape asynchrone (et l'appel de relève rendu dans
+  `pending`) — porte `_account`, que `meta.executer_cible` lit comme pour tout appel ;
+  les étapes des autres connecteurs n'en reçoivent aucun. La ligne de l'étape dans
+  `attempts` dit `account`.
+- **`_account` simple** : accepté seulement quand les étapes qui VONT tourner (après
+  `providers`, le réglage, le mode tableau) ne s'appuient que sur UN connecteur à compte
+  (`providers=["lemlist_db", "lemlist"]`). Sinon il nommerait le même compte chez tous :
+  refusé, en nommant `_accounts`. Les deux ensemble : refusé. Règle STATIQUE, jugée sur
+  le plan et non sur le contenu du coffre — qu'un autre connecteur reçoive demain un
+  compte du même nom ne change pas le sens d'un appel d'hier.
+- **Jugé avant de payer**, `dry_run` compris : un nom qui n'est pas un connecteur des
+  étapes (l'open data, `fr_get`, n'en prend aucun) est refusé en listant les bons ; un
+  compte que le connecteur n'a pas est refusé (`account_not_found`). La vérification
+  résout la clé nommée (`resolve_credential(account=…, check_usage=False)`) sous un relevé
+  d'appel JETABLE : ce que la résolution y note (`key_mode`, la ligne du coffre) facture
+  et nomme le payeur de l'appel. Un connecteur sans clé du tout n'est pas refusé ici :
+  son étape le dit (`no_key`), comme avant. Les comptes de messagerie (`unipile`) sont
+  des identités opérées, jugées par l'étape elle-même. En mode tableau, le refus tombe
+  une fois, avant de lire une ligne (`moteur.juger_comptes`).
+- **Le filet** : si le connecteur répond quand même « compte à nommer »
+  (`account_required`) pour un compte nommé, la cascade s'ARRÊTE là — la faute de frappe
+  de l'appelant ne fait pas payer les fournisseurs suivants.
+- **Rien de nommé = rien ne change** : aucun appel ne porte `_account`, le coffre n'est
+  pas lu. Deux comptes sans défaut et rien de nommé : l'étape échoue `account_required`
+  et passe la main, comme avant — son message nomme désormais `_accounts`, plus le
+  `_account` d'un appel direct.
+
+Les deux axes (`call_axes.STEP_ACCOUNTS`, `CASCADE_ACCOUNT`) ne s'annoncent que sur les
+douze outils des cascades et se posent dans des ContextVars que seule la cascade lit.
+Reste approché : le mode de clé (`key`) d'une étape et donc l'ordre par défaut se lisent
+sans le compte (`ordre._key_modes`), un compte nommé au palier de l'org quand la
+personne en tient un autre peut s'y lire `user`. Un compte épinglé par le projet
+(`_project=`, identité préfaite par connecteur) servait déjà les cascades : il se lit
+connecteur par connecteur, sans cette ambiguïté.
+
 ## Qualifier par Jev avant de dépenser
 
 `waterfall_company`, `waterfall_person` et `waterfall_people` prennent `qualify` (une
@@ -532,15 +621,13 @@ de `datastore/par_reference` (`docs/donnees-par-reference.md`), comme `lemlist_p
   la cascade → `time_budget` / `max_paid_steps` ; une trouvaille que Jev devait juger et
   n'a pas jugée → `qualification_skipped`. La ligne reste VIDE, le code va au reçu
   (`skipped_<code>`, `errors`), et l'appel suivant la retente.
-- ⚠️ **Une étape hors de la liste d'un agent hébergé** (27/10/2026) : la garde du travail
-  la saute (`appel._call`), comme toute garde. Avant, la ligne revenait
+- ⚠️ **Une étape refusée par la liste d'un agent hébergé** (27/10/2026 ; depuis le
+  18/11/2026 la cascade accordée couvre ses étapes, ce cas ne reste que si le refus a
+  lieu quand même) : la garde du travail la saute (`appel._call`), comme toute garde. Avant, la ligne revenait
   `no_step_answered` — ou `no_match` si une autre étape avait répondu, fermée pour de
   bon — et l'agent concluait à un quota. Désormais : `tool_not_in_job`, la ligne reste
   vide, et le reçu nomme les outils (`missing_tools`) avec le geste qui les donne
-  (`fix`, la forme du refus d'une recette-code) et `next_step` pour l'agent. Un `dry_run`
-  le dit aussi des étapes qu'il planifie : le plan les disait `planned` sans un mot. Avant le run,
-  `missing_tools` de l'agent les nomme déjà quand sa procédure écrit les fournisseurs
-  (`waterfall/cites.py`, `docs/runner-et-automatisations.md`).
+  (`fix`, la forme du refus d'une recette-code) et `next_step` pour l'agent.
 - `qualify` sans Jev utilisable : refusé avant de lire une ligne ; une clé de `providers`
   inconnue : refusée une fois, avant la première ligne.
 - **Mêmes entrées, une recherche** : les lignes dont les entrées normalisées coïncident

@@ -40,11 +40,11 @@ plus 10 essais et 20 s (`PUBLIC_PAS`, `PUBLIC_ESSAIS`, `PUBLIC_ATTENTE_MAX`), pu
 — nombre d'essais, durée, dernier code — et rebascule comme avant. Un code HTTP reçu autre
 que 200 échoue tout de suite : la couleur répond mal, l'attente serait servie au public.
 
-**Notre box fait exactement les mêmes gestes qu'avant.** Nos deux wrappers
-(`deploy/oto-backend.sh`, `deploy/oto-backend-canari.sh`) déclarent les valeurs qui
-étaient en dur, à l'identique. La preuve est un banc, pas une relecture :
+**Notre box fait exactement les mêmes gestes qu'avant.** Notre wrapper
+(`deploy/oto-backend.sh` ; celui de notre ancienne préproduction est retiré depuis le
+19/11/2026) déclare les valeurs qui étaient en dur, à l'identique. La preuve est un banc, pas une relecture :
 `tests/deploy/test_gestes_bleu_vert_967.py` rejoue chaque scénario réel — bascule dans
-les deux sens, retour arrière, préproduction, vidange, couleur morte, `caddy validate`
+les deux sens, retour arrière, vidange, couleur morte, `caddy validate`
 qui refuse, trafic public en échec, lanceur figé — avec des doublures qui journalisent
 chaque commande, et compare la trace (commandes, sortie, état final des fichiers) à la
 référence enregistrée depuis les scripts d'avant (`tests/deploy/gestes_bleu_vert/`).
@@ -74,14 +74,19 @@ est **dans le tag** : ni propagé, ni édité sur la machine.
   (`OTO_SECRETS_CHEMIN`, `/preprod` ou `/prod` : chaque rôle a sa `DATABASE_URL`). Chaque
   secret porte le **nom de sa variable**. Aucun identifiant n'est écrit nulle part.
 - **La clé d'API** arrive par `LoadCredential=scw:…` de l'unité, lisible du seul service.
+- **Le coffre sous Key Manager** ne passe pas par le lanceur : le serveur ouvre lui-même ses
+  clés enveloppées (`crypto`, docs/connector-vault.md §Les modes de clé), avec une seconde
+  clé d'API, `LoadCredential=scw-kms:<fichier>`, posée à la main au passage à Key Manager
+  (§3 bis). Le lanceur ne fait que tirer `OTO_MCP_TROUSSEAU` comme tout secret facultatif.
 - **Le `.env` ne porte que le non-secret** : un secret trouvé dans l'environnement
   refuse le démarrage.
 
 Notre box démarre par ce lanceur depuis le 30/09/2026 (lot 5, décrit pas à pas plus bas,
-§Passer notre box au lanceur) : nos deux wrappers déclarent `BG_LANCEUR=versionne`.
-`deploy/start-encrypted.sh` et `-canari.sh`, l'ancienne déclaration de secrets **propre à
-notre cible** (identifiants de notre projet, Mollie, Pennylane), ne servent plus qu'au
-retour arrière du lot 5 : ils partent au lot 5b avec le mode `propage`.
+§Passer notre box au lanceur) : notre wrapper déclare `BG_LANCEUR=versionne`.
+`deploy/start-encrypted.sh`, l'ancienne déclaration de secrets **propre à notre cible**
+(identifiants de notre projet, Mollie, Pennylane), ne sert plus qu'au retour arrière du
+lot 5 : il part au lot 5b avec le mode `propage`. (Son pendant de préproduction est retiré
+avec elle, le 19/11/2026.)
 
 Le lanceur démarre le serveur, ou — `--script CHEMIN` — un script de l'arbre sous son
 Python (l'archive du journal, un script d'entretien), avec les mêmes secrets ; `--noms`
@@ -107,6 +112,7 @@ rien et réécrit seulement ce qui se dérive de la déclaration.
 | Amont Caddy initial | `/etc/caddy/upstream-<i>-<r>.conf` |
 | Vidange (chemin stable : elle tourne après le déploiement) | `/usr/local/lib/<i>/oto-mcp-drain.sh` |
 | Maintenance quotidienne, après la bascule, sur l'arbre qui sert — chaque rôle a sa base, donc la sienne | `<i>-<r>-maintenance.{service,timer}` |
+| Archive quotidienne du journal d'appels (rétention, mois sortis vers le seau du rôle), même pose que la maintenance | `<i>-<r>-journal-archive.{service,timer}` |
 
 Ce qu'elle **exige et ne pose jamais** — le socle, geste d'opérateur, chacun refusé en
 le nommant s'il manque : root ; `uv`, `git`, `caddy`, `python3` ; la clé d'API du
@@ -355,6 +361,43 @@ Sur une Ubuntu 24.04 du projet de la cible, montée selon le socle d'une box tie
 ⚠️ Le `:22` reste ouvert jusqu'à ce qu'**un déploiement réel soit passé par le
 tunnel** ; on ne le ferme qu'après (socle, gestes J+2/J+7 ; § Passer au tunnel, puis
 fermer le :22).
+
+### 3 bis. Le coffre sous Key Manager (checklist)
+
+Une cible démarre en mode plate (`OTO_MCP_MASTER_KEY` seule). Le mode Key Manager
+(docs/connector-vault.md §Les modes de clé) ajoute **deux variables, un secret et un
+credential**, rien d'autre : ni la bibliothèque bleu/vert ni le lanceur ne changent.
+
+- [ ] Chez le titulaire, dans **son** organisation Scaleway : un projet dédié qui ne porte
+  que la clé ; une clé Key Manager `aes_256_gcm`, région de la base, rotation périodique,
+  protégée (`ProtectKey`) ; une application IAM dont la seule permission sur ce projet est
+  `KeyManagerKeyDecrypt`, et sa clé d'API. La clé de données se crée par un humain
+  (`GenerateDataKey` sans clair), jamais par la machine.
+- [ ] **Credential** : la clé d'API de l'application IAM dans `/etc/<i>/scw-kms.key`
+  (0600, root), à côté de `scw.key`. PUIS, le fichier en place (un chemin absent fait
+  échouer l'unité), un complément à la main pour l'unité du rôle et sa maintenance — le
+  gabarit `deploy/cible/instance@.service` ne porte pas la ligne, et l'amorce le réécrit à
+  chaque déploiement, alors qu'elle ne touche pas aux compléments :
+  ```
+  # /etc/systemd/system/<i>-<r>@.service.d/scw-kms.conf
+  # /etc/systemd/system/<i>-<r>-maintenance.service.d/scw-kms.conf
+  [Service]
+  LoadCredential=scw-kms:/etc/<i>/scw-kms.key
+  ```
+  puis `systemctl daemon-reload`. Les commandes `systemd-run` du lanceur (migrations jouées
+  par la montée, `deploy/cible/deployer.sh`) ne la portent pas ; une commande lancée à la main
+  qui doit ouvrir le coffre ajoute `-p LoadCredential=scw-kms:/etc/<i>/scw-kms.key`.
+- [ ] **Secret** : `OTO_MCP_TROUSSEAU` sous le chemin de chaque rôle, valeur
+  `{"02": "<ciphertext rendu par GenerateDataKey>"}`, ajouté aux `secrets_optionnels` de la
+  déclaration.
+- [ ] **Variables** (non secrètes, dans le `.env` du rôle) : `OTO_MCP_KMS_CLE` (l'id de la
+  clé) et `OTO_MCP_KMS_REGION`.
+- [ ] Déployer **en écriture `01`** : le journal du démarrage nomme `key_ref=0x01` et
+  `key_ref=0x02` avec leurs empreintes. Puis `OTO_MCP_CLE_ECRITURE=02` dans le `.env`, et
+  redéployer.
+
+Un export de périmètre vers cette cible reste chiffré sous sa clé **plate** tant qu'elle en
+a une ; une cible sous Key Manager seul ne peut plus en recevoir (docs/connector-vault.md).
 
 ### 4. L'environnement GitHub de la cible
 

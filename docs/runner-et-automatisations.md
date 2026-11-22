@@ -184,11 +184,20 @@ jusqu'au 01/09/2026 : c'est faux et constaté sur la machine), gaté par le cran
   relever `max_rows` (`op=update`) ou déclarer une autre automatisation.
   ⚠️ **Deux planchers, parce que la garde suit ce que le geste ENGAGE** :
   `launch` est réservé aux **admins** de l'org (il engage une dépense et des
-  écritures chez un tiers, irréversibles) ; `stop` est ouvert à **tout membre**
-  (un passage qui part en vrille doit pouvoir être stoppé par la première
-  personne qui le voit). Deux gardes distinctes : *un déroulé ne LANCE pas* (un
-  agent qui se relance dépense en boucle) et *un déroulé n'arrête pas CELLE QUI
-  L'EXÉCUTE* — nommée, plutôt que de fermer le verbe à tout le monde.
+  écritures chez un tiers, irréversibles) ; `stop` est ouvert au **propriétaire**
+  de l'automatisation et aux admins (le propriétaire arrête la sienne sans attendre
+  un admin). Deux gardes distinctes : *un déroulé ne LANCE pas* (un agent qui se
+  relance dépense en boucle) et *un déroulé n'arrête pas CELLE QUI L'EXÉCUTE* —
+  nommée, plutôt que de fermer le verbe à tout le monde.
+  ⚠️ **Droit par objet sur `update` et `stop`** : modifier une automatisation
+  (consigne, outils, bornes, libellé) ou l'arrêter est réservé à son
+  **propriétaire** (`runner_fleets.sub`, la personne qui l'a déclarée, sous
+  l'identité de qui elle s'exécute) et aux **admins** de l'org, sinon
+  `403 fleet_edit_forbidden` (`update`) ou `403 fleet_stop_forbidden` (`stop`).
+  Les niveaux sont ceux des agents (`_acces_agent.niveaux_d_objets`) ; une
+  automatisation ne se partage pas, donc aucun autre membre n'a de niveau
+  d'écriture. La lire (`list`, `get`, `state`) reste ouvert à tout membre ;
+  `launch` garde son plancher admin. Il n'existe pas de verbe de suppression.
 - **déclencheurs** `runner_triggers` — capacité + MCP `oto_trigger` (un agent hébergé de l'org,
   pas la tâche planifiée qu'un utilisateur demande à son assistant — voir l'avertissement en tête), tick
   backend avec CAS sur `next_due` (prod/preprod partagent la base : un seul
@@ -1064,6 +1073,7 @@ travail que ce que le modèle déclare :
 
 | Modèle | `effort` | `max_output_tokens` |
 |---|---|---|
+| `claude-sonnet-5-5`, `claude-opus-5-5`, `claude-haiku-5-5` | — (celui du worker) | — (celui du worker) |
 | `claude-sonnet-5`, `claude-opus-5` | — (celui du worker) | — (celui du worker) |
 | `claude-haiku-4-5` | `none` | — |
 | `mistral-large-2512` | — | 8 192 |
@@ -1088,6 +1098,31 @@ fournisseur.
 ⚠️ **Un `continue` relit l'effort et le plafond du `start`**, jamais le catalogue
 courant (`db.modele_du_run`). Les deux voyagent ensemble : relire l'effort sans le
 plafond faisait lever toute reprise d'un run qui raisonne (relevé en revue).
+
+### La génération Claude 5.5 passe devant, et les agents la rejoignent (11/11/2026)
+
+Le catalogue sert `claude-sonnet-5-5`, `claude-opus-5-5` et `claude-haiku-5-5` EN TÊTE,
+puis les ids d'avant (`claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`), qui restent
+servis et routés. Sonnet 5.5 est donc le défaut proposé quand la famille est servie et
+payable, et `repli_api` envoie `sub:sonnet|opus|haiku` au modèle 5.5 du même tier
+(premier du tier dans l'ordre).
+
+- **Les agents posés passent à la 5.5** par la révision `20261116_2220_modeles_claude_55` :
+  `runner_triggers.model` et `forfait_prete_model` dans la même écriture (un prêt n'est
+  vivant que si les deux sont égaux), puis `runner_fleets.model`.
+- ⚠️ **La révision se joue APRÈS le tag de prod** qui porte ce catalogue : prod et préprod
+  partagent la base et le tick tourne dans les deux. Jouée avant, la prod lirait des ids
+  qu'elle ne connaît pas et refuserait la livraison de ces agents (`motif_sans_famille`).
+  Ordre : fusion -> tag -> `oto-mcp migrer upgrade head` -> comptage (plus aucun
+  déclencheur ni flotte sur un id d'avant). ⚠️ Entre la fusion et le tag, un agent posé ou
+  retouché EN PRÉPROD sur un id 5.5 est refusé par le tick de la prod jusqu'au tag.
+- ⚠️ **`runner_jobs` n'est PAS réécrit.** Un travail enfilé porte sa charge et se route
+  par `model_family` (inchangée) ; un `continue` reprend le modèle du départ de son run,
+  jamais le catalogue courant (ci-dessus).
+- ⚠️ **Les lignes de barème des trois modèles 5.5 se posent AVANT la fusion**
+  (`docs/credits-au-moment-de-l-appel.md`) : sans elles, un tour sur clé refacturée est
+  `credits_unpriced` — refusé en `enforce`, servi sans réservation en `report`. Celles des
+  ids d'avant restent : travaux en vol et reprises se règlent sous elles.
 
 ⚠️ **Le backend se déploie avant le runner.** Un worker d'avant ce lot ignore
 `max_output_tokens` et applique sa variable d'hôte ; un worker d'après lève sur un
@@ -1132,6 +1167,21 @@ défaut ; `oto_org_settings domain=model_regions`, REST `/api/orgs/{id}/model-re
 admin de l'org). Écartés : `allowed: false` au catalogue (l'écran ne les propose pas),
 refusés à la pose (`model_region_blocked`, 403), et un travail déjà en file sur l'un d'eux
 est arrêté à la réservation, sur la clé de l'org comme sur la nôtre, raison écrite.
+
+Une org peut aussi éteindre un modèle à la fois (`orgs.disabled_models`, vide par défaut ;
+`oto_org_settings domain=models`, REST `GET|PUT /api/orgs/{id}/models` avec
+`{model, enabled}`, admin de l'org ; 15/11/2026). Éteint : `allowed: false, disabled: true`
+au catalogue, jamais par défaut (le défaut se redérive sur le premier modèle proposable
+qui reste), refusé à la pose (`model_disabled`, 403). Un agent déjà posé dessus ne tourne
+plus, **sans repli sur un autre modèle** (16/11/2026) : à l'horloge, l'occurrence est
+sautée (`refused_model_disabled` sur la page de l'agent) ; au webhook, la livraison est
+refusée (409 `model_disabled`, même trace) ; `run_now` et `rerun` sont refusés (403
+`model_disabled`) ; une campagne s'arrête (`stop_reason = model_disabled`). Un travail
+déjà en file sur lui est arrêté à la réservation, raison écrite. La bascule (`set`) rend
+`agents_on_model` : le nombre et les ids des agents de l'org posés sur ce modèle, en
+pause compris (rallumés, ils buteraient sur le même arrêt). Le modèle par défaut ne
+s'éteint pas (`model_is_default`, 409) ; les abonnements personnels (`sub:*`) ne se
+basculent pas (`unknown_model`).
 
 ### Un agent tourne sur la clé de SON org — ou ne tourne pas (12/09/2026)
 
@@ -2062,8 +2112,9 @@ comme `api/hooks.py`), logique dans `slack_events.py`, sans HTTP.
   demande le scope `app_mentions:read`, posé dans `auth/slack.BOT_SCOPES` : un espace
   installé avant se réinstalle une fois. Un DM ne demande que `im:history`.
 - **Preuve** : la signature Slack (`X-Slack-Signature`, HMAC-SHA256 sur
-  `v0:{ts}:{corps brut}`) avec le **secret de signature de l'app**, réglage plateforme
-  `connector_settings(slack, signing_secret)` — pas un secret par agent. Fenêtre de
+  `v0:{ts}:{corps brut}`) avec le **secret de signature de l'app**, secret de
+  l'application de l'instance rangé au coffre (`slack` / `signing_secret`,
+  `auth/app_instance`) — pas un secret par agent. Fenêtre de
   5 min, jugée après la signature. Pas de secret posé = 503 (Slack retente), journalisé.
 - **Accuser d'abord** : Slack attend un 200 sous 3 s, et `users.info` seul peut dépasser
   (délai de lecture du client : 60 s). La route vérifie et lit l'événement, répond
@@ -2130,11 +2181,12 @@ Un agent hébergé qui poste **en tant que l'app** (`slack_post_message(author="
 
 - **Réglage d'org « mention seule »** : `oto_org_settings domain=slack` (`get` membre,
   `set` admin de l'org, `mention_only` true|false ; colonne `orgs.slack_mention_only`,
-  défaut `false`, révision `20261109_2100_slack_mention_only`, `db/slack_reglage.py`).
-  **Par défaut, rien ne change** : une réponse dans le fil relance l'agent sans mention,
-  et la réponse de la même personne dans une conversation de l'agent intégré la poursuit
-  (`docs/copilot.md` §Dans Slack). Posé à `true`, hors d'un DM, l'app ne répond qu'à un
-  message qui la **tague** (`@<app>`), réponses en fil comprises : une réponse sans
+  défaut `true` depuis le 19/11/2026, orgs existantes comprises — révisions
+  `20261109_2100_slack_mention_only` puis `20261119_1200_slack_mention_dflt`,
+  `db/slack_reglage.py`). Posé à `false`, une réponse dans le fil relance l'agent sans
+  mention, et la réponse de la même personne dans une conversation de l'agent intégré la
+  poursuit (`docs/copilot.md` §Dans Slack). **Par défaut**, hors d'un DM, l'app ne répond
+  qu'à un message qui la **tague** (`@<app>`), réponses en fil comprises : une réponse sans
   mention est jetée **avant tout credential** (`ignored: mention_only`) — l'org se lit
   sur le fil lui-même (`slack_agent_posts.org_id`, ou l'org de la conversation de
   l'agent intégré, `copilot.slack_org_du_fil`), jamais sur l'installation. Les DM ne
@@ -2499,7 +2551,7 @@ ces identifiants. D'où trois conséquences lisibles dans le code :
 - seul un **worker de plateforme** reçoit ce sandbox, et seul lui peut faire arrêter
   un travail faute de connexion — la file est ouverte aux membres, pas ce pouvoir.
 
-**Des ids PRÉFIXÉS.** La famille se DÉDUIT du modèle : `claude-sonnet-5` reste la voie
+**Des ids PRÉFIXÉS.** La famille se DÉDUIT du modèle : `claude-sonnet-5-5` est la voie
 « clé de l'org », `sub:sonnet` est la voie « abonnement ». Le worker retire le préfixe.
 
 **La couture du partage : `_abonnement.peut_agir_pour`.** Au niveau de la PERSONNE : le
@@ -3024,11 +3076,59 @@ escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'an
   `runner_triggers.echec_annonce_at` est posé après l'envoi, et l'épisode suivant ne
   s'ouvre qu'après un succès. Aucune remise à zéro à écrire. La marque ne date pas
   l'agent (`updated_at`).
-- **Le courriel** : un par org, à son premier admin joignable (la même règle que
-  `alertes-credential`, `destinataire_admin`), par le courrier de plateforme sous la
-  marque de l'org (`org_store.org_front` → `email_templates._envoyer`), hors des heures
-  calmes par défaut (`scheduler.DEFAULT_QUIET_HOURS`, 20 h–8 h à Paris : un épisode vu
-  la nuit part au premier passage du matin). Un envoi raté ne marque rien.
+- **Le courriel** : écrit à CHAQUE destinataire de l'org, dans sa langue
+  (`alerte_agents_bloques.destinataires`, la même règle que `alertes-credential`) : le
+  titulaire de chaque agent bloqué encore membre de l'org, puis tous ses admins. ⚠️ **Le
+  personnel de la plateforme est écarté** (`access.is_operator_role`), comme un compte
+  suspendu : un opérateur est admin de nombreuses orgs clientes, et c'est le client qui
+  répare. Une org sans client joignable garde son premier admin, opérateur compris.
+  Par le courrier de plateforme sous la marque de l'org (`org_store.org_front` →
+  `email_templates._envoyer`), hors des heures calmes par défaut
+  (`scheduler.DEFAULT_QUIET_HOURS`, 20 h–8 h à Paris : un épisode vu la nuit part au
+  premier passage du matin).
+- **Ce que chacun reçoit** : un admin de l'org, tous ses agents bloqués ; un membre, les
+  seuls agents qu'il a le droit de voir (`alerte_agents_bloques.agents_visibles`, la
+  règle d'accès des agents `capabilities/_acces_agent.niveaux` : les siens, ceux qu'on
+  lui partage). Chaque courriel est composé pour son destinataire ; sans rien à lui
+  montrer, rien ne lui part.
+- **La marque** reste par agent : posée dès qu'UN courriel client est parti (rejouer pour
+  celui qu'un envoi a raté renverrait le message à tous les autres). Aucun courriel
+  client parti : rien n'est marqué, l'épisode est rejoué au passage suivant, et l'équipe
+  n'est pas écrite. Un agent dont le titulaire a quitté l'org, dans une org où les seuls
+  autres destinataires sont des membres qui ne le voient pas, est marqué sans qu'un
+  client l'ait lu : seule l'équipe le reçoit.
+- **Le courriel d'équipe** (`alertes_equipe.py`) : après les courriels clients d'une org,
+  un courriel SÉPARÉ à chaque admin de plateforme de l'instance (voir plus bas) — jamais
+  une copie visible du client. Il reprend tous les agents de l'org, la nomme (« Copie pour
+  l'équipe — org « nom » (#id), N courriel(s) envoyé(s) dans l'org. »), sous la marque
+  de l'instance, objet préfixé `[équipe]`. Un envoi d'équipe raté est journalisé et
+  compté (`equipe_rates`), jamais rejoué. Même courriel d'équipe pour l'alerte de clé
+  (`maintenance.alertes_credential`, voir plus bas).
+- **Ce qu'il dit** : sous le réglage des alertes d'agents
+  (`OTO_ALERTES_SLACK_AGENTS_ENABLED`), il parle comme Slack. Le TYPE de problème d'un
+  agent se décide en UN endroit (`alerte_agents_bloques.type_de_probleme` : `echec`,
+  ou `forfait` pour un agent qui attend un abonnement à reconnecter — sa phrase et le
+  geste de reconnexion, jamais ceux d'un échec), son texte en un autre
+  (`probleme_de_l_agent`) : pour un échec, le texte du
+  problème de son épisode vivant (`alertes_slack_agents.message_du_probleme` : la copie
+  de la cause approuvée, sinon le texte du médecin, sinon la phrase de la classe ; une
+  lecture d'épisodes par org, `sante_agents.episodes_vivants`) ; une panne pas encore
+  comprise (`cote = inconnu`) que le médecin n'a pas dite reçoit la phrase de l'onglet
+  Santé (`agent_health.A_NOUS_INCONNU`), jamais celle d'une classe. Les agents dont le
+  client lirait exactement le même problème (titre, geste, lien) forment UN bloc qui les
+  nomme — chacun lien vers sa page (`agent`) quand l'instance la déclare — avec le geste
+  une fois et son bouton (lien du tableau de bord seulement, `links`), depuis quand, et
+  la ligne de détails de l'onglet Santé (`agent_health.details` : connecteur, réponse du
+  fournisseur passée par la liste blanche). ⚠️ Le motif BRUT n'y entre jamais : un agent
+  sans épisode lisible (lecture en échec — ouvert, dit au journal) reçoit la phrase par
+  défaut. Tout texte est échappé. Qui reçoit, ce que chacun voit et à quel titre se
+  décident en un seul endroit (`destinataires_de_l_alerte`, qui applique
+  `destinataires` et `agents_visibles` ci-dessus) : `qualite` = `admin`, `membre` ou
+  `equipe`, et la ligne de fin le dit — « en tant qu'administrateur de cet espace »
+  pour un admin seulement, l'accès à ces agents pour un membre, la copie séparée pour
+  l'équipe (dont le courriel garde son en-tête et son objet `[équipe]`). Marques et
+  rejeu : comme ci-dessus. Réglage éteint : le courriel d'avant, mot pour mot. Un
+  agent sans épisode reçoit la phrase de SON type ; un type sans phrase lève.
 - **Où** : une boucle de fond déclarée `tiers=True` (`boucles_de_fond.py`,
   `alerte_agents_bloques`, un passage par quart d'heure) — ⚠️ **éteinte par défaut** :
   elle n'écrit que sur une instance qui déclare `OTO_ALERTE_AGENTS_ENABLED=1`, toute
@@ -3043,8 +3143,57 @@ escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'an
   signal — une clé refusée en 401/403 — est aussi lu par l'autre canal, la clé marquée
   rouge à l'appel (`alertes-credential`, `maintenance.py`), fermé par
   `OTO_ALERTE_CREDENTIAL`.
+- **Un agent qui ATTEND un abonnement à reconnecter** (`alertes_agents.agents_sans_forfait`) :
+  sous un abonnement personnel `needs_login` ou `disconnected`, la réservation SAUTE ses
+  travaux — ils attendent puis expirent, aucun ne meurt, l'épisode ci-dessus ne s'ouvre
+  jamais. Il est annoncé dans le même courriel (sa ligne dit « ne tourne plus » et nomme
+  l'abonnement par le libellé de sa famille, `runner_models.LIBELLES_ABONNEMENT` ; le
+  geste est de le reconnecter dans Connecteurs) quand un de ses travaux d'après son
+  dernier succès attend depuis `ATTENTE_FORFAIT_MIN` (30 min) et que l'abonnement est à
+  reconnecter depuis aussi longtemps, que l'agent déclare toujours un modèle de cette
+  famille, et que le travail ne passe PAS par le pool de l'org (`runner_jobs._par_le_pool`,
+  l'expression de la réservation). `paused_limit` n'en est pas : il repart seul. La
+  lecture sort d'emblée quand aucun abonnement personnel n'est à reconnecter. Même règle
+  de visibilité : un membre ne reçoit que les agents qu'il a le droit de voir.
+- ⚠️ **Deux marques, une par épisode** : `echec_annonce_at` pour les travaux morts,
+  `forfait_annonce_at` (révision `20261119_1530_forfait_annonce`) pour l'attente
+  d'abonnement, réarmée par un succès de l'agent OU par la preuve que l'abonnement tenait
+  (`last_ok_at`). Une marque commune ferait taire l'un quand l'autre a été annoncé : un
+  agent annoncé « à reconnecter », reconnecté, puis en échec trois fois sans jamais
+  réussir ne serait plus jamais annoncé (`agents_bloques` ne se réarme qu'après un
+  succès). Un agent présent dans les deux relevés est nommé une fois, et ses deux marques
+  sont posées.
 - Bancs : `tests/test_alerte_agents_bloques.py` (sans base), `tests/test_alertes_agents_db.py`
-  (l'épisode en SQL), `tests/test_migration_20261023_echec_annonce.py`.
+  (l'épisode et l'attente en SQL), `tests/test_migration_20261023_echec_annonce.py`,
+  `tests/test_migration_20261119_forfait_annonce.py`.
+
+#### Les destinataires du courriel d'équipe : les admins de plateforme (19/11/2026)
+
+L'alerte de clé (`maintenance.alertes_credential`) suit la même règle de destinataires :
+un admin reçoit tout ; un membre ne reçoit que SA clé personnelle (palier `member`,
+`<org>:<sub>`) en panne sous SES agents (`maintenance._cles_du_membre`) — les clés d'org
+ou d'équipe, les retraits et leurs gestes relèvent des admins. L'équipe en reçoit un
+courriel séparé par org, comme ci-dessus.
+
+- **Qui** (`alertes_equipe.destinataires`) : les comptes de l'instance qui ont le rôle
+  plateforme `admin` (opérateur) ou `super_admin`, à l'adresse de leur compte
+  (`users.email`). Le rôle se lit comme pour la porte `PLATFORM_ADMIN` des outils
+  `oto_admin_*` : `users.role`, le compte d'amorçage `OTO_MCP_ADMIN_SUB` compris, jugé
+  par `access.is_operator_role` — la même source qui les écarte des courriels clients.
+  Chaque instance écrit donc à SES admins de plateforme ; aucun réglage à poser.
+- **Écartés** : un compte suspendu (`users.suspended_at`), un compte d'un tenant
+  désactivé (`tenant_desactive.etat`), un compte sans adresse.
+- **Quand** : relu à chaque passage qui envoie réellement (la boucle hors heures calmes ;
+  `alertes-credential` avec `OTO_ALERTE_CREDENTIAL` posé et hors `--dry-run`), jamais
+  mis en cache.
+- **Personne** : aucun compte n'a le rôle. Les courriels clients partent normalement ;
+  le courriel d'équipe ne part pas, et le journal écrit une ligne ERROR par org :
+
+  ```
+  alerte agents bloqués : aucun admin de plateforme actif sur l'instance — courriel d'équipe NON envoyé pour l'org <id> (les courriels clients sont partis)
+  ```
+
+  (`alertes-credential : …` pour l'alerte de clé). Ni repli, ni refus de démarrage.
 
 ### Soigner un agent avant qu'on le remarque (27/10/2026)
 
@@ -3057,7 +3206,10 @@ passe AVANT l'alerte.
 - **L'épisode** (`agent_episodes`, `db/episodes_agents.py`) = la même définition que
   l'alerte (travaux morts d'un agent allumé depuis son dernier succès), mais ouvert dès
   le PREMIER travail mort. Un seul épisode vivant par agent (index unique partiel),
-  rafraîchi à chaque passage ; clos au premier succès postérieur (`gueri`) ou quand
+  réécrit seulement quand un champ change ou que son pouls `vu_at` a plus de
+  `episodes_agents.BATTEMENT` (10 min, bien en deçà de `FRAICHEUR`) — l'INSERT ne part
+  que sans épisode vivant, la séquence ne brûle pas un numéro par passage ; clos au
+  premier succès postérieur (`gueri`) ou quand
   l'agent est éteint ou supprimé (`agent_eteint`). Aucune FK : il survit à l'agent.
   `classe` + `cote` (`plateforme` · `proprietaire` · `inconnu`) disent QUI peut réparer ;
   `statut` `ouvert → en_soin → escalade | clos` ; `reparations` = chaque geste, son
@@ -3101,6 +3253,44 @@ passe AVANT l'alerte.
   rare. ⚠️ Ni la relance automatique ni `op=rerun` ne lisent `result.tool_counts` : un
   refus passager après une écriture est relancé comme la file le relance déjà
   (`complete_job`) ; rien encore ne distingue, avant un `rerun`, un run qui a écrit.
+- **Le budget d'un passage, et les incidents** : la boucle relève TOUTES les pannes avant
+  de relancer, puis relâche les relances sous budget — `RELANCES_PAR_PASSAGE` (20) au
+  plus, servies à tour de rôle par org (la plus anciennement en panne d'abord : une
+  grosse org ne passe pas avant une petite), chacune avec une gigue de 0 à `GIGUE_MAX_S`
+  (240 s, `enqueue_job(delai_s=…)`). Ce qui n'est pas servi attend le passage suivant
+  sans rien dépenser de son plafond (`relances_differees` au bilan). Une même classe du
+  côté de la plateforme dans au moins `INCIDENT_ORGS` (3) orgs ET `INCIDENT_PART` (30 %)
+  des orgs en panne au même passage est un **incident** (la part compte : à mille
+  clients, trois orgs sur un refus passager sont le bruit de fond) : dit UNE fois chez
+  nous à son ouverture (journal + suivi d'erreurs, `INCIDENT —`), fini au journal quand
+  plus aucune panne ne le porte ; ses relances se bornent à `INCIDENT_SONDES` (2) par
+  passage, et le plafond d'un de ses agents escalade l'épisode SANS alerte par agent.
+  ⚠️ L'incident vit dans la mémoire du processus (`_INCIDENTS`) : un redémarrage le redit
+  une fois. Le budget ne fait que borner : il ne relance rien que la boucle ne relançait
+  déjà.
+- **Le choix de l'org, et le plafond par org** : la réparation automatique est COUPÉE
+  tant qu'un admin de l'org ne l'a pas allumée (`agent_health_settings.auto_repair`,
+  `DEFAULT FALSE` ; aucune ligne = coupée ; `PUT /api/orgs/{id}/agent-health`). Coupée,
+  la boucle ouvre et dit l'épisode mais ne relance rien (`_avec_consentement`, fermé sur
+  erreur ; `reparation_coupee` au bilan), et `oto_admin_agent_repair` refuse `rerun` et
+  `add_tool` (403 `auto_repair_off`) à QUICONQUE l'appelle — l'agent médecin comme un
+  opérateur, d'où qu'il appelle : cette porte est celle de la plateforme, le choix de
+  l'org la lie. Aucun forçage. Allumée, les relances d'une org sont bornées à
+  `RELANCES_PAR_ORG` (20) sur 24 heures GLISSANTES, tous épisodes confondus, en plus des
+  deux par épisode et du budget d'un passage : comptées et écrites sous un verrou
+  consultatif de l'org, dans la transaction de la trace (`episodes_agents.
+  noter_reparation(plafond_org=)`). Une relance refusée par ce plafond est différée
+  (`plafond_org` au bilan, journalisée), jamais escaladée.
+- **Défaire une réparation** (`POST /api/orgs/{id}/agent-health/undo` `{episode_id}`,
+  qui peut modifier l'agent) : seuls les ajouts d'outils du médecin se défont, en une
+  transaction (`sante_agents.defaire`) — l'épisode puis l'agent relus `FOR UPDATE`. Un
+  outil n'est retiré que s'il y est encore ET que l'agent n'a été écrit par personne
+  depuis l'ajout : son `updated_at` est encore, à la microseconde, celui que l'ajout lui
+  a donné (relevé sur la trace, `maj_at`), et `updated_by` encore l'auteur de l'ajout.
+  Sinon l'outil est gardé et dit (`undo_result.kept`). Dans tous les cas l'annulation
+  s'écrit sur l'épisode, la note de réparation de cet épisode s'efface, et le médecin ne
+  redonne pas ces outils (`runner_triggers.repair_undone_tools`, `{outil: jusqu_a}`,
+  `add_tool` → 409 `repair_undone`) pendant `OUTILS_ANNULES_DUREE_JOURS` (90).
 - **Ce qu'il ne fait jamais** : toucher une clé, une identité, une procédure, un horaire
   ou une donnée ; relancer une panne `inconnu` (un run qui a agi avant de mourir
   referait ses effets). Un épisode du titulaire passe `escalade` sans geste : c'est
@@ -3120,13 +3310,107 @@ passe AVANT l'alerte.
   statut, tentatives, `last_error` — ni son `result` ni `attempt_errors`, qui portent ce
   que l'agent a produit chez son titulaire) / `rerun` (les mêmes gardes que la boucle, plus : épisode clos,
   agent éteint, panne du titulaire ; un refus revient dans `refus`, pas en erreur) /
-  `diagnose` / `escalate` / `close`. Prêté à un agent hébergé de la plateforme par
+  `diagnose` / `escalate` / `close` / `causes` / `set_cause` (le catalogue, ci-dessus). Prêté à un agent hébergé de la plateforme par
   `platform_tools` : sans lui, un agent de notre org lit les pannes d'une autre org sans
   pouvoir rien y faire (`oto_trigger` agit en membre).
+- **Le catalogue des causes, en OMBRE** (13/11/2026) : la regex range trois classes, et
+  tout le reste `inconnu`, diagnostiqué par l'agent médecin un épisode à la fois — ce qu'il
+  trouve ne servait qu'à cet épisode, et deux diagnostics de la même erreur ont rendu deux
+  côtés opposés. Chaque panne reçoit l'EMPREINTE de son motif (`causes_pannes.de` :
+  adresses, courriels, identifiants, dates, nombres et texte cité retirés, puis une LISTE
+  BLANCHE de mots — ne reste que ce qui a la forme du vocabulaire d'erreur, un nom propre
+  hors tête de phrase devient `<nom>`, tout jeton à chiffre, point ou barre `<id>` —,
+  minuscules ; une apostrophe collée à une lettre est une élision, pas une citation ; le
+  catalogue étant commun à toutes les orgs, `tests/test_causes_pannes.py` fixe ce qu'une
+  empreinte ne garde jamais), posée sur
+  l'épisode (`agent_episodes.empreinte`, sa clé hachée). Une empreinte neuve entre au
+  catalogue (`agent_causes`, `db/causes_agents.py`) `proposee`, avec la classe et le côté
+  de la regex — un lot par passage, `ON CONFLICT DO NOTHING` sur une clé texte : rien
+  n'est réécrit, aucune séquence brûlée. Un opérateur (ou l'agent médecin) l'approuve,
+  la refuse ou la corrige (`op=set_cause`) ; approuver une cause du TITULAIRE exige sa
+  copie au client par langue (`{fr|en: {headline, todo, action}}`), refusée si elle porte
+  un nom d'outil, un code, un identifiant, une adresse ou une variable autre que
+  `{marque}` (`causes_pannes.copie_refusee`). Ce qu'une cause couvre (épisodes, vivants,
+  orgs, `classes_vues`) se LIT par jointure (`op=causes`).
+  ⚠️ **Le catalogue ne décide d'AUCUN geste** : l'empreinte se calcule sur le motif
+  tronqué, deux erreurs qui ne diffèrent qu'au-delà de la tête la partagent, et relancer
+  ce qu'on nomme mal referait des effets. Le bilan du passage dit ce qu'il aurait décidé
+  (`catalogue_reconnues`, `catalogue_neuves`, `catalogue_sans_empreinte`, et les
+  `catalogue_desaccords` — cause approuvée d'une autre classe ou d'un autre côté que la
+  regex —, chacun dit au journal) : la regex décide. Une ombre qui casse ne coûte que son
+  bilan (`catalogue_erreur`), jamais le passage.
+  Une copie écrite pour un épisode (`op=set_cause` avec `episode_id`) range sur son geste
+  l'org et l'épisode d'origine (`origine`, l'épisode doit porter la cause, sinon 400
+  `episode_not_of_cause`) ; la liste des causes les sert (`copie_origine` : `{acteur, at,
+  org_id, episode_id}` du dernier geste qui a écrit la copie).
+  **Le catalogue qui décide** (`OTO_CATALOGUE_CAUSES_DECIDE`, éteint par défaut) : une
+  cause APPROUVÉE range une panne que la regex dit `inconnu` — sa classe et son côté,
+  donc qui l'alerte vise et ce que le client lit (`catalogue_decidees` au bilan). Jamais
+  au-delà : un verdict de la regex n'est pas défait, une classe posée à la main non plus,
+  et une cause ne donne jamais une classe que la boucle relance (`CLASSES_RELANCEES`) —
+  relancer reste décidé par la regex seule.
+- **Ce que lit le client, et combien de fois** (sous `OTO_ALERTES_SLACK_AGENTS_ENABLED`) :
+  le problème servi sur un agent (`problem` de la file), l'alerte Slack, le courriel et
+  l'onglet Santé prennent, dans cet ordre, la copie de la CAUSE approuvée de l'épisode
+  dans la langue de l'espace — si la cause est du même côté que l'épisode —, sinon le
+  texte que l'agent médecin a écrit pour CET épisode (`diagnose`, `client_*`), sinon la
+  phrase de la classe (`alertes_slack_agents.message_du_probleme`). `{marque}` y devient
+  le nom de la marque ; l'action `credits` mène à `billing`, `connectors` aux
+  connecteurs. Le texte du médecin se juge comme une copie (`copie_refusee` : ni
+  adresse, ni nom d'outil, ni code, ni identifiant — 400 `client_copy_refused`) et part
+  TOUT DE SUITE à l'org de l'épisode. Il devient aussi la copie PROPOSÉE de la cause de
+  l'épisode, dans la langue de l'org, si elle n'en a pas encore (sans le lien, propre à
+  l'org), avec son origine (l'org et l'épisode, `copie_origine` sur l'écran Admin des
+  causes) ; elle ne parle aux autres orgs qu'une fois la cause approuvée par un
+  opérateur. Une cause approuvée ou refusée ne prend jamais ce texte, même devenue telle
+  entre la lecture et l'écriture (`causes_agents.decider(si_statut=)`). **Le moment** :
+  un texte du médecin alerte tout de suite ; la copie d'une cause approuvée n'alerte
+  tout de suite que sous `OTO_CATALOGUE_CAUSES_DECIDE` — en ombre, elle donne le texte
+  après `ATTENTE_MIN`, comme une classe (`alertes_slack.a_annoncer(copie_immediate=)`).
+  **Un message par problème, pas par agent** (`grouper`) : les alertes d'une org dont
+  le client lirait exactement le même problème (titre, geste, lien) partent en UN
+  message qui nomme les agents (cinq, puis « et N autres »), avec le bouton du geste et,
+  si l'instance déclare la vue `agent_health`, celui de la santé des agents — chaque
+  agent nommé est un lien vers sa page (`agent`) ; les retours d'un passage partent
+  ensemble ; une réparation part seule. Chaque épisode du paquet est marqué après
+  l'envoi. ⚠️ Tout texte interpolé dans un message Slack (libellé d'agent, copie, texte
+  du médecin, erreur du fournisseur) est échappé (`&`, `<`, `>`) : il ne forme ni lien
+  ni mention. Les GESTES (relancer, escalader) restent décidés par la regex.
+- **L'onglet Santé d'une org, en lecture** (`capabilities/agent_health.py`) :
+  `GET /api/orgs/{id}/agent-health` (membres d'une org vivante, `ORG_MEMBER_OF_LIVE` :
+  409 `org_archived` sur une org archivée ; 404 `agent_alerts_off` sous le réglage des
+  alertes éteint, comme ses voisines) rend, en quelques requêtes pour toute l'org
+  (`db/sante_agents.py`), les agents allumés que l'appelant voit (`_acces_agent.niveaux`,
+  comme la liste des agents) et combien fonctionnent ; `needs_you` — un problème par
+  cause qui attend le client (`alertes_slack_agents.message_du_probleme`), avec les
+  agents qu'il arrête et depuis quand ; `on_us` — ce qui est à nous, côté plateforme ou
+  pas encore compris, une phrase sans geste : une panne de la PLATEFORME se tait six
+  heures (`DUREE_LONGUE`, lu sur `ouvert_at`) — son agent compte d'ici là comme
+  fonctionnant, comme sur sa carte — puis se dit par sa propre phrase (`lasting`) ;
+  `fixed` — les épisodes guéris après un geste du médecin ces 30 jours (la note de
+  réparation de l'agent, sinon la phrase d'une relance) ; `covered` (false : org d'un
+  tenant tiers, que le médecin ne suit pas). Chaque item porte `connectors` (les
+  connecteurs que les motifs NOMMENT, `causes_pannes.connecteur_de_la_panne`, le
+  fournisseur du modèle de l'agent en repli pour une réponse de fournisseur) et `error`
+  (`causes_pannes.erreur_du_fournisseur` : la réponse d'un fournisseur, passée par la
+  liste blanche de l'empreinte ; notre texte interne ne sort jamais). Il sert aussi
+  `auto_repair`, et sur chaque item de `fixed` `undo`/`undone`. Les deux écritures
+  (`PUT`, admins, `ORG_ADMIN_OF_LIVE` ; `POST …/undo`, `ORG_MEMBER_OF_LIVE` puis
+  `_acces_agent.exiger(ECRIRE)`) jugent le réglage des alertes AVANT d'écrire.
+- **L'écran Admin des causes** (`capabilities/agent_causes_admin.py`) :
+  `GET /api/admin/agent-causes` (`status`, `limit`, avec `copie_origine`) et
+  `PUT /api/admin/agent-causes/{key}` (`status`, `classe`, `cote`, `client_copy` par
+  langue), admin plateforme, REST seulement — les gardes de `set_cause` sans recopie
+  (`agent_repair._decider_une_cause`) : copie exigée pour approuver une cause du
+  titulaire, copie illisible refusée, un agent hébergé n'approuve jamais. Les incidents
+  vivent dans la mémoire de la boucle et ne s'y servent pas.
 - **Où** : boucle `tiers=True` (une relance refait agir un agent chez des tiers),
   ÉTEINTE tant que `OTO_MEDECIN_AGENTS_ENABLED=1` n'est pas déclaré — production seule.
-- Bancs : `tests/test_medecin_agents.py` (sans base), `tests/test_episodes_agents_db.py`
-  (le SQL), `tests/test_migration_20261027_agent_episodes.py`,
+- Bancs : `tests/test_medecin_agents.py` (sans base), `tests/test_causes_pannes.py`
+  (l'empreinte, la copie, le connecteur, la réponse du fournisseur),
+  `tests/test_episodes_agents_db.py` (le SQL, catalogue et battement compris),
+  `tests/test_agent_health.py`, `tests/test_agent_causes_admin.py`,
+  `tests/test_migration_20261027_agent_episodes.py`,
   `tests/test_alerte_agents_bloques.py` (le silence).
 
 ### `op=list` : la page dit ce qu'elle laisse dehors (#469, 01/09/2026)
@@ -3395,6 +3679,20 @@ rapport, plafond) restent en Python. `time_saved.formes_des_runs` est la référ
 mémoire, et `tests/test_temps_gagne_borne_live.py` prouve la parité et la borne
 (`docs/event-loop-perf.md`).
 
+⚠️ **Calculé HORS de la requête** (`capabilities/_temps_gagne_borne.py`, 20/11/2026) :
+sur une org chargée, relire les appels de chaque run va au disque et dure des minutes.
+Fait dans la requête de la page, sans borne, à chaque ouverture, ce calcul tenait une
+connexion du pool par ouverture jusqu'à le vider (`PoolTimeout` sur toutes les routes).
+Il tourne désormais dans un fil de fond : borné (`statement_timeout` 60 s par requête),
+un seul calcul en vol par clé (org, fenêtre, agents vus), deux au plus pour tout le
+processus, résultat en cache 10 min, échec retenté après 30 min (une lecture trop lourde pour la borne ne se relance pas à chaque ouverture). La page attend au plus
+2 s ; sans résultat (ni frais ni périmé), elle sort sans le temps gagné et le dit
+(`time_saved_status: "pending"`, sinon `"ready"`, déclaré dans `JobsOut`). Cache par
+processus : vidé au redémarrage, chaque couleur d'une bascule calcule de son côté. Les
+calculs tournent dans des fils DÉMONS (un `ThreadPoolExecutor` viderait sa file avant de
+laisser le processus s'arrêter) et au plus 32 clés sont en vol ou en queue ; au-delà, la
+page sort sans le temps gagné. Bancs : `tests/test_temps_gagne_borne.py`.
+
 **Revu sur des agents réels (17/10/2026)**, qui surcomptaient :
 - un balayage qui ne PRODUIT rien de neuf ne gagne rien — sa recherche ne compte que
   dans un run productif ;
@@ -3456,26 +3754,30 @@ l'écran. Il n'accorde rien seul : la liste reste la borne fail-closed de #1256.
 
 **Ce qui est lu (27/10/2026).** Une recette déclarative cite son `tool`, à la racine du
 corps — `outils_cites` lisait `source.tool`, une clé qu'aucune recette ne porte, et toute
-recette déclarative citait `[]`. Et les étapes d'une cascade : quand la procédure écrit
-les fournisseurs à côté de l'appel (`waterfall_email_act(… providers=["apollo",
-"aiark"])`), `waterfall/cites.py` rend les outils de leurs étapes (collecte et révélation
-comprises), `needed_by` = « `waterfall_email_act` (providers) ». Sans `providers=` écrit,
-rien n'est inféré : l'ordre se résout au run, et toute la table serait une liste trop
-large.
+recette déclarative citait `[]`. Les étapes d'une cascade, elles, ne manquent plus
+(18/11/2026) : la cascade accordée les couvre (`outils_du_travail.ouvrir_composite`,
+`docs/waterfall.md`), et les lister les ouvrirait en direct au modèle. Ne reste que
+l'outil qui COLLECTE une réponse `pending`, appel que le modèle fait lui-même : quand la
+procédure écrit les fournisseurs à côté d'un appel d'un contact (`waterfall_email(…
+providers=["fullenrich"])`), `waterfall/cites.py` rend l'outil de collecte de ces étapes,
+`needed_by` = « `waterfall_email` (pending answers) » ; le mode tableau (`_act`) n'en
+laisse aucune et ne cite rien. Sans `providers=` écrit, rien n'est inféré : l'ordre se
+résout au run, et toute la table serait une liste trop large.
 
 **Posé par une personne : ce qui manque est dit, jamais ajouté (27/10/2026).** `op=create`,
 et `op=update` quand `tools` ou `procedure` change, joués par une PERSONNE, rendent
 `tools_to_add` (absent si rien) : ce que les outils de l'agent appelleront pour lui et
 qu'il n'a pas — les outils des recettes publiées que la procédure lance, si l'agent a
-`oto_recipe` ; ceux des étapes de cascade qu'elle écrit, s'il a cette cascade. La liste
+`oto_recipe` ; ceux qui collectent la réponse `pending` des étapes de cascade qu'elle
+écrit, s'il a cette cascade — jamais les outils des étapes. La liste
 posée reste celle demandée : la personne la repose avec ces outils si elle le veut. Rien
 d'office, parce que ce qui décide de la proposition (la prose de la procédure, le corps
 des recettes) un agent peut l'écrire : un ajout à la retouche suivante d'une personne lui
 ouvrirait en direct ce qu'il y a cité. Bornes de la proposition : d'une recette, des
 LECTURES déclarées seulement (`tool_registry.effet_de == "read"`, fail-closed) ; d'une
-cascade, les outils d'étape de la liste blanche `waterfall/cites.PROPOSABLES` (écrite à la
-main ; `apify_run_sync`, qui lance n'importe quel acteur, est dans `NON_PROPOSES` et reste
-au geste via `missing_tools`) ; jamais les marqueurs `<tool:…>` de la procédure ; rien sous
+cascade, les outils de collecte de la liste blanche `waterfall/cites.PROPOSABLES` (écrite
+à la main ; `pipecorn`, dont la collecte est une opération d'un outil qui soumet aussi,
+facturé, est dans `NON_PROPOSES` et reste au geste via `missing_tools`) ; jamais les marqueurs `<tool:…>` de la procédure ; rien sous
 un jeton de délégation. Un calcul qui échoue lève : pas de liste posée à l'aveugle.
 
 **Élargir est un geste de personne (`tools_human_only`).** Sous un jeton de délégation

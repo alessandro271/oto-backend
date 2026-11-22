@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS agent_health_settings (
+org_id BIGINT PRIMARY KEY,
+auto_repair BOOLEAN NOT NULL DEFAULT FALSE,
+updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

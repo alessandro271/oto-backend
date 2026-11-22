@@ -155,8 +155,11 @@ def test_un_refresh_reussi_demarque(monkeypatch, wiring):
     prov, scope, ok, err = calls["record"][0]
     assert prov == "google" and ok is True and err is None
     assert scope == (credentials_store.MEMBER, credentials_store.member_id(7, "sub-1"), "a@b.com")
-    assert calls["update"] == [(credentials_store.MEMBER, credentials_store.member_id(7, "sub-1"),
-                                "google", "a@b.com", "AT-NEW")]
+    # Le jeton renouvelé reste en mémoire : rien n'est écrit dans le meta de la ligne.
+    assert calls["update"] == []
+    assert google_oauth._jeton_garde(
+        (credentials_store.MEMBER, credentials_store.member_id(7, "sub-1"), "a@b.com"),
+        "REFRESH-1", "s1 s2") == "AT-NEW"
 
 
 def test_une_erreur_de_config_ne_marque_rien(monkeypatch, wiring):

@@ -18,14 +18,24 @@ de qui l'EXÉCUTE (#1202) : le pont n'ouvre rien que l'appelant ne puisse appele
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
-from .. import geste, outils_du_travail, redaction
+from .. import deprecations, geste, outils_du_travail, redaction, session_org
 from ..datastore import via as ds_via
 from ..mcp_errors import McpError
 from ..tools import lecture as lecture_declaree
 from . import ecritures as ec
 from . import moteur
+
+logger = logging.getLogger(__name__)
+
+#: La clé du relevé de l'appel MCP (`session_org.note_call_trace`, versée dans
+#: `tool_calls.args` par `server._TRACED_ARGS`) qui compte les refus du pont.
+CLE_REFUS = "recipe_bridge_refusals"
+#: Au plus tant de couples `code:outil` distincts par appel : une boucle qui essaie
+#: mille noms ne gonfle pas la ligne du journal.
+MAX_REFUS_DISTINCTS = 20
 
 
 def _reponse(issue) -> dict:
@@ -57,9 +67,48 @@ async def _executer(tool, sub: Optional[str], outil: str, arguments: dict) -> di
     return _reponse(issue)
 
 
-def appeleur_en_lecture(fastmcp, sub: Optional[str]):
-    """L'`appeler` du pont pour `sub` : un outil en lecture, ou une réponse `ok: false`
-    nommée. Ne lève pas — un refus est une réponse."""
+def _sous_le_nom_d_aujourd_hui(appeler):
+    """`appeler`, qui reçoit le nom d'aujourd'hui d'un outil que le code nomme par un
+    ANCIEN nom (`deprecations.TOOLS` : `http_get` → `api_get`) — la traduction
+    d'`oto_call`, par la même table (`moteur.sous_le_nom_d_aujourd_hui`). Sans elle, le
+    pont cherchait l'ancien nom dans le catalogue et rendait `unknown_tool` à une recette
+    qu'`oto_call` aurait servie."""
+    async def servi(outil: str, arguments: dict) -> dict:
+        with moteur.sous_le_nom_d_aujourd_hui(outil) as nom:
+            reponse = await appeler(nom, arguments)
+        _noter_refus(outil, reponse)
+        return reponse
+    return servi
+
+
+def _noter_refus(outil: str, reponse: Any) -> None:
+    """Un refus du pont (`ok: false`) rendu au code d'une recette laisse une trace : le
+    script le reçoit comme une valeur et peut « réussir » quand même, et sans elle rien
+    ne disait qu'une recette butait (`unknown_tool` d'un ancien nom, #1822). Compté sous
+    `code:outil` (le nom DEMANDÉ par le code) dans la ligne `tool_calls` de l'appel MCP
+    qui joue la recette — son org, son outil (`oto_recipe`) et ses arguments y sont déjà
+    — et journalisé."""
+    if not isinstance(reponse, dict) or reponse.get("ok") is not False:
+        return
+    cle = f"{reponse.get('code') or 'refused'}:{outil}"
+    logger.info("pont des recettes : refus %s", cle)
+    trace = session_org.current_call_trace()
+    if trace is None:
+        return
+    refus = trace.setdefault(CLE_REFUS, {})
+    if cle in refus or len(refus) < MAX_REFUS_DISTINCTS:
+        refus[cle] = refus.get(cle, 0) + 1
+
+
+def _declaration_d_aujourd_hui(nom: str) -> str:
+    """Une écriture déclarée (`tool` ou `tool:op`) sous le nom d'aujourd'hui de son outil :
+    une recette qui déclare `http_post` déclare `api_post`, que le pont voit passer."""
+    outil, sep, op = str(nom).partition(":")
+    return deprecations.tool_canonique(outil) + sep + op
+
+
+def _lecture(fastmcp, sub: Optional[str]):
+    """L'appel en lecture du pont, sous le nom d'aujourd'hui déjà traduit."""
     async def appeler(outil: str, arguments: dict) -> dict:
         try:
             tool = await moteur._outil(fastmcp, outil)
@@ -67,6 +116,12 @@ def appeleur_en_lecture(fastmcp, sub: Optional[str]):
             return {"ok": False, "code": e.code, "message": str(e)}
         return await _executer(tool, sub, outil, arguments)
     return appeler
+
+
+def appeleur_en_lecture(fastmcp, sub: Optional[str]):
+    """L'`appeler` du pont pour `sub` : un outil en lecture, ou une réponse `ok: false`
+    nommée. Ne lève pas — un refus est une réponse."""
+    return _sous_le_nom_d_aujourd_hui(_lecture(fastmcp, sub))
 
 
 #: Ce qu'une page de `data_rows` peut rendre au code.
@@ -114,8 +169,11 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
     `ids` / `entries`, au plus `MAX_FICHES_PAR_APPEL`) compte autant d'écritures que de
     fiches, et n'est joué que s'il tient en entier dans ce qui reste ; une op qui détruit
     est refusée. `compteur` reçoit les comptes."""
-    lecture = appeleur_en_lecture(fastmcp, sub)
+    # Le bord (traduction du nom, trace des refus) est posé une fois, autour de tout
+    # `appeler` : la lecture qu'il appelle n'en reprend pas un second.
+    lecture = _lecture(fastmcp, sub)
     etat = compteur if compteur is not None else compteur_neuf()
+    ecritures = frozenset(_declaration_d_aujourd_hui(d) for d in ecritures)
     trouveurs: set[str] = set()
 
     async def appeler(outil: str, arguments: dict) -> dict:
@@ -131,7 +189,7 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
             via = arguments.get("via")
             arguments = {k: v for k, v in arguments.items() if k != "via"}
             if via is not None:
-                nom = str(via).strip()
+                nom = deprecations.tool_canonique(str(via).strip())
                 if nom and nom in trouveurs:
                     # Le geste de l'appel qui a lancé la recette porte l'écriture ; sans
                     # lui (recette lancée hors requête), on en ouvre un : sinon `via`
@@ -234,7 +292,7 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
                                f"has {max(reste, 0)} write(s) left; this call writes "
                                f"{fiches}. Nothing was called."}
         return None
-    return appeler
+    return _sous_le_nom_d_aujourd_hui(appeler)
 
 
 #: Ce qu'un appel EN LOT peut porter de fiches : la borne des outils CRM de la liste

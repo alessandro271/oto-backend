@@ -2,7 +2,6 @@
 # ============================================================================
 # Bibliothèque bleu/vert du backend oto — SOURCÉE par chaque déploiement :
 #   /opt/deploy/oto-backend.sh         (notre PROD,     oto-mcp@blue|green)
-#   /opt/deploy/oto-backend-canari.sh  (notre PRÉPROD,  oto-mcp-canari@blue|green)
 #   deploy/cible/deployer.sh           (une instance tierce, chargée depuis l'arbre
 #                                       du tag qu'elle déploie — docs/instance-cible.md)
 #
@@ -33,26 +32,28 @@
 # Variables attendues AVANT le `source` — TOUTES déclarées par le wrapper, aucune n'a
 # de défaut ici (#967) : une cible qui en oublie une est refusée au chargement, en
 # nommant ce qui manque, plutôt que de déployer avec une valeur qui serait la nôtre.
-#   BG_ENV            libellé de l'environnement (prod | canari | <rôle d'une cible>)
-#   BG_UNIT           gabarit systemd, sans @ (oto-mcp | oto-mcp-canari | …)
+#   BG_ENV            libellé de l'environnement (prod | <rôle d'une cible>)
+#   BG_UNIT           gabarit systemd, sans @ (oto-mcp | …)
 #   BG_TREE           préfixe des arbres : l'arbre d'une couleur est <BG_TREE>-<couleur>
 #   BG_PORT_blue      port de la couleur bleue
 #   BG_PORT_green     port de la couleur verte
 #   BG_UPSTREAM       fichier d'amont Caddy GÉNÉRÉ (ex. /etc/caddy/upstream-oto-prod.conf)
-#   BG_SNIPPET        préfixe des snippets Caddy (oto_prod | oto_canari | …)
+#   BG_SNIPPET        préfixe des snippets Caddy (oto_prod | …)
 #   BG_DOCSHARE_HOST  Host forcé pour le snippet doc-share (/p/d/*)
 #   BG_ASK            1 si l'env porte le `ask` de l'on-demand TLS, sinon VIDE (déclaré)
 #   BG_ACTIVE         fichier pointeur de couleur (blue | green)
 #   BG_PUBLIC         URL publique de vérification post-bascule
-#   BG_DRAIN_MAX      plafond du drain, en secondes
+#   BG_DRAIN_MAX      plafond du drain, en secondes ; égal à l'arrêt gracieux d'uvicorn
+#                     (`oto_mcp/bornes_processus.ARRET_GRACIEUX_S`), sous le TimeoutStopSec
+#                     des unités de la couleur
 #   BG_LOCK           verrou du déploiement (un par environnement)
 #   BG_CADDYFILE      Caddyfile que `caddy validate` juge avant chaque reload
 #   BG_CADDY          FACULTATIF : le binaire Caddy qui juge (défaut : caddy-custom, sinon caddy)
 #   BG_DRAIN          script de vidange différée (chemin STABLE : il tourne après nous)
 #   BG_DRAIN_UNIT     nom de l'unité transitoire de vidange (une par environnement)
 #   BG_LANCEUR        versionne — le lanceur est celui DU TAG (deploy/lanceur_secrets.py),
-#                                rien n'est propagé d'une couleur à l'autre. Notre prod et
-#                                notre préprod y sont depuis le 30/09/2026 (#967, lot 5) ;
+#                                rien n'est propagé d'une couleur à l'autre. Notre prod y
+#                                est depuis le 30/09/2026 (#967, lot 5) ;
 #                     propage  — mode HISTORIQUE, gardé jusqu'au lot 5b (retour arrière du
 #                                lot 5) : le lanceur `start-encrypted.sh` vit hors git dans
 #                                l'arbre et passe de la couleur en service à la nouvelle.
@@ -121,6 +122,10 @@ bg_log() { echo "[$(date +%H:%M:%S)] $*"; }
 bg_lock() {
   exec 9>"$BG_LOCK"
   flock -w 900 9 || { echo "verrou $BG_LOCK non obtenu après 900 s — un déploiement tourne déjà" >&2; exit 1; }
+  # Verrou MÉMOIRE de la box, partagé avec le build du dashboard (oto-app) : les deux couleurs
+  # vivantes + un build vite ne tiennent pas ensemble dans 8 Go (mesure du 16/11/2026).
+  exec 8>/run/lock/oto-platform-memoire.lock
+  flock -w 600 8 || { echo "verrou mémoire d'oto-platform tenu depuis plus de 600 s (build du dashboard ?)" >&2; exit 1; }
   bg_log "verrou pris ($BG_LOCK)"
 }
 
@@ -342,7 +347,7 @@ bg_public_ok() {
 # --- VIDANGE DIFFÉRÉE : le déploiement NE L'ATTEND PAS. Il se termine dès la
 # --- bascule validée (quelques secondes) ; l'extinction de l'ancienne couleur part
 # --- en unité transitoire, avec un plafond généreux puisqu'elle ne bloque plus rien.
-# --- Une seule vidange en cours à la fois (cf. bg_run, qui arrête la précédente).
+# --- Une seule vidange en cours à la fois (cf. bg_run, qui attend la fin de la précédente).
 bg_schedule_drain() {
   local color=$1 port; port=$(bg_port "$color")
   local n; n=$(ss -Htn state established "( sport = :$port )" 2>/dev/null | wc -l)
@@ -362,14 +367,50 @@ bg_commit_active() {
   systemctl disable "${BG_UNIT}" >/dev/null 2>&1   # unité simple d'avant, filet désactivé
 }
 
+# --- `bg_abort <couleur> <message> [a_servi]`. Sans 3e argument, la couleur n'a jamais
+# --- reçu de trafic (installation, démarrage ou bascule refusés) : on l'arrête net. Avec
+# --- `a_servi`, l'amont l'a désignée un moment (le trafic public a échoué après la
+# --- bascule, on a rebasculé) : des requêtes y sont peut-être EN VOL, jusqu'à ~20 s de
+# --- trafic. Elle se VIDE alors comme toute couleur qui a servi, en unité différée ; la
+# --- montée suivante attendra la fin de cette vidange (bg_attendre_vidange).
 bg_abort() {
-  local color=$1 msg=$2
+  local color=$1 msg=$2 a_servi=${3:-}
   bg_log "ÉCHEC: ${msg}"
   bg_log "--- journal de la couleur ${color} ---"
   journalctl -u "${BG_UNIT}@${color}" -n 50 --no-pager
-  systemctl stop "${BG_UNIT}@${color}" 2>/dev/null
-  bg_log "couleur ${color} arrêtée — ${BG_ENV} reste servie par $(bg_active), rien n'a basculé"
+  if [ -n "$a_servi" ]; then
+    bg_schedule_drain "$color"
+    bg_log "couleur ${color} en vidange (elle a servi) — ${BG_ENV} reste servie par $(bg_active), rien n'a basculé"
+  else
+    systemctl stop "${BG_UNIT}@${color}" 2>/dev/null
+    bg_log "couleur ${color} arrêtée — ${BG_ENV} reste servie par $(bg_active), rien n'a basculé"
+  fi
   exit 1
+}
+
+# --- `bg_attendre_vidange` : une vidange en cours (unité BG_DRAIN_UNIT active) porte la
+# --- couleur que la montée va réécrire. On ne la coupe plus : on attend qu'elle finisse.
+# --- Borne : la plus longue vie d'une vidange, son plafond (BG_DRAIN_MAX) puis l'arrêt
+# --- gracieux de la couleur (uvicorn finit ce qui est en vol pendant au plus
+# --- `bornes_processus.ARRET_GRACIEUX_S`, égal à BG_DRAIN_MAX), plus 30 s de fermeture.
+# --- Borne atteinte : échec NOMMÉ, rien n'est arrêté ni installé — la couleur en service
+# --- n'a pas bougé, la vidange continue. Compté en tours (pas en SECONDS) : chaque tour
+# --- dure au moins VIDANGE_PAS secondes, la borne réelle n'est donc jamais plus courte.
+VIDANGE_PAS=5
+bg_attendre_vidange() {
+  local borne=$((2 * BG_DRAIN_MAX + 30)) tours=0 max_tours
+  max_tours=$(( (borne + VIDANGE_PAS - 1) / VIDANGE_PAS ))
+  systemctl is-active --quiet "${BG_DRAIN_UNIT}.service" || return 0
+  bg_log "une vidange tourne encore (${BG_DRAIN_UNIT}) — on attend sa fin, au plus ${borne}s, sans la couper"
+  while systemctl is-active --quiet "${BG_DRAIN_UNIT}.service"; do
+    if [ "$tours" -ge "$max_tours" ]; then
+      bg_log "ÉCHEC: la vidange ${BG_DRAIN_UNIT} dure encore, borne de ${borne}s atteinte — montée REFUSÉE, rien n'est arrêté ni installé, ${BG_ENV} reste servie par $(bg_active) (journalctl -u ${BG_DRAIN_UNIT})"
+      return 1
+    fi
+    sleep "$VIDANGE_PAS"
+    tours=$((tours + 1))
+  done
+  bg_log "vidange ${BG_DRAIN_UNIT} terminée après ~$((tours * VIDANGE_PAS))s d'attente"
 }
 
 # ============================================================================
@@ -382,11 +423,13 @@ bg_run() {
   local newport; newport=$(bg_port "$new")
   bg_log "${BG_ENV}: couleur en service = ${old}, cible = ${new} (:${newport})"
 
-  # Garde-fou contre l'accumulation : AU PLUS UNE couleur en cours de vidange. Si
-  # une vidange tourne encore, sa couleur a eu son sursis — on l'arrête maintenant,
-  # c'est précisément l'arbre qu'on s'apprête à réécrire. Borne à deux instances
-  # vivantes en régime normal, trois pendant une seconde.
-  systemctl stop "${BG_DRAIN_UNIT}.service" 2>/dev/null
+  # AU PLUS UNE couleur en cours de vidange, et jamais coupée : si une vidange tourne
+  # encore (deux montées rapprochées), sa couleur est précisément l'arbre qu'on
+  # s'apprête à réécrire — on attend qu'elle ait fini, borné, ou on refuse en le
+  # nommant. Borne à deux instances vivantes.
+  bg_attendre_vidange || exit 1
+  # Plus de vidange : la couleur cible ne sert pas (ni amont, ni vidange) — arrêt
+  # sans effet si elle l'est déjà, ce qui est le cas normal.
   systemctl stop "${BG_UNIT}@${new}" 2>/dev/null
 
   if [ "$ref" = "--rollback" ]; then
@@ -417,7 +460,7 @@ bg_run() {
   if ! bg_public_ok; then
     bg_log "on REBASCULE sur ${old}, qui n'a jamais cessé de servir"
     bg_switch "$old"
-    bg_abort "$new" "vérification du trafic public en échec après bascule"
+    bg_abort "$new" "vérification du trafic public en échec après bascule" a_servi
   fi
 
   bg_commit_active "$new" "$old"

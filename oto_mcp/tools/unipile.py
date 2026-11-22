@@ -101,6 +101,7 @@ _COMPANY_CACHE: dict[tuple, tuple] = {}     # (sub, ident_lower) -> (epoch, resu
 _COMPANY_TTL = 6 * 3600                      # company profiles ~static → 6h
 _COMPANY_CACHE_MAX = 3000                    # memory bound (coarse purge beyond it)
 _RL_DEFAULT_SECS = 30    # 429 without a readable delay → short backoff (bursts = a few s)
+_MSG_REPRISE_MAX_S = 8   # messaging READS: Unipile delay waited out once, up to this
 _RL_MAX_SECS = 3600      # cap: a "Retry in 12 hours" (rare/misleading) does not lock
                          #  the day — at worst we re-probe after 1h (self-correcting)
 
@@ -123,6 +124,47 @@ def _rate_limited(wait_secs: float, detail: str) -> McpError:
         "a loop."),
         data={"code": "unipile_rate_limited", "retryable": True,
               "retry_after_seconds": secs}))
+
+
+def _limit_reached(e) -> McpError:
+    """The named refusal `linkedin_sending_limit_reached`: the account's OWNER set a
+    sending limit (`unipile_limites`) and its window is full — nothing was sent.
+    `retryable: true` with the wait until a slot frees up (rolling window)."""
+    secs = e.secondes_restantes()
+    return McpError(ErrorData(code=INVALID_PARAMS, message=(
+        f"Refused `linkedin_sending_limit_reached`: {e.phrase()} Do NOT retry before "
+        f"{_fmt_wait(secs)}: move on to other work, or leave the remaining rows for the "
+        "next run. The limit is the account owner's setting (`PUT /api/me/unipile/limits`), "
+        "never yours to work around with another account."),
+        data={"code": "linkedin_sending_limit_reached", "retryable": True,
+              "retry_after_seconds": secs, "limit": e.lim, "max": e.maxi,
+              "used": e.used}))
+
+
+def _within_limits(client, action: str, fn):
+    """Run `fn` (one LinkedIn action through `client`) under the owner's sending limits:
+    the slot is reserved first, released if `fn` fails (`unipile_limites.garde`)."""
+    from .. import unipile_limites
+    try:
+        with unipile_limites.garde(client, action):
+            return fn()
+    except unipile_limites.LimiteAtteinte as e:
+        raise _limit_reached(e)
+
+
+def _invitation_refused(err) -> Optional[McpError]:
+    """LinkedIn's own invitation cap (Unipile 422 `cannot_resend_yet`, raised only at the
+    last step) as a named refusal, rather than an opaque 422."""
+    if getattr(err, "status_code", None) == 422 and "cannot_resend_yet" in str(err):
+        return McpError(ErrorData(code=INVALID_PARAMS, message=(
+            "Refused `linkedin_invitation_limit`: LinkedIn refuses more invitations from "
+            "this account for now (`cannot_resend_yet`) — its weekly invitation cap is "
+            "reached, or this person was invited recently. Stop inviting from this "
+            "account for today; its owner lowering its invitations limit "
+            "(`PUT /api/me/unipile/limits`) keeps it from happening again."),
+            data={"code": "linkedin_invitation_limit", "retryable": True,
+                  "retry_after_seconds": 24 * 3600}))
+    return None
 
 
 def _rate_limit_guard(sub: str) -> None:
@@ -268,18 +310,17 @@ def _slim_search(res, *, facettes=(), page_suivante=False):
 
 
 def _canonical_li_identifier(identifier: str, genre: str = "in") -> str:
-    """Canonicalize a LinkedIn `public_identifier` (vanity slug): LinkedIn
-    ALWAYS generates it in ASCII (transliterates accents at creation, e.g.
-    `renée-lefèvre` → `renee-lefevre`). An accented slug typed by the agent
-    makes the Unipile API return a MISLEADING 403 "Insufficient permissions"
-    (#180) → we strip the diacritics before the call. No-op on an already ASCII slug
-    or an opaque provider_id (`ACoAA…`, no accent) — idempotent.
+    """Canonicalize a LinkedIn `public_identifier` (vanity slug) to its decoded form.
 
-    A full profile URL (`https://www.linkedin.com/<genre>/<slug>/?…`) gets the SAME
+    A full profile URL (`https://www.linkedin.com/<genre>/<slug>/?…`) gets a
     misleading 403 (#1353): it is brought back to its slug (`genre` = `in` for a
     member, `company` for a company). Any other LinkedIn URL (Sales Navigator, a post,
     the other genre) is refused by name rather than sent. A bare slug is
-    percent-decoded too (#1447): `chlo%C3%A9-dupr%C3%A9` → `chloe-dupre`."""
+    percent-decoded too (#1447): `chlo%C3%A9-dupr%C3%A9` → `chloé-dupré`.
+
+    Accents are KEPT: a slug can carry a non-ASCII letter. The accent-free
+    form is a fallback of `_read_li_slug`, tried only when the slug as given is
+    refused (#180). No-op on an ASCII slug or an opaque provider_id — idempotent."""
     ident = identifier.strip()
     if "linkedin.com" in ident.lower() or ident.lower().startswith(("http:", "https:")):
         parts = urlsplit(ident if "://" in ident else "https://" + ident)
@@ -297,10 +338,55 @@ def _canonical_li_identifier(identifier: str, genre: str = "in") -> str:
         # A bare slug copied from an address bar arrives percent-encoded
         # (`chlo%C3%A9-dupr%C3%A9`): decoded like a URL segment (#1447).
         ident = unquote(ident)
+    return unicodedata.normalize("NFC", ident)
+
+
+def _sans_accents(ident: str) -> str:
+    """The slug without its diacritics (`chloé-dupré` → `chloe-dupre`)."""
     return "".join(
         c for c in unicodedata.normalize("NFKD", ident)
         if not unicodedata.combining(c)
     )
+
+
+def _read_li_slug(ident: str, read):
+    """Read a member or a company by slug: the slug AS GIVEN first (a slug
+    can carry a non-ASCII letter), then, ONLY if upstream refuses a non-ASCII
+    slug with a 403/404, ONCE more under its accent-free form (#180 — an agent that
+    typed accents on an ASCII slug). The read's own identity guard checks each
+    attempt against the slug it sent.
+
+    For a non-ASCII slug the answer says which form matched, under
+    `identifier_form` (`as_given` / `without_accents`) — the form, never the slug,
+    which an anonymised profile must not get back. An ASCII slug or a provider id
+    is read once, its answer untouched."""
+    from oto.tools.unipile.client import UnipileError, UnipileRateLimited
+
+    plain = _sans_accents(ident)
+    if plain == ident:
+        return read(ident)
+    try:
+        res, form = read(ident), "as_given"
+    except UnipileRateLimited:
+        raise
+    except UnipileError as e:
+        if e.status_code not in (403, 404):
+            raise
+        try:
+            res, form = read(plain), "without_accents"
+        except UnipileRateLimited:
+            raise
+        except UnipileError as e2:
+            if e2.status_code in (403, 404):
+                raise e from e2  # not found either way: the error names what was asked
+            raise
+    if isinstance(res, dict):
+        res = dict(res, identifier_form=form)
+        if form == "without_accents":
+            res["warnings"] = [*(res.get("warnings") or []), (
+                "Not found under the slug as given (with its accents): found under its "
+                "accent-free form — use that form for this profile from now on.")]
+    return res
 
 
 def _slim(payload, fields: Optional[list[str]] = None,
@@ -416,6 +502,58 @@ def _page_de_messagerie(page, fields: Optional[list[str]],
     return out
 
 
+# The v2 relations endpoint nests the person under `user` (`{id, object, created_at,
+# user: {id, display_name, public_identifier, first_name, last_name, profile_url,
+# description}}`, observed 2026-11-21), while this tool documents a FLAT connection
+# with `member_id`, `name` and `headline`. Projecting the nested shape refused every
+# documented key ("absent from all connections… Keys present: created_at, id, object,
+# user"): an hourly agent failed on each run. The fix is ADDITIVE: `user` stays as
+# upstream sends it (an agent reading `items[].user.display_name`, or projecting
+# `fields=["user"]`, is unchanged), and the documented keys are added beside it.
+_RELATION_ALIASES = {"member_id": "id", "name": "display_name", "headline": "description"}
+
+
+def _relation_a_plat(it):
+    """One connection with the documented flat keys ADDED: the `user` keys lifted to
+    the top (never over a key the relation carries: its own `id`/`object` stay), plus
+    the v1 names (`member_id` = the person's id, `name`, `headline`). `user` is kept.
+    An item without a `user` object (v1, a test double) is returned as is."""
+    if not isinstance(it, dict) or not isinstance(it.get("user"), dict):
+        return it
+    user = it["user"]
+    plat = dict(it)
+    for k, v in user.items():
+        if k not in ("id", "object"):
+            plat.setdefault(k, v)
+    for v1, v2 in _RELATION_ALIASES.items():
+        if v1 not in plat and user.get(v2) is not None:
+            plat[v1] = user[v2]
+    return plat
+
+
+def _porte_relation(it, f: str) -> bool:
+    tete, _, queue = f.partition(".")
+    if not isinstance(it, dict) or tete not in it:
+        return False
+    return not queue or (isinstance(it[tete], dict) and queue in it[tete])
+
+
+def _projette_relation(it: dict, fields: list) -> dict:
+    """The named keys of one connection; `parent.key` keeps the nesting (as `_slim`
+    does), and `member_id` is always kept."""
+    garde: dict = {"member_id": it["member_id"]} if "member_id" in it else {}
+    for f in fields:
+        tete, _, queue = f.partition(".")
+        if not _porte_relation(it, f):
+            continue
+        if not queue:
+            garde[tete] = it[tete]
+        else:
+            sous = garde.get(tete) if isinstance(garde.get(tete), dict) else {}
+            garde[tete] = {**sous, queue: it[tete][queue]}
+    return garde
+
+
 def _page_de_relations(page, fields: Optional[list] = None):
     """A page of 1st-degree connections, without the duplicated envelope, projected if requested.
 
@@ -429,7 +567,8 @@ def _page_de_relations(page, fields: Optional[list] = None):
     `member_id` is always kept: it is the deduplication key that the
     description prescribes, projecting until it is lost would make the export unusable.
     A requested field that NO item on the page carries is refused, naming the
-    keys present — never silently dropped."""
+    keys present — never silently dropped. A sub-key is named `parent.key`
+    (`user.display_name`) and keeps its nesting."""
     if not isinstance(page, dict):
         return page
     out = {k: v for k, v in page.items() if k not in ("data", "next_cursor")}
@@ -438,17 +577,17 @@ def _page_de_relations(page, fields: Optional[list] = None):
         items = page.get("data") if isinstance(page.get("data"), list) else []
     if "cursor" not in out and "next_cursor" in page:
         out["cursor"] = page["next_cursor"]
+    items = [_relation_a_plat(it) for it in items]
     if fields:
-        presentes = {k for it in items if isinstance(it, dict) for k in it}
-        inconnues = [f for f in fields if f not in presentes]
+        inconnues = [f for f in fields if not any(_porte_relation(it, f) for it in items)]
         if items and inconnues:
+            presentes = {k for it in items if isinstance(it, dict) for k in it}
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=(f"`fields`: key(s) absent from all connections on the "
-                         f"page: {inconnues}. Keys present: {sorted(presentes)}.")))
-        garder = set(fields) | {"member_id"}
-        items = [{k: v for k, v in it.items() if k in garder}
-                 for it in items if isinstance(it, dict)]
+                         f"page: {inconnues}. Keys present: {sorted(presentes)} "
+                         f"(a sub-key is named `parent.key`).")))
+        items = [_projette_relation(it, fields) for it in items if isinstance(it, dict)]
     out["items"] = items
     return out
 
@@ -546,15 +685,30 @@ UNIPILE_CHANNELS = {
 }
 
 
-def _channels_from(accts_by_provider: dict) -> dict:
-    """Build the channels dict from the accounts indexed by DB provider."""
+def _channels_from(accts_by_provider: dict, all_by_provider: "dict | None" = None,
+                   default_by_provider: "dict | None" = None) -> dict:
+    """Build the channels dict from the accounts indexed by DB provider.
+
+    The top-level fields describe ONE account — the one served by default — as they
+    always did. `accounts` lists every account of the channel (several accounts per
+    channel), the default marked; one entry when there is a single account."""
+    all_by_provider = all_by_provider or {}
+    default_by_provider = default_by_provider or {}
+
     def _ch(provider: str) -> dict:
         a = accts_by_provider.get(provider)
+        defaut = (default_by_provider[provider] if provider in default_by_provider
+                  else (a["account_id"] if a else None))
+        tous = all_by_provider.get(provider) or ([a] if a else [])
         return {
             "connected": a is not None,
             "account_id": a["account_id"] if a else None,
             "account_name": a.get("account_name") if a else None,
             "connected_at": str(a["connected_at"]) if a else None,
+            "accounts": [{"account_id": x["account_id"],
+                          "account_name": x.get("account_name"),
+                          "connected_at": str(x["connected_at"]),
+                          "is_default": x["account_id"] == defaut} for x in tous],
         }
     return {front: _ch(prov) for front, prov in UNIPILE_CHANNELS.items()}
 
@@ -575,7 +729,29 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     byo = mode in access.BYO_MODES
     subscribed = access.option_open(sub, "unipile", org=org, group=group)  # single source (byo OR option)
     all_accts = db.list_unipile_accounts(sub)
-    accts = {a["provider"]: a for a in all_accts if a.get("org_id") == o}
+    ici: dict = {}
+    for a in all_accts:
+        if a.get("org_id") == o:
+            ici.setdefault(a["provider"], []).append(a)
+    # The account described per channel = the one served by default (several accounts per
+    # channel): the default chosen by the member, when it is one of these accounts, else
+    # the main one (`db.default_unipile_account`) — never an added one by office.
+    accts = {}
+    defauts = {}
+    for prov, rows in ici.items():
+        d = db.default_unipile_account(rows)
+        op = (db.get_operated_account(sub, prov)
+              if len(rows) > 1 or d is None else None)
+        if op and op.get("owner_sub") == sub:
+            d = next((r for r in rows if r["account_id"] == op["account_id"]), d)
+        if d is not None:
+            accts[prov] = d
+            defauts[prov] = d["account_id"]
+        else:
+            # Accounts, none designated: the channel IS connected — describe the
+            # oldest, and mark none as the default.
+            accts[prov] = rows[0]
+            defauts[prov] = None
     # Adoption possible? (platform mode = same key everywhere; the option gates the connect)
     elsewhere: dict = {}
     if mode == "platform" and subscribed:
@@ -593,7 +769,12 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
         "subscribed": subscribed,   # option unlocked (BYO or admin comp) — gates "connect"
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origin of the key)
         "byo": byo,
-        "channels": _channels_from(accts),
+        "channels": _channels_from(accts, ici, defauts),
+        # Several accounts per channel can be connected HERE (`add_account`): the
+        # database has the slot key (`db.slots_ouverts`) and the option is open. The
+        # front shows « Add another account » only on this — a backend without it
+        # would REPLACE the connected account instead.
+        "multi_account": bool(subscribed) and db.slots_ouverts(),
         # per front channel: the sub's account connected ELSEWHERE, adoptable here in one click
         # (the Connect button adopts on the backend side — the UI can announce it).
         "elsewhere": {front_by_provider[p]: v for p, v in elsewhere.items()
@@ -686,6 +867,13 @@ def account_status(provider: str = "LINKEDIN",
 
     out = {"connected": account_id is not None, "account_id": account_id,
            "account_name": label, "channel": provider, "alive": alive}
+    # Several accounts on this channel here: all of them, the served one marked — an
+    # agent picks another for one call with `_account=<account_id>`.
+    mine = connector_identities.comptes_du_canal_ici(sub, provider)
+    if len(mine) > 1:
+        out["accounts"] = [{"account_id": a["account_id"],
+                            "account_name": a.get("account_name"),
+                            "is_default": a["account_id"] == account_id} for a in mine]
 
     if account_id is None and isinstance(binding, dict) and not binding.get("bound"):
         # The reason for THIS channel: a failed WhatsApp request is not reported on the
@@ -793,6 +981,15 @@ for _con in providers.REGISTRY.values():
 del _con
 
 
+def _par_canal(accts) -> dict:
+    """Accounts grouped by DB provider, in listing order — the main account first
+    (`db.list_unipile_accounts`), so `rows[0]` is the one an admin sheet describes."""
+    out: dict = {}
+    for a in accts:
+        out.setdefault(a["provider"], []).append(a)
+    return out
+
+
 def admin_status_by_org(sub: str, orgs: list) -> list:
     """Messaging state **per org** for the admin sheet (a user can be in N orgs;
     the option is PER ORG). `orgs` = `org_store.list_orgs_for_user(sub)`.
@@ -805,12 +1002,13 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
         oid = o["org_id"]
         mode = access.credential_mode_for(sub, "unipile", org=oid)
         byo = mode in access.BYO_MODES
-        by = {a["provider"]: a for a in accts if a.get("org_id") == oid}
+        tous = _par_canal(a for a in accts if a.get("org_id") == oid)
+        by = {p: rows[0] for p, rows in tous.items()}
         out.append({
             "org_id": oid, "org_name": o.get("name"), "is_active": bool(o.get("is_active")),
             "subscribed": access.option_open(sub, "unipile", org=oid),  # single source
             "mode": mode, "byo": byo,
-            "channels": _channels_from(by),
+            "channels": _channels_from(by, tous),
             # Through the seam, never through the sources. `org_comp` = the org's declared
             # right (any source). `user_comp` = the person's account mark,
             # shown for the record — it opens nothing. `subscribed` also counts a
@@ -821,12 +1019,13 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
             },
         })
     member = {o["org_id"] for o in orgs}
-    orphans = {a["provider"]: a for a in accts if a.get("org_id") not in member}
+    tous_orphelins = _par_canal(a for a in accts if a.get("org_id") not in member)
+    orphans = {p: rows[0] for p, rows in tous_orphelins.items()}
     if orphans:
         out.append({
             "org_id": None, "org_name": "(outside their orgs)", "is_active": False,
             "subscribed": None, "mode": None, "byo": None,
-            "channels": _channels_from(orphans), "option_source": None,
+            "channels": _channels_from(orphans, tous_orphelins), "option_source": None,
         })
     return out
 
@@ -954,8 +1153,13 @@ def unipile_client(provider: str = "LINKEDIN"):
             api_key=rc.key, dsn=(None if rc.is_platform else rc.config.get("dsn")),
             account_id=_project_operated_account(anon, provider), provider=provider)
     sub = access.current_user_sub_or_raise()
+    sans_defaut = None
     try:
         account_id = connector_identities.resolve_operated_account_id(sub, provider)
+    except connector_identities.SansCompteParDefaut as e:
+        # Own accounts here, none by default: a project that pins one of them
+        # designates it (below) — the refusal only stands when nothing does.
+        account_id, sans_defaut = None, e
     except ValueError as e:  # operated pointer revoked/disconnected → explicit error
         raise McpError(_refus_identite(e))
     # Project pin (#57): if the active project pins an unipile account, it takes precedence over the
@@ -984,6 +1188,8 @@ def unipile_client(provider: str = "LINKEDIN"):
             connector_identities.refuser_si_preteur_en_pause(sub, provider, pinned)
         except ValueError as e:
             raise McpError(_refus_identite(e))
+    if not account_id and sans_defaut is not None:
+        raise McpError(_refus_identite(sans_defaut))
     if not account_id:
         # #1342 (option C of 27/10/2026): the caller's OWN account of this channel is
         # linked in another of their orgs and adoptable here → say so, with the gesture.
@@ -1079,6 +1285,24 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
     def _bad(msg: str) -> McpError:
         return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
+    def _lecture_reprise(fn):
+        """A READ refused by Unipile's API-wide burst limit ("We only allow 10
+        requests. Retry in 3 seconds") is waited out ONCE, when Unipile's own delay
+        is short. Measured 21 Nov 2026: 40 % of one account's WhatsApp reads failed
+        that way, all with 3-17 s delays; the agent read each refusal as a failure.
+        A longer delay, or a second refusal, goes back to the caller as is. Never on
+        a send: `_agir` is not wrapped."""
+        from oto.tools.unipile.client import UnipileRateLimited
+
+        try:
+            return fn()
+        except UnipileRateLimited as e:
+            attente = getattr(e, "retry_after", None)
+            if attente is None or attente > _MSG_REPRISE_MAX_S:
+                raise
+            time.sleep(attente + 0.5)
+            return fn()
+
     @mcp.tool(name=cl, annotations=LECTURE, description=(
         f"Reads {channel} messaging via Unipile: 1-to-1 AND group conversations. "
         f"Sending is `{acteur}`.\n\n"
@@ -1105,15 +1329,16 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
             if refus:
                 raise _bad(refus)
             page = limit if limit is not None else 20
-            return unipile_messagerie.page_de_fils(
-                unipile_client(prov).list_chats(limit=page, cursor=cursor,
-                                                with_attendee_names=with_names), page)
+            return unipile_messagerie.page_de_fils(_lecture_reprise(
+                lambda: unipile_client(prov).list_chats(
+                    limit=page, cursor=cursor, with_attendee_names=with_names)), page)
         if op == "read":
             if chat_id is None:
                 raise _bad("op='read' requires chat_id")
             return unipile_messagerie.references_des_pieces(
-                unipile_messagerie.page_de_messages(unipile_client(prov).list_messages(
-                    chat_id, limit=limit if limit is not None else 30)), cl)
+                unipile_messagerie.page_de_messages(_lecture_reprise(
+                    lambda: unipile_client(prov).list_messages(
+                        chat_id, limit=limit if limit is not None else 30))), cl)
         raise _bad(f"op must be 'list' or 'read' — sending is `{acteur}`.")
 
     @mcp.tool(name=acteur, annotations=ACTE, description=(
@@ -1145,7 +1370,8 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     async def unipile_connect_start(channel: str = "linkedin",
                                     force: bool = False,
-                                    premium: Optional[str] = None) -> dict:
+                                    premium: Optional[str] = None,
+                                    add_account: bool = False) -> dict:
         """Start the connection of a hosted messaging account (LinkedIn by
         default) and return an Unipile auth **`url`** to pass on to the user.
 
@@ -1184,13 +1410,24 @@ def register(mcp: FastMCP) -> None:
                 "sales_navigator" (exclusive, only one per account). Only request it
                 if the person really has the matching LinkedIn seat. Also adds
                 the cookie connection to the wizard (recommended for these products).
+            add_account: ADD another account on this channel (a second LinkedIn, a
+                second WhatsApp number…) instead of replacing the connected one. Each
+                added account is one more seat: under the platform subscription the org
+                must have its own seat cap set, otherwise the call is refused
+                (`unipile_seat_cap_required`) — do not retry, tell the person a platform
+                administrator has to set the org's cap first. The person must log in
+                with the OTHER account in the wizard. An added account is NEVER used by
+                default, even when it is the only one left: calls pick it with
+                `_account=<account_id>` (list them: `oto_identity(op='list')`), or it
+                becomes the default via `oto_identity(op='set')`.
         """
         from .. import unipile_connect
 
         sub = access.current_user_sub_or_raise()
         try:
             out = await unipile_connect.hosted_auth_url(sub, channel, force=force,
-                                                        premium=premium)
+                                                        premium=premium,
+                                                        add_account=bool(add_account))
         except unipile_connect.ConnectRefused as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=e.message))
         if out.get("adopted"):
@@ -1433,7 +1670,12 @@ def register(mcp: FastMCP) -> None:
 
         if op == "person":
             ident = _canonical_li_identifier(_need(identifier, "identifier", op))
-            return _scrape(sub, lambda: unipile_client().get_profile(ident, sections=sections))
+            from .. import unipile_limites
+            client = unipile_client()
+            # ONE visit, even when the slug is read twice (accent fallback).
+            return _scrape(sub, lambda: _within_limits(
+                client, unipile_limites.VISITE, lambda: _read_li_slug(
+                    ident, lambda i: client.get_profile(i, sections=sections))))
 
         if op == "company":
             ident = _canonical_li_identifier(_need(identifier, "identifier", op),
@@ -1442,7 +1684,8 @@ def register(mcp: FastMCP) -> None:
             hit = _COMPANY_CACHE.get(key)
             if hit and time.time() - hit[0] < _COMPANY_TTL:
                 return hit[1]
-            res = _scrape(sub, lambda: unipile_client().get_company(ident))
+            res = _scrape(sub, lambda: _read_li_slug(
+                ident, lambda i: unipile_client().get_company(i)))
             if len(_COMPANY_CACHE) >= _COMPANY_CACHE_MAX:
                 _COMPANY_CACHE.clear()
             _COMPANY_CACHE[key] = (time.time(), res)
@@ -1661,8 +1904,10 @@ def register(mcp: FastMCP) -> None:
                 raise _bad("op='send' requires chat_id (reply) or recipient_id "
                            "(new thread)")
             txt = _need(text, "text", op)
-            return unipile_client().send_message(txt, chat_id=chat_id,
-                                                 attendee_id=recipient_id)
+            from .. import unipile_limites
+            client = unipile_client()
+            return _within_limits(client, unipile_limites.MESSAGE, lambda: client.send_message(
+                txt, chat_id=chat_id, attendee_id=recipient_id))
 
         if op == "update":
             cid, act = _need(chat_id, "chat_id", op), _need(action, "action", op)
@@ -1694,7 +1939,17 @@ def register(mcp: FastMCP) -> None:
 
         if op == "invite":
             pid = _need(provider_id, "provider_id", op)
-            return unipile_client().send_invitation(pid, message=message)
+            from oto.tools.unipile.client import UnipileError
+            from .. import unipile_limites
+            client = unipile_client()
+            try:
+                return _within_limits(client, unipile_limites.INVITATION,
+                                      lambda: client.send_invitation(pid, message=message))
+            except UnipileError as e:
+                refus = _invitation_refused(e)
+                if refus is not None:
+                    raise refus from e
+                raise
 
         if op in ("accept_invitation", "decline_invitation"):
             iid = _need(invitation_id, "invitation_id", op)
@@ -1946,7 +2201,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def linkedin_unipile_account(
-        op: Literal["status", "contracts", "select", "inmail_balance"] = "contracts",
+        op: Literal["status", "contracts", "select", "inmail_balance",
+                    "limits"] = "contracts",
         contract_id: Optional[str] = None,
         account_id: Optional[str] = None,
     ) -> dict:
@@ -1968,6 +2224,11 @@ def register(mcp: FastMCP) -> None:
           pass to op="select".
         - **"select"**: activates a contract for the premium calls that follow.
         - **"inmail_balance"**: InMail credit balance (premium messages).
+        - **"limits"**: the sending limits the account's OWNER set (invitations per
+          day and per week, messages per day, profile visits per day): for each, `max`
+          (null = none), `used` on its rolling window and `resets_at`. Read it before a
+          batch of invitations or messages and pace the batch under it: past a limit
+          every action is refused (`linkedin_sending_limit_reached`), nothing is sent.
 
         The three premium ops require the matching subscription ON the connected
         account and the premium seat activated at connect
@@ -1975,7 +2236,7 @@ def register(mcp: FastMCP) -> None:
         403 "out of your scope". `op="status"`, for its part, requires nothing.
 
         Args:
-            op: status | contracts (default) | select | inmail_balance.
+            op: status | contracts (default) | select | inmail_balance | limits.
             contract_id: op="select" — id returned by op="contracts".
             account_id: op="status" — the `account_id` read from the address of the
                 connection flow's return page (proof of the account to link).
@@ -1997,8 +2258,14 @@ def register(mcp: FastMCP) -> None:
             return client.select_contract(_need(contract_id, "contract_id", op))
         if op == "inmail_balance":
             return client.inmail_balance()
+        if op == "limits":
+            from .. import unipile_limites
+            acct = unipile_limites.compte_du_client(client)
+            if acct is None:
+                raise _bad("no LinkedIn account resolved for this call")
+            return {"account_id": acct, "limits": unipile_limites.vue(acct)}
 
-        raise _bad("op must be 'status', 'contracts', 'select' or 'inmail_balance'")
+        raise _bad("op must be 'status', 'contracts', 'select', 'inmail_balance' or 'limits'")
 
     # ---- Recruiter: job postings & candidates (reads) ---------------------
 

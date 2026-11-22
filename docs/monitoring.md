@@ -364,14 +364,44 @@ une par limiteur, sous le même interrupteur que la limite de débit (`OTO_DEBIT
 | `corps` | `OTO_BORNE_CORPS_OCTETS` 4 Mo, `OTO_BORNE_CORPS_UPLOAD_OCTETS` 110 Mo | `defaut` \| `upload` | jeton porté, sinon adresse | `413 payload_too_large` |
 | `outil` | `OTO_BORNE_OUTIL_S` 120 s | le nom de l'outil | `user:<sub>` | erreur MCP `tool_timeout` |
 | `sql` | `OTO_MCP_DB_STATEMENT_TIMEOUT_MS` 30 s | la fonction appelante (`module:fonction`) | le texte SQL (jamais ses paramètres) | `statement_timeout` posé sur le pool |
-| `session` | `OTO_BORNE_SESSION_INACTIVE_S` 30 min | `mcp` | jeton porté, sinon adresse | `session_idle_timeout` de l'SDK `mcp` |
+| `session` | `OTO_BORNE_SESSION_INACTIVE_S` 30 min | `mcp` | jeton porté, sinon adresse | `session_idle_timeout` de l'SDK `mcp` — **armée aussi en `report`** (seul `off` la coupe) |
 
 Une route d'upload se reconnaît à son contrat (`ContratDeRoute.corps` d'un type autre que
 JSON), jamais à une liste de chemins. En `report`, `sql` compte les ordres qui ont duré
-plus que la borne sans en avoir posé une plus longue eux-mêmes ; `session` compte les
-sessions reprises après plus que la borne d'inactivité (celles que l'application aurait
-fermées). Chaque dépassement est aussi journalisé (`borne <limiteur> …`, une ligne par clé
+plus que la borne sans en avoir posé une plus longue eux-mêmes. `session` fait exception :
+elle ferme les sessions inactives dès que le mode n'est pas `off`, car une session jamais
+fermée garde sa mémoire jusqu'au redémarrage du processus. Ce n'est pas un refus : le client reçoit `404 Session not found` et rouvre la
+sienne. Le palmarès compte les sessions reprises après la borne (fermées entre-temps), et
+le démarrage journalise `borne de session MCP : … N gestionnaire(s) armé(s)` — attendu 2
+(face authentifiée + face anonyme). Chaque dépassement est aussi journalisé (`borne <limiteur> …`, une ligne par clé
 et par minute au plus, empreinte tronquée).
+
+**Les sessions MCP ouvertes ne retiennent plus leur dernière réponse** (`oto_mcp/sessions_mcp.py`,
+équipé au même démarrage, dans tous les modes). Deux défauts du transport Streamable HTTP de
+l'SDK `mcp`, corrigés par une enveloppe sur le serveur que chaque gestionnaire fait tourner,
+sans forker l'SDK : la tâche `message_router` du transport gardait dans ses variables locales
+le dernier message acheminé (une session arrêtée après un `tools/list` gardait ~1,3 Mo de tas
+et ~3 Mo de RSS jusqu'à la borne d'inactivité) — chaque réponse est désormais suivie d'un
+témoin minuscule, une réponse à un identifiant qu'aucune requête ne porte, que le routeur
+prend à sa place et ne livre à personne ; et une session fermée par `DELETE` restait pour
+toujours dans le gestionnaire (`_server_instances`, `_session_owners` : l'SDK ne retire que
+les sessions NON terminées) — l'enveloppe la retire. Un gestionnaire qui n'a plus ces
+accroches, ou qui porte un `event_store` (il rejouerait le témoin), refuse le démarrage ; le
+démarrage journalise `sessions MCP : N gestionnaire(s) équipé(s)…` — attendu 2. Le banc
+`tests/test_sessions_mcp_liberation.py` joue le vrai SDK, avec pour chaque correctif un
+témoin qui rougit le jour où l'SDK corrige lui-même le défaut.
+
+La **ligne de contrôle**, toutes les 5 min, une par processus :
+
+```
+sessions MCP : authentifiee ouvertes=42 terminees_retenues=0 fermees_inactivite=7 fermees_delete=3 ; anonyme ouvertes=0 terminees_retenues=0 fermees_inactivite=0 fermees_delete=0 (sur 300 s)
+```
+
+`ouvertes` = sessions vivantes au gestionnaire à l'instant de la ligne ; `terminees_retenues`
+= sessions terminées encore retenues (**0 attendu** : autre chose dit qu'une fermeture
+échappe à l'enveloppe) ; `fermees_*` = fermetures depuis la ligne précédente, par la borne
+d'inactivité ou par `DELETE`. Elle ne dépend pas du niveau des journaux `mcp.*`, qui disent
+la même chose session par session (`Created new transport…`, `Session … idle timeout`).
 
 Pas la connexion d'un connecteur, pas le `tools/list`. (Ce paragraphe disait « uniquement
 les invocations d'outils » jusqu'au 2026-08-29 : les appels `/api/*` y sont écrits depuis
@@ -793,12 +823,12 @@ réponse à l'ancienne lecture du journal, recopiée dans le banc.
 | `tool_call_stats` | `monitoring.summary`, `org.monitoring.summary`, `me.activity_summary`, consoles `op=summary` | oui — p95 sur les valeurs |
 | `connector_failure_stats` | `monitoring.connectors`, `org.monitoring.connectors`, `op=connectors` | oui |
 | `org_adoption` | `org.monitoring.adoption`, `op=adoption` | oui — le dernier appel sur tout l'historique consolidé |
+| `org_members_by_seniority` | `service.org.members` (commerce) | oui, sur `activity=true` — le dernier appel de chaque membre sur tout l'historique consolidé ; par défaut, la route ne lit rien |
 | `list_tenants_overview`, `get_tenant_overview` | `admin.tenants`, `admin.tenant`, console de tenant | oui |
 | `count_org_mcp_calls` | `billing.status` (usage inclus du mois), fiche d'org `org.get`, `org.admin.get` | oui |
 | `list_billable_calls_for_org`, `list_tool_calls`, `list_runs`, `export_tool_calls_for_org`, activité d'un tableau | `usage/calls`, `calls`, `runs`, `export`… | non — des LISTES, ligne à ligne |
 | `rest_call_stats`, `list_rest_calls`, `transport_refusal_stats`, `activation_funnel` | `monitoring.{rest,rest_calls,transport,funnel}` | non — le REST n'est pas agrégé (vues plateforme, vers Grafana) |
 | `instruction_usage`, `instructions_usage_by_slug` | `org.instruction.usage`, `me/instructions-usage` | non — la procédure vient d'`args`, servie par l'index partiel `(org_id, tool) WHERE ok` sur deux verbes |
-| `org_members_by_seniority` | `service.org.members` | non — un dernier appel par membre, pas une période |
 
 **Refus nommé, jamais le journal en silence** : un jour clos de la fenêtre que le
 registre n'a pas lève `AgregatIncomplet` — trou dans le registre, retard (un jour clos
@@ -880,6 +910,17 @@ cas est le plus grave : ne PAS retirer l'inscription pour réexporter, retrouver
 L'export lui-même refuse d'écrire sur un objet existant, et un refus d'accès au `HEAD`
 n'est jamais pris pour une absence. Une inscription ne se réécrit plus (elle se posait
 en `ON CONFLICT DO UPDATE`). Bancs : `tests/deploy/test_archive_journal_reprise_1197.py`.
+
+**Chaque passage laisse une trace, et son absence est une erreur.** Le registre
+`journal_archives` ne dit pas si le travail tourne : son `archived_at` vieillit
+normalement de 30 à 60 jours. Le script écrit donc, à la fin de chaque passage, une ligne
+dans `journal_archive_passages` (révision `20261120_2220_archive_passages` ; début, fin,
+`ok`, mois archivés, détail) : un passage sans mois éligible est réussi, un refus
+`ArchiveIncoherente` ou une exception est en échec avec sa cause ; le verrou pris, le
+passage à blanc et `--export-only` n'écrivent rien. `oto_admin_monitoring
+op=journal_archive` rend `last_success_at`, `last_failure_at` et l'état, et lève
+`journal_archive_late` quand aucun passage n'a réussi depuis plus de 48 h, y compris
+quand il n'y en a jamais eu. Bancs : `tests/deploy/test_archive_passages.py`.
 
 **La suppression avance par l'index** (#1197). Son prédicat
 `to_char(date_trunc('month', created_at), 'YYYY-MM') = mois` ne servait aucun index :
@@ -1092,6 +1133,26 @@ TERMINÉ trace son coût. Quatre garde-fous (`tools/apify.py`, `apify_releve.py`
   autre org ne facture personne ; une lecture dont la fiche de lancement est illisible non
   plus (le relevé facture le lanceur). Le relevé sert UNE clé plateforme : s'il en trouve
   plusieurs, il échoue en les nommant.
+- **Le coût d'un run terminé est son chiffre FINAL, ou rien** (`apify._cout`). Un acteur
+  payé à l'événement atteint SUCCEEDED avant qu'Apify ne réserve ses événements
+  (`accountedChargedEventCounts` en retard sur `chargedEventCounts`) : l'écart se chiffre
+  au prix de l'acteur, souvent tarifé **par palier d'abonnement**
+  (`eventTieredPricingUsd`, FREE … DIAMOND, sans `eventPriceUsd` : 10 des 11 acteurs
+  des outils dédiés le 15/11/2026) — le prix est alors
+  celui du palier du compte qui a lancé le run (`plan.tier` de `GET /v2/users/me`, lu
+  seulement quand un écart à palier se chiffre, gardé une heure par clé et par
+  processus). Un écart qui ne se chiffre pas (palier illisible, événement sans prix)
+  n'est **pas** facturé à ce qui est réservé : ce chiffre, premier du job, restait pour de
+  bon (signalé le 12/11/2026 : des runs d'employés LinkedIn rendant 25 profils facturés 0, ou le
+  seul démarrage). Sans comptes réservés lisibles (absents ou `null`), pareil. Un total chiffré au-delà du plafond
+  du run (`maxTotalChargeUsd`, qu'Apify ne dépasse jamais) aussi : c'est un prix faux, pas un coût. La lecture
+  trace 0 sans le job, la fiche de lancement reste ouverte, et la lecture suivante ou le
+  relevé de nuit facture le vrai chiffre — le relevé prend `usageTotalUsd` tel quel pour
+  un run fini depuis plus d'une heure (tout est réservé), sans quoi un tel run resterait
+  `illisibles` pour toujours.
+- **L'unité est le micro-dollar** : la `quantity` d'un appel Apify — donc les `units` d'un
+  reçu de recette et son `max_units` — compte le coût du run en millionièmes de dollar
+  (1 $ = 1 000 000), arrondi au supérieur comme Jev.
 - **Le mois se compare à ce qu'Apify compte** : au-delà de 5 $ d'écart, un signal `gap` de
   cible `apify_cost_gap`. Il ne se compare qu'une fois la table couvrant tout le cycle.
   Une comparaison en échec se journalise à part (`comparaison.echec`) : le bilan du relevé
@@ -1106,6 +1167,12 @@ annulé : gratuit — et son statut ne porte aucun prix. Sur la clé plateforme
 - **La soumission** vérifie le quota du jour de l'octroi pour le PRIX du travail (en
   micro-dollars, l'unité de `grant_quota_unit`), le note en `units`, et note le travail avec
   ce prix (table `higgsfield_jobs`). Aucune `quantity` : rien n'est encore facturé.
+- **Un prix illisible** (`usd` nul) est refusé sur la clé plateforme, et sur un appel dont la
+  clé n'est pas connue ; sur la clé propre du client, un `max_usd` invérifiable est refusé
+  (`higgsfield_cap_unverifiable`, sans signal), et sans `max_usd` le travail part non chiffré
+  (`price.usd` nul, `price.note`), sans rien facturer. Un refus nommé `higgsfield_price_unknown` (une
+  combinaison que la lib n'a pas mesurée) dépose un signal plateforme (`oto_admin_signal`,
+  `gap`/`billing`), un par combinaison : sa redite s'y rattache en occurrence.
 - **La lecture d'un travail abouti** (`higgsfield` op=get_request) par l'org qui l'a soumis
   trace son prix en `quantity`, le travail pour job (`higgsfield_request_id`).
 - **Lire, annuler ou effacer** un travail (`get_request`, `cancel`, `delete`) n'est permis
@@ -1118,4 +1185,5 @@ annulé : gratuit — et son statut ne porte aucun prix. Sur la clé plateforme
 - **`oto-mcp maintenance higgsfield-jobs`** relève chaque nuit les travaux sans issue : un
   travail abouti reçoit une ligne `higgsfield` de nature `kind='settlement'` sous l'org et
   la personne qui l'ont soumis ; les autres se closent sans coût. Une seule clé plateforme
-  servie, comme Apify. Pas de comparaison : Higgsfield n'expose ni solde ni compteur.
+  servie, comme Apify. Pas de comparaison : Higgsfield n'expose pas de solde, et son
+  compteur (`GET /models/usage`) somme les travaux par tranche et par modèle, jamais par travail.

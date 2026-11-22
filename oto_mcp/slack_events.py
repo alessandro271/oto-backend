@@ -15,8 +15,8 @@ HTTP — the same split as `runner_hook` and `api/hooks.py`.
 
 1. **Proof**: the request is signed with the app's signing secret (`X-Slack-Signature`,
    HMAC-SHA256 over `v0:{timestamp}:{raw body}`), within five minutes of our clock.
-   The secret is the INSTANCE's (`auth/slack.signing_secret`, platform scope of
-   `connector_settings`), like the app's `client_id`/`client_secret`.
+   The secret is the INSTANCE's (`auth/slack.signing_secret`, in the vault like the
+   app's `client_secret`; `auth/app_instance`).
 2. **ACK first**: `recevoir` only verifies and reads the event — no Slack call, no
    member lookup. The route answers 200 at once and hands the request to
    `apres_l_accuse`, run after the response (Starlette background task, off the

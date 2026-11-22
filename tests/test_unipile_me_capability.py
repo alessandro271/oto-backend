@@ -33,6 +33,7 @@ _STATUT = {
     "channels": {"linkedin": {"connected": True, "account_id": "a1",
                               "account_name": "Zoé", "connected_at": "2026-08-01"}},
     "elsewhere": {"whatsapp": {"account_id": "a2", "account_name": "Zoé", "org_id": 12}},
+    "multi_account": False,
 }
 
 
@@ -40,8 +41,10 @@ _STATUT = {
 def socle(monkeypatch):
     vus: list = []
 
-    async def _hosted(sub, channel, force=False, premium=None, app=None):
-        vus.append(("hosted", sub, channel, force, premium, app))
+    async def _hosted(sub, channel, force=False, premium=None, app=None,
+                      add_account=False):
+        vus.append(("hosted", sub, channel, force, premium, app)
+                   + (("add_account",) if add_account else ()))
         return {"url": "https://unipile/auth/xyz", "channel": channel}
 
     def _reconcile(sub):
@@ -53,7 +56,17 @@ def socle(monkeypatch):
     monkeypatch.setattr(tunipile, "status_for", lambda sub: dict(_STATUT))
     monkeypatch.setattr(um.access, "current_org", lambda sub: 35)
     monkeypatch.setattr(um.db, "clear_unipile_account",
-                        lambda sub, org, prov: vus.append(("clear", sub, org, prov)))
+                        lambda sub, org, prov, account_id=None:
+                        vus.append(("clear", sub, org, prov)
+                                   + ((account_id,) if account_id else ())))
+    # No platform seat by default: deleting at the provider is tested on its own below.
+    monkeypatch.setattr(um.db, "list_unipile_accounts", lambda sub: [])
+    # The channel's accounts HERE, read through `list_unipile_accounts` (so that a test
+    # overriding it below sees them here too), main account first.
+    monkeypatch.setattr(um.db, "live_unipile_accounts", lambda sub, org, prov="LINKEDIN": [
+        a for a in um.db.list_unipile_accounts(sub)
+        if a.get("org_id") == org and a.get("provider") == prov])
+    monkeypatch.setattr(um.db, "get_operated_account", lambda sub, prov: None)
     return vus
 
 
@@ -199,7 +212,8 @@ def test_le_statut_declare_tout_ce_qu_il_sert(monkeypatch, socle):
 def test_le_canal_delie_est_mis_en_majuscules(monkeypatch, socle, query, attendu):
     stub_authz(monkeypatch)
     code, out = call("me.unipile.disconnect", query=query)
-    assert (code, out) == (200, {"ok": True})
+    assert (code, out["ok"], out["channel"]) == (200, True, attendu.lower())
+    assert out.get("seat") is None      # aucun siège plateforme lié ici
     assert socle[0] == ("clear", "u-1", 35, attendu)
 
 
@@ -219,3 +233,139 @@ def test_un_champ_inconnu_est_desormais_refuse(monkeypatch, socle):
     code, out = call("me.unipile.connect", body={"chanel": "linkedin"})
     assert code == 400
     assert out["error"] == "unknown_fields" and "chanel" in out["detail"]
+
+
+# --- Délier rend le siège plateforme (le compte cesse d'être facturé) -------
+
+class _Plateforme:
+    def __init__(self, boum=False):
+        self.deleted: list = []
+        self.boum = boum
+
+    def delete_account(self, account_id):
+        if self.boum:
+            raise RuntimeError("unipile 503")
+        self.deleted.append(account_id)
+
+
+def _siege(monkeypatch, socle, *, platform_seat=True, ailleurs=False, raison=None,
+           boum=False):
+    """`a1` = le LinkedIn de u-1 dans l'org 35. `ailleurs` = le même compte reste branché
+    (adopté) dans une autre org après la déconnexion. `raison` = la clé du siège n'est
+    pas nommable (`client_for_seat` rend `(None, raison)`)."""
+    from oto_mcp.capabilities import unipile_seats
+    plat = _Plateforme(boum=boum)
+    monkeypatch.setattr(um.db, "list_unipile_accounts", lambda sub: [
+        {"provider": "LINKEDIN", "account_id": "a1", "org_id": 35,
+         "platform_seat": platform_seat}])
+    monkeypatch.setattr(um.db, "unipile_account_in_service", lambda account_id: ailleurs)
+    monkeypatch.setattr(unipile_seats, "client_for_seat",
+                        lambda: (None, raison) if raison else (plat, None))
+    signaux: list = []
+    monkeypatch.setattr(um.db, "insert_usage_signal", lambda **kw: signaux.append(kw))
+    plat.signaux = signaux
+    return plat
+
+
+def test_delier_un_siege_plateforme_le_supprime_chez_unipile(monkeypatch, socle):
+    stub_authz(monkeypatch)
+    plat = _siege(monkeypatch, socle)
+    code, out = call("me.unipile.disconnect")
+    assert code == 200
+    assert out == {"ok": True, "channel": "linkedin", "account_id": "a1",
+                   "seat": "deleted", "detail": um._DELETED}
+    assert "new account id" in out["detail"] and "not carried over" in out["detail"]
+    assert plat.deleted == ["a1"]
+    assert socle[0][0] == "clear"          # délier AVANT de supprimer
+    assert plat.signaux == []
+
+
+def test_un_compte_encore_branche_dans_une_autre_org_reste(monkeypatch, socle):
+    stub_authz(monkeypatch)
+    plat = _siege(monkeypatch, socle, ailleurs=True)
+    code, out = call("me.unipile.disconnect")
+    assert code == 200
+    assert (out["seat"], out["reason"]) == ("alive", "in_use_elsewhere")
+    assert plat.deleted == [] and plat.signaux == []
+
+
+def test_un_compte_byo_n_est_jamais_supprime(monkeypatch, socle):
+    """Il vit sur l'abonnement Unipile de l'org : ce n'est pas à nous de le supprimer."""
+    stub_authz(monkeypatch)
+    plat = _siege(monkeypatch, socle, platform_seat=False)
+    code, out = call("me.unipile.disconnect")
+    assert (code, out.get("seat")) == (200, None)
+    assert plat.deleted == [] and plat.signaux == []
+
+
+def test_un_autre_canal_ne_supprime_pas_le_linkedin(monkeypatch, socle):
+    stub_authz(monkeypatch)
+    plat = _siege(monkeypatch, socle)
+    code, out = call("me.unipile.disconnect", query=b"channel=whatsapp")
+    assert (code, out["channel"], out.get("seat")) == (200, "whatsapp", None)
+    assert plat.deleted == []
+
+
+def test_une_panne_amont_signale_et_dit_le_siege_encore_vivant(monkeypatch, socle):
+    """La déconnexion tient ; la réponse dit que le siège vit encore, et les admins
+    reçoivent un signal `gap`/`billing` sur CE siège — sans secret."""
+    stub_authz(monkeypatch)
+    plat = _siege(monkeypatch, socle, boum=True)
+    code, out = call("me.unipile.disconnect")
+    assert code == 200
+    assert (out["ok"], out["seat"], out["reason"]) == (True, "alive", "provider_failed")
+    assert socle[0][0] == "clear"
+    [sig] = plat.signaux
+    assert (sig["signal"], sig["kind"], sig["target"]) == ("gap", "billing",
+                                                           "unipile_seat:a1")
+    assert (sig["sub"], sig["org_id"]) == ("u-1", 35)
+    assert "provider_failed" in sig["body"]
+
+
+@pytest.mark.parametrize("raison", ["no_platform_key", "platform_key_ambiguous"])
+def test_une_cle_introuvable_ne_tente_rien_et_signale(monkeypatch, socle, raison):
+    stub_authz(monkeypatch)
+    plat = _siege(monkeypatch, socle, raison=raison)
+    code, out = call("me.unipile.disconnect")
+    assert (code, out["seat"], out["reason"]) == (200, "alive", raison)
+    assert plat.deleted == []
+    assert [s["target"] for s in plat.signaux] == ["unipile_seat:a1"]
+
+
+def test_sans_org_courante_la_deconnexion_est_refusee(monkeypatch, socle):
+    """Rien à délier : un refus nommé, jamais un `ok` qui n'a rien fait."""
+    stub_authz(monkeypatch)
+    monkeypatch.setattr(um.access, "current_org", lambda sub: None)
+    code, out = call("me.unipile.disconnect")
+    assert (code, out["error"]) == (400, "no_org_context")
+    assert socle == []
+
+
+# --- La clé du siège : nommée, ou rien n'est tenté ---------------------------
+
+@pytest.mark.parametrize("instances,raison", [
+    ([], "no_platform_key"),
+    ([{"label": "k1"}, {"label": "k2"}], "platform_key_ambiguous"),
+])
+def test_client_for_seat_ne_choisit_jamais_une_cle_a_l_aveugle(monkeypatch, instances,
+                                                              raison):
+    """Une ligne ne dit pas quelle clé plateforme a créé son compte : nommable seulement
+    si la plateforme n'en a qu'une. Sinon aucun client, donc aucun appel."""
+    from oto_mcp import credentials_store
+    from oto_mcp.capabilities import unipile_seats
+    monkeypatch.setattr(credentials_store, "list_platform_instances",
+                        lambda provider: list(instances))
+
+    def _jamais(label):
+        raise AssertionError(f"aucun client ne doit être construit (clé {label})")
+    monkeypatch.setattr(unipile_seats, "_client_on", _jamais)
+    assert unipile_seats.client_for_seat() == (None, raison)
+
+
+def test_client_for_seat_vise_la_cle_unique(monkeypatch):
+    from oto_mcp import credentials_store
+    from oto_mcp.capabilities import unipile_seats
+    monkeypatch.setattr(credentials_store, "list_platform_instances",
+                        lambda provider: [{"label": "seule"}])
+    monkeypatch.setattr(unipile_seats, "_client_on", lambda label: ("client", label))
+    assert unipile_seats.client_for_seat() == (("client", "seule"), None)

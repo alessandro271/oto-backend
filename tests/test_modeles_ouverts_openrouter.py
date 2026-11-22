@@ -52,7 +52,7 @@ def test_les_modeles_ouverts_sont_de_la_famille_openrouter_et_apres_les_autres()
 
 def test_le_defaut_propose_ne_bouge_pas_quand_openrouter_est_servi():
     cat = runner_models.catalogue({"anthropic", "openrouter"})
-    assert [m["id"] for m in cat if m["default"]] == ["claude-sonnet-5"]
+    assert [m["id"] for m in cat if m["default"]] == ["claude-sonnet-5-5"]
     seul = runner_models.catalogue({"openrouter"})
     assert [m["id"] for m in seul if m["default"]] == [FLASH]
 

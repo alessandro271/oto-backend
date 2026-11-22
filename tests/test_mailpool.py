@@ -14,6 +14,10 @@ SPECIFIC to this module:
   the change would add an audit error; after a write, named `INTERNAL_ERROR`s
   (`dns_outcome_unknown`, `dns_not_kept`, `partially_applied`) that never claim
   nothing changed;
+- `mailpool_mailboxes(op="update")`: dry run by default with the client's
+  diff, nothing sent when nothing differs, `avatar: null` passed through,
+  named `INTERNAL_ERROR`s after a write (`mailbox_update_outcome_unknown`,
+  `mailbox_update_not_kept` with the previous values);
 - the DNS audit and plan rules (`mailpool_dns`);
 - Mailpool's error envelopes translated (validations, 403, credits);
 - arguments go through pydantic validation (`call_tool`, not `.fn`).
@@ -751,3 +755,155 @@ def test_export_arguments_are_checked(client, args):
     with pytest.raises(Exception):
         _call("mailpool_mailboxes", args)
     client.export_mailboxes.assert_not_called()
+
+
+# --- mailbox update -----------------------------------------------------------
+
+UPDATE_PLAN = {"mailbox_id": 5301, "email": MAILBOX["email"], "type": "google",
+               "changes": {"signature": {"before": "Anna", "after": "Anna Lee"}},
+               "unchanged": ["firstName"]}
+
+
+def test_update_is_a_dry_run_by_default(client):
+    client.plan_mailbox_update.return_value = UPDATE_PLAN
+    out = _call("mailpool_mailboxes", {"op": "update", "mailbox_id": 5301,
+                                       "changes": {"firstName": "Anna", "signature": "Anna Lee"}})
+    assert out["dry_run"] is True and out["changed"] is True
+    assert out["changes"] == UPDATE_PLAN["changes"]
+    client.plan_mailbox_update.assert_called_once_with(5301, first_name="Anna",
+                                                       signature="Anna Lee")
+    client.update_mailbox.assert_not_called()
+
+
+def test_update_applies_and_serves_no_credential(client):
+    client.plan_mailbox_update.return_value = UPDATE_PLAN
+    client.update_mailbox.return_value = MAILBOX
+    out = _call("mailpool_mailboxes", {"op": "update", "mailbox_id": 5301, "dry_run": False,
+                                       "changes": {"signature": "Anna Lee"}})
+    client.update_mailbox.assert_called_once_with(5301, signature="Anna Lee")
+    assert out["dry_run"] is False and out["mailbox"]["email"] == MAILBOX["email"]
+    assert not [k for k in _keys(out) if SECRET.search(k)]
+    assert "domainOwner" not in out["mailbox"]["domain"]
+
+
+def test_update_avatar_null_is_passed_to_remove_it(client):
+    client.plan_mailbox_update.return_value = dict(
+        UPDATE_PLAN, changes={"avatar": {"before": "https://x/a.png", "after": None}})
+    _call("mailpool_mailboxes", {"op": "update", "mailbox_id": 5301,
+                                 "changes": {"avatar": None}})
+    client.plan_mailbox_update.assert_called_once_with(5301, avatar=None)
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_update_with_nothing_different_sends_nothing(client, dry_run):
+    client.plan_mailbox_update.return_value = dict(UPDATE_PLAN, changes={},
+                                                   unchanged=["signature"])
+    out = _call("mailpool_mailboxes", {"op": "update", "mailbox_id": 5301, "dry_run": dry_run,
+                                       "changes": {"signature": "Anna"}})
+    assert out["changed"] is False
+    client.update_mailbox.assert_not_called()
+
+
+@pytest.mark.parametrize("args", [
+    {"op": "update", "changes": {"firstName": "A"}},
+    {"op": "update", "mailbox_id": 5301},
+    {"op": "update", "mailbox_id": 5301, "changes": {}},
+    {"op": "update", "mailbox_id": 5301, "changes": {"email": "x@example.com"}},
+    {"op": "update", "mailbox_id": 5301, "changes": {"firstName": ""}},
+    {"op": "update", "mailbox_id": 5301, "domain_id": 1201, "changes": {"firstName": "A"}},
+    {"op": "update", "mailbox_id": 5301, "platform": "lemlist", "changes": {"firstName": "A"}},
+    {"op": "get", "mailbox_id": 5301, "changes": {"firstName": "A"}},
+    {"op": "export", "platform": "lemlist", "mailbox_ids": [5301], "changes": {"firstName": "A"}},
+])
+def test_update_arguments_are_checked(client, args):
+    with pytest.raises(Exception):
+        _call("mailpool_mailboxes", args)
+    client.update_mailbox.assert_not_called()
+
+
+def test_update_refusal_before_sending_is_invalid_params(client):
+    client.plan_mailbox_update.side_effect = ValueError(
+        "Mailbox 5301 is a shared mailbox: only google and outlook mailboxes take an avatar.")
+    e = _err("mailpool_mailboxes", {"op": "update", "mailbox_id": 5301,
+                                    "changes": {"avatar": "https://x/b.png"}})
+    assert e.code == INVALID_PARAMS and "avatar" in e.message
+
+
+@pytest.mark.parametrize("exc", ["timeout", "5xx"])
+def test_update_without_answer_is_an_unknown_outcome(client, exc):
+    import requests
+    from oto.tools.common.errors import UpstreamHTTPError
+    client.plan_mailbox_update.return_value = UPDATE_PLAN
+    client.update_mailbox.side_effect = (
+        requests.Timeout() if exc == "timeout"
+        else UpstreamHTTPError(503, "down", service="mailpool"))
+    e = _err("mailpool_mailboxes", {"op": "update", "mailbox_id": 5301, "dry_run": False,
+                                    "changes": {"signature": "Anna Lee"}})
+    assert e.code == INTERNAL_ERROR and _reason(e) == "mailbox_update_outcome_unknown"
+
+
+def test_update_refused_upstream_is_a_plain_refusal(client):
+    from oto.tools.common.errors import UpstreamHTTPError
+    client.plan_mailbox_update.return_value = UPDATE_PLAN
+    client.update_mailbox.side_effect = UpstreamHTTPError(
+        400, {"validations": [{"context": "forwardTo", "constraints": {"isEmail": "bad"}}]},
+        service="mailpool")
+    e = _err("mailpool_mailboxes", {"op": "update", "mailbox_id": 5301, "dry_run": False,
+                                    "changes": {"signature": "Anna Lee"}})
+    assert _reason(e) == "upstream_refused" and "forwardTo" in e.message
+
+
+def test_update_not_kept_carries_the_previous_values_without_credentials(client):
+    from oto.tools.mailpool import MailpoolUpdateNotKept
+    client.plan_mailbox_update.return_value = UPDATE_PLAN
+    client.update_mailbox.side_effect = MailpoolUpdateNotKept(
+        5301, [], ["forwardTo"], {"signature": "Anna", "forwardTo": "r@example.com"}, MAILBOX)
+    e = _err("mailpool_mailboxes", {"op": "update", "mailbox_id": 5301, "dry_run": False,
+                                    "changes": {"signature": "Anna Lee"}})
+    assert e.code == INTERNAL_ERROR and _reason(e) == "mailbox_update_not_kept"
+    assert e.data["changed"] == ["forwardTo"]
+    assert e.data["previous"]["forwardTo"] == "r@example.com"
+    assert not [k for k in _keys(e.data) if SECRET.search(k)]
+
+
+def test_update_through_the_real_client_sends_the_current_text_fields(monkeypatch):
+    """End to end with oto-core's client: the tool's `changes` reach Mailpool's PUT
+    body as Mailpool names them, on top of the box's CURRENT text fields (sender
+    names, signature, forwarding), so a PUT that replaces the whole box erases
+    nothing; the avatar is sent only when it changes."""
+    from oto.tools.mailpool import client as mpc
+
+    box = dict(MAILBOX, type="google", lastName="Lee", signature="Anna")
+    seen = []
+
+    class _R:
+        def __init__(self, body):
+            self.status_code, self._b, self.content, self.headers = 200, body, b"x", {}
+
+        def json(self):
+            return self._b
+
+    # the tool's preview read, the client's own read before writing, the PUT answer
+    answers = [box, box, dict(box, signature="Anna Lee")]
+
+    def fake(self, method, url, **kw):
+        seen.append((method, url, kw.get("json")))
+        return _R(answers.pop(0))
+
+    monkeypatch.setattr(mpc.requests.Session, "request", fake)
+    from oto_mcp.tools import mailpool
+    from fastmcp import FastMCP
+    m = FastMCP("t")
+    mailpool.register(m)
+    res = asyncio.run(m.call_tool("mailpool_mailboxes", {
+        "op": "update", "mailbox_id": 5301, "dry_run": False,
+        "changes": {"firstName": "Anna", "signature": "Anna Lee"}}))
+    assert [(a, b.rsplit("/", 2)[-2:]) for a, b, _ in seen] == [
+        ("GET", ["mailboxes", "5301"]), ("GET", ["mailboxes", "5301"]),
+        ("PUT", ["mailboxes", "5301"])]
+    expected = {k: box[k] for k in ("firstName", "lastName", "signature", "forwardTo")
+                if box.get(k) is not None}
+    expected["signature"] = "Anna Lee"
+    assert seen[-1][2] == expected
+    assert "avatar" not in seen[-1][2] and "avatarUrl" not in seen[-1][2]
+    assert "password" not in json.dumps(res.structured_content or {})

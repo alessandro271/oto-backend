@@ -267,13 +267,13 @@ def list_all_platform_instances() -> dict[str, list[dict]]:
     `list_platform_instances` (pas de garantie inter-provider)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT connector, entity_id AS label, share_mode, share_down, "
+            "SELECT connector, entity_id AS label, account, share_mode, share_down, "
             "share_side, meta FROM connector_credentials WHERE entity_type=%s "
             "ORDER BY connector, set_at DESC", (PLATFORM,)).fetchall()
     out: dict[str, list[dict]] = {}
     for r in rows:
         out.setdefault(r["connector"], []).append(
-            {"label": r["label"], "share_mode": r["share_mode"],
+            {"label": r["label"], "account": r["account"], "share_mode": r["share_mode"],
              "share_down": r["share_down"] or [], "share_side": r["share_side"] or [],
              "meta": r["meta"] or {}})
     return out
@@ -714,16 +714,94 @@ def clear_dedicated_app(owner_type: str, owner_id: int, connector: str) -> bool:
                        connector, "")
 
 
-# `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :
-# l'`access_token` bearer dérivé d'OAuth (google) y vit en clair (le
-# refresh_token, lui, est chiffré dans `secret_enc`). Les surfaces « statut /
-# listing » (credential_status, list_accounts, list_credentials) sont consommées
-# par /api/me, le listing d'org/groupe, etc. → elles ne doivent JAMAIS sérialiser
-# un bearer vers le front. On le retire À LA SOURCE (defense-in-depth, un seul
-# point) : les accesseurs qui ont VRAIMENT besoin du token (get_credential_with_meta,
-# access_token_for) gardent `meta` entier ; les surfaces de statut servent le
-# `meta` public.
-_SECRET_META_KEYS = ("access_token", "refresh_token", "id_token")
+# --- secrets de l'application OAuth de l'INSTANCE --------------------------------
+#
+# L'app d'éditeur, sous la forme que prennent les connecteurs dont l'application est
+# celle de l'instance, sans région ni tenant (microsoft, jefacture, instagram_meta,
+# hubspot, slack, linkedin_ads, meta_ads) : leurs secrets (`client_secret`,
+# `app_secret`, `user_client_secret`, `signing_secret`…) sont rangés ICI, chiffrés par
+# la clé maître ; leurs réglages publics (`client_id`, `app_id`, `config_id`) restent
+# dans `connector_settings`, qui refuse toute clé de forme secret
+# (`db/connector_settings.refuser_un_secret`).
+#
+# Même rangement et même invariant que l'app d'éditeur : scope `PLATFORM`, `entity_id`
+# `app:instance` — préfixe `app:` des apps dédiées, propriétaire `instance` qu'aucune
+# app dédiée ne peut porter (`DEDICATED_APP_OWNERS`), absent de `list_editor_apps` — et
+# `walk_cascade` ne propose le palier plateforme qu'aux connecteurs `auth_modes ∋
+# 'platform'`, ce qu'aucun de ces connecteurs ne déclare (figé par
+# `tests/test_editor_app.py`) : jamais servi comme credential d'appel. Une ligne par
+# secret, la clé du réglage en `account` (dans l'AAD) : poser, roter ou retirer un
+# secret ne relit ni ne réécrit les autres. Seuls les flux d'autorisation de ces
+# connecteurs les lisent, par `auth/app_instance`.
+
+INSTANCE_APP_LABEL = "app:instance"
+
+
+def set_app_secret(connector: str, key: str, value: str, set_by: Optional[str] = None,
+                   conn=None) -> None:
+    """Pose/rote un secret de l'application de l'instance, chiffré. `conn` : écrire
+    dans la transaction de l'appelant (la migration depuis `connector_settings`)."""
+    if not (key or "").strip():
+        raise ValueError("clé du secret requise")
+    if not (value or "").strip():
+        raise ValueError(f"{connector}.{key} : valeur vide")
+    if conn is not None:
+        _upsert(conn, PLATFORM, INSTANCE_APP_LABEL, connector, key, value.strip(),
+                set_by, None)
+        return
+    with _connect() as c:
+        _upsert(c, PLATFORM, INSTANCE_APP_LABEL, connector, key, value.strip(), set_by, None)
+
+
+def get_app_secrets(connector: str, keys: Sequence[str], conn=None) -> dict[str, str]:
+    """`{clé: secret en clair}` des secrets POSÉS parmi `keys` (absent = non posé). Un
+    déchiffrement en échec LÈVE : un secret illisible n'est pas un secret absent."""
+    sql = ("SELECT account, secret_enc FROM connector_credentials WHERE entity_type=%s "
+           "AND entity_id=%s AND connector=%s AND account = ANY(%s)")
+    params = (PLATFORM, INSTANCE_APP_LABEL, connector, list(keys))
+    if conn is not None:
+        rows = conn.execute(sql, params).fetchall()
+    else:
+        with _connect() as c:
+            rows = c.execute(sql, params).fetchall()
+    return {r["account"]: _reveal(r, PLATFORM, INSTANCE_APP_LABEL, connector, r["account"])
+            for r in rows}
+
+
+@lecture_d_appel
+def app_secrets_set(connector: Optional[str] = None) -> list[dict]:
+    """Les secrets posés (`connector`, `key`, `set_by`, `set_at`), **sans valeur et sans
+    déchiffrer** — la présence, pour la console admin et les cartes. Mémorisée par
+    appel : une liste de cartes la lit une fois pour tous ses connecteurs."""
+    sql = ("SELECT connector, account AS key, set_by, set_at FROM connector_credentials "
+           "WHERE entity_type=%s AND entity_id=%s")
+    params: tuple = (PLATFORM, INSTANCE_APP_LABEL)
+    if connector is not None:
+        sql += " AND connector=%s"
+        params += (connector,)
+    with _connect() as conn:
+        rows = conn.execute(sql + " ORDER BY connector, account", params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_app_secret(connector: str, key: str) -> bool:
+    """Retire un secret de l'application de l'instance (par `_delete` : son instance
+    s'archive, comme celle d'une app d'éditeur)."""
+    with _connect() as conn:
+        return _delete(conn, PLATFORM, INSTANCE_APP_LABEL, connector, key)
+
+
+# Les clés de forme JETON, en clair : `meta` n'en porte plus aucune. Un jeton
+# d'accès OAuth vit en mémoire, par processus (Google, Microsoft, HubSpot…), le
+# refresh_token chiffré dans `secret_enc`. Des lignes d'avant en portent encore
+# (`oto-mcp maintenance jetons-en-meta` les retire). Liste FERMÉE, la même pour trois
+# usages : les surfaces « statut / listing » (credential_status, list_accounts,
+# list_credentials, servies à /api/me et aux listings d'org/groupe) ne les
+# sérialisent jamais, un relais qui recopie `meta` d'une ligne à l'autre
+# (`copy_connector_rows`, reconnexion Microsoft) ne les recopie pas, et la commande
+# de nettoyage ne retire qu'elles.
+BEARER_META_KEYS = ("access_token", "refresh_token", "id_token")
+_SECRET_META_KEYS = BEARER_META_KEYS
 # Les satellites SCELLÉS (`seal_satellite`) : un état propre au compte, secret, qui
 # change à l'usage et non à la pose — le jar de cookies du mode `session` du connecteur
 # `api`. Rangé chiffré dans `meta` sous `<nom>_enc` (pas dans `secret_enc`, que seule la
@@ -735,8 +813,10 @@ _SECRET_META_KEYS += tuple(f"{nom}_enc" for nom in SEALED_SATELLITES)
 
 
 def _public_meta(meta: Optional[dict]) -> dict:
-    """`meta` débarrassé des satellites secrets (bearers OAuth) — pour les surfaces
-    de statut/listing qui le sérialisent vers le front."""
+    """`meta` débarrassé des satellites secrets (jetons, satellites scellés) — pour les
+    surfaces de statut/listing qui le sérialisent vers le front, et pour un relais qui
+    recopie `meta` sur une autre ligne (un satellite scellé est lié par son AAD à SA
+    ligne : recopié ailleurs, il ne se relirait pas)."""
     return {k: v for k, v in (meta or {}).items() if k not in _SECRET_META_KEYS}
 
 
@@ -1227,8 +1307,8 @@ def clear_call_health(entity_type: str, entity_id: str, connector: str,
 def update_meta(entity_type: str, entity_id: str, connector: str, account: str,
                 patch: dict, conn=None) -> bool:
     """Merge `patch` dans `meta` (JSONB ||) SANS toucher secret/secret_enc — pour
-    les satellites mutables (access_token/expires_at Google sur refresh,
-    is_default…), sans re-chiffrer le refresh_token. False si ligne absente."""
+    les satellites mutables (is_default, scopes, santé…), sans re-chiffrer le
+    refresh_token. False si ligne absente."""
     def _do(c) -> bool:
         cur = c.execute(
             "UPDATE connector_credentials SET meta = meta || %s::jsonb "
@@ -1249,6 +1329,12 @@ def _satellite(nom: str) -> str:
     return f"{nom}_enc"
 
 
+def aad_satellite(entity_type: str, entity_id: str, connector: str, account: str,
+                  nom: str) -> str:
+    """L'AAD de `meta.<nom>_enc` : celle de la ligne suivie du nom du satellite."""
+    return f"{_aad(entity_type, entity_id, connector, account)}#{nom}"
+
+
 def seal_satellite(entity_type: str, entity_id: str, connector: str, account: str,
                    nom: str, valeur: str) -> bool:
     """Range `valeur` CHIFFRÉE dans `meta.<nom>_enc` de la ligne, par fusion JSONB
@@ -1257,7 +1343,7 @@ def seal_satellite(entity_type: str, entity_id: str, connector: str, account: st
     autre ligne, ni vers `secret_enc`. Dernier écrivain gagnant entre processus. False
     si la ligne n'existe plus (clé retirée pendant l'appel)."""
     cle = _satellite(nom)
-    enc = crypto.encrypt(valeur, f"{_aad(entity_type, entity_id, connector, account)}#{nom}")
+    enc = crypto.encrypt(valeur, aad_satellite(entity_type, entity_id, connector, account, nom))
     return update_meta(entity_type, entity_id, connector, account, {cle: enc})
 
 
@@ -1274,7 +1360,8 @@ def unseal_satellite(entity_type: str, entity_id: str, connector: str, account: 
             (cle, entity_type, entity_id, connector, account)).fetchone()
     if not row or not row["enc"]:
         return None
-    return crypto.decrypt(row["enc"], f"{_aad(entity_type, entity_id, connector, account)}#{nom}")
+    return crypto.decrypt(row["enc"],
+                          aad_satellite(entity_type, entity_id, connector, account, nom))
 
 
 @lecture_d_appel
@@ -1770,19 +1857,26 @@ def scan_vault_health() -> dict:
     Prérequis : la master key doit être chargée. Sans elle, AUCUN déchiffrement
     n'est possible et 100 % des lignes apparaîtraient faussement périmées → on lève
     plutôt que rapporter un scan trompeur (le message « impossible » de
-    `crypto.decrypt` ≠ le message « indéchiffrable » d'un vrai InvalidTag)."""
+    `crypto.decrypt` ≠ le message « indéchiffrable » d'un vrai InvalidTag).
+
+    `by_key_ref` : pour CHAQUE valeur chiffrée (`rechiffrement.COLONNES_CHIFFREES`), le
+    nombre de lignes par clé du trousseau (`key_ref`, premier octet de l'enveloppe),
+    compté dans la base sans rien en lire d'autre (`compter_key_refs`)."""
     if not crypto.encryption_enabled():
         raise RuntimeError(
             "OTO_MCP_MASTER_KEY absente — scan de santé impossible (aucun "
             "déchiffrement possible ; toutes les lignes apparaîtraient périmées)"
         )
+    from .export_perimetre.rechiffrement import compter_key_refs
     with _connect() as conn:
+        conn.execute("SET LOCAL statement_timeout = '15s'")
         rows = conn.execute(
             "SELECT entity_type, entity_id, connector, account, secret_enc, set_at "
             "FROM connector_credentials "
             "ORDER BY entity_type, connector, entity_id"
         ).fetchall()
-    return classify_vault_rows(rows)
+        par_cle = compter_key_refs(conn)
+    return {**classify_vault_rows(rows), "by_key_ref": par_cle}
 
 
 def classify_vault_rows(rows) -> dict:
@@ -2110,7 +2204,9 @@ def copy_connector_rows(old: str, new: str, *, renamed: bool = False) -> dict:
 
     The AAD binds the ciphertext to its connector: decrypt with `old`'s, re-encrypt with
     `new`'s (`_upsert`, the single INSERT funnel — the instance is born with the row).
-    `meta`, `set_by` follow as they are.
+    `set_by` follows as it is; `meta` follows WITHOUT its secret keys (`_public_meta`:
+    a clear-text token is not relayed, a sealed satellite would not unseal under
+    another connector).
 
     Idempotent BY A MARK, not by the target's presence: each source row handled gets
     `meta.copied_to = new` (also when `new` already has a row for that account). A
@@ -2145,7 +2241,7 @@ def copy_connector_rows(old: str, new: str, *, renamed: bool = False) -> dict:
                 bilan["unreadable"] += 1
                 continue
             meta = r["meta"] if isinstance(r["meta"], dict) else json.loads(r["meta"] or "{}")
-            _upsert(conn, etype, eid, new, account, secret, r["set_by"], meta)
+            _upsert(conn, etype, eid, new, account, secret, r["set_by"], _public_meta(meta))
             if renamed:
                 conn.execute(
                     "UPDATE connector_credentials n SET share_mode = o.share_mode, "

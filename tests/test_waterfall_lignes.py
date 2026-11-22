@@ -347,15 +347,15 @@ def test_sans_etape_refusee_le_recu_ne_parle_pas_d_outils(calls, table, _travail
     assert "missing_tools" not in out and "fix" not in out
 
 
-def test_le_plan_d_un_dry_run_dit_l_etape_que_le_travail_refusera(calls, table, _travail_41):
-    """Le plan disait `planned` sans un mot : l'agent l'a cru, puis a conclu à un quota."""
+def test_le_plan_d_un_dry_run_ne_dit_pas_refusee_une_etape_que_la_cascade_couvre(
+        calls, table, _travail_41):
+    """L'agent a la cascade, pas l'outil de Hunter : la cascade accordée couvre son étape
+    (`outils_du_travail.ouvrir_composite`), le plan ne l'annonce donc pas refusée."""
     _une_ligne(table)
     out = _act("waterfall_email", **{**_EMAIL_ARGS, "providers": ["hunter", "apollo"],
                                      "dry_run": True})
     assert calls["made"] == [] and table["store"].ecrites == {}
-    assert out["missing_tools"] == ["hunter_email_finder"]
-    assert out["fix"]["tools"][-1] == "hunter_email_finder"
-    assert "will be skipped" in out["next_step"]
+    assert "missing_tools" not in out and "fix" not in out
 
 
 def test_chaque_ligne_trouvee_porte_l_outil_de_l_etape_qui_a_trouve(calls, table, monkeypatch):
@@ -384,3 +384,50 @@ def test_chaque_ligne_trouvee_porte_l_outil_de_l_etape_qui_a_trouve(calls, table
     assert table["store"].ecrites["r2"]["email_status"] == "no_match"
     assert vus == {"r1": "hunter_email_finder", "r2": None}
     assert geste.estampille()["fournisseur"] is None, "rien ne reste posé après l'écriture"
+
+
+# --- le compte de chaque connecteur (`_accounts`, `waterfall/comptes.py`) ------------
+
+def _deux_espaces_hunter(monkeypatch):
+    from oto_mcp import access
+
+    def resoudre(provider, want="auto", sub=None, *, account=None, **kw):
+        if account not in ("espace-a", "espace-b"):
+            raise access.CompteIntrouvable(ErrorData(
+                code=INVALID_PARAMS, message=f"Account `{account}` not found"), account)
+        return object()
+
+    monkeypatch.setattr(access, "resolve_credential", resoudre)
+
+
+def test_le_compte_nomme_sert_chaque_ligne(calls, table, monkeypatch):
+    from oto_mcp import session_org
+    _deux_espaces_hunter(monkeypatch)
+    table["lignes"] = [{"_id": f"r{i}", "first_name": "Jane", "last_name": f"Doe{i}",
+                        "website": "acme.com"} for i in (1, 2)]
+    calls["answers"]["hunter_email_finder"] = IssueCible(
+        ok=True, result={"data": {"email": "jane@acme.com"}})
+    jeton = session_org.set_call_step_accounts({"hunter": "espace-b"})
+    try:
+        out = _act("waterfall_email", **_EMAIL_ARGS)
+    finally:
+        session_org.reset_call_step_accounts(jeton)
+    hunter = [a for n, a in calls["made"] if n == "hunter_email_finder"]
+    assert len(hunter) == 2 and all(a["_account"] == "espace-b" for a in hunter)
+    assert out["found"] == 2
+
+
+def test_un_compte_inconnu_est_refuse_une_fois_avant_de_lire_une_ligne(calls, table,
+                                                                       monkeypatch):
+    from oto_mcp import session_org
+    _deux_espaces_hunter(monkeypatch)
+    lu = []
+    monkeypatch.setattr(pr, "ouvrir", lambda *a, **k: lu.append(1))
+    jeton = session_org.set_call_step_accounts({"hunter": "espace-z"})
+    try:
+        with pytest.raises(McpError) as e:
+            _act("waterfall_email", **_EMAIL_ARGS)
+    finally:
+        session_org.reset_call_step_accounts(jeton)
+    assert e.value.error.data["code"] == "account_not_found"
+    assert lu == [] and calls["made"] == []

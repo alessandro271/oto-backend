@@ -239,6 +239,40 @@ def _org_active_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _temps_gagne_sans_cache() -> None:
+    """Le temps gagné de la page Agents est mis en cache par PROCESSUS
+    (`_temps_gagne_borne`) : chaque banc repart d'un cache vide, sinon il lirait le
+    résultat calculé par le précédent pour la même org."""
+    from oto_mcp.capabilities import _temps_gagne_borne
+    _temps_gagne_borne.vider()
+
+
+@pytest.fixture(autouse=True)
+def _aucune_limite_d_envoi_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sans base, aucun compte LinkedIn n'a de limite d'envoi et rien ne se compte
+    (`unipile_limites.garde`, lue à chaque invitation, message et visite de profil). Un
+    banc sur base réelle lit les vraies tables ; un banc qui teste la garde la double
+    lui-même."""
+    if os.environ.get("DATABASE_URL"):
+        return
+    from oto_mcp import unipile_limites
+    monkeypatch.setattr(unipile_limites, "compte_du_client", lambda client: None)
+
+
+@pytest.fixture(autouse=True)
+def _aucun_modele_eteint_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sans base, aucune org n'a éteint de modèle (`orgs.disabled_models`). La lecture a
+    lieu à chaque occurrence d'un agent (horloge, webhook, lancement, campagne), à chaque
+    réservation et à chaque catalogue servi ; un banc qui double le runner sans base n'a
+    rien à y lire. Un banc sur base réelle lit la vraie colonne ; un banc qui teste
+    l'interrupteur la double lui-même."""
+    if os.environ.get("DATABASE_URL"):
+        return
+    from oto_mcp.db import modeles_eteints
+    monkeypatch.setattr(modeles_eteints, "eteints", lambda org_id: [])
+
+
+@pytest.fixture(autouse=True)
 def _palmares_neufs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Chaque banc part de palmarès vides. Ceux du processus
     (`limite_refus_top.palmares_du_processus`) gardent ce qu'un banc précédent y a
@@ -249,6 +283,18 @@ def _palmares_neufs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(top, "PALMARES_BORNES",
                         {lim: top.Palmares(lim) for lim in top.PALMARES_BORNES})
     monkeypatch.setattr(top, "PALMARES_CREDITS", top.Palmares(top.CREDITS))
+
+
+#: La clé maître d'un banc qui scelle des jetons de lien (`db/jetons_de_lien.py`).
+CLE_MAITRE_DE_BANC = "5" * 64
+
+
+@pytest.fixture
+def cle_maitre(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Pose une clé maître de banc : publier une page ou une procédure scelle le jeton
+    du lien, et sans clé, sceller lève (aucun lien en clair de repli)."""
+    monkeypatch.setenv("OTO_MCP_MASTER_KEY", CLE_MAITRE_DE_BANC)
+    return CLE_MAITRE_DE_BANC
 
 
 @pytest.fixture(autouse=True)

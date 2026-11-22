@@ -55,6 +55,8 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
         "bigquery",
         # google_ads (2026-10-08) : huitième service, même flux.
         "google_ads",
+        # search_console (2026-11-15) : neuvième service, même flux.
+        "search_console",
         # `instagram_meta` (2026-09-09) : flux Instagram Login hébergé par oto,
         # déclaré dans `auth/instagram_meta.py` — importé au boot par `api.routes`,
         # qui monte sa route de retour. C'est bien le chemin du boot, pas un import
@@ -77,6 +79,9 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
         # `jefacture` (2026-10-22) : connexion jefacture.com de la personne (code
         # d'autorisation, application plateforme), même patron.
         "jefacture",
+        # `linkedin_ads` (2026-11-17) : connexion LinkedIn de la personne (code
+        # d'autorisation, application plateforme), même patron.
+        "linkedin_ads",
         # `slack` (2026-10-22) : l'app Slack publiée par l'instance, en un clic (OAuth v2),
         # déclarée dans `auth/slack.py` — à côté du formulaire, pas à sa place.
         "slack",

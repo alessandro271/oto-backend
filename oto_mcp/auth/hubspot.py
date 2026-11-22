@@ -30,10 +30,10 @@ created, and both behaviours are wanted:
 - **org / team** (`org`, `group`) → the ACCOUNT-LEVEL app: installed once per portal
   by an admin, shared like a pasted key.
 
-Their `client_id` / `client_secret` are PLATFORM `connector_settings`, set by the
-operator — the `meta_ads` pattern, not the tenant (ADR 0052): `client_id` /
-`client_secret` for the account-level app, `user_client_id` / `user_client_secret`
-for the user-level one. A level whose app is not set keeps the form alone
+Their coordinates are set by the operator — the `meta_ads` pattern, not the tenant
+(ADR 0052): `client_id` / `client_secret` for the account-level app, `user_client_id` /
+`user_client_secret` for the user-level one; the ids at the PLATFORM scope of
+`connector_settings`, the secrets in the vault, encrypted (`auth/app_instance`). A level whose app is not set keeps the form alone
 (`app_ready_scopes`). The row says which app minted it (`meta.app`): a refresh token
 only renews with the client that issued it.
 
@@ -166,12 +166,9 @@ _APP_LABEL = {APP_ACCOUNT: "org", APP_USER: "personal"}
 def _settings() -> dict:
     """COLD read (`meta_ads._reglages`): start of a flow, return of a consent, and a
     token renewal — once per half hour and per row, never per tool call."""
-    from ..db import connector_settings as store
+    from . import app_instance
 
-    return {r["key"]: (r["value"] or "").strip()
-            for r in store.list_connector_settings()
-            if r["scope_type"] == "platform" and r["connector"] == CONNECTOR
-            and r["key"] in _ALL_SETTINGS}
+    return app_instance.reglages(CONNECTOR, _ALL_SETTINGS)
 
 
 def missing_settings(kind: str = APP_ACCOUNT, poses: Optional[dict] = None) -> list[str]:
@@ -199,8 +196,12 @@ def app_ready_scopes(sub: str) -> list[str]:
     """The levels whose app is set — what the card offers "Connect" on. ONE settings
     read for both apps."""
     del sub
+    from . import app_instance
+
     try:
-        poses = _settings()
+        # Presence only: nothing is decrypted to draw a card.
+        manque = set(app_instance.manquantes(CONNECTOR, _ALL_SETTINGS))
+        poses = {k: "set" for k in _ALL_SETTINGS if k not in manque}
     except Exception as e:  # noqa: BLE001 — a settings outage must not break /api/me
         logger.warning("hubspot: app settings unreadable (%s)", type(e).__name__)
         return []

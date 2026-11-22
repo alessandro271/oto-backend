@@ -13,6 +13,7 @@ a Mailpool workspace member creates a key in Mailpool → Settings → **API Key
 - "are my inboxes landing well?" → `mailpool_spam_checks(op="run", mailbox_id=…)`: score and per-check status in a few seconds, free
 - "which mailboxes do we have?" → `mailpool_mailboxes(op="list")`, optionally `domain_id=…`
 - "set up new mailboxes on our domains" → `mailpool_mailboxes(op="create", mailboxes=[{email, firstName, lastName, type, forwardTo}])` previews (free slots, domain types, taken addresses); then `dry_run=False`. A domain never used takes the type of its first mailbox; one domain = one type
+- "change the sender name / signature / forwarding of this mailbox" → `mailpool_mailboxes(op="update", mailbox_id=…, changes={"firstName": …, "signature": …, "forwardTo": …})` returns the before/after diff; re-call with `dry_run=False`. A field left out is kept; `avatar` (google/outlook only, `null` removes it). Warmup volume is a warmup setting, not a mailbox field
 - "add our new mailboxes to lemlist" → save the lemlist login once in the Mailpool dashboard, then `mailpool_mailboxes(op="export", platform="lemlist", mailbox_ids=[…])` previews (login saved, each mailbox `active`), `dry_run=False` schedules it, `op="export_batch"` follows it. Mailpool passes the passwords to lemlist itself
 - "is this domain name free?" → `mailpool_domains(op="availability", domain="…")` or `op="suggestions"`
 - "do we have room for more inboxes?" → `mailpool_account(op="slots")`
@@ -30,6 +31,7 @@ a Mailpool workspace member creates a key in Mailpool → Settings → **API Key
 - `-all` only once **every** service sending as the domain is in SPF (Google Workspace, Microsoft 365 or Mailpool's relay — a sending tool connected through them needs nothing more)
 - some lookups are **enabled per Mailpool workspace** (Google Workspace / Microsoft 365 checks): refused otherwise
 - a spam check is refused (404) for some mailbox types
+- **a mailbox update never empties a field** except the avatar: names, signature and forwarding address are replaced, not cleared. After `dry_run=False`, reason `mailbox_update_outcome_unknown` or `mailbox_update_not_kept` (it carries the `previous` values) means the mailbox **may have changed**: `op="get"` before calling again
 - **changing the DMARC policy or the web redirect is not served yet**: Mailpool's settings calls for them are not verified live (a later report-address change may republish the stored policy). Do it in Mailpool, then run `op="audit"`
 - lemwarm or another warmup paused on a **Microsoft 365** domain because "external forwarding is not allowed" is a tenant setting (Microsoft Defender → anti-spam outbound policy → automatic forwarding), not DNS
 

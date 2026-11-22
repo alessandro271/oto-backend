@@ -21,17 +21,30 @@ from typing import Any, Optional
 from psycopg.types.json import Jsonb
 
 from ._conn import _connect
+from . import jetons_de_lien as _jetons
 
 #: Fenêtre gardée du compteur quotidien des vues de vitrine.
 VUES_JOURS = 90
 
-_COLONNES = ("id, instruction_id, org_id, token, show_readers, preview_shape, "
+# `token_enc` : le jeton du lien, chiffré (`db/jetons_de_lien.py`) — rendu sous `token`,
+# rouvert, par `_partage` ; l'enveloppe ne sort pas d'ici.
+_COLONNES = ("id, instruction_id, org_id, token_enc, show_readers, preview_shape, "
              "shape_version, preview_views, created_by, created_at, updated_at, revoked_at")
+
+
+def _partage(row) -> dict:
+    """Une ligne de `_COLONNES` telle que les appelants la lisent : `token` = le jeton du
+    lien, rouvert de son enveloppe."""
+    partage = dict(row)
+    partage["token"] = _jetons.ouvrir(partage.pop("token_enc"),
+                                      _jetons.aad_partage(partage["id"]))
+    return partage
 
 
 def _jeton() -> str:
     """Un jeton d'URL : 15 octets aléatoires, 20 caractères url-safe. Il EST le
-    secret du lien — jamais dérivé du slug ni de l'id."""
+    secret du lien — jamais dérivé du slug ni de l'id. Rangé chiffré et par son
+    empreinte, jamais en clair (`db/jetons_de_lien.py`)."""
     return secrets.token_urlsafe(15)
 
 
@@ -42,7 +55,7 @@ def actif(instruction_id: int) -> Optional[dict]:
             f"SELECT {_COLONNES} FROM process_shares "
             "WHERE instruction_id = %s AND revoked_at IS NULL", (instruction_id,)
         ).fetchone()
-    return dict(row) if row else None
+    return _partage(row) if row else None
 
 
 def par_jeton(token: str) -> Optional[dict]:
@@ -52,9 +65,9 @@ def par_jeton(token: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             f"SELECT {_COLONNES} FROM process_shares "
-            "WHERE token = %s AND revoked_at IS NULL", (token,)
+            "WHERE token_hash = %s AND revoked_at IS NULL", (_jetons.empreinte(token),)
         ).fetchone()
-    return dict(row) if row else None
+    return _partage(row) if row else None
 
 
 def publier(instruction_id: int, org_id: Optional[int], created_by: str, *,
@@ -63,20 +76,29 @@ def publier(instruction_id: int, org_id: Optional[int], created_by: str, *,
     """Pose le partage actif de la procédure. Idempotent : un partage déjà actif est
     rendu tel quel (ses réglages ne bougent pas — c'est `regler` qui les change).
     Rend `(partage, cree)`."""
+    jeton = _jeton()
     with _connect() as conn:
         row = conn.execute(
-            f"""INSERT INTO process_shares
-                    (instruction_id, org_id, token, show_readers, preview_shape,
+            """INSERT INTO process_shares
+                    (instruction_id, org_id, token_hash, show_readers, preview_shape,
                      shape_version, created_by)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (instruction_id) WHERE revoked_at IS NULL DO NOTHING
-                RETURNING {_COLONNES}""",
-            (instruction_id, org_id, _jeton(), show_readers,
+                RETURNING id""",
+            (instruction_id, org_id, _jetons.empreinte(jeton), show_readers,
              Jsonb(preview_shape) if preview_shape is not None else None,
              shape_version, created_by),
         ).fetchone()
+        if row:
+            # L'AAD porte l'id de la ligne : l'enveloppe se scelle une fois l'id connu,
+            # dans la même transaction.
+            row = conn.execute(
+                f"UPDATE process_shares SET token_enc = %s WHERE id = %s "
+                f"RETURNING {_COLONNES}",
+                (_jetons.sceller(jeton, _jetons.aad_partage(row["id"])), row["id"]),
+            ).fetchone()
     if row:
-        return dict(row), True
+        return _partage(row), True
     existant = actif(instruction_id)
     if existant is None:  # retiré entre les deux lectures : on réessaie une fois
         return publier(instruction_id, org_id, created_by, show_readers=show_readers,
@@ -120,7 +142,7 @@ def regler(instruction_id: int, *, show_readers: Optional[bool] = None,
             f"WHERE instruction_id = %s AND revoked_at IS NULL RETURNING {_COLONNES}",
             (*vals, instruction_id),
         ).fetchone()
-    return dict(row) if row else None
+    return _partage(row) if row else None
 
 
 def compter_vue(share_id: int, *, aujourd_hui: Optional[date] = None) -> None:

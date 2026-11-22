@@ -197,7 +197,8 @@ def test_seule_l_heritee_declare_le_refus_du_type_inconnu():
     codes = lambda c: {e.code for e in c.errors}  # noqa: E731
     assert "unsupported_resource_type" in codes(_cap("resources.govern"))
     assert "unsupported_resource_type" not in codes(_cap("resources.govern.v2"))
-    assert codes(_cap("resources.govern.v2")) == {e.code for e in C.REFUS}
+    # … et la stricte en déclare UN de plus : le rôle Use, qu'elle seule prend.
+    assert codes(_cap("resources.govern.v2")) == {e.code for e in C.REFUS} | {"role_for_apps_only"}
 
 
 # ── 3. Le défaut connu est écrit LÀ OÙ L'APPELANT LE LIT ─────────────────────

@@ -23,46 +23,124 @@ from ._conn import _connect
 from .users import upsert_user
 
 
+# L'emplacement PRINCIPAL d'un canal : celui de toute ligne née avant les emplacements,
+# celui qu'une connexion ordinaire remplace, le compte servi par défaut.
+PRINCIPAL = ""
+
+
+def slot_pour_ajout(account_id: str) -> str:
+    """L'emplacement d'un compte AJOUTÉ : nommé par son premier `account_id`, puis figé
+    (une reconnexion qui change d'identifiant garde l'emplacement — c'est la clé stable
+    de la connexion, pas l'identifiant courant)."""
+    return str(account_id)
+
+
+_SLOTS_OUVERTS = False
+
+
+def slots_ouverts() -> bool:
+    """La base accepte-t-elle un SECOND compte sur un même canal ?
+
+    Non tant que la PK d'`unipile_accounts` est l'ancienne `(sub, org_id, provider)` :
+    le code en production arbitre encore dessus (lot A, `docs/live-migrations.md`). La
+    révision `20261118_1500_unipile_slots` la remplace par la PK à emplacement (lot B) ;
+    une base neuve naît avec. Vrai une fois vu, jamais relu ensuite : une PK ne revient
+    pas en arrière sous un processus qui tourne."""
+    global _SLOTS_OUVERTS
+    if _SLOTS_OUVERTS:
+        return True
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT a.attname FROM pg_index i "
+            "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) "
+            "WHERE i.indrelid = 'unipile_accounts'::regclass AND i.indisprimary"
+        ).fetchall()
+    _SLOTS_OUVERTS = any(r["attname"] == "slot" for r in rows)
+    return _SLOTS_OUVERTS
+
+
 def set_unipile_account(sub: str, account_id: str, account_name: Optional[str] = None,
                         org_id: Optional[int] = None, provider: str = "LINKEDIN",
-                        platform_seat: bool = False) -> None:
-    """Associe (upsert) le compte Unipile `account_id` à `(sub, org_id, provider)`
+                        platform_seat: bool = False, slot: str = PRINCIPAL) -> str:
+    """Associe (upsert) le compte Unipile `account_id` à `(sub, org_id, provider, slot)`
     — scope MEMBRE (ADR 0033 B4) : le binding vaut DANS cette org. `platform_seat`
     = le compte consomme un siège de la clé plateforme (comptage/facturation par
-    org) ; False en BYO."""
+    org) ; False en BYO.
+
+    `slot` : `PRINCIPAL` (défaut) = remplace le compte principal du canal, comme
+    toujours ; un emplacement d'ajout (`slot_pour_ajout`) = un compte DE PLUS. Un
+    `account_id` que ce membre porte déjà sur ce canal dans cette org (ligne vivante ou
+    morte) garde SON emplacement, quel que soit `slot` : un même compte n'occupe jamais
+    deux emplacements (deux sièges facturés pour une session). Rend l'emplacement écrit."""
     if org_id is None:
         raise ValueError("org_id requis (scope membre, ADR 0033)")
     upsert_user(sub)
     with _connect() as conn:
+        deja = conn.execute(
+            "SELECT slot FROM unipile_accounts "
+            "WHERE sub = %s AND org_id = %s AND provider = %s AND account_id = %s "
+            "ORDER BY (disconnected_at IS NULL) DESC, (slot = '') DESC LIMIT 1",
+            (sub, org_id, provider, account_id),
+        ).fetchone()
+        if deja is not None:
+            slot = deja["slot"]
         conn.execute(
-            "INSERT INTO unipile_accounts (sub, provider, account_id, account_name, org_id, platform_seat) "
-            "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (sub, org_id, provider) DO UPDATE SET "
+            "INSERT INTO unipile_accounts (sub, provider, account_id, account_name, org_id, "
+            "platform_seat, slot) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (sub, org_id, provider, slot) DO UPDATE SET "
             "account_id = EXCLUDED.account_id, account_name = EXCLUDED.account_name, "
             "platform_seat = EXCLUDED.platform_seat, connected_at = NOW(), "
             "disconnected_at = NULL, "  # re-binder = réactiver une ligne soft-déconnectée
             # …et effacer la fin de droit qu'elle portait (`db/unipile_fin_de_droit`) :
             # un compte rebranché n'hérite ni du délai ni du préavis d'avant.
             "entitlement_lost_at = NULL, entitlement_notice_at = NULL",
-            (sub, provider, account_id, account_name, org_id, platform_seat),
+            (sub, provider, account_id, account_name, org_id, platform_seat, slot),
         )
         # Sa sous-instance, dans la même transaction : la cible de ses règles d'accès
         # (#1499, `db/sous_instances`).
-        sous_instances.poser(conn, sub, org_id, provider)
+        sous_instances.poser(conn, sub, org_id, provider, slot)
+    return slot
+
+
+def _par_defaut(rows: list) -> Optional[dict]:
+    """Le compte servi SANS choix explicite parmi les comptes vivants d'un canal : le
+    principal s'il vit, sinon None. Le principal déconnecté, un compte ajouté n'est
+    jamais servi d'office, même seul : il ne sert que choisi (défaut posé par le membre,
+    `_account=`, épingle de projet). Le choix se fait, il ne se suppose pas — un message
+    envoyé sous une identité que personne n'a désignée ne se reprend pas."""
+    return next((r for r in rows if (r.get("slot") or "") == PRINCIPAL), None)
+
+
+def default_unipile_account(rows: list) -> Optional[dict]:
+    """`_par_defaut`, pour un appelant qui a déjà lu `live_unipile_accounts`."""
+    return _par_defaut(rows)
+
+
+def live_unipile_accounts(sub: str, org_id: Optional[int],
+                          provider: str = "LINKEDIN") -> list[dict]:
+    """Les comptes VIVANTS du membre sur ce canal DANS cette org, principal d'abord puis
+    par ancienneté : `[{account_id, account_name, slot, platform_seat, connected_at}]`."""
+    if org_id is None:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT account_id, account_name, slot, platform_seat, connected_at "
+            "FROM unipile_accounts WHERE sub = %s AND org_id = %s AND provider = %s "
+            "AND disconnected_at IS NULL ORDER BY (slot <> ''), connected_at",
+            (sub, org_id, provider),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_unipile_account_id(sub: str, org_id: Optional[int],
                            provider: str = "LINKEDIN") -> Optional[str]:
     """`account_id` Unipile du user pour ce canal DANS cette org (binding VIVANT),
-    ou None. `org_id=None` (défensif) → None, jamais un repli org-agnostique."""
-    if org_id is None:
-        return None
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT account_id FROM unipile_accounts "
-            "WHERE sub = %s AND org_id = %s AND provider = %s AND disconnected_at IS NULL",
-            (sub, org_id, provider),
-        ).fetchone()
-    return row["account_id"] if row else None
+    ou None. `org_id=None` (défensif) → None, jamais un repli org-agnostique.
+
+    Plusieurs comptes sur le canal : celui servi par défaut (`_par_defaut` : le
+    principal) — None quand rien ne le désigne."""
+    r = _par_defaut(live_unipile_accounts(sub, org_id, provider))
+    return r["account_id"] if r else None
 
 
 def seat_binding_elsewhere(sub: str, provider: str = "LINKEDIN",
@@ -76,7 +154,8 @@ def seat_binding_elsewhere(sub: str, provider: str = "LINKEDIN",
         row = conn.execute(
             "SELECT account_id, account_name, org_id FROM unipile_accounts "
             "WHERE sub = %s AND provider = %s AND platform_seat AND disconnected_at IS NULL "
-            "AND org_id IS DISTINCT FROM %s ORDER BY connected_at DESC LIMIT 1",
+            "AND org_id IS DISTINCT FROM %s ORDER BY (slot = '') DESC, connected_at DESC "
+            "LIMIT 1",
             (sub, provider, exclude_org),
         ).fetchone()
     return dict(row) if row else None
@@ -98,45 +177,69 @@ def dead_unipile_account_ids_for(sub: str, provider: str = "LINKEDIN") -> set:
 
 def get_unipile_account(sub: str, org_id: Optional[int],
                         provider: str = "LINKEDIN") -> Optional[dict]:
-    """Statut de connexion Unipile d'un canal dans CETTE org, ou None."""
-    if org_id is None:
+    """Statut de connexion Unipile d'un canal dans CETTE org (le compte servi par
+    défaut, `_par_defaut`), ou None."""
+    r = _par_defaut(live_unipile_accounts(sub, org_id, provider))
+    if r is None:
         return None
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT provider, account_id, account_name, connected_at FROM unipile_accounts "
-            "WHERE sub = %s AND org_id = %s AND provider = %s AND disconnected_at IS NULL",
-            (sub, org_id, provider)
-        ).fetchone()
-    return dict(row) if row else None
+    return {"provider": provider, "account_id": r["account_id"],
+            "account_name": r.get("account_name"), "connected_at": r.get("connected_at")}
 
 
 def list_unipile_accounts(sub: str) -> list[dict]:
     """Les comptes Unipile CONNECTÉS du user (bindings vivants), tous canaux confondus
-    (`[{provider, account_id, account_name, org_id, platform_seat, connected_at}]`) —
+    (`[{provider, account_id, account_name, org_id, platform_seat, connected_at, slot}]`,
+    par canal le principal d'abord) —
     pour le dashboard. `org_id` = l'org à laquelle le compte est rattaché (ventilation
     par org, fiche admin). Les lignes soft-déconnectées sont exclues (elles ne servent
     qu'au rebind, cf. `dead_unipile_account_ids_for`)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT provider, account_id, account_name, org_id, platform_seat, connected_at "
-            "FROM unipile_accounts WHERE sub = %s AND disconnected_at IS NULL "
-            "ORDER BY provider", (sub,)
+            "SELECT provider, account_id, account_name, org_id, platform_seat, connected_at, "
+            "slot FROM unipile_accounts WHERE sub = %s AND disconnected_at IS NULL "
+            "ORDER BY provider, (slot <> ''), connected_at", (sub,)
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def clear_unipile_account(sub: str, org_id: Optional[int], provider: str = "LINKEDIN") -> None:
-    """SOFT-déconnecte le canal dans CETTE org (la ligne survit, `disconnected_at`
-    posé) — par-org : le binding est un acte par org (modèle explicite), déconnecter
-    ICI ne touche pas les autres orgs. La ligne morte reste la preuve de propriété
-    du compte (rebind déterministe à la reconnexion, cf. `dead_unipile_account_ids_for`)."""
+def clear_unipile_account(sub: str, org_id: Optional[int], provider: str = "LINKEDIN",
+                          account_id: Optional[str] = None) -> int:
+    """SOFT-déconnecte UN compte du canal dans CETTE org (la ligne survit,
+    `disconnected_at` posé) — par-org : le binding est un acte par org (modèle
+    explicite), déconnecter ICI ne touche pas les autres orgs. La ligne morte reste la
+    preuve de propriété du compte (rebind déterministe à la reconnexion, cf.
+    `dead_unipile_account_ids_for`).
+
+    `account_id` nomme le compte ; sans lui, celui servi par défaut (`_par_defaut`) —
+    jamais tous les comptes du canal. Rend le nombre de lignes déconnectées (0 : rien
+    de vivant ne correspondait, ou rien ne désignait un compte)."""
     if org_id is None:
-        return
+        return 0
+    if account_id is None:
+        r = _par_defaut(live_unipile_accounts(sub, org_id, provider))
+        if r is None:
+            return 0
+        account_id = r["account_id"]
     with _connect() as conn:
-        conn.execute(
+        return conn.execute(
+            # A row already disconnected keeps its date: billing reads it (the connection
+            # lens, prorated connection-months), and a repeated DELETE must not move it.
             "UPDATE unipile_accounts SET disconnected_at = NOW() "
-            "WHERE sub = %s AND org_id = %s AND provider = %s",
-            (sub, org_id, provider))
+            "WHERE sub = %s AND org_id = %s AND provider = %s AND account_id = %s "
+            "AND disconnected_at IS NULL",
+            (sub, org_id, provider, account_id)).rowcount
+
+
+def unipile_account_in_service(account_id: str) -> bool:
+    """Un binding VIVANT, dans n'importe quelle org, nomme-t-il encore ce compte ?
+    (un compte adopté dans une autre org y reste en service : le supprimer chez le
+    fournisseur couperait cette org)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM unipile_accounts "
+            "WHERE account_id = %s AND disconnected_at IS NULL) AS vivant",
+            (account_id,)).fetchone()
+    return bool(row["vivant"])
 
 
 def org_unipile_account_ids(org_id: Optional[int], provider: str = "LINKEDIN") -> set:
@@ -170,15 +273,20 @@ def count_unipile_accounts_for_org(org_id: int) -> int:
         ).fetchone()["n"]
 
 
-def unipile_connection_key(org_id: int, sub: str, provider: str) -> str:
-    """Clé OPAQUE d'une connexion (un canal d'un membre dans une org) — ce qu'un
-    relevé déduplique pour compter une connexion une fois par période.
+def unipile_connection_key(org_id: int, sub: str, provider: str, slot: str = PRINCIPAL) -> str:
+    """Clé OPAQUE d'une connexion (un compte d'un canal d'un membre dans une org) — ce
+    qu'un relevé déduplique pour compter une connexion une fois par période.
 
-    Tirée de la clé primaire `(sub, org_id, provider)` et non d'`account_id` : une
+    Tirée de la clé primaire `(sub, org_id, provider, slot)` et non d'`account_id` : une
     reconnexion peut changer de compte Unipile, elle reste la même connexion. Et elle
     ne nomme pas le membre, parce que la lentille qui la sert est lisible par tout
-    membre de l'org."""
-    return hashlib.sha256(f"{int(org_id)}:{sub}:{provider}".encode()).hexdigest()[:24]
+    membre de l'org. L'emplacement principal garde la clé d'avant les emplacements, à
+    l'octet près (une connexion déjà facturée ne change pas de clé) ; un compte ajouté a
+    la sienne — il est facturé comme une connexion de plus."""
+    base = f"{int(org_id)}:{sub}:{provider}"
+    if slot:
+        base += f":{slot}"
+    return hashlib.sha256(base.encode()).hexdigest()[:24]
 
 
 def list_org_unipile_connections(org_id: int, since: Optional[str] = None) -> list[dict]:
@@ -202,13 +310,15 @@ def list_org_unipile_connections(org_id: int, since: Optional[str] = None) -> li
         clauses.append("disconnected_at IS NULL")
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT sub, provider, platform_seat, "
+            "SELECT sub, provider, slot, platform_seat, "
             "to_char(connected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS connected_at, "
             "to_char(disconnected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS disconnected_at "
-            f"FROM unipile_accounts WHERE {' AND '.join(clauses)} ORDER BY connected_at, provider",
+            f"FROM unipile_accounts WHERE {' AND '.join(clauses)} "
+            "ORDER BY connected_at, provider, slot",
             tuple(params),
         ).fetchall()
-    return [{"connection_key": unipile_connection_key(org_id, r["sub"], r["provider"]),
+    return [{"connection_key": unipile_connection_key(org_id, r["sub"], r["provider"],
+                                                      r.get("slot") or PRINCIPAL),
              "provider": r["provider"], "platform_seat": bool(r["platform_seat"]),
              "connected_at": r["connected_at"], "disconnected_at": r["disconnected_at"]}
             for r in rows]
@@ -239,7 +349,7 @@ def unipile_account_owners(include_disconnected: bool = False) -> list[dict]:
         rows = conn.execute(
             "SELECT ua.account_id, ua.provider, ua.account_name, ua.sub, u.email, "
             "ua.org_id, o.name AS org_name, ua.connected_at, ua.disconnected_at, "
-            "ua.platform_seat, ua.entitlement_lost_at "
+            "ua.platform_seat, ua.entitlement_lost_at, ua.slot "
             "FROM unipile_accounts ua "
             "LEFT JOIN users u ON u.sub = ua.sub "
             "LEFT JOIN orgs o ON o.id = ua.org_id" + where
@@ -375,17 +485,20 @@ def list_option_comps_for_option(option: str) -> list[dict]:
 
 
 def create_unipile_pending(nonce: str, sub: str, org_id: Optional[int] = None,
-                           provider: str = "LINKEDIN", platform_seat: bool = False) -> None:
+                           provider: str = "LINKEDIN", platform_seat: bool = False,
+                           add_account: bool = False) -> None:
     """Mappe un `nonce` (posé comme `name` sur le lien hosted-auth) au
     `(sub, org de contexte, provider)` + `platform_seat` : la moitié oto de la
-    connexion, que la réconciliation consomme. Prune les nonces expirés (> 1h)."""
+    connexion, que la réconciliation consomme. `add_account` = le compte qui viendra
+    s'AJOUTE au canal (nouvel emplacement) au lieu de remplacer le principal. Prune les
+    nonces expirés (> 1h)."""
     upsert_user(sub)
     with _connect() as conn:
         conn.execute("DELETE FROM unipile_pending WHERE created_at < NOW() - INTERVAL '1 hour'")
         conn.execute(
-            "INSERT INTO unipile_pending (nonce, sub, org_id, provider, platform_seat) "
-            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (nonce) DO NOTHING",
-            (nonce, sub, org_id, provider, platform_seat),
+            "INSERT INTO unipile_pending (nonce, sub, org_id, provider, platform_seat, "
+            "add_account) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (nonce) DO NOTHING",
+            (nonce, sub, org_id, provider, platform_seat, bool(add_account)),
         )
 
 
@@ -396,7 +509,7 @@ def resolve_unipile_pending(nonce: str) -> Optional[dict]:
         row = conn.execute(
             "DELETE FROM unipile_pending WHERE nonce = %s "
             "AND created_at >= NOW() - INTERVAL '1 hour' "
-            "RETURNING sub, org_id, provider, platform_seat",
+            "RETURNING sub, org_id, provider, platform_seat, add_account",
             (nonce,),
         ).fetchone()
     return dict(row) if row else None
@@ -409,7 +522,7 @@ def list_unipile_pending_for_sub(sub: str) -> list[dict]:
     (#581, 2026-08-29)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT nonce, org_id, provider, platform_seat, created_at "
+            "SELECT nonce, org_id, provider, platform_seat, add_account, created_at "
             "FROM unipile_pending WHERE sub = %s "
             "AND created_at >= NOW() - INTERVAL '1 hour' ORDER BY created_at",
             (sub,),

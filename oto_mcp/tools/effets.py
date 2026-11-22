@@ -348,6 +348,12 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "cognism_filter_values": "lire",
     "cognism_redeem": {"lire": "contact account"},
     "cognism_search": {"lire": "contact account"},
+    # A note stays in the conversation, unseen by the contact; segments are added or removed
+    # one by one (read, changed, read again), removing one is a removal; `send_message`
+    # without `confirm_send` only reads a preview, with it reaches the contact.
+    "crisp_act": {"ecrire": "add_note set_state update_conversation update_person "
+                            "update_person_data add_segments",
+                  "envoyer": "send_message", "detruire": "remove_segments"},
     "crunchbase_connect_start": "ecrire",
     "crunchbase_connect_status": "lire",
     "crunchbase_get_company": "lire",
@@ -504,7 +510,6 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # add_members may also remove (remove_record_ids); copy_from moves up to 100 000 records
     "hubspot_list": {"lire": "search get members record_lists", "ecrire": "create restore", "detruire": "update delete add_members remove_members clear_members copy_from"},
     "hubspot_object": {"lire": "search list get associations", "ecrire": "create update add_note", "detruire": "delete merge"},
-    "hubspot_owners": "lire",
     # update PATCHes the raw definition: options given replace the whole option list
     "hubspot_property": {"lire": "list get groups", "ecrire": "create", "detruire": "update delete"},
     "hubspot_push_rows": "envoyer",
@@ -621,7 +626,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "linear_user": {"lire": "list get viewer"},
     # registers a webhook: data then leaves to its URL (decided: a send)
     "linear_webhook": {"lire": "list", "envoyer": "create update", "detruire": "delete"},
-    "linkedin_unipile_account": {"lire": "status contracts inmail_balance", "ecrire": "select"},
+    "linkedin_unipile_account": {"lire": "status contracts inmail_balance limits", "ecrire": "select"},
     # update can archive a thread; update_member can reject an applicant
     "linkedin_unipile_act": {"envoyer": "send react_message publish_post comment_post react_post invite accept_invitation endorse", "detruire": "update update_member decline_invitation cancel_invitation"},
     "linkedin_unipile_facets": "lire",
@@ -656,7 +661,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # Rewrites the whole DNS record set, removes records, replaces a CNAME (dry_run=True previews).
     "mailpool_domain_fix": "detruire",
     "mailpool_domains": {"lire": "list get dns audit availability suggestions google_workspace_check microsoft_365_check owners"},
-    "mailpool_mailboxes": {"lire": "list get export_login export_batches export_batch", "ecrire": "create", "envoyer": "export"},
+    "mailpool_mailboxes": {"lire": "list get export_login export_batches export_batch", "ecrire": "create update", "envoyer": "export"},
     # `run` sends a real test email from the mailbox.
     "mailpool_spam_checks": {"lire": "get list", "envoyer": "run", "detruire": "delete"},
     "make_get_scenario": "lire",
@@ -1191,7 +1196,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_account_access": {"lire": "list", "envoyer": "grant", "detruire": "revoke"},
     "oto_admin_access_shadow": {"lire": "read"},
     "oto_admin_account": {"ecrire": "resume", "detruire": "suspend"},
-    "oto_admin_agent_repair": {"lire": "list get diagnose", "ecrire": "close add_tool", "envoyer": "rerun escalate"},
+    "oto_admin_agent_repair": {"lire": "list get diagnose causes", "ecrire": "close add_tool set_cause", "envoyer": "rerun escalate"},
     # dark-launched capabilities (feature flag): declared before they mount
     "oto_admin_cancel_contract": "detruire",
     # free-string `op`
@@ -1203,7 +1208,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_admin_key_grant": {"lire": "list", "envoyer": "grant", "detruire": "revoke"},
     "oto_admin_legal_proof": "lire",
     "oto_admin_model_spend": "lire",
-    "oto_admin_monitoring": {"lire": "summary rest rest_calls connectors transport funnel calls call runs run gaps tool_quality agents_en_echec connecteurs_orphelins"},
+    "oto_admin_monitoring": {"lire": "summary rest rest_calls connectors transport funnel calls call runs run gaps tool_quality agents_en_echec connecteurs_orphelins journal_archive"},
     "oto_admin_org": {"lire": "list get entitlements", "ecrire": "create", "detruire": "archive"},
     "oto_admin_org_member": {"lire": "list connectors events", "envoyer": "add", "detruire": "remove set_role"},
     "oto_admin_platform_balances": "lire",
@@ -1287,6 +1292,11 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
 LOTS: dict[str, Lot] = {
     "mailpool_mailboxes:create": Lot("mailboxes"),
     "mailpool_mailboxes:export": Lot("mailbox_ids"),
+    # `update` edits ONE mailbox (`mailbox_id`) and refuses `mailboxes`: this lot never
+    # counts anything. It stays because the guard (`test_effets_declares`) wants a lot on
+    # every writing op of a tool with a batch list, and `PAS_UN_LOT` is per tool —
+    # `mailboxes` is the batch of `create`, so it cannot be declared "not a batch" here.
+    "mailpool_mailboxes:update": Lot("mailboxes"),
     "lemlist_contact:list_create": Lot("contact_ids"),
     "lemlist_inbox:messages": Lot("cc"),
     "lemlist_inbox:label_create": Lot("cc"),
@@ -1538,6 +1548,8 @@ PAS_UN_LOT: dict[str, str] = {
     "cognism_enrich_account": "anchor_fields",
     "cognism_enrich_contact": "anchor_fields",
     "cognism_redeem": "ids redeem_ids",
+    # the segment names of ONE conversation or ONE contact, not a batch of records
+    "crisp_act": "segments",
     "figma_get_file": "node_ids",
     "figma_get_images": "node_ids",
     "finkare_invoice": "invoices",
@@ -1572,9 +1584,9 @@ PAS_UN_LOT: dict[str, str] = {
     "klaviyo_consent": "channels",
     "klaviyo_events": "include",
     "klaviyo_profiles": "additional_fields include",
-    "leexi_calls": "owner_uuid participating_user_uuid customer_email_address customer_phone_number",
+    "leexi_calls": "owner_uuid participating_user_uuid customer_email_address customer_phone_number fields",
     "lemlist_act": "filters",
-    "lemlist_campaign": "campaign_ids sender_user_ids channels",
+    "lemlist_campaign": "campaign_ids sender_user_ids senders channels",
     "lemlist_campaign_auto_review": "conditions",
     "lemlist_company": "ids_or_domains fields",
     "lemlist_contact": "ids_or_emails",
@@ -1585,7 +1597,7 @@ PAS_UN_LOT: dict[str, str] = {
     "lemlist_task": "images videos filters",
     "lemlist_watchlist": "filters",
     "lever_add_candidate": "posting_ids",
-    "linear_issue": "label_ids include",
+    "linear_issue": "label_ids include fields",
     "linear_project": "team_ids include",
     "linear_webhook": "resource_types",
     "luma_act": "recipient_groups",

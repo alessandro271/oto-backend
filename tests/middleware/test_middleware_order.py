@@ -11,6 +11,11 @@ invariants gardés ici :
   Il ne dispute rien à `ToolAlias` — il ne lit ni ne réécrit aucun nom, aucun argument,
   aucun résultat. Et il reste SOUS `ErrorEnvelope` pour l'exception : il n'en lève
   aucune (cf. son docstring), sans quoi un refus partirait sans l'enveloppe.
+- `SansSurrogateMiddleware` juste sous elle — le PLUS EXTERNE de ce qui touche au
+  RÉSULTAT, donc le dernier à le voir au retour : il remplace un surrogate isolé (que
+  l'encodage UTF-8 de la réponse refuse) par U+FFFD dans le canal texte et le canal
+  structuré. Plus interne, un middleware au-dessus pourrait encore le porter. Il ne lit
+  ni nom ni identité.
 - `ToolAliasMiddleware` OUTERMOST de tout ce qui touche au NOM — il rétablit le nom CANONIQUE d'un outil
   avant que quoi que ce soit d'autre ne le lise (gates `_org=`, rédaction par
   namespace, visibilité, journal `tool_calls`), et renomme la liste servie en dernier
@@ -64,6 +69,7 @@ from _mcp_app import static_mcp as _test_mcp
 
 OURS = [
     "IdentityScopeMiddleware",
+    "SansSurrogateMiddleware",
     "ToolAliasMiddleware",
     "UnSeulCanalMiddleware",
     "RappelContexteMiddleware",
