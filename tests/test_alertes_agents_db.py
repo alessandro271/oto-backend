@@ -323,3 +323,40 @@ def test_sans_abonnement_a_reconnecter_la_lecture_sort_d_emblee(agent_forfait, m
                         lambda: lus.append(1) or "FALSE")
     assert alertes_agents.agents_sans_forfait() == []
     assert lus == [], "la requête des travaux n'a pas été composée"
+
+
+def test_une_panne_plus_vieille_que_la_fenetre_dit_son_vrai_debut(agent_forfait):
+    """Seize jours de panne s'annonçaient vieux de sept : le début et le compte étaient
+    lus dans la fenêtre. Ils se lisent depuis le dernier succès — à commencer par le
+    travail qui a ÉCHOUÉ en constatant la déconnexion."""
+    from datetime import datetime, timedelta, timezone
+    _forfait("needs_login")
+    _en_attente(agent_forfait, 16 * 24 * 60, status="failed")
+    for jours in (15, 10, 8, 2):
+        _en_attente(agent_forfait, jours * 24 * 60, status="expired")
+    _en_attente(agent_forfait, 45)
+    a = _en_attente_de_forfait()[agent_forfait]
+    assert a["travaux"] == 6
+    depuis = a["depuis"]
+    if isinstance(depuis, str):  # la connexion rend les dates en texte
+        depuis = datetime.fromisoformat(depuis)
+    if depuis.tzinfo is None:
+        depuis = depuis.replace(tzinfo=timezone.utc)
+    ecart = datetime.now(timezone.utc) - depuis
+    assert timedelta(days=16) - timedelta(minutes=5) < ecart < timedelta(days=16, minutes=5)
+
+
+def test_le_compte_s_arrete_au_dernier_succes(agent_forfait):
+    _forfait("needs_login")
+    _en_attente(agent_forfait, 5 * 24 * 60, status="expired")
+    _travail(agent_forfait, "done", 3 * 24)
+    _en_attente(agent_forfait, 2 * 24 * 60, status="failed")
+    _en_attente(agent_forfait, 45)
+    a = _en_attente_de_forfait()[agent_forfait]
+    assert a["travaux"] == 2, "le travail d'avant le succès n'est pas de cette panne"
+
+
+def test_une_panne_entierement_hors_fenetre_ne_s_annonce_pas(agent_forfait):
+    _forfait("needs_login")
+    _en_attente(agent_forfait, 10 * 24 * 60, status="expired")
+    assert agent_forfait not in _en_attente_de_forfait(), "plus rien ne court"
