@@ -14,7 +14,8 @@ Flow hosted by oto, on the common pattern (`connectors/flow` + `auth/flow`):
    `state` that carries the identity, the card (`c`), the directory (`t`) and the tier
    (`s`, `g`: member, org or team);
 2. Microsoft sends the browser back to `/api/microsoft/oauth/callback`
-   (`api/microsoft.py`); the code there becomes a refresh token;
+   (`api/oauth_returns.py`); the callback hands the code to the front, which
+   completes with its own token (`auth/flow.py`); the code then becomes a refresh token;
 3. the refresh token goes to the vault under `microsoft`, MEMBER tier by default: the
    person acts with THEIR Microsoft 365 rights, no more and no less.
 
@@ -374,6 +375,7 @@ class EtatConnexion(NamedTuple):
     tenant: Optional[str]
     scope: str = "member"
     group: Optional[int] = None
+    jti: str = ""
 
 
 class EtatApprobation(NamedTuple):
@@ -383,6 +385,7 @@ class EtatApprobation(NamedTuple):
     app: str
     connector: str
     services: tuple[str, ...]
+    jti: str = ""
 
 
 def _cartes() -> tuple[str, ...]:
@@ -409,7 +412,7 @@ def make_state(sub: str, org_id: int, return_app: str = "", connector: str = CON
     (`g`): the tier the account is written at."""
     return oauth_flow.sign_state(_AUD, {"sub": sub, "org": org_id, "app": return_app,
                                         "c": connector, "t": tenant, "s": scope,
-                                        "g": group})
+                                        "g": group, "jti": oauth_flow.new_jti()})
 
 
 def verify_state(state: Optional[str]) -> Optional[EtatConnexion]:
@@ -426,13 +429,17 @@ def verify_state(state: Optional[str]) -> Optional[EtatConnexion]:
     scope, group = data.get("s") or "member", data.get("g")
     if scope not in _PALIERS or (scope == "group" and not isinstance(group, int)):
         return None
+    jti = data.get("jti")
+    if not isinstance(jti, str) or not jti:
+        return None
     return EtatConnexion(sub, org, oauth_flow.resolve_return_app(
         return_app if isinstance(return_app, str) else ""), connector, tenant, scope,
-        group if scope == "group" else None)
+        group if scope == "group" else None, jti)
 
 
 def verify_admin_state(state: Optional[str]) -> Optional[EtatApprobation]:
-    """An administrator's approval state (its own audience, seven days), or None."""
+    """An administrator's approval state (its own audience, seven days, single-use
+    `jti`), or None."""
     data = oauth_flow.read_state(_AUD_ADMIN, state, ttl=ADMIN_LINK_TTL)
     if not data:
         return None
@@ -442,8 +449,11 @@ def verify_admin_state(state: Optional[str]) -> Optional[EtatApprobation]:
             or not isinstance(services, list) or not services
             or any(s not in SERVICES for s in services)):
         return None
+    jti = data.get("jti")
+    if not isinstance(jti, str) or not jti:
+        return None
     return EtatApprobation(sub, org, oauth_flow.resolve_return_app(
-        return_app if isinstance(return_app, str) else ""), connector, tuple(services))
+        return_app if isinstance(return_app, str) else ""), connector, tuple(services), jti)
 
 
 # --- starting the flow -------------------------------------------------------
@@ -529,7 +539,7 @@ def admin_consent_url(sub: str, services: tuple[str, ...], tenant: Optional[str]
         demandes += service_scopes(svc) + admin_scopes(svc)
     state = oauth_flow.sign_state(_AUD_ADMIN, {
         "sub": sub, "org": org_id, "app": oauth_flow.resolve_return_app(return_app),
-        "c": connector, "s": list(services)})
+        "c": connector, "s": list(services), "jti": oauth_flow.new_jti()})
     return _coeur().auth.admin_consent_url(
         app()["client_id"], oauth_flow.redirect_uri(_CALLBACK_PATH), state,
         scopes=tuple(dict.fromkeys(demandes)), tenant=annuaire(tenant))
@@ -1084,3 +1094,88 @@ def avertir_au_demarrage() -> None:
             "microsoft: connectors mounted but NOT configured — %s missing. "
             "The \"Sign in\" button will refuse and say so. Set with: %s",
             ", ".join(manquantes), _COMMANDE)
+
+
+# --- the return: the callback hands over, the front completes (`auth/flow.py`) ------
+
+_AADSTS = re.compile(r"AADSTS\d+")
+#: The organization requires an administrator's approval (user consent disabled or
+#: restricted; AADSTS65001 at exchange: consent missing for this application).
+_ADMIN_REQUIS = ("AADSTS90094", "AADSTS90099", "AADSTS65001")
+
+
+def _aadsts(texte: Optional[str]) -> Optional[str]:
+    """The AADSTS code of an `error_description` — the only part we keep: the rest
+    may name the organization."""
+    m = _AADSTS.search(texte or "")
+    return m.group(0) if m else None
+
+
+def _refusal(query) -> str:
+    """The return state of a connection that came back without a code. The
+    organisation's approval requirement comes first (it may arrive as an
+    `access_denied` too): `admin_required`, the card offers the administrator's
+    approval; then the person's refusal is `denied`, anything else `error`."""
+    description = query.get("error_description")
+    if (_aadsts(description) in _ADMIN_REQUIS
+            or "admin approval" in (description or "").lower()):
+        return "admin_required"
+    return oauth_flow.etat_sans_code(query.get("error"))
+
+
+def _admin_return(query) -> Optional[str]:
+    """An administrator's answer to an approval link (`admin_consent_url`), or None when
+    the state is not one. NOTHING is exchanged nor stored — each person still connects
+    from the card, the approval only lets them; the link is used once (`jti`).
+    Synchronous (SQL)."""
+    etat = verify_admin_state(query.get("state"))
+    if etat is None:
+        return None
+
+    def _url(e: str) -> str:
+        return oauth_flow.connector_return_url(etat.app, etat.connector, e, org=etat.org)
+
+    if not oauth_flow.consume_state(_AUD_ADMIN, {"jti": etat.jti}):
+        logger.warning("microsoft: approval link already used (sub=%s)", etat.sub)
+        return _url("error")
+    if query.get("error"):
+        logger.info("microsoft: administrator approval not given (sub=%s, reason=%s)",
+                    etat.sub, _aadsts(query.get("error_description")) or query.get("error"))
+        return _url("admin_refused")
+    if (query.get("admin_consent") or "").lower() == "true":
+        logger.info("microsoft: administrator approval given (sub=%s, services=%s)",
+                    etat.sub, ",".join(etat.services))
+        return _url("admin_approved")
+    return _url("error")
+
+
+def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
+    e = verify_state(state)
+    if e is None:
+        return None
+    return oauth_flow.ReturnState(e.sub, e.org, e.app, e.connector, e.jti, e)
+
+
+def _finish_return(etat: EtatConnexion, code: str) -> dict:
+    try:
+        fin = finish_connection(etat, code)
+    except PermissionError as e:
+        raise oauth_flow.not_allowed(str(e))
+    except Exception as e:
+        aadsts = getattr(e, "code", None)
+        if isinstance(aadsts, str) and aadsts in _ADMIN_REQUIS:
+            logger.info("microsoft: connection needs an administrator's approval "
+                        "(sub=%s, card=%s, code=%s)", etat.sub, etat.connector, aadsts)
+            raise oauth_flow.CompletionRefused(
+                403, "admin_required",
+                "Your organization requires an administrator's approval for this "
+                "application. Ask your administrator from the card.")
+        raise
+    return {"account": (fin or {}).get("account"), "scope": etat.scope}
+
+
+RETURN = oauth_flow.OAuthReturn(
+    audience=_AUD, callback_path=_CALLBACK_PATH, label="Microsoft",
+    default_card=CONNECTOR, read=_return_state, finish=_finish_return,
+    cards=_cartes, refusal=_refusal, side_return=_admin_return)
+oauth_flow.declare_return(RETURN)

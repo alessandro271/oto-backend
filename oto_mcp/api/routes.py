@@ -20,9 +20,10 @@ Les handlers vivent par DOMAINE, chacun une fonction de module appelable seule :
 | `api/pennylane_firm.py` | relais d'upload vers la GED Pennylane (`/api/relay/{token}`, manifeste d'un lot `/api/relay/batch/{token}`) |
 | `api/wttj.py` | lien DURABLE vers le CV d'un candidat WTTJ (`/api/wttj/resume/{token}`, 302 vers une URL fraîchement signée) |
 
-Les modules ANTÉRIEURS à la découpe gardent leur forme : datastore, sirene,
-accords, zoho, salesforce, billing — ils exposent un
-`make_routes(...)` qui reçoit les primitives en paramètres. (`api/connectors.py` a
+Les modules ANTÉRIEURS à la découpe gardent leur forme : sirene, accords, billing —
+ils exposent un `make_routes(...)` qui reçoit les primitives en paramètres. Les retours
+de consentement des connecteurs vivent dans `api/oauth_returns.py` (un par
+fournisseur, un seul code, oto-backend#1908). (`api/connectors.py` a
 disparu le 2026-08-29 avec sa dernière route, le webhook de liaison messagerie :
 dormant depuis la v2 du fournisseur, #581 ; `api/atlassian.py` et `api/folk.py` le
 2026-09-09 avec la fédération MCP, ADR 0069.)
@@ -59,22 +60,12 @@ from starlette.concurrency import run_in_threadpool
 from .. import db, journal_secrets, session_org, tenancy
 from . import (accords as api_routes_accords,
                billing as api_routes_billing,
-               datastore as api_routes_datastore,
                hooks as api_routes_hooks,
-               instagram_meta as api_routes_instagram_meta,
-               hubspot as api_routes_hubspot,
-               meta_ads as api_routes_meta_ads,
                slack as api_routes_slack,
-               microsoft as api_routes_microsoft,
-               ubersuggest as api_routes_ubersuggest,
-               jefacture as api_routes_jefacture,
-               linkedin_ads as api_routes_linkedin_ads,
                logto_webhook as api_routes_logto_webhook,
+               oauth_returns as api_routes_oauth_returns,
                receveurs as api_routes_receveurs,
-               salesforce as api_routes_salesforce,
-               sirene as api_routes_sirene,
-               wordpress as api_routes_wordpress,
-               zoho as api_routes_zoho)
+               sirene as api_routes_sirene)
 from ..capabilities import _rest_adapter as _cap_rest_adapter
 from ..capabilities import registry as _cap_registry
 from ..capabilities._authz import CODE_HORS_VUE
@@ -806,15 +797,6 @@ class RestCallLogger:
 def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     from starlette.routing import Route
 
-    datastore_routes = api_routes_datastore.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        cors_headers=_cors_headers,
-        options_handler=options_handler,
-    )
-
     sirene_routes = api_routes_sirene.make_routes(
         verifier=verifier,
         authenticate=_authenticate,
@@ -831,102 +813,13 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         options_handler=options_handler,
     )
 
-    # OAuth Zoho « server-based » — SECOND mode d'acquisition, le Self Client
-    # restant intact et par défaut (les deux produisent le même credential).
-    zoho_routes = api_routes_zoho.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
+    # Retours de consentement des connecteurs (un par fournisseur, un seul code :
+    # `auth/flow.py`, déclarés par chaque `auth/<x>.py`). Le callback ne range rien ;
+    # le front termine par `POST /api/me/connectors/{name}/complete`.
+    oauth_return_routes = api_routes_oauth_returns.make_routes()
 
-    salesforce_oauth_routes = api_routes_salesforce.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
-    # Retour de consentement Instagram (statistiques) — le `/start` passe par le
-    # seam commun (`connectors/flow`), seul le callback est une route.
-    instagram_meta_routes = api_routes_instagram_meta.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
-    # Retour de consentement HubSpot — même forme que Meta Ads.
-    hubspot_routes = api_routes_hubspot.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
-    # Retour de consentement Meta Ads — même forme qu'Instagram.
-    meta_ads_routes = api_routes_meta_ads.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
-    # Retour de connexion Microsoft (SharePoint & OneDrive) — même forme.
-    microsoft_routes = api_routes_microsoft.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
-    # Retour de connexion Ubersuggest (client OAuth public, PKCE) — même forme.
-    ubersuggest_routes = api_routes_ubersuggest.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
-    # Retour de connexion jefacture.com (code d'autorisation, application plateforme)
-    # — même forme.
-    jefacture_routes = api_routes_jefacture.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
-    # Retour de connexion LinkedIn Ads (code d'autorisation, application plateforme)
-    # — même forme que jefacture.
-    linkedin_ads_routes = api_routes_linkedin_ads.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
-    # Retour de l'écran d'autorisation WordPress (mot de passe d'application) — le
-    # `/start` passe par le seam commun (`connectors/flow`), seul le retour est une route.
-    wordpress_routes = api_routes_wordpress.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
-    # Retour d'installation de l'app Slack publiée par l'instance (OAuth v2) — même forme :
-    # le `/start` passe par le seam commun, seul le retour est une route.
+    # Les événements et les boutons de l'app Slack publiée par l'instance (son retour
+    # d'installation est dans `oauth_return_routes`).
     slack_routes = api_routes_slack.make_routes(
         verifier=verifier,
         authenticate=_authenticate,
@@ -1051,19 +944,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
               bind(datastore_export.export_csv, verifier=verifier), methods=["GET"]),
         Route("/api/datastores/{datastore}/rows/export.csv", options_handler,
               methods=["OPTIONS"]),
-        *datastore_routes,
+        *oauth_return_routes,
         *sirene_routes,
         *accords_routes,
-        *zoho_routes,
-        *salesforce_oauth_routes,
-        *instagram_meta_routes,
-        *hubspot_routes,
-        *meta_ads_routes,
-        *microsoft_routes,
-        *ubersuggest_routes,
-        *jefacture_routes,
-        *linkedin_ads_routes,
-        *wordpress_routes,
         *slack_routes,
         *capability_routes,
         *billing_webhook_routes,

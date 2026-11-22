@@ -6,8 +6,9 @@ synchrone. Le callback Zoho, lui, était déjà protégé : la discipline exista
 elle n'avait simplement pas été appliquée aux trois autres.
 
 ⚠️ Deux des trois (`api/atlassian.py`, `api/folk.py`) ont disparu le 2026-09-09
-avec la fédération MCP (ADR 0069) : il ne reste ici que `salesforce`. Le contrôle
-statique garde sa valeur pour lui, et pour tout callback qui s'ajouterait.
+avec la fédération MCP (ADR 0069). Depuis oto-backend#1908, tous les callbacks sont
+UNE route commune (`api/oauth_returns.py`) : le contrôle statique la lit, elle et ce
+qu'elle appelle (`callback_url`, `complete`).
 
 ⚠️ **Ce qui est parti avec eux, et qu'il faudra refaire le jour où un callback
 compte à nouveau** : l'épreuve qui MONTAIT un vrai handler et observait le vrai
@@ -154,7 +155,7 @@ def _echanges_sync_dans_une_async(source: str, noms: set[str]) -> list[int]:
     return sorted(lignes)
 
 
-@pytest.mark.parametrize("module", ["salesforce"])
+@pytest.mark.parametrize("module", ["oauth_returns"])
 def test_aucun_echange_de_code_ne_reste_dans_la_boucle(module):
     """⚠️ Contrôle STATIQUE, assumé : jouer un vrai callback demanderait un state
     signé, une base et un fournisseur. Il lit l'arbre, pas le texte — il tombera
@@ -164,7 +165,8 @@ def test_aucun_echange_de_code_ne_reste_dans_la_boucle(module):
     src = (pathlib.Path(__file__).resolve().parents[1] / "oto_mcp" / "api"
            / f"{module}.py").read_text()
     nus = _echanges_sync_dans_une_async(
-        src, {"exchange_code", "persist_token", "read_saved_fields"})
+        src, {"exchange_code", "persist_token", "read_saved_fields", "callback_url",
+              "complete"})
     assert not nus, (
         f"ligne(s) {nus} : échange de code ou écriture synchrone dans un handler "
         "`async def` — le processus gèle le temps que le fournisseur réponde.")

@@ -5,7 +5,7 @@ hand-written REST route. Modeled on `zoho_connect.py` (same shape, same reason) 
 and like it, gains a **MCP face**: the agent can build the link and hand it to
 the user, which is the useful gesture in conversation.
 
-What REMAINS a hand-written route (`api/salesforce.py`): the **callback**.
+What REMAINS a hand-written route (`api/oauth_returns.py`): the **callback**.
 Salesforce redirects the BROWSER there — with no auth header, with a 302 response — which
 a capability contract (JSON + authz) cannot express. Declared as such in
 `test_rest_modules_are_capabilities.py`.

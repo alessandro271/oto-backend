@@ -621,7 +621,8 @@ def make_state(sub: str, org_id: int, connector: str, data_center: str,
     scopes were asked for — signed, it cannot be widened between the two."""
     return oauth_flow.sign_state(_AUDIENCE, {"sub": sub, "org": org_id, "g": group_id,
                                              "c": connector, "dc": data_center,
-                                             "l": level, "a": return_app})
+                                             "l": level, "a": return_app,
+                                             "jti": oauth_flow.new_jti()})
 
 
 def _level_ok(connector: str, level: object) -> bool:
@@ -632,7 +633,7 @@ def _level_ok(connector: str, level: object) -> bool:
 
 
 def verify_state(state: str) -> Optional[dict]:
-    """`{sub, org, group, connector, data_center, level, return_app}` if the state is
+    """`{sub, org, group, connector, data_center, level, return_app, jti}` if the state is
     valid, from THIS flow, and not expired. The business invariants (known connector,
     known region, declared level) stay here — the factory only knows the transport. A
     state without team or level (signed before them) is refused: the callback could not
@@ -648,11 +649,14 @@ def verify_state(state: str) -> Optional[dict]:
         return None
     if not _level_ok(d["c"], d.get("l")):
         return None
-    # `a` absent = state signed BEFORE this field and still alive within the
-    # TTL window: we degrade to the historical default rather than reject a
-    # consent in progress (same tolerance as salesforce).
+    # Single use (`jti`, consumed when the front completes): a state without one is
+    # refused, the connection is started again.
+    if not isinstance(d.get("jti"), str) or not d["jti"]:
+        return None
+    a = d.get("a")
     return {"sub": d["sub"], "org": d["org"], "group": d["g"], "connector": d["c"],
-            "data_center": d["dc"], "level": d["l"], "return_app": d.get("a") or ""}
+            "data_center": d["dc"], "level": d["l"],
+            "return_app": a if isinstance(a, str) else "", "jti": d["jti"]}
 
 
 # --- flow --------------------------------------------------------------------
@@ -783,3 +787,54 @@ def persist(sub: str, org_id: int, connector: str, data_center: str,
 def supports(connector: str) -> bool:
     """Does the connector offer server-based mode? (the front gates the button)"""
     return connector in SCOPES and connector in providers.REGISTRY
+
+
+# --- the return: the callback hands over, the front completes (`auth/flow.py`) ------
+
+def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
+    d = verify_state(state) if state else None
+    if d is None:
+        return None
+    return oauth_flow.ReturnState(d["sub"], d["org"],
+                                  oauth_flow.resolve_return_app(d["return_app"]),
+                                  d["connector"], d["jti"], d)
+
+
+def _finish_return(parsed: dict, code: str) -> dict:
+    """The SAME resolution as the start, from the signed state: org AND team (the
+    dedicated app of a team, the BYO of its cascade), and the REGION — the publisher app
+    is keyed by data center. BEFORE storing, the consented Zoho organization is checked
+    against the one the app expects: a mismatch revokes the token, nothing is stored
+    (409 `org_mismatch`). A consent stored with a warning says so, with the Zoho
+    organization(s) consented, SHOWN so an admin can copy the ID into the key's
+    `zoho_org_id` (`details.consented_org` / `consented_org_id`, paired by position)."""
+    from .. import roles
+
+    if parsed["org"] and not roles.is_org_member(parsed["sub"], parsed["org"]):
+        raise oauth_flow.not_allowed(
+            "You are no longer a member of the organization where this Zoho connection "
+            "was started.")
+    app = app_fields(parsed["connector"], parsed["sub"], parsed["data_center"],
+                     org=parsed["org"], group=parsed["group"])
+    tokens = exchange_code(code, parsed["data_center"], app=app)
+    try:
+        verdict = check_org(parsed["connector"], parsed["data_center"], tokens, app)
+    except ZohoOrgMismatch as e:
+        raise oauth_flow.CompletionRefused(409, "org_mismatch", str(e),
+                                           details={"consented_org": e.consented})
+    persist(parsed["sub"], parsed["org"], parsed["connector"], parsed["data_center"],
+            tokens, app=app, level=parsed["level"])
+    out: dict = {"account": None, "scope": "member"}
+    if verdict.warning:
+        out["warning"] = verdict.warning
+        if verdict.consented:
+            out["details"] = {"consented_org": [o.name for o in verdict.consented],
+                              "consented_org_id": [o.shown_id for o in verdict.consented]}
+    return out
+
+
+RETURN = oauth_flow.OAuthReturn(
+    audience=_AUDIENCE, callback_path="/api/zoho/oauth/callback", label="Zoho",
+    default_card="zoho", read=_return_state, finish=_finish_return,
+    cards=lambda: tuple(CONNECTORS))
+oauth_flow.declare_return(RETURN)

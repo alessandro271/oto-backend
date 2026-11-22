@@ -15,17 +15,14 @@ consommés sont remplacés.
 """
 from __future__ import annotations
 
-import asyncio
 import time
 import urllib.parse
 
 import pytest
-from starlette.requests import Request
 
 from _datastore_rest import call, stub_authz
 
 from oto_mcp import db
-from oto_mcp.api import datastore as datastore_routes
 from oto_mcp.auth import flow as oauth_flow
 from oto_mcp.auth import google as google_oauth
 
@@ -158,21 +155,9 @@ def test_un_echange_refuse_par_google_est_un_refus_nomme(google, monkeypatch):
 
 # --- de bout en bout : callback réel, puis complétion -------------------------
 
-def _callback():
-    async def _options(_r):
-        return None
-    routes = datastore_routes.make_routes(
-        None, None, lambda *a, **k: None, lambda *a, **k: None, lambda o: {}, _options)
-    return next(r.endpoint for r in routes if r.path == "/api/google/oauth/callback")
-
-
 def _retour_de_google(query: str) -> str:
-    async def _receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-    req = Request({"type": "http", "method": "GET", "path": "/api/google/oauth/callback",
-                   "headers": [], "query_string": query.encode(), "path_params": {}},
-                  receive=_receive)
-    return asyncio.run(_callback()(req)).headers["location"]
+    from _retour_oauth import rappel
+    return rappel("/api/google/oauth/callback", dict(urllib.parse.parse_qsl(query)))
 
 
 @pytest.mark.usefixtures("connecteurs_tous_disponibles")
@@ -201,3 +186,16 @@ def test_de_bout_en_bout_seul_le_demandeur_range_le_compte(google, monkeypatch,
         assert [r[0] for r in google["ranges"]] == [A]
     else:
         assert google["echanges"] == [] and google["ranges"] == []
+
+
+def test_la_route_generique_termine_aussi_une_carte_google(google):
+    """Une carte Google se termine aussi par `POST /api/me/connectors/{name}/complete` :
+    le même cœur, la même réponse ; une autre carte que celle du state est refusée."""
+    etat = google_oauth.make_state(A, ORG, "", "drive")
+    code, out = call("me.connector_complete", path_params={"name": "gmail"},
+                     body={"code": "c0de", "state": etat}, sub=A)
+    assert (code, out["error"]) == (400, "invalid_state")
+    code, out = call("me.connector_complete", path_params={"name": "drive"},
+                     body={"code": "c0de", "state": etat}, sub=A)
+    assert (code, out) == (200, {"ok": True, "connector": "drive",
+                                 "account": f"{A}@example.test", "scope": "member"})

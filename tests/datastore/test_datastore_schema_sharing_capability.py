@@ -223,16 +223,11 @@ def test_les_quatre_capacites_declarent_leur_sortie_et_restent_rest_only():
 
 
 def test_le_datastore_na_plus_aucune_route_ecrite_a_la_main():
-    """La preuve de fin de lot : `api/datastore` ne sert plus un seul chemin
-    `/api/datastore/*` — ils sont tous dérivés d'un descripteur."""
-    from oto_mcp.api import datastore as ard
-
-    async def _noop(request):
-        return None
-
-    routes = ard.make_routes(None, _noop, lambda *a, **k: None, lambda *a, **k: None,
-                             lambda o: {}, _noop)
-    assert not [r for r in routes if r.path.startswith("/api/datastore/")]
+    """La preuve de fin de lot : plus aucun module `api/datastore` — les chemins
+    `/api/datastore/*` sont tous dérivés d'un descripteur (le callback Google qu'il
+    portait encore vit dans `api/oauth_returns.py` depuis oto-backend#1908)."""
+    import importlib.util
+    assert importlib.util.find_spec("oto_mcp.api.datastore") is None
 
 
 # --- F-016 : pas d'oracle d'existence de compte -----------------------------------

@@ -64,8 +64,7 @@ def test_l_admin_connecte_outlook_au_nom_de_l_org(org):
     # Entra rend l'union des consentements du compte : le courrier ET les fichiers
     # que l'admin avait autorisés pour lui-même.
     org.coeur.auth.exchange_code.return_value = _grant("AT", "RT-ORG", scope=SCOPE_TOUT)
-    resp = _callback({"code": "code-1", "state": etat})
-    assert resp.headers["location"].endswith("connect=connected")
+    assert _callback({"code": "code-1", "state": etat})[0] == "connected"
     ligne = org.coffre.lignes[("org", str(ORG), JANE)]
     assert ligne["secret"] == "RT-ORG" and ligne["set_by"] == ADMIN
     assert org.auth.services_granted(ligne["meta"]["scopes"]) == ["outlook"], \
@@ -114,8 +113,7 @@ def test_un_droit_perdu_avant_le_retour_n_ecrit_rien(org, monkeypatch):
     from oto_mcp import roles
     etat = _demarrer(org, ADMIN, scope="org")
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, oid: False)
-    resp = _callback({"code": "code-1", "state": etat})
-    assert resp.headers["location"].endswith("connect=error")
+    assert _callback({"code": "code-1", "state": etat})[0] == "not_allowed"
     assert ("org", str(ORG), JANE) not in org.coffre.lignes
     org.coeur.auth.exchange_code.assert_not_called()
 

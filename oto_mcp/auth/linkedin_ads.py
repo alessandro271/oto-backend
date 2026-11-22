@@ -6,7 +6,8 @@ as `jefacture`:
 1. "Connect" on the card → `_start_flow` returns LinkedIn's consent URL, with a signed,
    single-use `state` carrying the identity;
 2. LinkedIn sends the browser back to `/api/linkedin_ads/oauth/callback`
-   (`api/linkedin_ads.py`); the code there becomes a grant;
+   (`api/oauth_returns.py`); the callback hands the code to the front, which
+   completes with its own token (`auth/flow.py`); the code then becomes a grant;
 3. the grant goes to the vault, MEMBER tier: the agent reads the ad accounts on which
    THAT person holds a Campaign Manager role.
 
@@ -480,3 +481,41 @@ def avertir_au_demarrage() -> None:
             "linkedin_ads: connector mounted but NOT configured — %s missing. "
             "The \"Connect\" button will refuse, saying so. Set with: %s",
             ", ".join(manquantes), _COMMANDE)
+
+
+# --- the return: the callback hands over, the front completes (`auth/flow.py`) ------
+
+#: LinkedIn's own words for the person's refusal (its documented `error` values).
+_REFUS_LINKEDIN = {"user_cancelled_login": oauth_flow.REFUS_FOURNISSEUR,
+                   "user_cancelled_authorize": oauth_flow.REFUS_FOURNISSEUR}
+
+
+def _refusal(query) -> str:
+    erreur = query.get("error")
+    return oauth_flow.etat_sans_code(_REFUS_LINKEDIN.get(erreur, erreur))
+
+
+def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
+    d = verify_state(state) if state else None
+    if d is None:
+        return None
+    return oauth_flow.ReturnState(d["sub"], d["org"],
+                                  oauth_flow.resolve_return_app(d["app"]), CONNECTOR,
+                                  d["jti"], d)
+
+
+def _finish_return(d: dict, code: str) -> dict:
+    """Re-read ON RETURN (`still_allowed`): still a member of the org, connector still
+    open there; then the exchange and the vault."""
+    if not still_allowed(d):
+        raise oauth_flow.not_allowed(
+            "You are no longer a member of this organization, or LinkedIn Ads is now "
+            "turned off there.")
+    exchange_and_persist(d, code)
+    return {"account": None, "scope": "member"}
+
+
+RETURN = oauth_flow.OAuthReturn(
+    audience=_AUD, callback_path=CALLBACK_PATH, label="LinkedIn Ads", default_card=CONNECTOR,
+    read=_return_state, finish=_finish_return, cards=lambda: (CONNECTOR,), refusal=_refusal)
+oauth_flow.declare_return(RETURN)

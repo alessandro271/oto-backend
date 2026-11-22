@@ -398,22 +398,6 @@ def read_state(state: Optional[str]) -> Optional[dict]:
             "group": group if scope == "group" else None, "jti": jti}
 
 
-def verify_state(state: Optional[str]) -> Optional[tuple]:
-    """`read_state` as a tuple — (sub, org_id, return_app, connector, scope, group_id) —
-    or None. What the callback reads to know where to send the browser back; it proves
-    nothing about who is holding that browser."""
-    d = read_state(state)
-    if d is None:
-        return None
-    return (d["sub"], d["org"], d["app"], d["connector"], d["scope"], d["group"])
-
-
-def consume_state(data: dict) -> bool:
-    """Single use of a state read by `read_state`: True the FIRST time its `jti` is
-    presented, False on any replay. Synchronous (SQL)."""
-    return oauth_flow.consume_state(_AUD, data)
-
-
 def build_auth_url(sub: str, return_app: str = "", connector: str = "google",
                    scope: str = "member") -> str:
     """The Google consent URL — for the account, or for ONE service (its scopes
@@ -1121,6 +1105,35 @@ for _svc in SERVICES:
         label=f"Authorize {SERVICE_LABELS[_svc]}",
         callback_path="/api/google/oauth/callback",
     )
+
+
+# --- the return: the callback hands over, the front completes (`auth/flow.py`) ------
+
+def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
+    d = read_state(state)
+    if d is None:
+        return None
+    return oauth_flow.ReturnState(d["sub"], d["org"], d["app"], d["connector"], d["jti"], d)
+
+
+def _finish_return(d: dict, code: str) -> dict:
+    """The code is exchanged with the app and the exact redirect that asked for the
+    consent (`app_for(sub)`, a tenant's included), the token stored for the org and the
+    card the state carries."""
+    tokens = exchange_code(code, d["sub"])
+    if d["scope"] == "member":
+        email = persist_token(d["sub"], d["org"], tokens)
+    else:
+        email = persist_token(d["sub"], d["org"], tokens, scope=d["scope"],
+                              group_id=d["group"], connector=d["connector"])
+    return {"account": email, "scope": d["scope"]}
+
+
+RETURN = oauth_flow.OAuthReturn(
+    audience=_AUD, callback_path=_CALLBACK_PATH, label="Google", default_card="google",
+    read=_return_state, finish=_finish_return,
+    cards=lambda: ("google", *SERVICE_SCOPES))
+oauth_flow.declare_return(RETURN)
 
 
 def _grant_held_elsewhere(email: Optional[str], client_id: Optional[str],

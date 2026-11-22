@@ -14,8 +14,8 @@ sous eux, jamais au-dessus. `api.routes` **ré-exporte** ces noms — `api.route
 et `api.routes._cors_headers` restent valides pour les appelants (et les tests)
 d'avant la découpe.
 
-Les dix modules de routes ANTÉRIEURS à la découpe (`api/datastore.py`,
-`api/sirene.py`, …) reçoivent encore ces mêmes fonctions en PARAMÈTRES de
+Les modules de routes ANTÉRIEURS à la découpe (`api/sirene.py`,
+`api/accords.py`, …) reçoivent encore ces mêmes fonctions en PARAMÈTRES de
 leur `make_routes` — c'est leur patron historique, né du même besoin d'éviter le
 cycle. Il n'a pas été touché : les convertir serait un second lot, sans effet sur
 ce qui est servi.

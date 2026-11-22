@@ -248,20 +248,16 @@ def test_le_dialogue_porte_le_client_de_l_application_et_le_retour(env):
 # ── Retour de connexion ─────────────────────────────────────────────────────
 
 def _callback(query: dict):
-    from starlette.requests import Request
+    """The real callback, then the front's completion (`auth/flow.complete`):
+    `(issue, detail)`."""
+    from _retour_oauth import terminer
 
-    from oto_mcp.api import linkedin_ads as api_li
-
-    route = api_li.make_routes(None, None, None, None, None)[0]
-    qs = "&".join(f"{k}={v}" for k, v in query.items()).encode()
-    req = Request({"type": "http", "method": "GET", "path": route.path,
-                   "query_string": qs, "headers": []})
-    return asyncio.run(route.endpoint(req))
+    return terminer("/api/linkedin_ads/oauth/callback", query)
 
 
 def test_retour_range_le_refresh_token_et_l_identite(env):
-    resp = _callback({"code": "le-code", "state": _etat(env)})
-    assert resp.status_code == 302 and "connected" in resp.headers["location"]
+    issue, _out = _callback({"code": "le-code", "state": _etat(env)})
+    assert issue == "connected"
     assert env.coeur.auth.exchange_code.call_args.args == (
         "id-de-l-application", "secret-de-l-application", "le-code", _RETOUR)
     ligne = env.coffre.lignes[("member", MEMBRE, "")]
@@ -277,7 +273,7 @@ def test_retour_range_le_refresh_token_et_l_identite(env):
 
 def test_sans_refresh_token_le_jeton_d_acces_est_le_secret(env):
     env.coeur.auth.exchange_code.return_value = _grant(refresh="")
-    assert "connected" in _callback({"code": "c", "state": _etat(env)}).headers["location"]
+    assert _callback({"code": "c", "state": _etat(env)})[0] == "connected"
     ligne = env.coffre.lignes[("member", MEMBRE, "")]
     assert ligne["secret"] == "AT1" and ligne["meta"]["token_shape"] == "access"
     assert "refresh_expires_at" not in ligne["meta"]
@@ -289,48 +285,48 @@ def test_sans_refresh_token_le_jeton_d_acces_est_le_secret(env):
 def test_l_identite_est_facultative(env):
     env.coeur.LinkedInAdsClient.return_value.list_account_roles.side_effect = RuntimeError(
         "403")
-    assert "connected" in _callback({"code": "c", "state": _etat(env)}).headers["location"]
+    assert _callback({"code": "c", "state": _etat(env)})[0] == "connected"
     assert "member_urn" not in env.coffre.lignes[("member", MEMBRE, "")]["meta"]
 
 
 def test_le_retour_ne_journalise_ni_le_code_ni_le_jeton(env, caplog):
     env.coeur.auth.exchange_code.side_effect = RuntimeError("refus")
     with caplog.at_level("DEBUG"):
-        resp = _callback({"code": "code-tres-secret", "state": _etat(env)})
-    assert "error" in resp.headers["location"]
+        issue, _out = _callback({"code": "code-tres-secret", "state": _etat(env)})
+    assert issue == "exchange_failed"
     assert "code-tres-secret" not in caplog.text
     assert not env.coffre.lignes
 
 
 def test_un_state_rejoue_est_refuse(env):
     etat = _etat(env)
-    assert "connected" in _callback({"code": "c1", "state": etat}).headers["location"]
-    assert "error" in _callback({"code": "c2", "state": etat}).headers["location"]
+    assert _callback({"code": "c1", "state": etat})[0] == "connected"
+    assert _callback({"code": "c2", "state": etat})[0] == "state_used"
     assert env.coeur.auth.exchange_code.call_count == 1
 
 
 def test_droits_retires_entre_le_depart_et_le_retour(env):
     etat = _etat(env)
     env.membres.clear()
-    assert "forbidden" in _callback({"code": "c", "state": etat}).headers["location"]
+    assert _callback({"code": "c", "state": etat})[0] == "not_allowed"
     etat = _etat(env)
     env.membres.add((SUB, ORG))
     env.coupes.add((CONNECTEUR, ORG))
-    assert "forbidden" in _callback({"code": "c", "state": etat}).headers["location"]
+    assert _callback({"code": "c", "state": etat})[0] == "not_allowed"
     env.coeur.auth.exchange_code.assert_not_called()
 
 
 @pytest.mark.parametrize("erreur", ["user_cancelled_authorize", "user_cancelled_login",
                                     "access_denied"])
 def test_les_refus_de_linkedin_se_lisent_comme_un_refus(env, erreur):
-    resp = _callback({"error": erreur, "state": _etat(env)})
-    assert "connect=denied" in resp.headers["location"]
+    issue, _out = _callback({"error": erreur, "state": _etat(env)})
+    assert issue == "denied"
     env.coeur.auth.exchange_code.assert_not_called()
 
 
 def test_une_autre_erreur_reste_une_erreur(env):
-    resp = _callback({"error": "invalid_scope", "state": _etat(env)})
-    assert "connect=error" in resp.headers["location"]
+    issue, _out = _callback({"error": "invalid_scope", "state": _etat(env)})
+    assert issue == "error"
 
 
 def test_la_query_du_retour_est_masquee_au_journal_d_acces():
