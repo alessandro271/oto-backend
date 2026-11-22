@@ -54,7 +54,7 @@ n'est servi sans dédoublonnage.
 **`TABLEAU_PAR_NOM`** — les appels qui ont désigné un tableau par son NOM (révision
 `20261120_2210_tableau_par_nom`). Le journal cite le tableau résolu ; la FORME de la
 désignation (`args.ref_kind` ∈ `number`|`slot`|`name`, `session_org.noter_forme_tableau`)
-est ce qui prouve, avant le retrait du nom (`deprecations.RETRAIT_NOM_DE_TABLEAU`),
+est ce qui prouve, depuis le retrait du nom (`datastore_by_name`),
 qu'aucun appelant ne s'en sert plus — face MCP (ligne de l'appel) comme face REST (ligne
 de route). Sans index, ce compte parcourrait des jours entiers du journal par
 `idx_tool_calls_created_at` en ouvrant chaque `args`. Partiel sur les seules
