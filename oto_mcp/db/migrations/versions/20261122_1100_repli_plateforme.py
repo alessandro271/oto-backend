@@ -22,7 +22,7 @@ tant que l'instance ne le permet pas (`OTO_REPLI_CLE_PLATEFORME_PERMIS`).
 Retour arrière : retire les colonnes (le réglage des orgs qui l'avaient ouvert se perd ;
 leurs travaux au plafond sans clé d'org attendent de nouveau la réinitialisation).
 
-Révision : 20261119_1400_repli_plateforme
+Révision : 20261122_1100_repli_plateforme
 Précédente : 20261119_1600_repar_consentie
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ from alembic import op
 
 from oto_mcp.db.schema.runs import MODEL_SUBSCRIPTION_REPLI_PLATEFORME
 
-revision = "20261119_1400_repli_plateforme"
+revision = "20261122_1100_repli_plateforme"
 down_revision = "20261119_1600_repar_consentie"
 branch_labels = None
 depends_on = None

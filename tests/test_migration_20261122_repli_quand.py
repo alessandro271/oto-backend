@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 RACINE = Path(__file__).resolve().parent.parent
-_PRECEDENTE = "20261119_1400_repli_plateforme"
+_PRECEDENTE = "20261122_1100_repli_plateforme"
 _REVISION = "20261122_1200_repli_quand"
 _COLONNES = ("repli_quand", "repli_quand_by", "repli_quand_at")
 

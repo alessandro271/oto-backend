@@ -2863,7 +2863,7 @@ modèle, au même palier, payé aux jetons sur la clé API de l'org. Le repli le
   `cle_plateforme`), et la remise sert ce payeur ou défait le repli — jamais rien
   d'autre. `oto_org_settings domain=model_subscriptions platform_key_fallback=true|false`,
   ou `PUT /api/orgs/{id}/model-subscriptions/{family}/platform-key-fallback`. Révision
-  `20261119_1400_repli_plateforme`. Détail, bornes et preuve de facturation :
+  `20261122_1100_repli_plateforme`. Détail, bornes et preuve de facturation :
   `docs/repli-cle-plateforme.md`.
 - **L'org le CHOISIT** : colonne `org_model_subscription_modes.repli_api`. Sans
   réglage de l'org, c'est le **défaut de l'instance** : `OTO_REPLI_API_PAR_DEFAUT`

@@ -23,7 +23,7 @@ Retour arrière : retire les colonnes (le réglage des orgs qui avaient choisi
 `plafond_ou_deconnexion` se perd ; leurs travaux à reconnecter attendent de nouveau).
 
 Révision : 20261122_1200_repli_quand
-Précédente : 20261119_1400_repli_plateforme
+Précédente : 20261122_1100_repli_plateforme
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from alembic import op
 from oto_mcp.db.schema.runs import MODEL_SUBSCRIPTION_REPLI_QUAND
 
 revision = "20261122_1200_repli_quand"
-down_revision = "20261119_1400_repli_plateforme"
+down_revision = "20261122_1100_repli_plateforme"
 branch_labels = None
 depends_on = None
 
