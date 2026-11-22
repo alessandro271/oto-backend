@@ -1,4 +1,4 @@
-"""La révision `20261119_1400_repli_plateforme` pose le réglage du repli sur la clé de
+"""La révision `20261122_1100_repli_plateforme` pose le réglage du repli sur la clé de
 PLATEFORME (`org_model_subscription_modes.repli_cle_plateforme`, `_by`, `_at`).
 
 Sur une base d'AVANT (colonnes absentes, une ligne de réglage existante) : les colonnes
@@ -14,7 +14,7 @@ import pytest
 
 RACINE = Path(__file__).resolve().parent.parent
 _PRECEDENTE = "20261119_1600_repar_consentie"
-_REVISION = "20261119_1400_repli_plateforme"
+_REVISION = "20261122_1100_repli_plateforme"
 _COLONNES = ("repli_cle_plateforme", "repli_cle_plateforme_by", "repli_cle_plateforme_at")
 
 

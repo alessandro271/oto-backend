@@ -148,7 +148,7 @@ avant la déclaration du worker : c'est le serveur qui a choisi la clé et l'a r
 
 Fragment `db/schema/runs.py::MODEL_SUBSCRIPTION_REPLI_PLATEFORME` (dans `_SCHEMA`, joué
 au démarrage sous garde de catalogue, figé dans `tests/schema_gele/`), révision
-`20261119_1400_repli_plateforme` : trois colonnes sur `org_model_subscription_modes`,
+`20261122_1100_repli_plateforme` : trois colonnes sur `org_model_subscription_modes`,
 `repli_cle_plateforme BOOLEAN NOT NULL DEFAULT FALSE`, `repli_cle_plateforme_by TEXT`
 (colonne de compte, repointée par `migrate_sub`), `repli_cle_plateforme_at TIMESTAMPTZ`.
 Ordre avec le code indifférent. Une ligne que le réglage fait NAÎTRE a `mode` NULL et
