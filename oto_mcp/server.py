@@ -1122,6 +1122,10 @@ def main():
     # Exécutions simultanées du bac à sable (`functions/places.py`) : illisible, refus ici.
     from .functions import places
     places.verifier_configuration()
+    # Durée des invitations (réglage d'instance, en heures) : illisible, ou l'ancien
+    # réglage en jours encore défini, refus ici.
+    from .config import verifier_duree_invitation
+    verifier_duree_invitation()
     # Le journal d'accès d'uvicorn n'écrit en clair ni un jeton porté DANS le chemin
     # (`{token}`, `{code}` des routes servies : leur masque), ni la valeur d'une clé de
     # query secrète (`code`/`state` d'un retour OAuth, `*token*`, `key`… : `***`), sur

@@ -38,19 +38,18 @@ def _norm(email: Optional[str]) -> str:
 
 
 def creer(*, resource_type: str, kind: str, resource_id: str, email: str, role: str,
-          ttl_days: Optional[int], invited_by: str, nom: Optional[str],
-          heures: int = config.INVITATION_TTL_HOURS) -> dict:
+          ttl_days: Optional[int], invited_by: str, nom: Optional[str]) -> dict:
     """Pose le partage en attente de l'objet vers `email`. Rend `{id, token,
     expires_at, nouveau}` — `token` en clair (à mettre dans le lien, jamais
     persisté) seulement quand la ligne est NEUVE : un partage déjà en attente pour
     le même objet et la même adresse est rendu tel quel (`nouveau=False`, `token`
-    None), sans second secret porteur. Le lien vit `heures` (24 h par défaut, 48 au plus :
-    `config.INVITATION_TTL_HOURS`, l'échéance de toute invitation) ; `ttl_days` est celle
-    de l'ACCÈS une fois accepté, une autre chose."""
+    None), sans second secret porteur. Le lien vit autant que toute invitation de l'instance
+    (`config.invitation_ttl_hours`) ; `ttl_days` est la durée de l'ACCÈS une fois
+    accepté, une autre chose."""
     email = _norm(email)
     if "@" not in email:
         raise ValueError("email invalide")
-    duree = config.heures_d_invitation(heures)
+    duree = str(config.invitation_ttl_hours())
     token = "inv_" + secrets.token_urlsafe(32)
     with _connect() as conn:
         # Une ligne ÉCHUE garde sa place dans l'index unique (l'échéance n'est pas dans

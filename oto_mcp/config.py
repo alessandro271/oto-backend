@@ -247,29 +247,51 @@ def invite_base_url() -> str:
     return require_env("OTO_INVITE_BASE_URL").strip().rstrip("/")
 
 
-#: Durée de vie d'une invitation, en HEURES — écrite UNE fois, pour ses trois porteurs :
-#: l'invitation d'org/équipe/plateforme (`org_store.create_invitation`), le partage en
-#: attente d'un objet (`partage_en_attente.creer`) et le magic-link Logto joint au mail
-#: (`auth.annuaire.magic_url`). Une invitation est un code d'activation — son lien suffit
-#: à entrer (modèle bearer) ; il expire vite :
-#: 24 h, 48 h au plus. Elle valait 7 jours (`OTO_MCP_INVITE_TTL_DAYS`,
-#: retiré) : aucun réglage d'environnement, une valeur au-delà du plafond EST le défaut
-#: que la constante corrige. L'invité qui laisse échoir la sienne se fait réinviter :
-#: une invitation échue sort de la file (`org_store._PENDING`), la suivante n'est donc
-#: pas un doublon (refus #622) et porte un jeton NEUF.
-INVITATION_TTL_HOURS = 24
-#: Le plafond : une échéance demandée au-delà est REFUSÉE, jamais rabotée.
-INVITATION_TTL_MAX_HOURS = 48
+#: Durée de vie d'une invitation, en HEURES — un RÉGLAGE D'INSTANCE (`docs/tenants.md` :
+#: un besoin propre à une instance se règle par instance), lu à UN endroit pour ses trois
+#: porteurs : l'invitation d'org/équipe/plateforme (`org_store.create_invitation`), le
+#: partage en attente d'un objet (`partage_en_attente.creer`) et le lien de connexion
+#: Logto joint au mail (`auth.annuaire.magic_url`). Le mail dit la durée réelle.
+#: Défaut : 168 h (7 jours). En heures pour qu'une durée sous la journée reste possible.
+#: L'invité qui laisse échoir la sienne se fait réinviter : une invitation échue sort de
+#: la file (`org_store._PENDING`), la suivante n'est donc pas un doublon (refus #622) et
+#: porte un jeton NEUF.
+ENV_INVITATION_TTL_HOURS = "OTO_MCP_INVITATION_TTL_HOURS"
+INVITATION_TTL_HOURS_DEFAUT = 168
+#: L'ancien réglage, en jours. Retiré le 22/11/2026 au profit du réglage en heures :
+#: encore défini, il REFUSE le démarrage plutôt que d'être ignoré en silence.
+ENV_INVITATION_TTL_ANCIEN = "OTO_MCP_INVITE_TTL_DAYS"
 
 
-def heures_d_invitation(ttl_hours: int) -> str:
-    """`ttl_hours` validé, en texte prêt pour `(%s || ' hours')::interval`. Lève
-    `ValueError` hors de 1..`INVITATION_TTL_MAX_HOURS`."""
-    h = int(ttl_hours)
-    if not 0 < h <= INVITATION_TTL_MAX_HOURS:
-        raise ValueError(f"échéance d'invitation hors bornes : {h} h "
-                         f"(1 à {INVITATION_TTL_MAX_HOURS} h)")
-    return str(h)
+class DureeInvitationInvalide(RuntimeError):
+    """Réglage de durée d'invitation illisible, ou ancien réglage encore défini."""
+
+
+def invitation_ttl_hours() -> int:
+    """La durée de vie d'une invitation sur CETTE instance, en heures. Lève
+    `DureeInvitationInvalide` sur une valeur qui n'est pas un entier ≥ 1, et si l'ancien
+    réglage en jours est encore défini — jamais de repli sur le défaut."""
+    ancien = os.environ.get(ENV_INVITATION_TTL_ANCIEN)
+    if ancien is not None:
+        raise DureeInvitationInvalide(
+            f"{ENV_INVITATION_TTL_ANCIEN} n'est plus lu : le remplacer par "
+            f"{ENV_INVITATION_TTL_HOURS} (en heures, ex. 168 pour 7 jours).")
+    brut = os.environ.get(ENV_INVITATION_TTL_HOURS)
+    if brut is None or brut.strip() == "":
+        return INVITATION_TTL_HOURS_DEFAUT
+    try:
+        heures = int(brut.strip())
+    except ValueError:
+        heures = 0
+    if heures < 1:
+        raise DureeInvitationInvalide(
+            f"{ENV_INVITATION_TTL_HOURS}={brut!r} illisible : un entier d'heures, au moins 1.")
+    return heures
+
+
+def verifier_duree_invitation() -> None:
+    """Au démarrage (`server.main`) : un réglage illisible refuse de démarrer ICI."""
+    invitation_ttl_hours()
 
 
 def cors_origins() -> list[str]:

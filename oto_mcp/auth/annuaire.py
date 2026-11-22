@@ -182,16 +182,18 @@ def reset_user_mfa(sub: str) -> list[str]:
 # porte → la custom UI Logto le consomme (signIn extraParams) → auth silencieuse,
 # compte créé/loggé avec l'email EXACT (pas de mismatch). Best-effort : si le mint
 # échoue (M2M absent, Logto down), l'invitation reste valide via le flow code email.
-# Le jeton vit autant que l'invitation qui le porte (`config.INVITATION_TTL_HOURS`, 24 h)
-# : c'est un code d'activation, il ne survit pas à son invitation. Il valait
-# 7 jours.
-OTT_TTL_S = config.INVITATION_TTL_HOURS * 3600
+# Le jeton vit autant que l'invitation qui le porte (`config.invitation_ttl_hours`,
+# réglage d'instance) : c'est un code d'activation, il ne survit pas à son invitation.
 
 
-def mint_one_time_token(email: str, *, expires_in: int = OTT_TTL_S) -> str | None:
+def mint_one_time_token(email: str, *, expires_in: int | None = None) -> str | None:
     """Mint un one-time-token Logto (magic link) pour `email`. Renvoie le token,
-    ou None si le mint échoue (l'appelant dégrade vers le lien sans magic-link)."""
+    ou None si le mint échoue (l'appelant dégrade vers le lien sans magic-link).
+    `expires_in` (secondes) : par défaut la durée d'une invitation de l'instance, lue
+    HORS du repli ci-dessous — un réglage illisible lève, il ne dégrade pas."""
     import requests
+    if expires_in is None:
+        expires_in = config.invitation_ttl_hours() * 3600
     try:
         base, tok = _logto_base(), _mgmt_token()
         r = requests.post(
@@ -208,7 +210,7 @@ def mint_one_time_token(email: str, *, expires_in: int = OTT_TTL_S) -> str | Non
         return None
 
 
-def magic_url(base_url: str, email: str, *, expires_in: int = OTT_TTL_S) -> str:
+def magic_url(base_url: str, email: str, *, expires_in: int | None = None) -> str:
     """Augmente `base_url` d'un magic-link Logto pour `email` (params `otl` +
     `login_hint`). Le front fait `signIn({extraParams:{one_time_token: otl},
     loginHint})`. Si le mint échoue, renvoie `base_url` inchangé (dégradation

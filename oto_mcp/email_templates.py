@@ -68,15 +68,23 @@ def _qui_invite(inviter: str | None, inviter_name: str | None) -> str:
     return f"{nom} ({inviter})" if inviter and inviter.lower() != nom.lower() else nom
 
 
-def _echeance_du_lien(locale: str | None, heures: int) -> str:
-    """La phrase qui DIT l'échéance d'un lien d'invitation (il expire en
-    24 h, `config.INVITATION_TTL_HOURS`). Sans elle, l'invité qui ouvre le mail le
-    lendemain tombe sur « invitation expirée » sans avoir été prévenu."""
+def _duree(locale: str | None, heures: int) -> str:
+    """La durée en clair : en jours quand elle en est un nombre entier, sinon en heures."""
+    en = locale == "en"
+    if heures % 24 == 0:
+        n = heures // 24
+        return f"{n} {'day' if en else 'jour'}{'s' if n > 1 else ''}"
+    return f"{heures} {'hour' if en else 'heure'}{'s' if heures > 1 else ''}"
+
+
+def _echeance_du_lien(locale: str | None) -> str:
+    """La phrase qui DIT l'échéance d'un lien d'invitation, telle que l'instance la règle
+    (`config.invitation_ttl_hours`). Sans elle, l'invité qui ouvre le mail trop tard tombe
+    sur « invitation expirée » sans avoir été prévenu."""
+    duree = _duree(locale, config.invitation_ttl_hours())
     if locale == "en":
-        return (f"this link is valid for {heures} hours. after that, ask for a new "
-                "invitation.")
-    return (f"ce lien est valable {heures} heures. passé ce délai, demandez une nouvelle "
-            "invitation.")
+        return f"this link is valid for {duree}. after that, ask for a new invitation."
+    return f"ce lien est valable {duree}. passé ce délai, demandez une nouvelle invitation."
 
 
 def send_invite_email(to: str, target_name: str | None, invite_url: str,
@@ -102,7 +110,7 @@ def send_invite_email(to: str, target_name: str | None, invite_url: str,
     locale = locale or m.langue or None
     qui = _qui_invite(inviter, inviter_name)
     nom = _email._esc(m.nom)
-    echeance = _echeance_du_lien(locale, config.INVITATION_TTL_HOURS)
+    echeance = _echeance_du_lien(locale)
     if locale == "en":
         lead = (f"<strong>{_email._esc(qui)}</strong> invites you" if qui
                 else "you're invited")
@@ -190,7 +198,7 @@ def send_resource_shared_email(to: str, *, type_label: str, name: str | None,
                    + _email._bouton(app_url, f"ouvrir dans {m.nom}", brand))
     if lien_d_invitation:
         contenu += (f'<p style="{_charte.PARA}">'
-                    f'{_echeance_du_lien(locale, config.INVITATION_TTL_HOURS)}</p>')
+                    f'{_echeance_du_lien(locale)}</p>')
     return _envoyer(m, to, subject, _charte.page(
         m, contenu, preheader=apercu,
         mention=_charte.mention_transactionnelle(m, locale), locale=locale))
