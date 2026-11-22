@@ -59,7 +59,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, output_projection
 from ..connectors import verify as connector_verify
 
 
@@ -74,6 +74,29 @@ def _only(op: str, allowed: set, **provided: Any) -> None:
     extra = sorted(k for k, v in provided.items() if v is not None and k not in allowed)
     if extra:
         raise _bad(f"op={op!r} does not use {', '.join(extra)}")
+
+
+_ADRESSE_ISSUE = ("id", "identifier")
+
+
+def _selection(payload: Any, fields: Optional[List[str]]) -> Any:
+    """A list/search page reduced to the keys the caller names (signals #1908,
+    #1917: one page of full descriptions passed 100k characters and filled a
+    run's context before its first step ended). `id`/`identifier` are always
+    kept, so a projected issue can still be opened; the notice says what was
+    left out and what was asked for but absent."""
+    if fields is None:
+        return payload
+    voulus = list(dict.fromkeys(fields))
+    if output_projection.RAW not in voulus:
+        voulus += [k for k in _ADRESSE_ISSUE if k not in voulus]
+    out, notice = output_projection.select_fields(payload, voulus)
+    if notice and notice.get("missing"):
+        manquants = [k for k in notice["missing"] if k not in _ADRESSE_ISSUE or k in fields]
+        notice = {k: v for k, v in notice.items() if k != "missing"}
+        if manquants:
+            notice["missing"] = manquants
+    return output_projection.with_notice(out, notice)
 
 
 def _require(op: str, **required: Any) -> None:
@@ -254,9 +277,15 @@ def register(mcp: FastMCP) -> None:
         first: Optional[int] = None,
         after: Optional[str] = None,
         include: Optional[List[Literal["needs", "relations", "history"]]] = None,
+        fields: Optional[List[str]] = None,
     ) -> object:
         """A Linear issue — list/filter, full-text search, fetch one,
         create, update, archive (reversible), or delete (moves to trash).
+
+        op="list"/"search" return each issue WITH its full description: one page
+        can pass 100k characters. To scan, pass `fields` (e.g.
+        `["identifier", "title", "state", "updatedAt"]`), then `op="get"` the
+        ones worth reading.
 
         op="list" sorts by `createdAt` DESCENDING unless `order_by` says
         otherwise, so a stale issue updated yesterday can sit on any page:
@@ -294,7 +323,16 @@ def register(mcp: FastMCP) -> None:
                 date, oldest first (answers "when did it move to Done").
                 A project's customer needs: `linear_project(op="get",
                 include=["needs"])`.
+            fields: op="list"/"search" only — keys kept on each issue
+                (`id` and `identifier` always kept; `pageInfo` stays). A
+                requested key no issue carries is named in `selection.missing`.
+                `["*"]` = everything (same as omitting it).
         """
+        if fields is not None and op not in ("list", "search"):
+            raise _bad(f"op={op!r} does not use fields (op='list'/'search' only)")
+        if fields is not None and not fields:
+            raise _bad("`fields` is an empty list: omit it for every field, name the "
+                       "keys to keep, or pass `[\"*\"]`.")
         c = _client()
         if op == "list":
             _only(op, {"team_id", "project_id", "cycle_id", "assignee_id",
@@ -305,12 +343,12 @@ def register(mcp: FastMCP) -> None:
                   priority=priority, label_ids=label_ids, due_date=due_date,
                   estimate=estimate, parent_id=parent_id,
                   include=include)
-            return _run(lambda: c.list_issues(
+            return _selection(_run(lambda: c.list_issues(
                 team_id=team_id, project_id=project_id, cycle_id=cycle_id,
                 assignee_id=assignee_id, state_id=state_id,
                 updated_after=updated_after, updated_before=updated_before,
                 created_after=created_after, created_before=created_before,
-                order_by=order_by, first=_page(first), after=after))
+                order_by=order_by, first=_page(first), after=after)), fields)
         if op == "get":
             _require(op, issue_id=issue_id)
             _only(op, {"issue_id", "include"}, team_id=team_id, project_id=project_id,
@@ -336,7 +374,8 @@ def register(mcp: FastMCP) -> None:
                   created_after=created_after, created_before=created_before,
                   order_by=order_by,
                   include=include)
-            return _run(lambda: c.search_issues(query, team_id=team_id, first=_page(first), after=after))
+            return _selection(_run(lambda: c.search_issues(
+                query, team_id=team_id, first=_page(first), after=after)), fields)
         if op == "create":
             _require(op, title=title, team_id=team_id)
             _only(op, {"title", "team_id", "description", "assignee_id", "state_id",

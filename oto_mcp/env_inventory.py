@@ -743,7 +743,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "Backoff (s) entre tentatives FOD.", ("oto_mcp/fod/http.py:35",)),
     Variable("FOD_RETRY_AFTER_MAX_S", Classe.REGLAGE, "10",
              "Plafond (s) d'un `Retry-After` FOD honoré.",
-             ("oto_mcp/fod/http.py:134",)),
+             ("oto_mcp/fod/http.py:177",)),
     Variable("OTO_MCP_S3_REGION", Classe.REGLAGE, "fr-par",
              "Région S3/Scaleway du store média.", ("oto_mcp/media_store.py:61",)),
     Variable("OTO_MCP_S3_PRESIGN_EXPIRY", Classe.REGLAGE, "3600",
