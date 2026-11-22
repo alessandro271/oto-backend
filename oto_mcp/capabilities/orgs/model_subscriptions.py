@@ -18,7 +18,8 @@ et un corps partiel ne dirait pas lequel des deux on voulait laisser.
 Le REPLI d'un forfait épuisé, sur la même ressource et toujours réglé seul : vers la clé
 API déposée par l'org (`PUT …/{family}/api-fallback`, la porte), et — sur une instance
 qui le permet — vers la clé de PLATEFORME pour une org sans clé
-(`PUT …/{family}/platform-key-fallback`, 19/11/2026, `docs/repli-cle-plateforme.md`).
+(`PUT …/{family}/platform-key-fallback`, 19/11/2026, `docs/repli-cle-plateforme.md`) ;
+et QUAND, au plafond ou aussi déconnecté (`PUT …/{family}/fallback-when`, 22/11/2026).
 
 Lecture = membre ; écriture = org_admin. Une déclaration → deux surfaces : REST
 `/api/orgs/{id}/model-subscriptions/{family}` ici, MCP par la console
@@ -44,6 +45,11 @@ _PATH = "/api/orgs/{id}/model-subscriptions/{family}"
 _PATH_MODE = "/api/orgs/{id}/model-subscriptions/{family}/mode"
 _PATH_REPLI = "/api/orgs/{id}/model-subscriptions/{family}/api-fallback"
 _PATH_REPLI_PLATEFORME = "/api/orgs/{id}/model-subscriptions/{family}/platform-key-fallback"
+_PATH_REPLI_QUAND = "/api/orgs/{id}/model-subscriptions/{family}/fallback-when"
+#: `repli_quand` (la base) ↔ `fallback_when` (les surfaces) ; une ligne d'avant : `limit`.
+_QUAND_SERVI = {org_subscription_pool.REPLI_AU_PLAFOND: "limit",
+                org_subscription_pool.REPLI_AUSSI_DECONNECTE: "limit_or_signed_out"}
+_QUAND_RECU = {v: k for k, v in _QUAND_SERVI.items()}
 
 
 class Preteur(BaseModel):
@@ -129,11 +135,11 @@ class OrgPlafond(BaseModel):
     api_fallback: bool = Field(
         default=False,
         description=("`true`: a job whose subscription (the requester's, or the whole "
-                     "pool) is EXHAUSTED replays on this org's own deposited API key, "
-                     "same tier, instead of waiting for the plan to reset. `false`: those "
-                     "jobs wait. Without a setting of the org, the instance's default "
-                     "applies. It never spends anyone else's key — the platform key "
-                     "only through `platform_key_fallback`."))
+                     "pool) is EXHAUSTED — or signed out, per `fallback_when` — replays "
+                     "on this org's own deposited API key, same tier, instead of waiting. "
+                     "`false`: those jobs wait. Without a setting of the org, the "
+                     "instance's default applies. It never spends anyone else's key — "
+                     "the platform key only through `platform_key_fallback`."))
     platform_key_fallback: bool = Field(
         default=False,
         description=("The org's own choice, set by an org admin: `true` = when "
@@ -152,6 +158,17 @@ class OrgPlafond(BaseModel):
         default=None, description="Who last set `platform_key_fallback`; null = never set.")
     platform_key_fallback_set_at: Optional[str] = Field(
         default=None, description="When `platform_key_fallback` was last set.")
+    fallback_when: Literal["limit", "limit_or_signed_out"] = Field(
+        default="limit",
+        description=("WHEN a job falls back, set by an org admin: `limit` (default) "
+                     "= only at the subscription's cap; `limit_or_signed_out` = also "
+                     "when it is signed out or needs a new login (see "
+                     "`set_fallback_when`). It neither turns the fallback on "
+                     "(`api_fallback`) nor picks who pays."))
+    fallback_when_set_by: Optional[str] = Field(
+        default=None, description="Who last set `fallback_when`; null = never set.")
+    fallback_when_set_at: Optional[str] = Field(
+        default=None, description="When `fallback_when` was last set.")
 
 
 class GetOrgPlafondInput(BaseModel):
@@ -189,6 +206,13 @@ class SetOrgRepliInput(BaseModel):
                      "default applies."))
 
 
+class SetOrgRepliQuandInput(BaseModel):
+    org_id: int
+    family: str
+    when: Literal["limit", "limit_or_signed_out"] = Field(
+        description="`limit` (default): only at the cap; `limit_or_signed_out`: also signed out.")
+
+
 class SetOrgRepliPlateformeInput(BaseModel):
     org_id: int
     family: str
@@ -214,19 +238,26 @@ def _exiger(org_id: int, famille: str) -> None:
             f"({', '.join(sorted(_abonnement.FAMILLES))}).")
 
 
+def _date(v):
+    return v.isoformat() if hasattr(v, "isoformat") else v
+
+
 def _repli_plateforme_servi(org_id: int, famille: str) -> dict:
     """Le réglage du repli sur la clé de PLATEFORME, tel que l'org l'a posé, et si
     l'instance le permet (19/11/2026). Le réglage est rendu TEL QU'IL EST, même quand
     l'instance ne le permet plus : l'écran dit les deux, plutôt qu'un « fermé » qui
-    cacherait un réglage qu'il faudrait refermer avant de rouvrir l'instance."""
+    cacherait un réglage qu'il faudrait refermer avant de rouvrir l'instance. Et QUAND
+    l'org se replie (`fallback_when`, 22/11/2026), de la même ligne."""
     ligne = org_subscription_pool.get_mode(org_id, famille) or {}
-    quand = ligne.get("repli_cle_plateforme_at")
     return {"platform_key_fallback": bool(ligne.get("repli_cle_plateforme")),
             "platform_key_fallback_permitted":
                 org_subscription_pool.repli_cle_plateforme_permis(),
             "platform_key_fallback_set_by": ligne.get("repli_cle_plateforme_by"),
-            "platform_key_fallback_set_at":
-                quand.isoformat() if hasattr(quand, "isoformat") else quand}
+            "platform_key_fallback_set_at": _date(ligne.get("repli_cle_plateforme_at")),
+            "fallback_when": _QUAND_SERVI[ligne.get("repli_quand")
+                                          or org_subscription_pool.REPLI_AU_PLAFOND],
+            "fallback_when_set_by": ligne.get("repli_quand_by"),
+            "fallback_when_set_at": _date(ligne.get("repli_quand_at"))}
 
 
 def _servi(org_id: int, famille: str, admin: bool) -> dict:
@@ -345,6 +376,17 @@ def _set_repli_plateforme(ctx: ResolvedCtx, inp: SetOrgRepliPlateformeInput) -> 
     return _servi(inp.org_id, inp.family, True)
 
 
+def _set_repli_quand(ctx: ResolvedCtx, inp: SetOrgRepliQuandInput) -> dict:
+    """QUAND l'org se replie (22/11/2026, `docs/repli-cle-plateforme.md` §Quand se
+    replier) : au plafond seulement (`limit`, la règle d'avant), ou aussi déconnecté
+    (`limit_or_signed_out`). Ni la porte (`api_fallback`) ni le payeur, donc aucune
+    permission d'instance : chaque payeur garde ses portes. Vaut au travail SUIVANT."""
+    _exiger(inp.org_id, inp.family)
+    org_subscription_pool.set_repli_quand(inp.org_id, inp.family, _QUAND_RECU[inp.when],
+                                          ctx.sub)
+    return _servi(inp.org_id, inp.family, True)
+
+
 _ERREURS = (
     DeclaredError(404, "unknown_org", "l'org n'existe pas"),
     DeclaredError(400, "unknown_family", "une famille qui n'est pas servie par abonnement"),
@@ -428,13 +470,31 @@ CAPABILITIES += [
                      "must be on as well, and an org with its own key always replays "
                      "on it. Only if the shared key is granted to the org, the replayed "
                      "model is priced in the credit scale and the org itself (not each "
-                     "person) pays its credits — otherwise the job waits; same narrow "
-                     "case (a cap with a future reset, never a reconnection or an empty "
-                     "pool), one replayed run at a time per subscription, capped in "
+                     "person) pays its credits — otherwise the job waits; same cases "
+                     "as `api_fallback` (a cap with a future reset — and a signed-out "
+                     "subscription if `fallback_when` says so — never an empty pool), "
+                     "one replayed run at a time per subscription, capped in "
                      "tokens. Turning it on is refused "
                      "(`platform_key_fallback_not_permitted`) on an instance that does "
                      "not allow it; turning it off always works. Applies from the next "
                      "job; a running job is never cut. Org admin."),
         rest=RestBinding("PUT", _PATH_REPLI_PLATEFORME, _ID),
+    ),
+    Capability(
+        key="org.model_subscriptions.set_fallback_when", handler=_set_repli_quand,
+        Input=SetOrgRepliQuandInput, authz=ORG_ADMIN_OF("org_id"), Output=OrgPlafond,
+        errors=_ERREURS,
+        description=("Choose WHEN this org's subscription jobs fall back: `limit` "
+                     "(default) — only at the cap; `limit_or_signed_out` — also when "
+                     "signed out or needing a new login for 10+ minutes: the "
+                     "requester's own subscription opened here, or every lender of the "
+                     "pool (each capped or signed out; with no mode set, also the pool "
+                     "of a requester with no subscription here). Neither turns the "
+                     "fallback on (`api_fallback`) nor picks who pays; same bounds. "
+                     "Still waiting either way: a pool with no lender, a requester with "
+                     "no subscription outside that pool case, a model the org switched "
+                     "off. Reconnected, new jobs run on it again; replayed ones finish "
+                     "on the fallback key. Next job on. Org admin."),
+        rest=RestBinding("PUT", _PATH_REPLI_QUAND, _ID),
     ),
 ]

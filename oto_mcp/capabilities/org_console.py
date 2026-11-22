@@ -116,6 +116,7 @@ class OrgSettingsInput(BaseModel):
     mode: Optional[str] = None               # set : personnel | pool (seul, sans limit_pct)
     api_fallback: Optional[bool] = None      # set : repli clé de l'org (seul) ; défaut d'instance
     platform_key_fallback: Optional[bool] = None  # set : repli clé de plateforme (seul) ; si l'instance le permet
+    fallback_when: Optional[str] = None      # set : limit | limit_or_signed_out (seul) — QUAND se replier
     # time_saved (set) : minutes par type de résultat — {"record": 2, …} ; une
     # valeur null rend le défaut à ce type, `{}` les rend tous.
     minutes: Optional[dict[str, Optional[float]]] = None
@@ -311,6 +312,19 @@ def _plafond_abonnements(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
                    f"`family` (ex. claude_subscription) requis pour {inp.op}.")
     if inp.op == "get":
         return ms._get_plafond(ctx, ms.GetOrgPlafondInput(org_id=inp.org_id, family=family))
+    if inp.op == "set" and inp.fallback_when is not None:
+        # QUAND se replier (22/11/2026), seul lui aussi, et lu AVANT les autres : passé
+        # cette branche, aucun réglage plus bas ne le voit — un `set` qui le porterait
+        # avec un autre ne dirait pas lequel des deux on voulait laisser tel quel.
+        if (inp.mode is not None or inp.limit_pct is not None
+                or inp.api_fallback is not None or inp.platform_key_fallback is not None):
+            raise AuthzDenied(400, "one_setting_per_call",
+                              "`fallback_when` se règle seul : un appel par réglage.")
+        if inp.fallback_when not in ("limit", "limit_or_signed_out"):
+            raise AuthzDenied(400, "invalid_fallback_when",
+                              "`fallback_when` vaut `limit` ou `limit_or_signed_out`.")
+        return ms._set_repli_quand(ctx, ms.SetOrgRepliQuandInput(
+            org_id=inp.org_id, family=family, when=inp.fallback_when))
     if inp.op == "set" and inp.platform_key_fallback is not None:
         # Le payeur du repli (19/11/2026), seul lui aussi : un `set` qui ouvrirait
         # `api_fallback` et `platform_key_fallback` d'un coup ferait d'un seul geste
@@ -324,7 +338,7 @@ def _plafond_abonnements(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
             org_id=inp.org_id, family=family,
             platform_key_fallback=inp.platform_key_fallback))
     if inp.op == "set" and inp.api_fallback is not None:
-        # Même discipline que `mode` : un réglage par appel. Quatre interrupteurs sur
+        # Même discipline que `mode` : un réglage par appel. Cinq réglages sur
         # la même ressource, et un `set` qui en porterait deux ne dirait pas lequel
         # on voulait laisser tel quel.
         if inp.mode is not None or inp.limit_pct is not None:
@@ -489,9 +503,14 @@ CAPABILITIES += [
             "billed to the org's credits, only if that key is granted to the org; turning "
             "it on is refused (`platform_key_fallback_not_permitted`) where the instance "
             "does not allow it, turning it off always works; "
+            "OR, in a separate call, `fallback_when` limit|limit_or_signed_out — WHEN such "
+            "a job falls back: `limit` (default) only at the cap, `limit_or_signed_out` also "
+            "when the subscription (the requester's, or every lender of the pool) is signed "
+            "out for 10+ minutes; it neither turns the fallback on nor picks who pays; "
             "get also returns `mode`, `pool_size`, `lenders` (who lends, and whether each is "
             "usable now — never their tier or usage), `api_fallback`, "
-            "`platform_key_fallback` (+ `_permitted`, `_set_by`, `_set_at`)) | time_saved "
+            "`platform_key_fallback` (+ `_permitted`, `_set_by`, `_set_at`), "
+            "`fallback_when` (+ `_set_by`, `_set_at`)) | time_saved "
             "(minutes per result type behind the agents' time saved — report, action, record, "
             "research; the defaults are estimates, the org may override them; get returns "
             "each kind's default and applied minutes; set takes "

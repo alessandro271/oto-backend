@@ -10,8 +10,9 @@ base et par le vrai chemin de réservation (`capabilities.runner_jobs._jobs`) :
    partagée ACCORDÉE → servi sur la clé de plateforme, `meter_usage`, payeur stampé
    `cle_plateforme` ;
 2. sans réglage, sur une instance qui ne permet pas, sans accord, avec `repli_api`
-   coupé, à reconnecter, pool vide, worker qui ne mesure pas, ferme → le travail ATTEND,
-   jamais arrêté ;
+   coupé, à reconnecter (sous `repli_quand = plafond`, le défaut :
+   `test_repli_deconnexion.py` pour l'autre), pool vide, worker qui ne mesure pas, ferme
+   → le travail ATTEND, jamais arrêté ;
 3. l'org a SA clé → sa clé paie (`cle_org`), quoi que dise le réglage ;
 4. un seul repli en vol par forfait, la prise revérifie le réglage ;
 5. la remise défait (jamais n'arrête, jamais ne sert sans mesure) ce qu'elle ne peut

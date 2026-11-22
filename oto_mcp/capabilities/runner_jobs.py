@@ -1976,8 +1976,9 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
                 return {"job": None, "campaign_error": panne}
         if job is None and ctx.platform_worker and inp.provider:
             # ⚠️ REPLI ABONNEMENT ÉPUISÉ → clé API (OTO-130, 27/09/2026) : un
-            # travail d'abonnement en pause (jamais needs_login/disconnected,
-            # jamais un pool vide) rejoue sur la clé API de son org plutôt que
+            # travail d'abonnement en pause (needs_login/disconnected seulement si
+            # l'org a choisi `plafond_ou_deconnexion`, 22/11/2026 ; jamais un pool
+            # vide) rejoue sur la clé API de son org plutôt que
             # d'attendre — seulement si l'org l'a CHOISI et que SA clé paie
             # (`repli_disponible` revérifie avant de prendre). Réservé au worker
             # de PLATEFORME, même garde que le sandbox d'abonnement lui-même : ce

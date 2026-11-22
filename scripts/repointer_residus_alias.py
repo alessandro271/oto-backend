@@ -127,6 +127,7 @@ BORNEES: dict[tuple[str, str], str] = {
     ("org_model_subscription_limits", "updated_by"): _REGLAGES,
     ("org_model_subscription_modes", "updated_by"): _REGLAGES,
     ("org_model_subscription_modes", "repli_cle_plateforme_by"): _REGLAGES,
+    ("org_model_subscription_modes", "repli_quand_by"): _REGLAGES,
     ("option_comps", "granted_by"): _REGLAGES,
     ("option_comps", "entity_id"): _REGLAGES,
     ("org_entitlements", "granted_by"): _REGLAGES,

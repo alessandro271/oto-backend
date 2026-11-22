@@ -3,7 +3,8 @@
 > Statut : livré en brouillon (19/11/2026). Section B de la spécification « Alertes de
 > capacité » (`alertes-de-capacite.md`, branche de l'alerte), ajustée à ce qui est
 > construit. Le repli sur la clé de l'org (OTO-130) est décrit dans
-> `runner-et-automatisations.md`, § « Le REPLI vers la clé de l'org ».
+> `runner-et-automatisations.md`, § « Le REPLI vers la clé de l'org ». Élargi le
+> 22/11/2026, sur choix de l'org, à un abonnement déconnecté : § « Quand se replier ».
 
 ## Le constat
 
@@ -68,8 +69,10 @@ Une org qui a ouvert le réglage mais à qui la clé partagée n'est pas accord�
 
 ### Bornes, les mêmes que le repli sur la clé de l'org
 
-- même cas étroit : `paused_limit` à échéance future, en personnel comme en pool (tous
-  les prêteurs) ; jamais `needs_login` / `disconnected`, jamais un pool vide ;
+- même cas que le repli sur la clé de l'org : `paused_limit` à échéance future, en
+  personnel comme en pool (tous les prêteurs) ; `needs_login` / `disconnected` seulement
+  si l'org a choisi `plafond_ou_deconnexion` (§ « Quand se replier »), jamais un pool
+  vide ;
 - même plafond de jetons par run (`REPLI_MAX_TOKENS`, sauf plafond déclaré par l'agent),
   un seul repli en vol par forfait, même modèle au même palier ;
 - même pré-filtrage SQL avant la limite des candidats (`candidats_repli_abonnement`) :
@@ -155,6 +158,103 @@ Ordre avec le code indifférent. Une ligne que le réglage fait NAÎTRE a `mode`
 `repli_api` au défaut de l'instance — naître à `FALSE` sur une instance ouverte
 fermerait le repli de l'org par effet de bord.
 
+## Quand se replier (22/11/2026)
+
+### Le constat
+
+Le repli ne partait que d'un forfait AU PLAFOND — décision délibérée d'OTO-130 et de sa
+revue (#1086) : un abonnement à reconnecter attend la personne, le repli « ne répare rien
+de ça ». Le 19/11/2026, le seul abonnement prêté d'une org s'est déconnecté : tous ses
+agents se sont arrêtés pendant des heures, repli allumé. Pour l'org, un
+abonnement qui ne peut pas servir est un abonnement qui ne peut pas servir, plafond ou
+déconnexion.
+
+### Ce qui est construit
+
+Un réglage d'org, posé par un org_admin, **à part** des deux autres :
+`org_model_subscription_modes.repli_quand` (qui `_by`, quand `_at`), révision
+`20261122_1200_repli_quand`.
+
+| `repli_quand` | servi (`fallback_when`) | le repli part de |
+| --- | --- | --- |
+| `plafond` (défaut, toute org d'avant) | `limit` | la règle d'avant, à l'identique |
+| `plafond_ou_deconnexion` | `limit_or_signed_out` | la règle d'avant, ET un abonnement déconnecté |
+
+Il n'ouvre pas le repli (`repli_api` reste la porte : fermée, rien ne replie) et ne
+choisit pas le payeur (la clé de l'org ; sinon, si l'org l'a choisi et que l'instance le
+permet, la clé de plateforme — mêmes portes que ci-dessus). Il n'a donc besoin d'aucune
+permission d'instance. Les trois réglages composent le choix que l'écran présente d'un
+seul geste : « quand les abonnements ne peuvent pas tourner (déconnectés ou au plafond) :
+attendre / la clé de l'org / les crédits de la plateforme ».
+
+### Ce qui devient repliable sous `plafond_ou_deconnexion`
+
+« Déconnecté » = `needs_login` ou `disconnected`, avec un sandbox posé (une ligne sans
+sandbox n'a jamais été connectée : rien à reconnecter, la lecture de
+`_abonnement.reparable`), **depuis au moins dix minutes** (`DECONNEXION_TENUE_S`, sur
+`updated_at`) : le repli paie des jetons, un `needs_login` le temps d'un jeton qui se
+renouvelle ou une déconnexion défaite dans la minute ne doivent pas acheter un run.
+
+- **voie personnelle** : l'abonnement du demandeur OUVERT dans l'org du travail
+  (`_ABONNEMENT_OUVERT_ICI`) est déconnecté ;
+- **voie du pool** : au moins un prêteur vivant (`PRET_VIVANT`), et CHACUN est en pause
+  pour l'org (la règle d'avant) OU déconnecté — un pool mélangé plafond + déconnexion se
+  replie, un pool tout déconnecté aussi ;
+- **sans mode réglé** (le pool complète) : un demandeur SANS abonnement ouvert ici n'a que
+  le pool. Quand aucun prêteur ne peut servir, la réservation le renvoie sur une voie
+  personnelle où il n'a rien, et la règle d'avant n'y voyait aucun plafond — il attendait
+  donc toujours, plafond compris. Le repli, lui, remplace le pool qu'il aurait emprunté
+  (`voiep`, forfait `org:`), au plafond comme déconnecté. ⚠️ C'est le seul endroit où la
+  voie du REPLI diffère de celle de la RÉSERVATION (`_par_le_pool`, inchangée).
+
+### Ce qui attend toujours, dans les deux réglages
+
+- un pool sans aucun prêteur vivant (une absence, pas une panne) ;
+- un demandeur sans abonnement, hors du cas « sans mode réglé, son pool » : en mode
+  `personnel`, ou sans prêteur, il n'y a rien à remplacer ;
+- un prêteur SERVABLE : le pool n'est pas bloqué, il sert ;
+- un modèle ÉTEINT par l'org (`orgs.disabled_models`) — celui du travail ou celui
+  d'arrivée (`_modeles_allumes`) : un modèle éteint s'arrête, il ne se replie jamais.
+  ⚠️ Ce garde-fou vaut aussi sous `plafond` : avant lui, le repli reroutait un `sub:*`
+  éteint vers un modèle allumé, ou arrêtait à la remise un travail replié vers un modèle
+  éteint au lieu de le laisser attendre ;
+- `repli_api` fermé, une org sans payeur, et les bornes d'avant (`REPLI_MAX_TOKENS`, un
+  repli en vol par forfait, même modèle au même palier).
+
+### La prise, la reconnexion, le stamp
+
+- **Une seule écriture** (`runner_jobs._jointures_de_repli`, `_REPLIABLE`,
+  `_modeles_allumes`), lue par les candidats ET revérifiée dans le `WHERE` de la prise,
+  pour TOUT payeur : un admin qui repasse à `plafond`, une personne qui se reconnecte, un
+  modèle éteint entre la lecture et la prise, gagnent.
+- **Reconnecté**, l'abonnement n'est plus déconnecté : les travaux suivants ne sont plus
+  candidats et repartent sur lui. Un travail déjà replié est un travail `anthropic`
+  ordinaire : il finit sur le payeur stampé. `defaire_le_repli` rend la charge d'avant à
+  l'octet, quelle que soit la cause.
+- **Le stamp dit pourquoi** : `_plateforme.repli.cause` = `plafond` exactement quand la
+  règle d'avant l'aurait replié, `deconnexion` sinon (un pool mélangé est une
+  `deconnexion`) ; `reason` = `paused_limit` | `signed_out` ; `reset_at` = l'échéance du
+  plafond, nulle pour une déconnexion, qui n'en a pas. Un repli pris avant le champ se lit
+  `plafond` (`runner_jobs.cause_du_repli`).
+- **Sous `plafond`, chaque clause se réduit à celle d'avant** : `quand` est faux, la voie
+  du repli est celle de la réservation, et une pause porte toujours son échéance — les
+  bancs d'avant (`test_repli_plafond_api.py`, `test_repli_cle_plateforme.py`) passent sans
+  retouche.
+
+### Surfaces
+
+- REST : `GET /api/orgs/{id}/model-subscriptions/{family}` rend `fallback_when`
+  (`limit` | `limit_or_signed_out`), `fallback_when_set_by`, `fallback_when_set_at` —
+  membres compris. `PUT …/{family}/fallback-when` `{"when": "limit" |
+  "limit_or_signed_out"}`, org_admin.
+- MCP : `oto_org_settings domain=model_subscriptions fallback_when=limit|limit_or_signed_out`,
+  seul dans son appel (`one_setting_per_call`).
+- Diagnostics : la péremption d'une occurrence (`_abonnement.raison_de_peremption`) et
+  l'alerte des agents qui attendent un abonnement à reconnecter ne parlent que de travaux
+  qui n'ont PAS tourné — une occurrence périmée, un travail en file depuis trente minutes
+  sans succès depuis : un travail replié est réservé, sa famille devient `anthropic`, il
+  n'y figure pas. Textes inchangés.
+
 ## Questions ouvertes
 
 - **Le réglage doit-il valoir accord ?** Aujourd'hui, non : la clé `anthropic` de
@@ -165,6 +265,9 @@ fermerait le repli de l'org par effet de bord.
   plateforme) : seul le pool au plafond le fait, comme avant.
 - **Les orgs à payeur « personne »** attendent : faut-il plutôt un consentement de la
   personne (son propre réglage), ou laisser le réglage de l'admin engager chaque membre ?
+- **Dix minutes de déconnexion** avant de replier (`DECONNEXION_TENUE_S`) : le bon
+  délai entre « un jeton qui se renouvelle » et « des heures sans un passage » n'est pas
+  mesuré ; c'est une constante, pas un réglage.
 - **`enforce` sans plancher** (`OTO_CREDITS_JOB_FLOOR` absent ou 0) : une org au solde
   nul passe la prise, puis son premier tour est refusé (`insufficient_credits`) et le
   travail s'arrête au lieu d'attendre — comme tout travail sur la clé partagée. Un

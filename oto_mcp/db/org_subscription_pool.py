@@ -59,7 +59,8 @@ def get_mode(org_id: Optional[int], famille: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             "SELECT org_id, famille, mode, repli_api, updated_at, updated_by, "
-            "       repli_cle_plateforme, repli_cle_plateforme_by, repli_cle_plateforme_at "
+            "       repli_cle_plateforme, repli_cle_plateforme_by, repli_cle_plateforme_at, "
+            "       repli_quand, repli_quand_by, repli_quand_at "
             "FROM org_model_subscription_modes WHERE org_id = %s AND famille = %s",
             (org_id, famille)).fetchone()
     return dict(row) if row else None
@@ -222,6 +223,45 @@ def set_repli_cle_plateforme(org_id: int, famille: str, actif: bool,
             RETURNING org_id, famille, mode, repli_api, repli_cle_plateforme,
                       repli_cle_plateforme_by, repli_cle_plateforme_at""",
             (org_id, famille, repli_api_par_defaut(), bool(actif), par)).fetchone()
+    return dict(row)
+
+
+#: QUAND un travail d'abonnement se replie (22/11/2026, `docs/repli-cle-plateforme.md`
+#: §Quand se replier) — le choix de l'org, une valeur de `repli_quand` :
+#: - `plafond` (le défaut, et toute org qui n'a rien réglé) : seulement un forfait au
+#:   plafond, la règle d'OTO-130 à l'identique ;
+#: - `plafond_ou_deconnexion` : AUSSI un abonnement déconnecté ou à reconnecter — celui du
+#:   demandeur, ou tous les prêteurs du pool (`runner_jobs._jointures_de_repli`).
+#: Il ne choisit ni le repli (`repli_api` reste la porte) ni le payeur.
+REPLI_AU_PLAFOND = "plafond"
+REPLI_AUSSI_DECONNECTE = "plafond_ou_deconnexion"
+REPLI_QUAND = (REPLI_AU_PLAFOND, REPLI_AUSSI_DECONNECTE)
+
+
+def set_repli_quand(org_id: int, famille: str, quand: str, par: Optional[str]) -> dict:
+    """Pose QUAND les travaux d'abonnement de cette org se replient (22/11/2026). Qui
+    (`par`) et quand s'écrivent sur des colonnes à lui, jamais sur `updated_by`, qui
+    appartient au mode.
+
+    ⚠️ Une ligne qui NAÎT ici n'a rien choisi du repli API ni du mode, comme
+    `set_repli_cle_plateforme` : `mode` NULL (le pool continue de compléter) et
+    `repli_api` au DÉFAUT DE L'INSTANCE — naître à `FALSE` fermerait le repli de l'org par
+    effet de bord. Une ligne existante garde son `repli_api` et son payeur."""
+    if quand not in REPLI_QUAND:
+        raise ValueError(f"repli_quand hors contrat : {quand!r}")
+    with _connect() as conn:
+        row = conn.execute(
+            """INSERT INTO org_model_subscription_modes
+                           (org_id, famille, mode, repli_api, repli_quand, repli_quand_by,
+                            repli_quand_at)
+                    VALUES (%s, %s, NULL, %s, %s, %s, NOW())
+               ON CONFLICT (org_id, famille) DO UPDATE
+                       SET repli_quand = EXCLUDED.repli_quand,
+                           repli_quand_by = EXCLUDED.repli_quand_by,
+                           repli_quand_at = NOW()
+            RETURNING org_id, famille, mode, repli_api, repli_quand, repli_quand_by,
+                      repli_quand_at""",
+            (org_id, famille, repli_api_par_defaut(), quand, par)).fetchone()
     return dict(row)
 
 

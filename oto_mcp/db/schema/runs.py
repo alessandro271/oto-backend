@@ -728,6 +728,25 @@ ALTER TABLE org_model_subscription_modes ADD COLUMN IF NOT EXISTS repli_cle_plat
 ALTER TABLE org_model_subscription_modes ADD COLUMN IF NOT EXISTS repli_cle_plateforme_at TIMESTAMPTZ;
 """
 
+# QUAND un abonnement se replie : au plafond seulement, ou aussi déconnecté (22/11/2026,
+# docs/repli-cle-plateforme.md §Quand se replier)
+MODEL_SUBSCRIPTION_REPLI_QUAND = """
+-- Le choix de l'org (org_admin) : un travail d'abonnement se replie quand son forfait est
+-- au PLAFOND (`plafond`, le défaut — la règle d'avant, à l'identique), ou AUSSI quand
+-- l'abonnement qui doit le servir est déconnecté ou à reconnecter
+-- (`plafond_ou_deconnexion`). Il ne choisit ni le repli ni le payeur : `repli_api` reste
+-- la porte, la clé de l'org ou `repli_cle_plateforme` le payeur
+-- (`runner_jobs._jointures_de_repli`). Toute org d'avant lit `plafond` : rien ne change
+-- pour elle.
+--
+-- ⚠️ Qui l'a réglé et quand, sur des colonnes à lui (`_by`, `_at`), comme
+-- `repli_cle_plateforme` : `updated_by` appartient au MODE. `_by` est une colonne de
+-- compte : `migrate_sub` la repointe (`users._SUB_COLUMNS`). Une ligne par ordre.
+ALTER TABLE org_model_subscription_modes ADD COLUMN IF NOT EXISTS repli_quand TEXT NOT NULL DEFAULT 'plafond' CHECK (repli_quand IN ('plafond', 'plafond_ou_deconnexion'));
+ALTER TABLE org_model_subscription_modes ADD COLUMN IF NOT EXISTS repli_quand_by TEXT;
+ALTER TABLE org_model_subscription_modes ADD COLUMN IF NOT EXISTS repli_quand_at TIMESTAMPTZ;
+"""
+
 # Les LIENS entre agents (22/10/2026) — docs/runner-et-automatisations.md §Lier des agents
 AGENT_LINKS = """
 -- Ce qu'un agent fait à un autre, DÉCLARÉ par quelqu'un qui peut modifier les deux :
