@@ -21,9 +21,9 @@ screen any party to an act against the french register of asset freezes (dg tré
 ## usage — tax doctrine (bofip)
 
 the dgfip's reading of tax law, commentaries in force, with the official bofip.impots.gouv.fr permalink. doctrine is not the law: cite both.
-- `doctrine_bofip(op="search")(query="pacte Dutreil transmission")` — 2 to 5 french keywords, all required
-- `doctrine_bofip(op="get")(identifiant="BOI-ENR-DMTG-20-30-20-20")` — full commentary (`max_chars=0` for the whole text)
-- typical workflow: `doctrine_bofip(op="search")` → read the commentary → cite the article it applies with `loi_article(code="CGI", …)`
+- `doctrine(op="search")(query="pacte Dutreil transmission")` — 2 to 5 french keywords, all required
+- `doctrine(op="get")(identifiant="BOI-ENR-DMTG-20-30-20-20")` — full commentary (`max_chars=0` for the whole text)
+- typical workflow: `doctrine(op="search")` → read the commentary → cite the article it applies with `loi_article(code="CGI", …)`
 
 ## usage — consolidated codes (legi)
 

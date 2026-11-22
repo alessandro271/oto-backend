@@ -9,7 +9,7 @@ from ._model import _c
 
 # droit: case law (juris_*) + consolidated codes (loi_*) + collective
 # agreements (ccn_*) + checks before an act (compliance, read-only) + tax doctrine
-# (doctrine_*, BOFiP), served by the FOD service (fod/juris, fod/loi, fod/ccn). Extracted
+# (doctrine, BOFiP), served by the FOD service (fod/juris, fod/loi, fod/ccn). Extracted
 # from `sirene`/`fr` (it was not INSEE data: DILA/Justice/Légifrance). Open
 # data, no key. 3 namespaces → 1 card "Info légale FR".
 CONNECTOR = _c(

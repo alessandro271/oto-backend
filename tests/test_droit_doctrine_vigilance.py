@@ -1,4 +1,4 @@
-"""`doctrine_bofip` (BOFiP) et `compliance(op="screen_asset_freeze")` (gels d'avoirs) passent
+"""`doctrine` (BOFiP) et `compliance(op="screen_asset_freeze")` (gels d'avoirs) passent
 par le service FOD sans rien calculer : la route appelée, le nom dans le corps, une
 référence inconnue nommée, un registre non concluant qui n'est jamais « aucun gel »."""
 import asyncio
@@ -28,7 +28,7 @@ def test_bofip_recherche_et_lecture_par_les_routes_fod(monkeypatch):
         return None if path.endswith("INCONNU") else {"identifiant_juridique": "x"}
 
     monkeypatch.setattr("oto_mcp.fod.doctrine._get", get)
-    t = _tool("doctrine_bofip")
+    t = _tool("doctrine")
     t(op="search", query="pacte Dutreil")
     t(op="get", identifiant="BOI-ENR-DMTG-20-30-20-20", max_chars=0)
     assert vus == [("/api/doctrine/bofip", {"query": "pacte Dutreil", "limit": 6}),
@@ -70,3 +70,22 @@ def test_chaque_op_exige_ses_champs():
         t(op="screen_asset_freeze")
     with pytest.raises(McpError, match="requires date_entree"):
         t(op="check_mutual_termination")
+
+
+def test_les_defauts_resserrent_et_full_rend_le_brut(monkeypatch):
+    pub = {"identifiant_juridique": "BOI-X", "titre": "t", "serie": "ENR", "type": "Contenu",
+           "debut_de_validite": "2024-01-01", "permalien": "p", "extrait": "e"}
+    monkeypatch.setattr("oto_mcp.fod.doctrine._get",
+                        lambda path, params=None: {"total_count": 1, "publications": [pub]})
+    t = _tool("doctrine")
+    assert t(op="search", query="pacte Dutreil")["publications"] == [
+        {k: pub[k] for k in ("identifiant_juridique", "titre", "debut_de_validite", "permalien", "extrait")}]
+    assert t(op="search", query="pacte Dutreil", full=True)["publications"] == [pub]
+
+    corr = {"sur": "nom_seul", "nom": "MARTIN", "naissance": "1970", "fondement": "long"}
+    monkeypatch.setattr("oto_mcp.fod.vigilance._etat",
+                        lambda *a, **k: _reponse(200, {"total": 1, "correspondances": [corr]}))
+    c = _tool("compliance")
+    assert c(op="screen_asset_freeze", nom="Martin")["correspondances"] == [
+        {"sur": "nom_seul", "nom": "MARTIN", "naissance": "1970"}]
+    assert c(op="screen_asset_freeze", nom="Martin", full=True)["correspondances"] == [corr]

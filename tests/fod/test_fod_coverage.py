@@ -88,7 +88,7 @@ FOD_NOT_EXPOSED = {
     "europepmc": _SANTE_JAMAIS_PAR_LA_LIB,  # sante(op="search_europepmc"|"get_europepmc_article")
     "transparence": _SANTE_JAMAIS_PAR_LA_LIB,  # liens d'intérêts — sante(op="search_interest_declarations"|…)
     "bofip": "client BOFiP (doctrine fiscale) consommé via le service FOD en proxy HTTP "
-             "(oto_mcp/fod/doctrine.py → /api/doctrine/bofip*) — le tool doctrine_bofip "
+             "(oto_mcp/fod/doctrine.py → /api/doctrine/bofip*) — le tool doctrine "
              "est exposé, le client lib n'a jamais tourné dans le backend",
     "judilibre": "client Judilibre (jurisprudence) = source d'INGESTION du service "
                  "FOD (fod-0, épopée DILA) ; le backend consomme la jurisprudence "
