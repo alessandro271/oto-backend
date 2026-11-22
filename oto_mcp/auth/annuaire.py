@@ -99,7 +99,7 @@ def _credential_present(d: Directory) -> bool:
                 and os.environ.get(f"{d.credential}_SECRET"))
 
 
-def _mgmt_token(directory: "Directory | None" = None) -> str:
+def _mgmt_token(directory: "Directory | None" = None, *, timeout: float = 15) -> str:
     import requests
     d = directory or _primary_directory()
     cid = os.environ.get(f"{d.credential}_ID")
@@ -115,7 +115,7 @@ def _mgmt_token(directory: "Directory | None" = None) -> str:
     r = requests.post(
         f"{d.token_endpoint}/oidc/token",
         data={"grant_type": "client_credentials", "resource": _MGMT_RESOURCE, "scope": "all"},
-        auth=(cid, csec), headers={"User-Agent": _UA}, timeout=15,
+        auth=(cid, csec), headers={"User-Agent": _UA}, timeout=timeout,
     )
     r.raise_for_status()
     j = r.json()
@@ -169,7 +169,9 @@ def facteurs_mfa(sub: str, *, timeout: float = 15) -> list[str]:
 
     from ..tenancy import require_primary_tenant
     require_primary_tenant(sub, "lecture des facteurs MFA Logto")
-    base, tok = _logto_base(), _mgmt_token()
+    # Le MÊME délai borne l'obtention du jeton de gestion : un Logto lent ne doit pas
+    # tenir un fil de requête plus longtemps que ce que l'appelant a demandé.
+    base, tok = _logto_base(), _mgmt_token(timeout=timeout)
     r = requests.get(f"{base}/api/users/{sub}/mfa-verifications",
                      headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
                      timeout=timeout)

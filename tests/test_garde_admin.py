@@ -39,6 +39,8 @@ def roles(monkeypatch):
                         lambda sub: {"sub": sub, "role": table[sub]} if sub in table else None)
     monkeypatch.delenv("OTO_MCP_ADMIN_SUB", raising=False)
     monkeypatch.delenv("OTO_ADMIN_MFA", raising=False)
+    # Les règles enrichissent le ctx de l'org active : sans base ici.
+    monkeypatch.setattr(access, "current_org", lambda sub: None)
     return table
 
 
@@ -428,3 +430,139 @@ def test_les_surfaces_admin_ne_lisent_le_role_qu_au_seam():
                            for x in elts):
                         fautes.append(f"{rel}:{n.lineno}")
     assert not fautes, fautes
+
+
+# ── 8. Par les vraies portes : adaptateur REST, adaptateur MCP, « en tant que » ─
+
+from pydantic import BaseModel  # noqa: E402
+
+from oto_mcp.capabilities._types import Capability, RestBinding  # noqa: E402
+
+
+class _Vide(BaseModel):
+    pass
+
+
+def _cap_admin(regle=None) -> Capability:
+    return Capability(key="test.garde_admin", handler=lambda ctx, inp: {"sub": ctx.sub},
+                      Input=_Vide, authz=regle or _authz.PLATFORM_ADMIN,
+                      mcp="oto_admin_test_garde",
+                      rest=RestBinding("GET", "/api/admin/test-garde"))
+
+
+class _VerifierJwt:
+    async def verify_token(self, token):
+        return types.SimpleNamespace(claims={"sub": OP})
+
+
+@pytest.fixture
+def porte_reelle(monkeypatch, roles, facteurs):
+    """La vraie `_authenticate`, ses lectures en base doublées : un jeton `oto_` est
+    celui de l'opérateur, un autre bearer est un JWT de l'opérateur."""
+    from oto_mcp.api import base
+    monkeypatch.setattr(base.db, "verify_api_token",
+                        lambda t: {"sub": OP, "scopes": None, "token_id": 3,
+                                   "token_kind": "user"})
+    monkeypatch.setattr(base.garde_identite, "refus", lambda sub: None)
+    monkeypatch.setattr(base.db, "upsert_user", lambda *a, **k: None)
+    monkeypatch.setattr(base.service_identity, "adresse_aux_services", lambda t: False)
+    monkeypatch.setattr(base, "alias_drain_armed", lambda: False)
+    yield base
+    garde_admin.poser(None)
+
+
+def _client_rest(base, cap):
+    from starlette.applications import Starlette
+    from starlette.testclient import TestClient
+
+    from oto_mcp.capabilities import _rest_adapter
+    routes = _rest_adapter.make_routes(_VerifierJwt(), base._authenticate, base._json,
+                                       base._json_error, lambda r: None, [cap])
+    return TestClient(Starlette(routes=routes))
+
+
+@pytest.mark.parametrize("bearer,types_,statut,code", [
+    ("jwt.session", ["Totp"], 200, None),
+    ("jwt.session", [], 403, garde_admin.CODE_MFA),
+    ("oto_jeton", ["Totp"], 403, garde_admin.CODE_SESSION),
+])
+def test_rest_une_route_admin_exige_session_et_mfa(porte_reelle, facteurs, bearer, types_,
+                                                    statut, code):
+    facteurs["types"] = types_
+    r = _client_rest(porte_reelle, _cap_admin()).get(
+        "/api/admin/test-garde", headers={"Authorization": f"Bearer {bearer}"})
+    assert r.status_code == statut, r.text
+    if code:
+        assert r.json()["error"] == code
+    else:
+        assert r.json()["sub"] == OP
+
+
+@pytest.mark.parametrize("claims,client_id,types_,code", [
+    ({"sub": OP}, "https://client.example/cimd.json", ["Totp"], None),
+    ({"sub": OP}, "https://client.example/cimd.json", [], garde_admin.CODE_MFA),
+    ({"sub": OP, "token_id": 3, "token_kind": "user"}, "oto_api_token", ["Totp"],
+     garde_admin.CODE_SESSION),
+])
+def test_mcp_un_outil_admin_exige_session_et_mfa(roles, facteurs, monkeypatch, claims,
+                                                  client_id, types_, code):
+    from oto_mcp.capabilities import _mcp_adapter
+    from oto_mcp.mcp_errors import McpError
+    monkeypatch.setattr("oto_mcp.tenant_migration.alias_drain_armed", lambda: False)
+    monkeypatch.setattr("oto_mcp.auth.hooks.alias_drain_armed", lambda: False,
+                        raising=False)
+    _jeton_mcp(monkeypatch, client_id=client_id, claims=claims)
+    facteurs["types"] = types_
+    garde_admin.poser(None)
+    outil = _mcp_adapter._make_tool(_cap_admin())
+    fn = getattr(outil, "fn", outil)
+    if code is None:
+        assert asyncio.run(fn())["sub"] == OP
+    else:
+        with pytest.raises(McpError) as e:
+            asyncio.run(fn())
+        assert "second factor" in str(e.value) or "interactive" in str(e.value)
+
+
+def _client_vue(base):
+    """`ViewAsMiddleware` réel devant une route qui dit ce que la vue a appliqué."""
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from oto_mcp import session_org
+    from oto_mcp.api import routes as api_routes
+
+    async def sonde(request):
+        return JSONResponse({
+            "vue": request.scope.get(api_routes.CLE_VIEW_AS_APPLIQUE),
+            "ecriture": bool(request.scope.get(api_routes.CLE_VIEW_AS_ECRITURE)),
+            "ecriture_acceptee": bool(session_org.view_as_write_accepted())})
+    app = Starlette(routes=[Route("/api/sonde", sonde, methods=["GET", "POST"])])
+    return TestClient(api_routes.ViewAsMiddleware(app, _VerifierJwt()))
+
+
+@pytest.mark.parametrize("bearer,types_,ouverte", [
+    ("jwt.session", ["Totp"], True),
+    ("jwt.session", [], False),
+    ("oto_jeton", ["Totp"], False),
+])
+def test_voir_et_ecrire_en_tant_que_exigent_session_et_mfa(porte_reelle, facteurs, roles,
+                                                           monkeypatch, bearer, types_,
+                                                           ouverte):
+    """L'écriture « en tant que » d'un super_admin (accusée par `X-Oto-View-As-Write`)
+    n'est servie qu'à une session avec second facteur ; sinon la consultation n'est
+    même pas ouverte (le porteur n'est plus opérateur, et il n'est pas org_admin)."""
+    roles["cible"] = "member"
+    facteurs["types"] = types_
+    r = _client_vue(porte_reelle).post(
+        "/api/sonde", json={"op": "set"},
+        headers={"Authorization": f"Bearer {bearer}", "X-Oto-View-As": "cible",
+                 "X-Oto-View-As-Write": "1"})
+    if ouverte:
+        assert r.status_code == 200, r.text
+        assert r.json() == {"vue": "cible", "ecriture": True, "ecriture_acceptee": True}
+    else:
+        assert r.status_code in (400, 403), r.text
+        assert r.json().get("vue") is None

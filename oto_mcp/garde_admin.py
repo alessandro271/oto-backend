@@ -61,9 +61,10 @@ _MODES = ("enforce", "report", "off")
 #: Les rôles bornés — ceux d'un compte d'ADMINISTRATION de la plateforme.
 ROLES_BORNES = ("admin", "super_admin")
 
-#: Les facteurs qui comptent. `BackupCode` seul ne compte pas (Logto ne l'enrôle
-#: qu'avec un autre), et le code par SMS/e-mail ne s'enrôle pas : il ne se lit donc
-#: pas ici, et un opérateur s'équipe d'une application TOTP ou d'une clé d'accès.
+#: Les facteurs qui comptent — une POLITIQUE, pas un constat sur Logto : seuls TOTP et
+#: WebAuthn ouvrent l'administration. `BackupCode` seul ne compte pas (Logto ne l'enrôle
+#: qu'avec un autre), et un code par SMS ou e-mail ne compte pas non plus : un
+#: opérateur s'équipe d'une application TOTP ou d'une clé d'accès.
 FACTEURS_FORTS = frozenset({"Totp", "WebAuthn"})
 
 # Natures de porteur.
@@ -130,6 +131,9 @@ _SIGNALE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 
 _cache: dict[str, tuple[float, Optional[str]]] = {}
 _verrou_cache = threading.Lock()
+# Un verrou PAR COMPTE autour de la lecture Logto : cent requêtes d'un opérateur qui
+# tombent sur un cache échu font UN appel, pas cent fils bloqués sur un Logto lent.
+_verrous_compte: dict[str, threading.Lock] = {}
 
 
 def mode() -> str:
@@ -197,11 +201,21 @@ def _verdict_mfa(sub_logto: Optional[str]) -> Optional[str]:
     """None si le compte a un facteur fort enrôlé ; sinon le CODE du refus."""
     if not sub_logto:
         return CODE_INVERIFIABLE
-    now = time.monotonic()
     with _verrou_cache:
         hit = _cache.get(sub_logto)
-    if hit is not None and hit[0] > now:
+        verrou = _verrous_compte.setdefault(sub_logto, threading.Lock())
+    if hit is not None and hit[0] > time.monotonic():
         return hit[1]
+    with verrou:
+        with _verrou_cache:
+            hit = _cache.get(sub_logto)
+        if hit is not None and hit[0] > time.monotonic():
+            return hit[1]
+        return _lire_et_cacher(sub_logto)
+
+
+def _lire_et_cacher(sub_logto: str) -> Optional[str]:
+    now = time.monotonic()
     try:
         types = _facteurs_logto(sub_logto)
     except Exception as e:  # noqa: BLE001 — fail-closed, nommé et journalisé

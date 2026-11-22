@@ -353,7 +353,8 @@ CASA AL1 3.3.1 (« le MFA est imposé à tout compte d'administration ») ; code
   nommé ; un second refuse une comparaison de rôle plateforme littérale hors du seam.
 - **Refusés** : un jeton `oto_` (utilisateur, clé d'org) — il ne passe aucun second
   facteur ; une session dont le compte n'a aucun facteur fort (`BackupCode` seul ne compte
-  pas ; le code par SMS ou e-mail ne s'enrôle pas, il ne compte pas) ; une session dont
+  pas ; un code par SMS ou e-mail ne compte pas non plus, par choix : seuls TOTP et
+  WebAuthn ouvrent l'administration) ; une session dont
   les facteurs sont illisibles (Logto injoignable, compte d'un tenant tiers dont nous
   n'administrons pas l'annuaire) — **fail-closed**.
 - **Le seul chemin non interactif** : un jeton de **délégation** (travail du runner)
@@ -367,10 +368,15 @@ CASA AL1 3.3.1 (« le MFA est imposé à tout compte d'administration ») ; code
   POSITIVEMENT à chaque branche de `api.base._authenticate` (rejeu compris) et lu, sur la
   face MCP, sur le jeton vérifié par FastMCP (`client_id="oto_api_token"` / `token_id` =
   jeton d'API). **Hors requête** (scripts, maintenance, boucles de fond) : aucun porteur,
-  rien n'est borné.
+  rien n'est borné. Deux portes agissent sous un sub sans bearer et restent donc hors
+  de la garde : le worker des travaux Jev (`jev_jobs_worker`, sous le sub du travail
+  émis plus tôt) et l'upload signé (`api/uploads.py`, une URL frappée en session) —
+  aucune n'est une surface d'administration, mais un travail d'opérateur y garde son
+  rôle.
 - **Les facteurs** : `GET /api/users/{id}/mfa-verifications` (API de gestion, credential
   `OTO_MCP_LOGTO_M2M_*`, `auth.annuaire.facteurs_mfa`), sur l'identifiant Logto du JWT
-  (avant le drain d'alias), délai 5 s. Cache par compte : 5 min positif, 1 min « aucun
+  (avant le drain d'alias), délai 5 s par appel (jeton de gestion compris), une seule
+  lecture à la fois par compte. Cache par compte : 5 min positif, 1 min « aucun
   facteur », 10 s panne. `reset_user_mfa` le vide. Payé uniquement pour un compte dont
   le rôle EN BASE est `admin`/`super_admin`.
 - **Le refus se dit** : `PLATFORM_ADMIN`, `SUPER_ADMIN`, `LIBRARY_PUBLISHER`,
@@ -392,10 +398,14 @@ quelles :
 - une session ouverte **avant** l'enrôlement continue de produire des jetons par
   rafraîchissement sans avoir vu le facteur : après l'enrôlement, se déconnecter partout ;
 - la récupération par lien magique (e-mail) reste mono-facteur (§ MFA par org, Limite) ;
+- les agents hébergés d'un opérateur qui appellent un `oto_admin_*` doivent le nommer
+  dans `platform_tools` : hors de cette liste, ils lisent `member` même en mode
+  `report` du verrou des rôles ;
 - **prérequis de déploiement** : tout compte `admin`/`super_admin`, et le sub de
   `OTO_MCP_ADMIN_SUB`, doit avoir enrôlé TOTP ou une clé d'accès AVANT le tag — sinon il
   perd l'administration à la première requête (récupérable : enrôler, se reconnecter ;
-  ou `OTO_ADMIN_MFA=report` le temps de le faire).
+  ou `OTO_ADMIN_MFA=report` le temps de le faire). Un opérateur dont le seul second
+  facteur est un code par SMS doit enrôler TOTP ou une clé d'accès en plus.
 
 ## MFA par org## MFA par org (« une org impose le 2ᵉ facteur à ses membres »)
 

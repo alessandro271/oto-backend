@@ -397,7 +397,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "(jeton `oto_`, compte sans TOTP ni clé d'accès, Logto injoignable), "
              "`report` journalise ce qui serait retiré et ne retire rien, `off` la "
              "coupe. Une valeur inconnue vaut `enforce`.",
-             ("oto_mcp/garde_admin.py:138",)),
+             ("oto_mcp/garde_admin.py:142",)),
     Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "report",
              "Verrou des rôles PLATEFORME des jetons de délégation (`verrou_org.py`) : "
              "`enforce` lit `member` le porteur `admin`/`super_admin` d'un travail du "
