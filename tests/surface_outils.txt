@@ -609,7 +609,7 @@ oto_admin_invite	create list revoke	bb4850d048dbcda5
 oto_admin_key_grant	grant list revoke	a4591a8e64d38811
 oto_admin_legal_proof	-	cd6506165b4b05e2
 oto_admin_model_spend	-	9b0f7fac164f4d44
-oto_admin_monitoring	agents_en_echec call calls connecteurs_orphelins connectors funnel gaps rest rest_calls run runs summary tool_quality transport	ce1681895ea2b1bd
+oto_admin_monitoring	agents_en_echec call calls connecteurs_orphelins connectors funnel gaps journal_archive rest rest_calls run runs summary tool_quality transport	cf77e2f39700e6f6
 oto_admin_org	archive create entitlements get list	2b55f899e73afb50
 oto_admin_org_member	add connectors events list remove set_role	91d575ef65d01d59
 oto_admin_platform_balances	-	545b8382c47a76a4
