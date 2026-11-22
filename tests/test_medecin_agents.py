@@ -115,6 +115,12 @@ def file(monkeypatch):
     monkeypatch.setattr(episodes_agents, "poser",
                         lambda eid, **kw: etat["poses"].append((eid, kw)) or {"id": eid})
     monkeypatch.setattr(episodes_agents, "lire", lambda eid: etat["relu"])
+    # Le choix des orgs : par défaut, toutes ont allumé la réparation ; `coupees` = celles
+    # qui ne l'ont pas fait.
+    from oto_mcp.db import sante_agents
+    etat["coupees"] = set()
+    monkeypatch.setattr(sante_agents, "orgs_avec_auto_repair",
+                        lambda ids: {int(o) for o in ids} - etat["coupees"])
     import sentry_sdk
     monkeypatch.setattr(sentry_sdk, "capture_message",
                         lambda message, level=None: etat["signaux"].append((message, level)))
@@ -135,7 +141,8 @@ def test_un_refus_passager_se_relance_une_fois_trace_d_abord(file):
     assert M._soigner(_panne(), _episode(), _MAINTENANT) == "relance"
     assert file["notes"] == [(3, {"action": "relance", "acteur": "medecin", "job_id": 900,
                                   "detail": "relance du travail 900 (refus_passager)",
-                                  "maximum": M.RELANCES_MAX})]
+                                  "maximum": M.RELANCES_MAX,
+                                  "plafond_org": M.RELANCES_PAR_ORG})]
     org, kind, payload, sub = file["enfiles"][0]
     assert (org, kind, sub) == (7, "start", "porteur")
     assert payload["trigger_id"] == 55, "la même charge, rendue à `enqueue_job` qui l'épure"
@@ -243,7 +250,8 @@ def test_un_passage_ne_s_arrete_pas_sur_une_panne_illisible(monkeypatch, file, t
     assert appels == [1, 2]
     assert {k: v for k, v in bilan.items() if not k.startswith("catalogue_")} == {
         "pannes": 2, "relances": 1, "relances_differees": 0, "incidents": [], "gueris": 1,
-        "gueris_apres_soin": 1, "erreurs": 1, "tenant_tiers_ecartes": 0}
+        "gueris_apres_soin": 1, "erreurs": 1, "tenant_tiers_ecartes": 0,
+        "reparation_coupee": 0, "plafond_org": 0}
 
 
 def test_l_org_d_un_tenant_tiers_n_est_ni_relevee_ni_relancee(monkeypatch, file, tenants):
@@ -497,3 +505,47 @@ def test_le_catalogue_ne_defait_pas_un_verdict_de_la_regex(monkeypatch, file, te
     ouverts = _un_passage(monkeypatch, [_panne(motif=motif)])
     M.balayer(_MAINTENANT)
     assert (ouverts[0]["classe"], ouverts[0]["cote"]) == ("cle_refusee", "proprietaire")
+
+
+# --- Le choix de l'org, et le plafond par org ------------------------------------------
+
+def test_une_org_qui_n_a_pas_allume_la_reparation_n_est_pas_relancee(monkeypatch, file,
+                                                                     tenants):
+    """Aucune ligne = coupée : l'épisode s'ouvre et se dit, rien n'est relancé."""
+    _un_passage(monkeypatch, [_panne(org_id=7, trigger_id=1), _panne(org_id=8, trigger_id=2)])
+    file["coupees"] = {8}
+    bilan = M.balayer(_MAINTENANT)
+    assert [e[0] for e in file["enfiles"]] == [7]
+    assert (bilan["relances"], bilan["reparation_coupee"]) == (1, 1)
+
+
+def test_un_choix_illisible_ne_relance_rien(monkeypatch, file, tenants):
+    from oto_mcp.db import sante_agents
+    _un_passage(monkeypatch, [_panne(org_id=7, trigger_id=1)])
+
+    def _panne_de_base(ids):
+        raise RuntimeError("base indisponible")
+    monkeypatch.setattr(sante_agents, "orgs_avec_auto_repair", _panne_de_base)
+    bilan = M.balayer(_MAINTENANT)
+    assert file["enfiles"] == []
+    assert (bilan["relances"], bilan["reparation_coupee"]) == (0, 1)
+
+
+def test_le_plafond_de_l_org_differe_la_relance_sans_escalade(file):
+    """La trace refuse, et l'épisode relu n'a pas ses deux relances : c'est le plafond de
+    l'org. La relance attend le passage suivant ; l'épisode n'est pas escaladé."""
+    file["garde"] = False
+    file["relu"] = _episode(statut="ouvert", reparations=[])
+    assert M._soigner(_panne(), _episode(), _MAINTENANT) == "plafond_org"
+    assert file["enfiles"] == [] and file["poses"] == []
+    assert M.relancer(_panne(), _episode(), maintenant=_MAINTENANT) == M.REFUS_PLAFOND_ORG
+
+
+def test_un_passage_compte_les_relances_differees_par_le_plafond_de_l_org(monkeypatch, file,
+                                                                         tenants):
+    _un_passage(monkeypatch, [_panne(org_id=7, trigger_id=1)])
+    file["garde"] = False
+    file["relu"] = _episode(statut="ouvert", reparations=[])
+    bilan = M.balayer(_MAINTENANT)
+    assert (bilan["relances"], bilan["relances_differees"], bilan["plafond_org"]) == (0, 1, 1)
+

@@ -73,6 +73,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from ..connectors import verify as connector_verify
 from . import hubspot_merge
 from ..auth import hubspot as hubspot_auth
+from .lecture import LECTURE
 from .hubspot_pipelines import (
     add_labels, compact_property, fill_pipeline_options, filter_properties)
 from .hubspot_scopes import (measure_scopes, missing_scopes_refusal, report_from_granted,
@@ -1094,11 +1095,24 @@ def register(mcp: FastMCP) -> None:
         raise _bad("op must be 'list', 'get', 'create', 'update', 'delete' "
                    "or 'groups'")
 
-    @mcp.tool()
+    @mcp.tool(annotations=LECTURE)
     def hubspot_owners() -> dict:
-        """List HubSpot owners (users) — to assign records by ownerId."""
+        """List ALL HubSpot owners (users) — read-only — to turn an ownerId into a
+        name, or to assign records by ownerId. Returns `{results, count,
+        truncated}`, no `paging`: HubSpot serves 100 owners per page and every page
+        is read, up to 50 (5,000 owners). `truncated: true` means that bound was
+        reached and owners past it are missing from `results`."""
         try:
-            return _client().list_owners()
+            c = _client()
+            results: list = []
+            after = None
+            for _ in range(50):
+                page = c.list_owners(after=after)
+                results.extend(page.get("results") or [])
+                after = ((page.get("paging") or {}).get("next") or {}).get("after")
+                if not after:
+                    break
+            return {"results": results, "count": len(results), "truncated": bool(after)}
         except UpstreamHTTPError as e:
             refus = translate(e, family="owners", what="owner")
             if refus is None:

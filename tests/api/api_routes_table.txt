@@ -240,6 +240,10 @@ POST /api/orgs/{id}/agent-alerts/test -> _handler
 OPTIONS /api/orgs/{id}/agent-alerts/test -> options_handler
 GET,HEAD /api/orgs/{id}/agent-health -> _handler
 OPTIONS /api/orgs/{id}/agent-health -> options_handler
+PUT /api/orgs/{id}/agent-health -> _handler
+OPTIONS /api/orgs/{id}/agent-health -> options_handler
+POST /api/orgs/{id}/agent-health/undo -> _handler
+OPTIONS /api/orgs/{id}/agent-health/undo -> options_handler
 GET,HEAD /api/admin/agent-causes -> _handler
 OPTIONS /api/admin/agent-causes -> options_handler
 PUT /api/admin/agent-causes/{key} -> _handler
@@ -552,6 +556,10 @@ GET,HEAD /api/me/unipile -> _handler
 OPTIONS /api/me/unipile -> options_handler
 DELETE /api/me/unipile -> _handler
 OPTIONS /api/me/unipile -> options_handler
+GET,HEAD /api/me/unipile/limits -> _handler
+OPTIONS /api/me/unipile/limits -> options_handler
+PUT /api/me/unipile/limits -> _handler
+OPTIONS /api/me/unipile/limits -> options_handler
 GET,HEAD /api/google/oauth/start -> _handler
 OPTIONS /api/google/oauth/start -> options_handler
 GET,HEAD /api/google/oauth/status -> _handler
@@ -590,6 +598,8 @@ DELETE /api/orgs/{id}/api-keys/{token_id} -> _handler
 OPTIONS /api/orgs/{id}/api-keys/{token_id} -> options_handler
 DELETE /api/me/avatar -> _handler
 OPTIONS /api/me/avatar -> options_handler
+POST /api/me/avatar/import -> _handler
+OPTIONS /api/me/avatar/import -> options_handler
 DELETE /api/orgs/{id}/logo -> _handler
 OPTIONS /api/orgs/{id}/logo -> options_handler
 GET,HEAD /api/me/projects/{project_id:int}/files -> _handler

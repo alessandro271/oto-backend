@@ -1,0 +1,254 @@
+### scénario prod-vidange-sans-fin : oto-backend.sh v1.2.3
+### code de sortie : 1
+### commandes
+flock -w 900 9
+flock -w 600 8
+date +%H:%M:%S
+date +%H:%M:%S
+systemctl is-active --quiet oto-mcp-drain-prod.service
+date +%H:%M:%S
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+sleep 5
+systemctl is-active --quiet oto-mcp-drain-prod.service
+date +%H:%M:%S
+### sortie
+[12:00:00] verrou pris (/var/lock/oto-mcp-bluegreen-prod.lock)
+[12:00:00] prod: couleur en service = blue, cible = green (:9107)
+[12:00:00] une vidange tourne encore (oto-mcp-drain-prod) — on attend sa fin, au plus 510s, sans la couper
+[12:00:00] ÉCHEC: la vidange oto-mcp-drain-prod dure encore, borne de 510s atteinte — montée REFUSÉE, rien n'est arrêté ni installé, prod reste servie par blue (journalctl -u oto-mcp-drain-prod)
+### erreurs
+### état final
+--- /etc/caddy/Caddyfile
+# Caddyfile du banc
+--- /etc/caddy/upstream-oto-prod.conf
+# amont d'avant la bascule
+--- /etc/oto-mcp/active-prod
+blue
+--- /opt/oto-mcp-blue/deploy/lanceur_secrets.py
+# lanceur du tag
+--- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur blue
+--- /opt/oto-mcp-blue/pyproject.toml
+dependencies = [
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
+]
+--- /opt/oto-mcp-blue/scripts/installer_bac_a_sable.py
+# installateur du tag
+--- /opt/oto-mcp-green/deploy/lanceur_secrets.py
+# lanceur du tag
+--- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur green
+--- /opt/oto-mcp-green/pyproject.toml
+dependencies = [
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
+]
+--- /opt/oto-mcp-green/scripts/installer_bac_a_sable.py
+# installateur du tag
+--- /run/lock/oto-platform-memoire.lock
+--- /var/lock/oto-mcp-bluegreen-prod.lock

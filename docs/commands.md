@@ -6,7 +6,7 @@ description: >-
   pytest — recette exacte), tester un clone sans réinstaller les deps et ses deux
   pièges d'import, RECONNAÎTRE le faux rouge du venv partagé en retard sur le pin
   oto-core (une grappe de rouges « No module named 'oto.tools.<connecteur>' » qui
-  n'est PAS ton lot — §Pin oto-core), déployer (push main = preprod, tag v* = prod),
+  n'est PAS ton lot — §Pin oto-core), déployer (push main = CI seule, tag v* = prod),
   lire les logs, inspecter la base managée, et les gotchas de registre d'outils hors
   serveur. À charger avant toute exécution de test, de déploiement ou d'inspection
   de prod.
@@ -99,7 +99,7 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 # La suite ne tourne plus sur UN runner (`-n 4`, ~14 min le 08/10) mais répartie en N
 # parts, une par runner : `.github/workflows/suite-tests.yml` (réutilisable, `workflow_call`,
 # entrées `cible` — chemins de tests, vide = suite complète — et `ref`). Appelé au push par
-# deploy-canari.yml (cible = la sélection #1185) et au tag par deploy.yml (cible vide, ref
+# ci.yml (cible = la sélection #1185) et au tag par deploy.yml (cible vide, ref
 # du tag validée par le job `tag`). Jobs :
 #   `plan`      → N et la répartition, depuis les DURÉES mesurées par fichier
 #                 (`scripts/durees_suite.json`, LPT, déterministe ; ~120 s de cas par
@@ -185,46 +185,38 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 #           2 = RIEN N'A PU ÊTRE JUGÉ (jamais un vert muet).
 # ⚠️ « 9 607 tests collectés chez moi » ne prouve RIEN sur le commit : c'est le disque
 # qu'on mesure. Le même contrôle tourne en CI (job `arbre-importable`, sur les PR ET
-# sur le tronc) et gate `deploy-preprod`.
+# sur le tronc) ; un rouge rend le run « CI » rouge, donc refuse le tag (garde du tronc).
 
-# Deploy — modèle tronc unique (refonte 2026-07-20, ADR 0020) :
-#   push `main`  → PREPROD (« Deploy preprod », deploy-canari.yml, script serveur
-#                  oto-backend-canari.sh <sha> : git reset --hard <sha du run> →
-#                  preprod. ⚠️ Le sha, jamais `origin/main` — oto-backend#948,
-#                  14/09/2026 : un `$1` absent y défaillait vers la pointe du
-#                  tronc au moment de l'exécution, pas le sha que LE RUN venait de
-#                  tester. Script sans repli depuis, comme oto-backend.sh)
+# Deploy — modèle tronc unique (refonte 2026-07-20, ADR 0020 ; plus de préproduction
+# depuis le 19/11/2026) :
+#   push `main`  → CI SEULE (« CI », ci.yml : sélection + socle, contrats des
+#                  consommateurs) — aucun serveur ne suit le tronc
 #   tag  `v*`    → PROD    (« Deploy prod », deploy.yml : suite complète en parts
 #                  parallèles (`suite-tests.yml`, agrégée par `test`), puis script
 #                  serveur oto-backend.sh <tag> : git reset --hard <tag> → prod. La
 #                  suite complète ne tourne QU'ICI depuis #1185 ; le push ne joue que
 #                  volets touchés + socle, répartis de la même façon)
-# Le deploy (les deux) = SSH box dédiée via runner self-hosted : reset au ref +
+# Le deploy = SSH box dédiée via runner self-hosted : reset au ref +
 # **`uv sync --frozen`** (le jeu exact de `uv.lock` ; un ref sans verrou est refusé,
 # docs/verrou-dependances.md) + restart + **smoke HTTP**
 # (GET 200 /.well-known/oauth-protected-resource) + **rollback auto** si
 # install/restart/smoke échoue. La couleur démarre par deploy/lanceur_secrets.py, celui
 # du tag (secrets tirés par nom, #967 lot 5, depuis le 30/09/2026).
 #
-# Preprod = travailler sur `main`, commit, push : deploy preprod auto (gate
-# `needs: test`). Claude Code (web) ouvre ses PR sur main → merge = deploy preprod.
-git push origin main            # → PREPROD
+# Tronc = travailler sur `main`, commit, push : la CI juge, rien ne se déploie.
+# Claude Code (web) ouvre ses PR sur main → merge = CI sur le tronc, toujours rien de servi.
+git push origin main            # → CI (aucun déploiement)
 
 # Prod = acte explicite : taguer un commit de main + pousser le tag.
 git tag v1.2.3 && git push origin v1.2.3   # → PROD (tags v* immuables, ruleset)
-# ⚠️ Depuis le 08/09/2026 la prod NE REJOUE PLUS la suite : elle EXIGE qu'un run de
-# préproduction vert existe sur le sha exact du tag, et refuse sinon
-# (`scripts/garde_preprod_verte.py`). C'est la vérification qu'on faisait à la main,
-# devenue mécanique — et ~6 min 30 de moins entre le push du tag et la prod servie.
-# Donc : taguer un commit DÉJÀ poussé sur main ET dont le run « Deploy preprod » est
-# vert (jobs compris). Un refus nomme ce qu'il a lu — l'identifiant du run et sa
-# conclusion exacte —, il n'y a rien à deviner. Il n'y a RIEN de neuf à faire côté
-# préproduction : son run existe déjà à chaque poussée du tronc.
-# Porte de secours (run de préproduction purgé, incident GitHub) : lancer « Deploy
-# prod » en workflow_dispatch avec `sans_garde_preprod: true` — délibéré, tracé, et
-# hors d'atteinte d'une simple poussée de tag.
-# ⚠️ `canari` est DÉPRÉCIÉE (ne déploie plus) : un checkout encore dessus doit
-# passer sur main (`git checkout main`). guard-main + sync-main-to-canari retirés.
+# ⚠️ La prod EXIGE que le sha du tag soit sur main (pointe ou ancêtre) ET que le run
+# « CI » poussé sur main à ce sha exact soit vert, job `test` compris
+# (`scripts/garde_tronc_vert.py`) ; puis elle joue la suite complète au tag. Donc :
+# taguer la pointe d'une poussée sur main dont le run « CI » est vert. Un refus nomme ce
+# qu'il a lu — l'identifiant du run et sa conclusion exacte —, il n'y a rien à deviner.
+# Porte de secours (run CI purgé, incident GitHub) : lancer « Deploy prod » en
+# workflow_dispatch avec `sans_garde_tronc: true` — délibéré, tracé, et hors d'atteinte
+# d'une simple poussée de tag. La suite complète du tag tourne quand même.
 
 # Logs
 ssh -i ~/.ssh/<clé> root@<box> "journalctl -u oto-mcp -f"
@@ -276,7 +268,7 @@ chiffre ou déchiffre ouvre lui-même son trousseau, avec la clé d'API de `Decr
 échouer la commande). En mode plate, la recette reste telle quelle.
 
 ```bash
-# Sur la box (prod ; pour la préprod : /opt/oto-mcp-canari et lanceur-canari.env).
+# Sur la box (prod).
 lanceur() {
   # l'arbre de la couleur ACTIVE, pas /opt/oto-mcp (qui est l'arbre bleu)
   local A=/opt/oto-mcp-$(cat /etc/oto-mcp/active-prod)
@@ -310,7 +302,7 @@ sudo systemctl start oto-mcp-maintenance.service          # la passe complète, 
 sudo journalctl -u oto-mcp-maintenance -n 50 --no-pager   # ce qu'elle a fait, avec ses durées
 systemctl list-timers oto-mcp-maintenance.timer           # le prochain tir
 
-# Un travail seul, et d'abord À BLANC — sur une base PARTAGÉE prod/preprod, la
+# Un travail seul, et d'abord À BLANC — sur la base de PROD, la
 # première question devant une purge est « combien de lignes ? ».
 # ⚠️ Ces `sudo -E env $(cat .env)` valaient tant que le `.env` portait `DATABASE_URL` ; depuis
 # le passage au lanceur (#967 lot 5, 30/09/2026), même geste par `lanceur maintenance …` (§précédent).
@@ -344,7 +336,7 @@ sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
 # Purge rétroactive des jetons écrits en clair dans le journal (#558). Le SEUL travail
 # qui est à blanc PAR DÉFAUT : ici c'est `--apply` qui écrit, pas `--dry-run` qui
 # retient. Hors `all` et hors timer — il réécrit des lignes servies aux lentilles de
-# supervision, sur une base partagée prod/preprod.
+# supervision, sur la base de prod.
 sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
   /opt/oto-mcp/.venv/bin/oto-mcp maintenance journal-tokens            # compte
 sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
@@ -352,8 +344,8 @@ sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
 ```
 
 ⚠️ **Le timer n'est posé qu'en PROD**, par `deploy/oto-backend.sh` au tag (jamais à la
-main, jamais en crontab) : prod et preprod partagent la base, deux exécutants se
-disputeraient les mêmes lignes.
+main, jamais en crontab) : deux exécutants sur la même base se disputeraient les mêmes
+lignes.
 
 ### Copier le coffre des connecteurs renommés — `oto-mcp maintenance copies-du-coffre`
 
@@ -383,8 +375,8 @@ Sorties : 0 fait, 1 refus, 2 erreur, 3 un orphelin reste à la relecture (relanc
 
 Le catalogue est le registre du code qui tourne : lancée depuis un commit, la commande
 juge avec SON registre. Le rapport à blanc doit nommer les mêmes connecteurs que le
-constat servi avant tout `--appliquer`. Depuis le commit, sans tag (la base est partagée
-prod/preprod : une seule exécution) :
+constat servi avant tout `--appliquer`. Depuis le commit, sans tag (une seule exécution
+sur la base) :
 
 ```bash
 SHA=<commit> A=/opt/oto-mcp-$(cat /etc/oto-mcp/active-prod) T=/tmp/orphelins-$SHA
@@ -420,7 +412,7 @@ relecture (relancer).
 ⚠️ **Pour `google` : seulement APRÈS le déploiement du code qui ne range plus le jeton
 dans `meta`, l'ancienne couleur arrêtée.** Le code d'avant, tant qu'il sert, réécrit
 `access_token` à son prochain refresh. Depuis le commit, comme `orphelins` (§précédent,
-même extraction de l'arbre, une seule exécution : la base est partagée prod/preprod) :
+même extraction de l'arbre, une seule exécution sur la base) :
 
 ```bash
 jetons() {
@@ -459,12 +451,12 @@ palier plateforme : ces lignes ne sont pas touchées, à trancher à la main), 2
 ligne en échec reste intacte), 3 il reste à faire (à blanc : il y a des lignes à sceller).
 
 **Ordre de mise en prod — aucune fenêtre où une connexion OAuth échoue.** Le code d'avant
-lit le clair, le code d'après lit le coffre seul ; la base est partagée prod/préprod :
+lit le clair, le code d'après lit le coffre seul :
 
-1. **Avant la fusion**, depuis l'arbre extrait du commit de tête de la PR : à blanc, puis
+1. **Juste avant la bascule**, depuis un arbre extrait du SHA du tag : à blanc, puis
    `--appliquer --sans-effacer`, puis à blanc encore (tout « déjà au coffre », code 0).
    Le coffre porte les secrets ET le clair reste : les deux codes lisent.
-2. **Fusion** (la préprod passe au code neuf, qui lit le coffre), puis **tag** (la prod).
+2. **Tag**, bascule de la prod sur le code neuf, qui lit le coffre.
 3. **Après la bascule de la prod**, depuis l'arbre du tag : `--appliquer` (efface le
    clair, chaque ligne « déjà au coffre, clair effacé »), puis à blanc : « aucun secret
    dans connector_settings », code 0.
@@ -507,13 +499,12 @@ les colonnes chiffrées (posées par le démarrage du code neuf) — sinon refus
 Sorties : 0 fait, 1 refus (un écart : l'enveloppe porte un autre jeton — la ligne n'est pas
 touchée), 2 erreur (la ligne en échec reste intacte), 3 il reste à faire.
 
-**Ordre de mise en prod.** La base est partagée prod/préprod ; le code d'avant lit et écrit
-le clair, celui d'après l'enveloppe seule, sans repli :
+**Ordre de mise en prod.** Le code d'avant lit et écrit le clair, celui d'après l'enveloppe
+seule, sans repli :
 
-1. **Fusion** : la préprod démarre le code neuf, son démarrage pose `*_enc` et `*_hash`
-   (et lève le `NOT NULL` de `process_shares.token`). La prod, sur le code d'avant, n'est
-   pas touchée.
-2. **Tag**, bascule de la prod.
+1. **Tag**, bascule de la prod : le démarrage du code neuf pose `*_enc` et `*_hash` (et
+   lève le `NOT NULL` de `process_shares.token`).
+2. **Bascule faite** : la couleur neuve sert.
 3. **Aussitôt la bascule faite**, depuis l'arbre actif (celui du tag) : à blanc,
    `--appliquer`, puis à blanc encore (« aucun jeton de lien en clair », code 0).
 
@@ -586,7 +577,7 @@ lecteurs                # « aucun partage viewer par lequel quelqu'un cliquait 
 ## Pin oto-core — une version déployée = une coordonnée reproductible
 
 - **`oto-core` PINNÉ sur un tag git** (`oto-core[anonymize] @ git+…@vX.Y.Z` dans `pyproject.toml` — l'extra est `anonymize`, `browser` a été retiré côté backend et n'est resté que sur le CLI local ; plus `@main` flottant ni dép `oto-cli`) : une version déployée = coordonnée reproductible. ⚠️ **`pip` ne réinstalle PAS une dép VCS déjà présente** (`oto-core` "satisfait" quelle que soit sa version) → `pip install -e .` seul ne monte JAMAIS oto-core au tag bumpé. Le deploy installe **par le verrou** (`uv sync --frozen`, #932) : oto-core au commit que `uv.lock` désigne, plus de force-reinstall. Bump connecteurs = tag oto-core + édit du pin **+ `uv lock` dans le même commit** (le verrou est versionné, la CI installe par lui et refuse un verrou en retard — `docs/verrou-dependances.md`) + deploy (PAS de `git pull` box). Cf. ADR 0020. ⚠️ **Symptôme trompeur en LOCAL** : des tests rouges peuvent être un venv en retard sur le pin, pas du code cassé (05/08 : 17 rouges sur un connecteur neuf ; 26/08 : 48 ; 01/09 : 28) → **sous-section ci-dessous**, qui porte la trace exacte à reconnaître et la recette. (⚠️ box `otomata-0` a un VIEUX oto-mcp décommissionné/stoppé avec un editable legacy `oto-cli` pré-split — ne pas s'y fier, le runtime live est la box dédiée.) ⚠️ **Le pin est un champ que TOUTES les sessions // éditent → régressions silencieuses récurrentes** : vécu 2026-07-07, un commit concurrent a réécrit le pin `v1.18.0→v1.17.0` et **cassé un tool déployé SANS erreur** (le tool était enregistré, sa méthode absente de l'ancien oto-core → `AttributeError` seulement à l'appel). Toujours bumper en **superset** (tag haut ⊇ tags bas) ; à la moindre divergence de pin en merge/rebase, **garder la version haute**.
-- **Lire ce qui est RÉELLEMENT installé, sans SSH** : `curl -s https://mcp.oto.cx/api/version` (preprod : `mcp.oto.ninja`) rend le tag du backend servi **et** `oto_core.tag` — l'installé, pas le pin. ⚠️ **Ne PAS demander à `pip show oto-core`** : son numéro est **gelé à 1.100.0** depuis que les tags ont cessé de bumper le champ `version` du manifeste (mesuré le 01/09/2026 : `1.100.0` annoncé pour un `v1.101.0` installé). La coordonnée fiable est ce que pip **écrit** à l'installation, `direct_url.json` — c'est elle que sert `/api/version`. Localement : `.venv/bin/python -c "from oto_mcp import version; print(version.oto_core())"`. Cf. `docs/version-servie.md`.
+- **Lire ce qui est RÉELLEMENT installé, sans SSH** : `curl -s https://mcp.oto.cx/api/version` rend le tag du backend servi **et** `oto_core.tag` — l'installé, pas le pin. ⚠️ **Ne PAS demander à `pip show oto-core`** : son numéro est **gelé à 1.100.0** depuis que les tags ont cessé de bumper le champ `version` du manifeste (mesuré le 01/09/2026 : `1.100.0` annoncé pour un `v1.101.0` installé). La coordonnée fiable est ce que pip **écrit** à l'installation, `direct_url.json` — c'est elle que sert `/api/version`. Localement : `.venv/bin/python -c "from oto_mcp import version; print(version.oto_core())"`. Cf. `docs/version-servie.md`.
 
 ### Faux rouge : le venv partagé est en retard sur le pin
 

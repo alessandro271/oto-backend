@@ -480,6 +480,9 @@ _SUB_COLUMNS = [
     # Le PROPRIÉTAIRE d'un canal opéré : hors PK `(sub, provider)`, donc UPDATE nu
     # (le TITULAIRE, lui, est en PK → `_PK_SUB_TABLES`).
     ("unipile_operated_accounts", "owner_sub"),
+    # Le TITULAIRE d'un compte LinkedIn sous ses limites d'envoi et son compte glissant :
+    # hors PK (clé = le compte Unipile), UPDATE nu — ses limites le suivent.
+    ("unipile_sending_limits", "sub"), ("unipile_sending_log", "sub"),
     # ressources possédées + grants (ère ownership 0030/0042/0048 — ajoutées Phase H B1 :
     # l'inventaire n'avait jamais suivi, une bascule de tenant orphelinait les ressources
     # user-owned et les grants nominatifs). `owner_id`/`principal_id` mélangent sub et
@@ -1091,6 +1094,21 @@ def list_users() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def operateurs_de_plateforme(admin_sub: Optional[str] = None) -> list[dict]:
+    """`{sub, email, role}` des comptes NON suspendus dont `users.role` est un rôle
+    plateforme (`admin`, `super_admin`), plus `admin_sub` (le compte d'amorçage
+    `OTO_MCP_ADMIN_SUB`) quel que soit son rôle en base, avec une adresse. Ordre de
+    création. Le verdict reste à `access.is_operator_role` : cette lecture ne fait que
+    borner les lignes candidates (`alertes_equipe.destinataires`)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT sub, email, role FROM users "
+            "WHERE (role IN ('admin', 'super_admin') OR sub = %s) "
+            "  AND suspended_at IS NULL AND COALESCE(email, '') <> '' "
+            "ORDER BY created_at, sub", (admin_sub or "",)).fetchall()
+        return [dict(r) for r in rows]
+
+
 def set_user_role(sub: str, role: str) -> None:
     with _connect() as conn:
         conn.execute(
@@ -1155,17 +1173,30 @@ def resume_account(sub: str) -> bool:
     return bool(row)
 
 
-def set_avatar_url(sub: str, url: Optional[str]) -> None:
+def set_avatar_url(sub: str, url: Optional[str], *, seulement_si_absent: bool = False) -> bool:
     """Pose (ou efface si url=None) l'URL publique de l'avatar du user.
 
     URL publique servie depuis l'Object Storage — pas un secret, colonne en
-    clair (hors coffre chiffré)."""
+    clair (hors coffre chiffré).
+
+    `seulement_si_absent` : ne pose que sur une ligne SANS avatar, dans le même
+    UPDATE (`avatar_url IS NULL`) — l'import d'une photo de profil
+    (`POST /api/me/avatar/import`) ne doit jamais écraser un upload, y compris un
+    upload arrivé entre sa lecture et son écriture. Rend True si la ligne a changé."""
     upsert_user(sub)
     with _connect() as conn:
-        conn.execute(
-            "UPDATE users SET avatar_url = %s, updated_at = NOW() WHERE sub = %s",
-            (url, sub),
-        )
+        if seulement_si_absent:
+            cur = conn.execute(
+                "UPDATE users SET avatar_url = %s, updated_at = NOW() "
+                "WHERE sub = %s AND avatar_url IS NULL",
+                (url, sub),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE users SET avatar_url = %s, updated_at = NOW() WHERE sub = %s",
+                (url, sub),
+            )
+        return bool(cur.rowcount)
 
 
 def set_user_locale(sub: str, locale: str) -> None:

@@ -64,8 +64,35 @@ def test_the_object_surface_stays_one_tool(client):
 def test_owners_stays_its_own_tool(client):
     """Aucun paramètre d'objet CRM en commun (ni object_type, ni object_id, ni
     properties) : le fusionner n'aurait factorisé aucun paramètre."""
+    client.list_owners.return_value = {"results": [{"id": "1"}]}
     _tool("hubspot_owners")()
-    client.list_owners.assert_called_once_with()
+    client.list_owners.assert_called_once_with(after=None)
+
+
+def test_owners_reads_every_page(client):
+    """HubSpot serves 100 owners per page: past the first, an ownerId on a record
+    could not be named. Every page is read, `truncated` stays false."""
+    client.list_owners.side_effect = [
+        {"results": [{"id": "1"}], "paging": {"next": {"after": "p2"}}},
+        {"results": [{"id": "2"}]},
+    ]
+    out = _tool("hubspot_owners")()
+    assert [o["id"] for o in out["results"]] == ["1", "2"]
+    assert out["count"] == 2 and out["truncated"] is False
+    assert client.list_owners.call_args_list[1].kwargs == {"after": "p2"}
+
+
+def test_owners_is_read_only():
+    """A code recipe calls only tools DECLARED read-only without a `writes` entry:
+    without the annotation, `hubspot_owners` was refused as a write."""
+    import asyncio
+    from fastmcp import FastMCP
+    from oto_mcp.tools import hubspot as H
+
+    m = FastMCP("t")
+    H.register(m)
+    tool = {t.name: t for t in asyncio.run(m._list_tools())}["hubspot_owners"]
+    assert tool.annotations and tool.annotations.readOnlyHint is True
 
 
 # --- dispatch op → méthode client ----------------------------------------------

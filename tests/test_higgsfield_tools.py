@@ -211,12 +211,22 @@ def test_generate_with_an_unreadable_price_sends_nothing(client, estimate, param
     client.generate.assert_not_called()
 
 
-@pytest.mark.parametrize("max_usd", [None, 0, -1, True])
+@pytest.mark.parametrize("max_usd", [0, -1, True])
 def test_generate_needs_a_positive_cap(client, max_usd):
     with pytest.raises(McpError, match="max_usd"):
         _tool("higgsfield_act")(op="create_generation", model="z-image/turbo", params={"prompt": "x"},
                                 max_usd=max_usd)
     client.estimate.assert_not_called()
+    client.generate.assert_not_called()
+
+
+def test_a_readable_price_without_a_cap_is_refused(client):
+    """`max_usd` is required whenever the price can be read: the estimate (free) runs,
+    nothing is sent."""
+    client.estimate.return_value = {"usd": "0.48", "credits": 48}
+    with pytest.raises(McpError, match=r"requires `max_usd` .*0\.480.*Nothing was sent"):
+        _tool("higgsfield_act")(op="create_generation", model="z-image/turbo",
+                                params={"prompt": "x"})
     client.generate.assert_not_called()
 
 

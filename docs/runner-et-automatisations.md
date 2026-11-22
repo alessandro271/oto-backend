@@ -3111,11 +3111,59 @@ escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'an
   `runner_triggers.echec_annonce_at` est posé après l'envoi, et l'épisode suivant ne
   s'ouvre qu'après un succès. Aucune remise à zéro à écrire. La marque ne date pas
   l'agent (`updated_at`).
-- **Le courriel** : un par org, à son premier admin joignable (la même règle que
-  `alertes-credential`, `destinataire_admin`), par le courrier de plateforme sous la
-  marque de l'org (`org_store.org_front` → `email_templates._envoyer`), hors des heures
-  calmes par défaut (`scheduler.DEFAULT_QUIET_HOURS`, 20 h–8 h à Paris : un épisode vu
-  la nuit part au premier passage du matin). Un envoi raté ne marque rien.
+- **Le courriel** : écrit à CHAQUE destinataire de l'org, dans sa langue
+  (`alerte_agents_bloques.destinataires`, la même règle que `alertes-credential`) : le
+  titulaire de chaque agent bloqué encore membre de l'org, puis tous ses admins. ⚠️ **Le
+  personnel de la plateforme est écarté** (`access.is_operator_role`), comme un compte
+  suspendu : un opérateur est admin de nombreuses orgs clientes, et c'est le client qui
+  répare. Une org sans client joignable garde son premier admin, opérateur compris.
+  Par le courrier de plateforme sous la marque de l'org (`org_store.org_front` →
+  `email_templates._envoyer`), hors des heures calmes par défaut
+  (`scheduler.DEFAULT_QUIET_HOURS`, 20 h–8 h à Paris : un épisode vu la nuit part au
+  premier passage du matin).
+- **Ce que chacun reçoit** : un admin de l'org, tous ses agents bloqués ; un membre, les
+  seuls agents qu'il a le droit de voir (`alerte_agents_bloques.agents_visibles`, la
+  règle d'accès des agents `capabilities/_acces_agent.niveaux` : les siens, ceux qu'on
+  lui partage). Chaque courriel est composé pour son destinataire ; sans rien à lui
+  montrer, rien ne lui part.
+- **La marque** reste par agent : posée dès qu'UN courriel client est parti (rejouer pour
+  celui qu'un envoi a raté renverrait le message à tous les autres). Aucun courriel
+  client parti : rien n'est marqué, l'épisode est rejoué au passage suivant, et l'équipe
+  n'est pas écrite. Un agent dont le titulaire a quitté l'org, dans une org où les seuls
+  autres destinataires sont des membres qui ne le voient pas, est marqué sans qu'un
+  client l'ait lu : seule l'équipe le reçoit.
+- **Le courriel d'équipe** (`alertes_equipe.py`) : après les courriels clients d'une org,
+  un courriel SÉPARÉ à chaque admin de plateforme de l'instance (voir plus bas) — jamais
+  une copie visible du client. Il reprend tous les agents de l'org, la nomme (« Copie pour
+  l'équipe — org « nom » (#id), N courriel(s) envoyé(s) dans l'org. »), sous la marque
+  de l'instance, objet préfixé `[équipe]`. Un envoi d'équipe raté est journalisé et
+  compté (`equipe_rates`), jamais rejoué. Même courriel d'équipe pour l'alerte de clé
+  (`maintenance.alertes_credential`, voir plus bas).
+- **Ce qu'il dit** : sous le réglage des alertes d'agents
+  (`OTO_ALERTES_SLACK_AGENTS_ENABLED`), il parle comme Slack. Le TYPE de problème d'un
+  agent se décide en UN endroit (`alerte_agents_bloques.type_de_probleme` : `echec`,
+  ou `forfait` pour un agent qui attend un abonnement à reconnecter — sa phrase et le
+  geste de reconnexion, jamais ceux d'un échec), son texte en un autre
+  (`probleme_de_l_agent`) : pour un échec, le texte du
+  problème de son épisode vivant (`alertes_slack_agents.message_du_probleme` : la copie
+  de la cause approuvée, sinon le texte du médecin, sinon la phrase de la classe ; une
+  lecture d'épisodes par org, `sante_agents.episodes_vivants`) ; une panne pas encore
+  comprise (`cote = inconnu`) que le médecin n'a pas dite reçoit la phrase de l'onglet
+  Santé (`agent_health.A_NOUS_INCONNU`), jamais celle d'une classe. Les agents dont le
+  client lirait exactement le même problème (titre, geste, lien) forment UN bloc qui les
+  nomme — chacun lien vers sa page (`agent`) quand l'instance la déclare — avec le geste
+  une fois et son bouton (lien du tableau de bord seulement, `links`), depuis quand, et
+  la ligne de détails de l'onglet Santé (`agent_health.details` : connecteur, réponse du
+  fournisseur passée par la liste blanche). ⚠️ Le motif BRUT n'y entre jamais : un agent
+  sans épisode lisible (lecture en échec — ouvert, dit au journal) reçoit la phrase par
+  défaut. Tout texte est échappé. Qui reçoit, ce que chacun voit et à quel titre se
+  décident en un seul endroit (`destinataires_de_l_alerte`, qui applique
+  `destinataires` et `agents_visibles` ci-dessus) : `qualite` = `admin`, `membre` ou
+  `equipe`, et la ligne de fin le dit — « en tant qu'administrateur de cet espace »
+  pour un admin seulement, l'accès à ces agents pour un membre, la copie séparée pour
+  l'équipe (dont le courriel garde son en-tête et son objet `[équipe]`). Marques et
+  rejeu : comme ci-dessus. Réglage éteint : le courriel d'avant, mot pour mot. Un
+  agent sans épisode reçoit la phrase de SON type ; un type sans phrase lève.
 - **Où** : une boucle de fond déclarée `tiers=True` (`boucles_de_fond.py`,
   `alerte_agents_bloques`, un passage par quart d'heure) — ⚠️ **éteinte par défaut** :
   elle n'écrit que sur une instance qui déclare `OTO_ALERTE_AGENTS_ENABLED=1`, toute
@@ -3130,8 +3178,57 @@ escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'an
   signal — une clé refusée en 401/403 — est aussi lu par l'autre canal, la clé marquée
   rouge à l'appel (`alertes-credential`, `maintenance.py`), fermé par
   `OTO_ALERTE_CREDENTIAL`.
+- **Un agent qui ATTEND un abonnement à reconnecter** (`alertes_agents.agents_sans_forfait`) :
+  sous un abonnement personnel `needs_login` ou `disconnected`, la réservation SAUTE ses
+  travaux — ils attendent puis expirent, aucun ne meurt, l'épisode ci-dessus ne s'ouvre
+  jamais. Il est annoncé dans le même courriel (sa ligne dit « ne tourne plus » et nomme
+  l'abonnement par le libellé de sa famille, `runner_models.LIBELLES_ABONNEMENT` ; le
+  geste est de le reconnecter dans Connecteurs) quand un de ses travaux d'après son
+  dernier succès attend depuis `ATTENTE_FORFAIT_MIN` (30 min) et que l'abonnement est à
+  reconnecter depuis aussi longtemps, que l'agent déclare toujours un modèle de cette
+  famille, et que le travail ne passe PAS par le pool de l'org (`runner_jobs._par_le_pool`,
+  l'expression de la réservation). `paused_limit` n'en est pas : il repart seul. La
+  lecture sort d'emblée quand aucun abonnement personnel n'est à reconnecter. Même règle
+  de visibilité : un membre ne reçoit que les agents qu'il a le droit de voir.
+- ⚠️ **Deux marques, une par épisode** : `echec_annonce_at` pour les travaux morts,
+  `forfait_annonce_at` (révision `20261119_1530_forfait_annonce`) pour l'attente
+  d'abonnement, réarmée par un succès de l'agent OU par la preuve que l'abonnement tenait
+  (`last_ok_at`). Une marque commune ferait taire l'un quand l'autre a été annoncé : un
+  agent annoncé « à reconnecter », reconnecté, puis en échec trois fois sans jamais
+  réussir ne serait plus jamais annoncé (`agents_bloques` ne se réarme qu'après un
+  succès). Un agent présent dans les deux relevés est nommé une fois, et ses deux marques
+  sont posées.
 - Bancs : `tests/test_alerte_agents_bloques.py` (sans base), `tests/test_alertes_agents_db.py`
-  (l'épisode en SQL), `tests/test_migration_20261023_echec_annonce.py`.
+  (l'épisode et l'attente en SQL), `tests/test_migration_20261023_echec_annonce.py`,
+  `tests/test_migration_20261119_forfait_annonce.py`.
+
+#### Les destinataires du courriel d'équipe : les admins de plateforme (19/11/2026)
+
+L'alerte de clé (`maintenance.alertes_credential`) suit la même règle de destinataires :
+un admin reçoit tout ; un membre ne reçoit que SA clé personnelle (palier `member`,
+`<org>:<sub>`) en panne sous SES agents (`maintenance._cles_du_membre`) — les clés d'org
+ou d'équipe, les retraits et leurs gestes relèvent des admins. L'équipe en reçoit un
+courriel séparé par org, comme ci-dessus.
+
+- **Qui** (`alertes_equipe.destinataires`) : les comptes de l'instance qui ont le rôle
+  plateforme `admin` (opérateur) ou `super_admin`, à l'adresse de leur compte
+  (`users.email`). Le rôle se lit comme pour la porte `PLATFORM_ADMIN` des outils
+  `oto_admin_*` : `users.role`, le compte d'amorçage `OTO_MCP_ADMIN_SUB` compris, jugé
+  par `access.is_operator_role` — la même source qui les écarte des courriels clients.
+  Chaque instance écrit donc à SES admins de plateforme ; aucun réglage à poser.
+- **Écartés** : un compte suspendu (`users.suspended_at`), un compte d'un tenant
+  désactivé (`tenant_desactive.etat`), un compte sans adresse.
+- **Quand** : relu à chaque passage qui envoie réellement (la boucle hors heures calmes ;
+  `alertes-credential` avec `OTO_ALERTE_CREDENTIAL` posé et hors `--dry-run`), jamais
+  mis en cache.
+- **Personne** : aucun compte n'a le rôle. Les courriels clients partent normalement ;
+  le courriel d'équipe ne part pas, et le journal écrit une ligne ERROR par org :
+
+  ```
+  alerte agents bloqués : aucun admin de plateforme actif sur l'instance — courriel d'équipe NON envoyé pour l'org <id> (les courriels clients sont partis)
+  ```
+
+  (`alertes-credential : …` pour l'alerte de clé). Ni repli, ni refus de démarrage.
 
 ### Soigner un agent avant qu'on le remarque (27/10/2026)
 
@@ -3206,6 +3303,29 @@ passe AVANT l'alerte.
   ⚠️ L'incident vit dans la mémoire du processus (`_INCIDENTS`) : un redémarrage le redit
   une fois. Le budget ne fait que borner : il ne relance rien que la boucle ne relançait
   déjà.
+- **Le choix de l'org, et le plafond par org** : la réparation automatique est COUPÉE
+  tant qu'un admin de l'org ne l'a pas allumée (`agent_health_settings.auto_repair`,
+  `DEFAULT FALSE` ; aucune ligne = coupée ; `PUT /api/orgs/{id}/agent-health`). Coupée,
+  la boucle ouvre et dit l'épisode mais ne relance rien (`_avec_consentement`, fermé sur
+  erreur ; `reparation_coupee` au bilan), et `oto_admin_agent_repair` refuse `rerun` et
+  `add_tool` (403 `auto_repair_off`) à QUICONQUE l'appelle — l'agent médecin comme un
+  opérateur, d'où qu'il appelle : cette porte est celle de la plateforme, le choix de
+  l'org la lie. Aucun forçage. Allumée, les relances d'une org sont bornées à
+  `RELANCES_PAR_ORG` (20) sur 24 heures GLISSANTES, tous épisodes confondus, en plus des
+  deux par épisode et du budget d'un passage : comptées et écrites sous un verrou
+  consultatif de l'org, dans la transaction de la trace (`episodes_agents.
+  noter_reparation(plafond_org=)`). Une relance refusée par ce plafond est différée
+  (`plafond_org` au bilan, journalisée), jamais escaladée.
+- **Défaire une réparation** (`POST /api/orgs/{id}/agent-health/undo` `{episode_id}`,
+  qui peut modifier l'agent) : seuls les ajouts d'outils du médecin se défont, en une
+  transaction (`sante_agents.defaire`) — l'épisode puis l'agent relus `FOR UPDATE`. Un
+  outil n'est retiré que s'il y est encore ET que l'agent n'a été écrit par personne
+  depuis l'ajout : son `updated_at` est encore, à la microseconde, celui que l'ajout lui
+  a donné (relevé sur la trace, `maj_at`), et `updated_by` encore l'auteur de l'ajout.
+  Sinon l'outil est gardé et dit (`undo_result.kept`). Dans tous les cas l'annulation
+  s'écrit sur l'épisode, la note de réparation de cet épisode s'efface, et le médecin ne
+  redonne pas ces outils (`runner_triggers.repair_undone_tools`, `{outil: jusqu_a}`,
+  `add_tool` → 409 `repair_undone`) pendant `OUTILS_ANNULES_DUREE_JOURS` (90).
 - **Ce qu'il ne fait jamais** : toucher une clé, une identité, une procédure, un horaire
   ou une donnée ; relancer une panne `inconnu` (un run qui a agi avant de mourir
   referait ses effets). Un épisode du titulaire passe `escalade` sans geste : c'est
@@ -3264,6 +3384,33 @@ passe AVANT l'alerte.
   au-delà : un verdict de la regex n'est pas défait, une classe posée à la main non plus,
   et une cause ne donne jamais une classe que la boucle relance (`CLASSES_RELANCEES`) —
   relancer reste décidé par la regex seule.
+- **Ce que lit le client, et combien de fois** (sous `OTO_ALERTES_SLACK_AGENTS_ENABLED`) :
+  le problème servi sur un agent (`problem` de la file), l'alerte Slack, le courriel et
+  l'onglet Santé prennent, dans cet ordre, la copie de la CAUSE approuvée de l'épisode
+  dans la langue de l'espace — si la cause est du même côté que l'épisode —, sinon le
+  texte que l'agent médecin a écrit pour CET épisode (`diagnose`, `client_*`), sinon la
+  phrase de la classe (`alertes_slack_agents.message_du_probleme`). `{marque}` y devient
+  le nom de la marque ; l'action `credits` mène à `billing`, `connectors` aux
+  connecteurs. Le texte du médecin se juge comme une copie (`copie_refusee` : ni
+  adresse, ni nom d'outil, ni code, ni identifiant — 400 `client_copy_refused`) et part
+  TOUT DE SUITE à l'org de l'épisode. Il devient aussi la copie PROPOSÉE de la cause de
+  l'épisode, dans la langue de l'org, si elle n'en a pas encore (sans le lien, propre à
+  l'org), avec son origine (l'org et l'épisode, `copie_origine` sur l'écran Admin des
+  causes) ; elle ne parle aux autres orgs qu'une fois la cause approuvée par un
+  opérateur. Une cause approuvée ou refusée ne prend jamais ce texte, même devenue telle
+  entre la lecture et l'écriture (`causes_agents.decider(si_statut=)`). **Le moment** :
+  un texte du médecin alerte tout de suite ; la copie d'une cause approuvée n'alerte
+  tout de suite que sous `OTO_CATALOGUE_CAUSES_DECIDE` — en ombre, elle donne le texte
+  après `ATTENTE_MIN`, comme une classe (`alertes_slack.a_annoncer(copie_immediate=)`).
+  **Un message par problème, pas par agent** (`grouper`) : les alertes d'une org dont
+  le client lirait exactement le même problème (titre, geste, lien) partent en UN
+  message qui nomme les agents (cinq, puis « et N autres »), avec le bouton du geste et,
+  si l'instance déclare la vue `agent_health`, celui de la santé des agents — chaque
+  agent nommé est un lien vers sa page (`agent`) ; les retours d'un passage partent
+  ensemble ; une réparation part seule. Chaque épisode du paquet est marqué après
+  l'envoi. ⚠️ Tout texte interpolé dans un message Slack (libellé d'agent, copie, texte
+  du médecin, erreur du fournisseur) est échappé (`&`, `<`, `>`) : il ne forme ni lien
+  ni mention. Les GESTES (relancer, escalader) restent décidés par la regex.
 - **L'onglet Santé d'une org, en lecture** (`capabilities/agent_health.py`) :
   `GET /api/orgs/{id}/agent-health` (membres d'une org vivante, `ORG_MEMBER_OF_LIVE` :
   409 `org_archived` sur une org archivée ; 404 `agent_alerts_off` sous le réglage des
@@ -3281,7 +3428,10 @@ passe AVANT l'alerte.
   connecteurs que les motifs NOMMENT, `causes_pannes.connecteur_de_la_panne`, le
   fournisseur du modèle de l'agent en repli pour une réponse de fournisseur) et `error`
   (`causes_pannes.erreur_du_fournisseur` : la réponse d'un fournisseur, passée par la
-  liste blanche de l'empreinte ; notre texte interne ne sort jamais). Rien ne s'y écrit.
+  liste blanche de l'empreinte ; notre texte interne ne sort jamais). Il sert aussi
+  `auto_repair`, et sur chaque item de `fixed` `undo`/`undone`. Les deux écritures
+  (`PUT`, admins, `ORG_ADMIN_OF_LIVE` ; `POST …/undo`, `ORG_MEMBER_OF_LIVE` puis
+  `_acces_agent.exiger(ECRIRE)`) jugent le réglage des alertes AVANT d'écrire.
 - **L'écran Admin des causes** (`capabilities/agent_causes_admin.py`) :
   `GET /api/admin/agent-causes` (`status`, `limit`, avec `copie_origine`) et
   `PUT /api/admin/agent-causes/{key}` (`status`, `classe`, `cote`, `client_copy` par
@@ -3563,6 +3713,20 @@ enregistrement (par agent et par jour) et rend les **formes** des runs (actions,
 rapport, plafond) restent en Python. `time_saved.formes_des_runs` est la référence en
 mémoire, et `tests/test_temps_gagne_borne_live.py` prouve la parité et la borne
 (`docs/event-loop-perf.md`).
+
+⚠️ **Calculé HORS de la requête** (`capabilities/_temps_gagne_borne.py`, 20/11/2026) :
+sur une org chargée, relire les appels de chaque run va au disque et dure des minutes.
+Fait dans la requête de la page, sans borne, à chaque ouverture, ce calcul tenait une
+connexion du pool par ouverture jusqu'à le vider (`PoolTimeout` sur toutes les routes).
+Il tourne désormais dans un fil de fond : borné (`statement_timeout` 60 s par requête),
+un seul calcul en vol par clé (org, fenêtre, agents vus), deux au plus pour tout le
+processus, résultat en cache 10 min, échec retenté après 30 min (une lecture trop lourde pour la borne ne se relance pas à chaque ouverture). La page attend au plus
+2 s ; sans résultat (ni frais ni périmé), elle sort sans le temps gagné et le dit
+(`time_saved_status: "pending"`, sinon `"ready"`, déclaré dans `JobsOut`). Cache par
+processus : vidé au redémarrage, chaque couleur d'une bascule calcule de son côté. Les
+calculs tournent dans des fils DÉMONS (un `ThreadPoolExecutor` viderait sa file avant de
+laisser le processus s'arrêter) et au plus 32 clés sont en vol ou en queue ; au-delà, la
+page sort sans le temps gagné. Bancs : `tests/test_temps_gagne_borne.py`.
 
 **Revu sur des agents réels (17/10/2026)**, qui surcomptaient :
 - un balayage qui ne PRODUIT rien de neuf ne gagne rien — sa recherche ne compte que

@@ -1,14 +1,17 @@
 """Banc des GESTES du déploiement bleu/vert de NOTRE box (#967).
 
 Ce que ce banc prouve : rendre la bibliothèque bleu/vert générique ne change RIEN à ce
-que nos deux déploiements (`deploy/oto-backend.sh` pour la production,
-`deploy/oto-backend-canari.sh` pour la préproduction) font sur la machine. Il rejoue
-chaque scénario réel — bascule dans les deux sens, retour arrière, préproduction, et
+que notre déploiement (`deploy/oto-backend.sh`, la production) fait sur la machine. Il
+rejoue chaque scénario réel — bascule dans les deux sens, retour arrière, et
 les chemins d'échec (couleur morte au démarrage, `caddy validate` qui refuse, trafic
 public en échec, certificat pas encore prêt puis jamais prêt, lanceur figé sur un
 chemin) — dans une racine jetable, avec des
 doublures qui JOURNALISENT chaque commande au lieu de l'exécuter, puis compare la
 trace à une référence enregistrée depuis les scripts d'avant.
+
+Retrait de la préproduction (19/11/2026) : le tronc ne déploie plus, le wrapper de
+préproduction `oto-backend-canari.sh` et ses quatre scénarios `canari-*` sont retirés ;
+aucun geste de production n'a bougé.
 
 Lot 5 (30/09/2026) : nos deux wrappers déclarent `BG_LANCEUR=versionne`, et les
 références de leurs scénarios ont été régénérées — seule la propagation du lanceur
@@ -21,6 +24,12 @@ et `… --force-reinstall oto-core…`, et le log « oto-core requis par le mani
 sont remplacés par la ligne `uv sync --frozen --quiet` (doublure `uv`) et le log
 « installé par le verrou : uv.lock <sha12> » ; aucun autre geste n'a bougé. Le scénario
 `prod-tag-sans-verrou` rejoue un tag antérieur au verrou : refus nommé, rien d'installé.
+
+Vidange sans coupure (19/11/2026) : une montée ne coupe plus une vidange en cours, elle
+l'ATTEND (`systemctl is-active --quiet <vidange>`, au lieu de `systemctl stop` de la
+vidange) — `prod-montee-pendant-vidange`, et `prod-vidange-sans-fin` pour la borne ;
+une couleur qui a servi avant une rebascule est VIDÉE, plus arrêtée net
+(`prod-public-ko-rebascule`) ; le plafond passe de 120 à 240 s.
 
 Bac à sable des fonctions (#1202) : après `uv sync`, `bg_install` pose le bac à sable
 dans l'arbre de la couleur (`.venv/bin/python scripts/installer_bac_a_sable.py
@@ -67,10 +76,9 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 TAG = "v1.2.3"
 
 # Scripts de notre box, sources de la réécriture de chemins.
-SCRIPTS = ("oto-mcp-bluegreen.sh", "oto-backend.sh", "oto-backend-canari.sh",
-           "oto-mcp-drain.sh")
+SCRIPTS = ("oto-mcp-bluegreen.sh", "oto-backend.sh", "oto-mcp-drain.sh")
 
-# nom -> (script, argument, environnement {prod|canari}, couleur active, variantes)
+# nom -> (script, argument, environnement (prod), couleur active, variantes)
 SCENARIOS: dict[str, tuple[str, list[str], str, str, dict[str, str]]] = {
     "prod-bleu-vers-vert": ("oto-backend.sh", [TAG], "prod", "blue", {}),
     "prod-vert-vers-bleu": ("oto-backend.sh", [TAG], "prod", "green", {}),
@@ -108,20 +116,32 @@ SCENARIOS: dict[str, tuple[str, list[str], str, str, dict[str, str]]] = {
     # n'est posé, l'installation continue comme avant.
     "prod-tag-sans-bac-a-sable": ("oto-backend.sh", [TAG], "prod", "blue",
                                   {"BANC_SANS_BAC_A_SABLE": "1"}),
-    "canari-bleu-vers-vert": ("oto-backend-canari.sh", [SHA], "canari", "blue", {}),
-    "canari-vert-vers-bleu": ("oto-backend-canari.sh", [SHA], "canari", "green", {}),
-    "canari-retour-arriere": ("oto-backend-canari.sh", ["--rollback"], "canari", "blue", {}),
-    "canari-sans-argument": ("oto-backend-canari.sh", [], "canari", "blue", {}),
+    # Deux montées rapprochées : la vidange de la précédente tourne encore. La montée
+    # attend qu'elle finisse, sans arrêter ni la vidange ni sa couleur, puis continue.
+    "prod-montee-pendant-vidange": ("oto-backend.sh", [TAG], "prod", "blue",
+                                    {"BANC_VIDANGE_EN_COURS": "3"}),
+    # La vidange dure au-delà de sa plus longue vie possible : refus nommé, rien n'est
+    # arrêté ni installé, la couleur en service n'a pas bougé.
+    "prod-vidange-sans-fin": ("oto-backend.sh", [TAG], "prod", "blue",
+                              {"BANC_VIDANGE_EN_COURS": "sans-fin"}),
     "vidange": ("oto-mcp-drain.sh", ["oto-mcp", "blue", "9103", "120"], "prod", "green", {}),
 }
 
-ARBRES = {"prod": "/opt/oto-mcp", "canari": "/opt/oto-mcp-canari"}
+ARBRES = {"prod": "/opt/oto-mcp"}
 
 # Doublures : chacune journalise `nom args…` dans $BANC_TRACE, puis se comporte comme
 # le scénario le demande. Les commandes de fichiers (cp, chmod, install) s'exécutent
 # réellement après journalisation : leur effet fait partie de l'état final comparé.
 DOUBLURES = {
+    # Une vidange (unité `*-drain-*`) est active aux BANC_VIDANGE_EN_COURS premières
+    # questions (« sans-fin » : toujours), puis finie — par défaut, aucune ne tourne.
     "systemctl": r'''
+case "$1 $3" in
+  "is-active "*-drain-*)
+    [ "${BANC_VIDANGE_EN_COURS:-0}" = sans-fin ] && exit 0
+    [ "$(grep -c '^systemctl is-active --quiet .*-drain-' "$BANC_TRACE")" -le "${BANC_VIDANGE_EN_COURS:-0}" ] && exit 0
+    exit 3 ;;
+esac
 case "$1" in
   is-active) [ -n "${BANC_DEMARRAGE_KO:-}" ] && exit 3; exit 0 ;;
   show) echo "Sun 2026-10-04 03:20:00 CEST" ;;
