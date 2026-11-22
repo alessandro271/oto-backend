@@ -13,6 +13,18 @@ check a rupture conventionnelle before it is filed: reference salary (12 or 3 mo
 - read the gross pay months and the idcc with the payroll tools; mark a month `neutralise` without giving its reason
 - `non_couvert` on the agreement floor = not coded yet: check it by hand with `ccn_article(op="search")(query="indemnité de licenciement", idcc=…)`
 
+screen any party to an act against the french register of asset freezes (dg trésor: un, eu and national measures).
+- `compliance(op="screen_asset_freeze")(nom=…, prenom=…)` — every entry whose name or alias holds all the words of `nom`; `prenom` orders, never drops
+- a match on a common name is not a confirmed freeze: compare first names and date of birth
+- an error saying the register cannot be relied on is never "no match": do not clear the name, retry later
+
+## usage — tax doctrine (bofip)
+
+the dgfip's reading of tax law, commentaries in force, with the official bofip.impots.gouv.fr permalink. doctrine is not the law: cite both.
+- `doctrine_bofip(op="search")(query="pacte Dutreil transmission")` — 2 to 5 french keywords, all required
+- `doctrine_bofip(op="get")(identifiant="BOI-ENR-DMTG-20-30-20-20")` — full commentary (`max_chars=0` for the whole text)
+- typical workflow: `doctrine_bofip(op="search")` → read the commentary → cite the article it applies with `loi_article(code="CGI", …)`
+
 ## usage — consolidated codes (legi)
 
 the 22 french codes with historical versions: cite the exact law, at the right date, with a légifrance link.

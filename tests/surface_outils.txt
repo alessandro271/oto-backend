@@ -168,7 +168,7 @@ cognism_entitlement	account contact	0836884a07dcae6a
 cognism_filter_values	-	8a197fb8821e5d1f
 cognism_redeem	account contact	4faca235a21b467f
 cognism_search	account contact	b78d5ef6baaa3556
-compliance	check_mutual_termination	ed2e3bf36e1b43a2
+compliance	check_mutual_termination screen_asset_freeze	cad879af276386fa
 crisp	conversation conversation_meta conversations helpdesk helpdesk_content helpdesk_entry helpdesk_locales helpdesk_metadata helpdesk_pages helpdesk_tree inbox inboxes messages people person person_conversations person_data search_conversations search_people website	a06f342b70caec3f
 crisp_act	add_note add_segments remove_segments send_message set_state update_conversation update_person update_person_data	d2b9eaa29e6204e5
 crunchbase_connect_start	-	99334726611ccf58
@@ -204,6 +204,7 @@ data_share	-	1b3219a98c95204e
 data_update_where	-	720d8bde36782b8e
 data_url	-	4459136daa442990
 data_write	-	5a2fa2bc2d4e80bc
+doctrine_bofip	get search	847d7c957acf32a6
 drive_access	-	4bba7137749a5e35
 drive_file	create_folder delete download export list metadata update upload	79d525f5f3d575b0
 dropcontact_credits	-	99334726611ccf58

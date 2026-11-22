@@ -6,7 +6,9 @@ connector card (`droit` in the registry, `providers/droit.py`):
 
 - `juris_*` — case law (DILA Cass/CE collections + live CEDH/CJUE/Judilibre);
 - `loi_*`   — versioned consolidated codes (LEGI, text in force at a given date);
-- `ccn_*`   — sector-level collective agreements (KALI/DILA).
+- `ccn_*`   — sector-level collective agreements (KALI/DILA);
+- `doctrine_*` — the tax administration's doctrine (BOFiP-Impôts, DGFiP);
+- `compliance` — checks before an act (mutual termination, asset freezes).
 
 All these sources are served by the **FOD service** (`fod/juris`/`fod/loi`/`fod/ccn`
 → HTTP, `FOD_BASE_URL`), not by a direct lib client. Extracted from the `sirene`/`fr`
@@ -40,7 +42,7 @@ from typing import Literal, Optional
 from fastmcp import FastMCP
 from .lecture import LECTURE
 from ..mcp_errors import McpError
-from mcp.types import ErrorData, INVALID_PARAMS
+from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
 
 def _bad(msg: str) -> McpError:
@@ -135,18 +137,21 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=LECTURE)
     def compliance(
-        op: Literal["check_mutual_termination"],
-        date_entree: str,
-        date_signature: str,
-        date_rupture_envisagee: str,
-        indemnite_convenue: float,
-        mois: list[dict],
+        op: Literal["check_mutual_termination", "screen_asset_freeze"],
+        date_entree: Optional[str] = None,
+        date_signature: Optional[str] = None,
+        date_rupture_envisagee: Optional[str] = None,
+        indemnite_convenue: Optional[float] = None,
+        mois: Optional[list[dict]] = None,
         idcc: Optional[str] = None,
         jours_non_comptes_anciennete: int = 0,
         date_depot: Optional[str] = None,
         alsace_moselle: bool = False,
         categorie: Optional[Literal["cadre", "non_cadre"]] = None,
         anciennete_cadre_mois: Optional[int] = None,
+        nom: Optional[str] = None,
+        prenom: Optional[str] = None,
+        limit: int = 10,
     ) -> dict:
         """Checks before an act, deterministic, nothing stored, nothing filed.
 
@@ -166,6 +171,18 @@ def register(mcp: FastMCP) -> None:
         a `null` field could not be established and is filled in by hand.
         The figures come from the employee's payroll: read them with the payroll
         tools, never estimate them.
+        - **"screen_asset_freeze"**: screen a name against the French national
+          register of asset freezes (DG Trésor): persons, entities and ships under
+          a freeze in force in France (UN, EU and national measures). Do it for
+          any party to an act: client, supplier, buyer, seller. An entry matches
+          when its name or an alias holds every word of `nom` (accents, case and
+          punctuation ignored); `prenom` only ORDERS the matches, never drops one.
+          Returns {publication, inscrits, total, nom_et_prenom, nom_seul,
+          correspondances: [{sur, nature, nom, prenoms, naissance, fondement}],
+          source}; `limit` bounds the list, never the counts. A match on a common
+          name is not a confirmed freeze: compare first names and date of birth.
+          When the register cannot be relied on, the tool raises an error: that
+          is NEVER "no match", do not conclude the name is clear.
 
         Args:
             op: The check to run.
@@ -193,7 +210,29 @@ def register(mcp: FastMCP) -> None:
             anciennete_cadre_mois: Months of service as a cadre (IDCC 2264);
                 only a whole career as cadre is computed, otherwise
                 `non_couvert`.
+            nom: op="screen_asset_freeze" (required) — surname, or name of the
+                legal person: "Martin", "SCI Les Hortillons".
+            prenom: op="screen_asset_freeze" — first name: puts the entries that
+                carry it first, drops none.
+            limit: op="screen_asset_freeze" — most matches listed (default 10,
+                max 50); the counts stay whole.
+
+        Rupture fields (date_entree … anciennete_cadre_mois) are required by
+        op="check_mutual_termination" as documented above.
         """
+        if op == "screen_asset_freeze":
+            from ..fod import vigilance as fod_vigilance
+            try:
+                return fod_vigilance.gels_avoirs_controler(_need(nom, "nom", op), prenom=prenom,
+                                                           limit=limit)
+            except fod_vigilance.RegistreNonConcluant as e:
+                raise McpError(ErrorData(code=INTERNAL_ERROR, message=str(e))) from e
+        if op != "check_mutual_termination":
+            raise _bad("op must be 'check_mutual_termination' or 'screen_asset_freeze'")
+        for valeur, champ in ((date_entree, "date_entree"), (date_signature, "date_signature"),
+                              (date_rupture_envisagee, "date_rupture_envisagee"),
+                              (indemnite_convenue, "indemnite_convenue"), (mois, "mois")):
+            _need(valeur, champ, op)
         from ..fod import rupture as fod_rupture
         dossier = {"date_entree": date_entree, "date_signature": date_signature,
                    "date_rupture_envisagee": date_rupture_envisagee,
@@ -202,6 +241,63 @@ def register(mcp: FastMCP) -> None:
                    "date_depot": date_depot, "alsace_moselle": alsace_moselle,
                    "categorie": categorie, "anciennete_cadre_mois": anciennete_cadre_mois}
         return fod_rupture.controler({k: v for k, v in dossier.items() if v is not None})
+
+    # --- Tax doctrine (BOFiP-Impôts, via FOD service) ---
+    # The DGFiP's reading of tax law, commentaries in force. Its own namespace
+    # (`doctrine`): doctrine is not the law (loi_*) nor case law (juris_*).
+
+    @mcp.tool(annotations=LECTURE)
+    def doctrine_bofip(
+        op: Literal["search", "get"] = "search",
+        query: Optional[str] = None,
+        limit: int = 6,
+        identifiant: Optional[str] = None,
+        max_chars: int = 12_000,
+    ) -> dict:
+        """The French tax administration's official doctrine (BOFiP-Impôts,
+        DGFiP), commentaries in force — search them, or read one in full.
+
+        Doctrine is the administration's reading of the law, not the law
+        itself: cite it with the `source.mention` it carries, and the law with
+        loi_article.
+
+        `op`:
+        - **"search"** (default): commentaries that hold EVERY word of `query`
+          (2 to 5 French keywords: droits de mutation, plus-values, IFI, pacte
+          Dutreil, TVA immobilière); no result means fewer or other words.
+          Returns {total_count, publications: [{identifiant_juridique, titre,
+          serie, type, debut_de_validite, permalien, extrait}], source};
+          `extrait` is 400 characters around the first word found,
+          `total_count` counts every match beyond `limit`.
+        - **"get"**: one commentary or news item in force by its reference
+          (`identifiant_juridique` of a search result): {identifiant_juridique,
+          titre, serie, type, debut_de_validite, permalien, contenu,
+          contenu_chars, tronque, source}. The text is cut at `max_chars`
+          (`tronque` true, `contenu_chars` gives its whole length).
+
+        Args:
+            op: search (default) | get.
+            query: op="search" — 2 to 5 French keywords, all required, ex
+                "donation usufruit parts sociales".
+            limit: op="search" — max results (default 6, max 20).
+            identifiant: op="get" — BOFiP reference, ex
+                "BOI-ENR-DMTG-20-30-20-20", or "ACTU-…" for a news item; the
+                version suffix of a permalink (-20240319) is accepted.
+            max_chars: op="get" — cut the text at this length (default 12000;
+                0 returns it whole).
+        """
+        from ..fod import doctrine as fod_doctrine
+
+        if op == "search":
+            return fod_doctrine.bofip_rechercher(_need(query, "query", op), limit=limit)
+        if op == "get":
+            ident = _need(identifiant, "identifiant", op)
+            pub = fod_doctrine.bofip_lire(ident, max_chars=max_chars)
+            if pub is None:
+                raise _bad(f"No BOFiP publication in force with reference {ident!r}: "
+                           "take it from a doctrine_bofip(op=\"search\") result.")
+            return pub
+        raise _bad("op must be 'search' or 'get'")
 
     # --- Consolidated codes (LEGI, via FOD service) ---
     # 22 French codes WITH historical versions: the article in force at a
