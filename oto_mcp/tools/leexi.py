@@ -33,12 +33,43 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, output_projection
 from ..connectors import verify as connector_verify
 
 
 def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
+
+
+# A search page served whole calls — prompt outputs, chapters, tasks — about 30-40k
+# characters per call, so a page of 100 was cut at the tool's 120k ceiling and filled a
+# run's context before its first step ended (signal #1917, 21 Nov 2026), while the
+# docstring promised "only the metadata". These are the columns of a Leexi call that
+# carry bodies (read on a live page, 21 Nov 2026). FIXED list, so a key is present or
+# absent on every page alike; the search view serves each as its size (`<key>_length`,
+# `output_projection.summarize`). `simple_transcript` is not in it: it only comes when
+# the caller asks for it (`with_transcript=True`), and then it is served whole.
+_CORPS_D_APPEL = ("prompts", "chapters", "tasks", "mentioned_tasks", "scorecards",
+                  "feedbacks")
+
+_HINT_CALLS = ('Search view: heavy columns come as their size (`<key>_length`). '
+               '`op="get"` (call_uuid) reads one call whole; `fields=["*"]` returns '
+               'the page raw, `fields=[…]` picks the keys (`uuid` always kept).')
+
+
+def _slim_calls(payload: Any, fields: Optional[list]) -> Any:
+    """A search page, light by default (see `_CORPS_D_APPEL`)."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        return payload
+    rows = [r for r in payload["data"] if isinstance(r, dict)]
+    if len(rows) != len(payload["data"]):
+        return payload
+    vue, notice = output_projection.summarize(
+        rows, body_fields=_CORPS_D_APPEL, fields=fields, always=("uuid",),
+        hint=_HINT_CALLS)
+    if notice is None and vue == rows:
+        return payload
+    return output_projection.with_notice({**payload, "data": vue}, notice, "projection")
 
 
 def _upstream_message(e) -> str:
@@ -142,7 +173,7 @@ def register(mcp: FastMCP) -> None:
         date_filter: Optional[str] = None,
         order: Optional[str] = None,
         with_transcript: bool = False,
-        fields: Optional[dict] = None,
+        fields: Optional[dict | list[str]] = None,
         extension: Optional[str] = None,
         page: Optional[int] = None,
         items: int = 10,
@@ -151,7 +182,10 @@ def register(mcp: FastMCP) -> None:
 
         This is where you find what was SAID: `op='get'` returns the call with
         its topics and transcript (paragraph- and word-level), whereas
-        `op='search'` only returns the metadata.
+        `op='search'` returns a light view: the heavy columns (`prompts`,
+        `chapters`, `tasks`, `mentioned_tasks`, `scorecards`, `feedbacks`) come
+        back as their size (`<key>_length`), named in `projection.omitted`.
+        `fields=["*"]` = the raw page; `fields=[…]` = only those keys.
 
         `op`:
         - `search` — lists the calls within the key's scope. Filters by
@@ -179,22 +213,33 @@ def register(mcp: FastMCP) -> None:
             date_to: op='search' — end of the window (ISO 8601).
             date_filter: op='search' — bounded field: created_at | performed_at | updated_at.
             order: op='search' — sort, e.g. 'performed_at desc'.
-            with_transcript: op='search' — attaches the paragraph transcript (heavy response).
-            fields: op='create' — call body (direction, external_id,
-                performed_at, recording_s3_key, user_uuid required).
+            with_transcript: op='search' — attaches the paragraph transcript
+                (`simple_transcript`, served whole: heavy response).
+            fields: op='search' — a LIST of keys kept on each call (`uuid`
+                always kept), `["*"]` for every column. op='create' — the call
+                body, an OBJECT (direction, external_id, performed_at,
+                recording_s3_key, user_uuid required).
             extension: op='presign' — file extension, e.g. 'mp3'.
             page: page number.
             items: rows per page (1-100, default 10).
         """
+        if op == "search" and fields is not None and not (
+                isinstance(fields, list) and fields):
+            raise _bad("op='search': `fields` is a non-empty list of keys to keep, "
+                       'or `["*"]` for every column (omit it for the light view).')
+        if op == "create" and fields is not None and not isinstance(fields, dict):
+            raise _bad("op='create': `fields` is the call body, an object.")
+        if op in ("get", "presign") and fields is not None:
+            raise _bad(f"op='{op}' does not use `fields`.")
         if op == "search":
-            return _run(lambda: _client().list_calls(
+            return _slim_calls(_run(lambda: _client().list_calls(
                 page=page, items=items, order=order, date_filter=date_filter,
                 date_from=date_from, date_to=date_to,
                 owner_uuid=owner_uuid,
                 participating_user_uuid=participating_user_uuid,
                 customer_email_address=customer_email_address,
                 customer_phone_number=customer_phone_number,
-                with_simple_transcript=with_transcript or None))
+                with_simple_transcript=with_transcript or None)), fields)
         if op == "get":
             _need(call_uuid, "call_uuid", op)
             return _run(lambda: _client().get_call(call_uuid))

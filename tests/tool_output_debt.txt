@@ -121,7 +121,6 @@ infosec_domain
 instagram
 instagram_meta_get_recent_media
 juris_decision
-leexi_calls
 leexi_meetings
 leexi_notes
 leexi_teams
