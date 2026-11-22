@@ -1,4 +1,4 @@
-"""Les gestes SENSIBLES refusent un jeton d'API, sur les deux faces (CASA 2.4.1).
+"""Les gestes SENSIBLES refusent un jeton d'API, sur les deux faces.
 
 Deux crans (`capabilities/_session_exigee.py`), testés là où ils s'APPLIQUENT :
 

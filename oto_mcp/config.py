@@ -251,14 +251,14 @@ def invite_base_url() -> str:
 #: l'invitation d'org/équipe/plateforme (`org_store.create_invitation`), le partage en
 #: attente d'un objet (`partage_en_attente.creer`) et le magic-link Logto joint au mail
 #: (`auth.annuaire.magic_url`). Une invitation est un code d'activation — son lien suffit
-#: à entrer (modèle bearer) ; CASA 1.1.2 (guide de test ADA) veut qu'il expire vite :
-#: 24 h recommandées, 48 h au plus. Elle valait 7 jours (`OTO_MCP_INVITE_TTL_DAYS`,
+#: à entrer (modèle bearer) ; il expire vite :
+#: 24 h, 48 h au plus. Elle valait 7 jours (`OTO_MCP_INVITE_TTL_DAYS`,
 #: retiré) : aucun réglage d'environnement, une valeur au-delà du plafond EST le défaut
 #: que la constante corrige. L'invité qui laisse échoir la sienne se fait réinviter :
 #: une invitation échue sort de la file (`org_store._PENDING`), la suivante n'est donc
 #: pas un doublon (refus #622) et porte un jeton NEUF.
 INVITATION_TTL_HOURS = 24
-#: Le plafond du guide ADA : une échéance demandée au-delà est REFUSÉE, jamais rabotée.
+#: Le plafond : une échéance demandée au-delà est REFUSÉE, jamais rabotée.
 INVITATION_TTL_MAX_HOURS = 48
 
 

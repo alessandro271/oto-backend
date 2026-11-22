@@ -69,7 +69,7 @@ def _qui_invite(inviter: str | None, inviter_name: str | None) -> str:
 
 
 def _echeance_du_lien(locale: str | None, heures: int) -> str:
-    """La phrase qui DIT l'échéance d'un lien d'invitation (CASA 1.1.2 : il expire en
+    """La phrase qui DIT l'échéance d'un lien d'invitation (il expire en
     24 h, `config.INVITATION_TTL_HOURS`). Sans elle, l'invité qui ouvre le mail le
     lendemain tombe sur « invitation expirée » sans avoir été prévenu."""
     if locale == "en":

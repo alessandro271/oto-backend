@@ -1,7 +1,6 @@
-"""Une invitation expire en 24 h (CASA 1.1.2) — et se réémet avec un jeton NEUF.
+"""Une invitation expire en 24 h — et se réémet avec un jeton NEUF.
 
-Le guide de test ADA veut qu'un code d'activation expire vite : 24 h recommandées, 48 h
-au plus. Une invitation en est un (son lien suffit à entrer, modèle bearer) ; elle valait
+Exigence : un code d'activation expire vite, 24 h, 48 h au plus. Une invitation en est un (son lien suffit à entrer, modèle bearer) ; elle valait
 7 jours, son magic-link Logto aussi. Ce qui est figé ici :
 
 - UNE constante (`config.INVITATION_TTL_HOURS`), lue par ses trois porteurs : l'invitation,
@@ -119,9 +118,9 @@ def _echoir(inv_id: int) -> None:
 
 def test_l_invitation_posee_vit_24_h(live):
     from oto_mcp import org_store
-    org = org_store.create_org("casa-24h", created_by="u-casa-admin")
-    inv_id, _ = org_store.create_invitation(org, "invite@casa.test", "org_member",
-                                            "u-casa-admin")
+    org = org_store.create_org("inv-24h", created_by="u-inv24-admin")
+    inv_id, _ = org_store.create_invitation(org, "invite@inv24.test", "org_member",
+                                            "u-inv24-admin")
     vie = _vie(inv_id)
     assert timedelta(hours=23, minutes=59) <= vie <= timedelta(hours=24, minutes=1), vie
 
@@ -134,14 +133,14 @@ def test_une_invitation_echue_se_reemet_avec_un_jeton_neuf(live, monkeypatch):
 
     from oto_mcp import db, org_store
     from oto_mcp.capabilities.orgs import invites as oi
-    monkeypatch.setenv("OTO_INVITE_BASE_URL", "https://front.casa.test")
+    monkeypatch.setenv("OTO_INVITE_BASE_URL", "https://front.inv24.test")
     monkeypatch.setattr(oi.annuaire, "magic_url", lambda url, email, **_: url)
     monkeypatch.setattr(oi.email_mod, "send_invite_email", lambda *a, **k: True)
-    db.upsert_user("u-casa-hote", email="hote@casa.test")
-    org = org_store.create_org("casa-reemission", created_by="u-casa-hote")
-    org_store.add_org_member(org, "u-casa-hote", "org_admin")
-    ctx = SimpleNamespace(sub="u-casa-hote")
-    entree = oi.InviteCreateInput(org_id=org, email="neuf@casa.test", send_email=False)
+    db.upsert_user("u-inv24-hote", email="hote@inv24.test")
+    org = org_store.create_org("inv-reemission", created_by="u-inv24-hote")
+    org_store.add_org_member(org, "u-inv24-hote", "org_admin")
+    ctx = SimpleNamespace(sub="u-inv24-hote")
+    entree = oi.InviteCreateInput(org_id=org, email="neuf@inv24.test", send_email=False)
 
     premier = oi._invite_create(ctx, entree)["invite_url"].rsplit("/", 1)[-1]
     # Encore valide : la seconde émission est un doublon, refusé (#622).
@@ -149,12 +148,12 @@ def test_une_invitation_echue_se_reemet_avec_un_jeton_neuf(live, monkeypatch):
         oi._invite_create(ctx, entree)
     assert e.value.code == "already_invited"
 
-    _echoir(org_store.find_pending_invitation(org, "neuf@casa.test")["id"])
-    assert org_store.find_pending_invitation(org, "neuf@casa.test") is None
+    _echoir(org_store.find_pending_invitation(org, "neuf@inv24.test")["id"])
+    assert org_store.find_pending_invitation(org, "neuf@inv24.test") is None
 
     second = oi._invite_create(ctx, entree)["invite_url"].rsplit("/", 1)[-1]
     assert second != premier and second.startswith("inv_")
     assert org_store.get_invitation_by_token(premier) is None
     assert org_store.get_invitation_by_token(second) is not None
-    db.upsert_user("u-casa-neuf", email="neuf@casa.test")
-    assert org_store.accept_invitation(premier, "u-casa-neuf") is None
+    db.upsert_user("u-inv24-neuf", email="neuf@inv24.test")
+    assert org_store.accept_invitation(premier, "u-inv24-neuf") is None

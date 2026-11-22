@@ -672,7 +672,7 @@ def _payments(ctx: ResolvedCtx, inp: PaymentsInput) -> dict:
 
 # Les six gestes qui engagent un paiement (souscrire, confirmer, résilier, reprendre,
 # changer de moyen de paiement) : session interactive seule (`allow_api_token=False`,
-# CASA 2.4.1, `capabilities/_session_exigee.py`) — jamais un jeton d'API, même si le
+# `capabilities/_session_exigee.py`) — jamais un jeton d'API, même si le
 # cœur les refuse aujourd'hui en 409 `billing_moved` : la garde ne dépend pas de ce
 # refus-là, qui peut tomber.
 _BILLING_CAPS = [

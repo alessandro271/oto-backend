@@ -214,7 +214,7 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
 
 
 def _set_role(ctx: ResolvedCtx, inp: SetRoleInput) -> dict:
-    exiger_session("Changer le rôle plateforme d'un compte")  # CASA 2.4.1
+    exiger_session("Changer le rôle plateforme d'un compte")
     if inp.role not in access.ROLES:
         raise AuthzDenied(400, "invalid_role", f"Rôle invalide. Valides : {list(access.ROLES)}.")
     target = _resolve_target(inp.target)
@@ -225,7 +225,7 @@ def _set_role(ctx: ResolvedCtx, inp: SetRoleInput) -> dict:
 
 
 def _reset_mfa(ctx: ResolvedCtx, inp: ResetMfaInput) -> dict:
-    exiger_session("Effacer la double authentification d'un compte")  # CASA 2.4.1
+    exiger_session("Effacer la double authentification d'un compte")
     target = _resolve_target(inp.target)
     if not db.get_user(target):
         raise AuthzDenied(404, "unknown_user", f"Compte {target!r} inconnu.")
@@ -499,7 +499,7 @@ CAPABILITIES += [
         authz=SUPER_ADMIN,
         description="[super admin] Set an account's platform role (member|admin|super_admin). "
                     "target = email or sub.",
-        # Session interactive seule (CASA 2.4.1, `_session_exigee`).
+        # Session interactive seule (`_session_exigee`).
         rest=RestBinding("POST", "/api/admin/users/{sub}/role", _SUB, allow_api_token=False),
     ),
     Capability(

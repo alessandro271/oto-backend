@@ -282,7 +282,7 @@ def _notify_grant(sharer_sub: str, resource_type: str, rid: str, to_email: str,
         return email.send_resource_shared_email(
             to_email, type_label=type_label, name=name, permission=permission,
             app_url=app_url, sharer=sharer, brand=brand, locale=locale,
-            **({"lien_d_invitation": True} if lien is not None else {}))
+            lien_d_invitation=lien is not None)
     except Exception as e:  # best-effort
         log.warning("notify(%s %s %s → %s) failed: %s",
                     event, resource_type, rid, to_email, e)
@@ -783,8 +783,8 @@ def _gouverner(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         return out
 
     if inp.op == "transfer":
-        # Céder la propriété d'un objet demande une session, jamais un jeton (CASA
-        # 2.4.1, `_session_exigee`) — sur les deux faces, `oto_resource` comme
+        # Céder la propriété d'un objet demande une session, jamais un jeton (
+        # `_session_exigee`) — sur les deux faces, `oto_resource` comme
         # `POST /api/resources`. Partager reste ouvert au jeton.
         exiger_session("Transférer la propriété d'une ressource")
         # Le TRANSFERT de propriété exclut le simple gérant (ADR 0048 §3) : owner ∪

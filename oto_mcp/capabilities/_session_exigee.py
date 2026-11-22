@@ -1,10 +1,8 @@
 """Les gestes SENSIBLES demandent une session de connexion complète — jamais un jeton.
 
-CASA 2.4.1 (guide de test ADA) : une modification de compte ou une transaction sensible
-exige une session de connexion complète ou une re-vérification du compte. Un jeton `oto_`
-(jusqu'à 90 jours, celui d'une personne, d'un agent hébergé ou une clé d'org) n'est ni
-l'un ni l'autre : il se copie, il fuit, et rien ne redemande qui le porte. Il ne fait donc
-pas ces gestes-là — archiver une org, retirer un membre ou changer un rôle, donner le rang
+Exigence : une modification de compte ou une transaction sensible se fait sous une
+session de connexion complète. Un jeton `oto_` (jusqu'à 90 jours, celui d'une personne,
+d'un agent hébergé ou une clé d'org) n'en est pas une. Il ne fait donc pas ces gestes-là — archiver une org, retirer un membre ou changer un rôle, donner le rang
 d'admin (invitation, ajout), transférer la propriété d'un objet, régler la sécurité d'une
 org, gérer les jetons et les clés.
 
@@ -43,13 +41,10 @@ def _jeton_mcp() -> bool:
     OAuth n'a ni l'un ni les autres. Hors requête MCP : False."""
     if hooks.current_token_axes():
         return True
-    try:
-        from fastmcp.server.dependencies import get_access_token  # type: ignore
-        jeton = get_access_token()
-    # noqa: SILENT — hors contexte de requête MCP : aucun jeton à juger
-    except Exception:  # noqa: BLE001
-        return False
-    return getattr(jeton, "client_id", None) == "oto_api_token"
+    # Hors requête MCP, `get_access_token` rend None (aucun jeton à juger). Toute autre
+    # erreur se lève : une garde qui la lirait « pas de jeton » laisserait passer.
+    from fastmcp.server.dependencies import get_access_token  # type: ignore
+    return getattr(get_access_token(), "client_id", None) == "oto_api_token"
 
 
 def porteur_de_jeton() -> bool:

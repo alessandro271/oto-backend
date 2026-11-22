@@ -182,8 +182,8 @@ def reset_user_mfa(sub: str) -> list[str]:
 # porte → la custom UI Logto le consomme (signIn extraParams) → auth silencieuse,
 # compte créé/loggé avec l'email EXACT (pas de mismatch). Best-effort : si le mint
 # échoue (M2M absent, Logto down), l'invitation reste valide via le flow code email.
-# Le jeton vit autant que l'invitation qui le porte (`config.INVITATION_TTL_HOURS`, 24 h,
-# CASA 1.1.2) : c'est un code d'activation, il ne survit pas à son invitation. Il valait
+# Le jeton vit autant que l'invitation qui le porte (`config.INVITATION_TTL_HOURS`, 24 h)
+# : c'est un code d'activation, il ne survit pas à son invitation. Il valait
 # 7 jours.
 OTT_TTL_S = config.INVITATION_TTL_HOURS * 3600
 

@@ -221,7 +221,7 @@ class RestBinding:
     # l'application (`capabilities/copilot`) — un jeton en ferait un point d'accès au
     # modèle payé par l'instance, piloté par un script. Depuis le 22/11/2026, un troisième :
     # les gestes SENSIBLES (archiver une org, rôles et retraits de membres, MFA, paiement —
-    # CASA 2.4.1), dont la face MCP et les cas conditionnels sont tenus par la garde de
+    # ), dont la face MCP et les cas conditionnels sont tenus par la garde de
     # handler `capabilities/_session_exigee.py`.
     #
     # Le cran vit sur le BINDING et non sur la capacité parce qu'il est propre au

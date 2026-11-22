@@ -274,7 +274,7 @@ def emit_invitation(ctx: ResolvedCtx, *, org_id: int | None, email: str | None,
     que l'instance déclare (`email_brand.marque_instance`).
 
     Une invitation qui donne le rang d'ADMIN (d'org ou d'équipe) demande une session,
-    jamais un jeton (CASA 2.4.1, `_session_exigee`) — les trois niveaux passent ici,
+    jamais un jeton (`_session_exigee`) — les trois niveaux passent ici,
     les deux faces aussi. Inviter un simple membre reste ouvert au jeton."""
     if role == "org_admin" or group_role == "group_admin":
         exiger_session("Inviter quelqu'un comme admin")

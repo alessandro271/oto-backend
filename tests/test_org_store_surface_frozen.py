@@ -124,7 +124,7 @@ Ses appelants en tirent chacun leur conclusion (succès idempotent du même comp
 410, rien au signup). Deux noms s'AJOUTENT, sans rien retirer : `_consommer` et
 `add_org_member_in` (le corps d'`add_org_member` sur la transaction de l'appelant).
 
-⚠️ **Mise à jour du 22/11/2026 (CASA 1.1.2)** — `create_invitation` prend son échéance en
+⚠️ **Mise à jour du 22/11/2026** — `create_invitation` prend son échéance en
 HEURES (`ttl_hours`, défaut `config.INVITATION_TTL_HOURS` = 24, 48 au plus) au lieu de
 `ttl_days=7` : une invitation est un code d'activation, elle expire vite. Son seul
 appelant de production ne passait que la valeur du réglage retiré

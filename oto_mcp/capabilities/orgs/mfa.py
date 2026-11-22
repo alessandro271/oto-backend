@@ -88,7 +88,7 @@ def _get_org_mfa(ctx: ResolvedCtx, inp: GetOrgMfaInput) -> dict:
 
 
 def _set_org_mfa(ctx: ResolvedCtx, inp: SetOrgMfaInput) -> dict:
-    # Réglage de SÉCURITÉ de l'org, dans les deux sens : session seule (CASA 2.4.1).
+    # Réglage de SÉCURITÉ de l'org, dans les deux sens : session seule.
     exiger_session("Changer l'exigence de double authentification d'une org")
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")

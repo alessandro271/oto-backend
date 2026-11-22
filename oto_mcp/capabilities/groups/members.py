@@ -173,7 +173,7 @@ def _write_member_role(group_id: int, org_id: int, sub: str, role: str, *,
     current = group_store.get_group_role(group_id, sub)
     if current is None and require_member:
         raise AuthzDenied(404, "not_a_member", "Cible non-membre du groupe.")
-    # CASA 2.4.1 (`_session_exigee`) : même règle qu'un palier plus haut.
+    # `_session_exigee` : même règle qu'un palier plus haut.
     if role == "group_admin" or (current is not None and current != role):
         exiger_session("Changer le rôle d'un membre d'équipe ou nommer un chef")
     _guard_group_stays_administrable(group_id, org_id, current, role)
@@ -199,7 +199,7 @@ def _set_member_role(ctx: ResolvedCtx, inp: SetGroupMemberRoleInput) -> dict:
 
 
 def _remove_member(ctx: ResolvedCtx, inp: RemoveGroupMemberInput) -> dict:
-    exiger_session("Retirer un membre d'une équipe")  # CASA 2.4.1, `_session_exigee`
+    exiger_session("Retirer un membre d'une équipe")  # `_session_exigee`
     target_sub = _resolve_target(inp.target)
     # Même garantie que l'écriture de rôle : sans quoi le retrait resterait le chemin
     # strict d'une garde que la rétrogradation autorise — donc contournable en deux
@@ -224,7 +224,7 @@ CAPABILITIES += [
         key="group.member.set_role", handler=_set_member_role, Input=SetGroupMemberRoleInput,
         authz=GROUP_ADMIN_OF("group_id"), Output=GroupMemberWritten,
         description="Change a member's role in a group you lead (group_member|group_admin).",
-        # Session interactive seule (CASA 2.4.1, `_session_exigee`).
+        # Session interactive seule (`_session_exigee`).
         rest=RestBinding("POST", "/api/groups/{id}/members/{sub}", _GID, allow_api_token=False),
     ),
     Capability(

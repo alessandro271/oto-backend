@@ -73,7 +73,7 @@ def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
 
 
 def _archive_org(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
-    exiger_session("Archiver une org")  # CASA 2.4.1 : jamais sous un jeton (`_session_exigee`)
+    exiger_session("Archiver une org")  # jamais sous un jeton (`_session_exigee`)
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     archived = archive_org_ou_409(inp.org_id)
