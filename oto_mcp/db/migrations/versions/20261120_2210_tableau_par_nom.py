@@ -1,6 +1,6 @@
 """tool_calls : l'index partiel des appels qui ont désigné un tableau par son NOM.
 
-Avant de refuser un nom de tableau (`deprecations.RETRAIT_NOM_DE_TABLEAU`), il faut
+Un nom de tableau est refusé (`datastore_by_name`) ; il faut
 prouver qu'aucun appelant ne s'en sert plus, sur la face MCP comme sur la face REST, par
 org et par principal. Le journal citait le tableau RÉSOLU (`ns_id`, nom canonique) : `957`,
 `slot:vivier` et `mes_leads` y laissaient la même trace. Il porte désormais la FORME de la

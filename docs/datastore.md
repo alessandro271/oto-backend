@@ -294,26 +294,28 @@ un sous-ensemble de clés (`op=inventory`, `oto_use_project`, `share_ui`, cascad
 Banc : `tests/test_designation_par_identifiant.py` (la reproduction y est le faux
 résolveur qui rejoue l'`ORDER BY` : le même nom, deux demandeurs, deux tableaux).
 
-⚠️ **Un nom de tableau sera REFUSÉ à partir du 08/11/2026** (lot 0 du retrait, 29/09/2026 ;
-la date vit dans `deprecations.RETRAIT_NOM_DE_TABLEAU`, alignée sur le retrait de
-`namespace`). D'ici là le nom résout encore, partout, avec le même contrôle de visibilité
-(`db.resolve_datastore_ns`), et **rien ne l'accepte en silence** : une réponse MCP obtenue
-par un nom porte en tête l'avis qui donne le numéro et la date (`session_org.noter_avis`,
-posé par `middleware.rappel_contexte`) — `data_*`, `oto_project op=link`, `oto_fleet
-op=create` —, une route REST adressée par un nom répond avec `Deprecation` / `Sunset`, et
-la portée d'un jeton range ses tableaux par numéro (`auth/token_scopes`, oto#158). Les
-données qui gardent un nom (automatisations, liens de projet, portées de jetons,
-procédures `datastore="…"`) se migrent par `scripts/tableaux_par_numero.py`, à blanc par
-défaut.
+⚠️ **Un nom de tableau est REFUSÉ depuis le 08/11/2026** (préavis servi du 07/09 au
+08/11/2026, lot 0 du 29/09/2026). Rien n'est cherché sous un nom, aucun repli :
+`DatastorePg._trouver` lève `datastore/errors.TableauParNom` (sous-classe de
+`DatastoreNotFound`, donc refusé partout), et les faces le DISENT avec un code propre —
+`400 datastore_by_name` sur toute route `/api/datastores/{datastore}/…` (adaptateur REST,
+et la garde des jetons portés), par `ns_not_found` dans les capacités datastore, dans les
+outils `data_*`, à `oto_project op=link|unlink`, `oto_fleet op=create`, l'émission d'un
+jeton et `oto_upload_url`. Seuls le numéro et `slot:<nom>` (résolu en numéro) désignent.
+Restent résolus par nom, parce que ce sont des DONNÉES écrites avant et non une adresse
+reçue : les liens de projet posés par nom (`db.list_project_links`, et `_ref_canonizer`
+pour les retrouver sous leur numéro) et les automatisations d'avant #1067
+(`_lignes_reservables._cle_heritee`). Elles se migrent par
+`scripts/tableaux_par_numero.py`, à blanc par défaut.
 
-**L'usage du nom se COMPTE** (17/11/2026). Le journal cite le tableau résolu (`ns_id`,
-nom canonique) : `957`, `slot:vivier` et `mes_leads` y laissaient la même trace. Il porte
-aussi la FORME de la désignation, `args.ref_kind` ∈ `number` | `slot` | `name` — jamais le
-nom —, notée là où l'adresse reçue est résolue : `access.resolve_datastore_ref` pour
-`slot:`, `session_org.noter_adresse_de_tableau` pour le numéro et le nom (le store
-`_resolve`, `oto_project op=link`, `oto_fleet op=create` ; c'est aussi lui qui pose l'avis
-daté), et le rangement d'une portée de jeton. Plusieurs tableaux dans un appel : la forme
-la plus dépréciée l'emporte (`name` > `slot` > `number`).
+**Les désignations se COMPTENT** (17/11/2026). Le journal cite le tableau résolu (`ns_id`,
+nom canonique) : `957` et `slot:vivier` y laissaient la même trace. Il porte aussi la
+FORME de la désignation, `args.ref_kind` ∈ `number` | `slot` | `name` — jamais le nom —,
+notée là où l'adresse reçue est jugée : `access.resolve_datastore_ref` pour `slot:`, les
+résolutions par numéro (le store `_resolve`, `oto_project op=link`, `oto_fleet op=create`,
+la portée d'un jeton) pour `number`, et le refus d'un nom (`errors.refus_tableau_par_nom`,
+par où passent toutes les faces) pour `name` : une ligne `name` est un appel REFUSÉ. Plusieurs
+tableaux dans un appel : la forme la plus dépréciée l'emporte (`name` > `slot` > `number`).
 - Face MCP : la ligne de l'appel (`kind='mcp'`, la cible d'un `oto_call` sur SA ligne),
   par le relevé d'appel (`server._TRACED_ARGS`).
 - Face REST : la ligne de ROUTE (`kind='rest'`, `api.routes.RestCallLogger`), une par
@@ -341,9 +343,8 @@ ORDER BY appels DESC;
 ROLLBACK;
 ```
 
-Zéro ligne sur la fenêtre voulue, l'index posé et valide : plus personne ne désigne un
-tableau par son nom. Un nom en chiffres (« 2024 ») compte comme un nom : c'est le
-résultat qui juge (`deprecations.adresse_par_nom`), pas la forme.
+La mesure dit qui se heurte encore au refus du nom (face, org, compte, jeton), pour le
+prévenir. Des chiffres désignent toujours un numéro (`errors.est_un_nom_de_tableau`).
 
 Ce qui a changé est ce qu'on MONTRE — descriptions de `data_claim_next`/`data_write`/
 `data_release`/`data_rows`/`data_get_schema`, instruction de flotte

@@ -413,10 +413,12 @@ def noter_avis(texte: str) -> None:
 
 # ── La FORME sous laquelle l'appel a désigné un tableau (`ref_kind`) ──────────
 # Le journal cite le tableau RÉSOLU (`ns_id`, nom canonique) : `957`, `slot:vivier` et
-# `mes_leads` y laissaient la même trace, et l'usage d'un nom de tableau
-# (`deprecations.RETRAIT_NOM_DE_TABLEAU`) ne se comptait pas. La forme est notée au
-# point où l'adresse reçue est résolue — `access.resolve_datastore_ref` pour `slot:`,
-# `noter_adresse_de_tableau` pour le numéro et le nom — et rejoint le journal :
+# `mes_leads` y laissaient la même trace. Un nom est REFUSÉ depuis le retrait
+# (`datastore_by_name`) : la forme `name` compte ces refus. La forme est notée au point
+# où l'adresse reçue est jugée — `access.resolve_datastore_ref` pour `slot:`, les
+# résolutions par numéro (store `_resolve`, lien de projet, automatisation, portée d'un
+# jeton) pour `number`, le refus d'un nom (`datastore.errors.refus_tableau_par_nom`, par
+# où passent toutes les faces qui le refusent) pour `name` — et rejoint le journal :
 #   - face MCP : le relevé de l'appel (`_CALL_TRACE`), versé dans `args` par
 #     `calllog.apply_call_trace` (`server._TRACED_ARGS`) ;
 #   - face REST : le holder posé par le journal des routes (`api.routes.RestCallLogger`),
@@ -424,8 +426,7 @@ def noter_avis(texte: str) -> None:
 #     MCP : ce relevé, posé en REST, ferait lire `key_mode`/`quantity` aux gardes de
 #     crédit et de budget qui le prennent pour un appel MCP.
 # Jamais le nom lui-même : seulement sa forme. Plusieurs tableaux désignés dans un même
-# appel : la forme la plus dépréciée l'emporte (`name` > `slot` > `number`), c'est elle
-# qu'on compte avant un retrait.
+# appel : la forme la plus dépréciée l'emporte (`name` > `slot` > `number`).
 REF_NUMBER = "number"
 REF_SLOT = "slot"
 REF_NAME = "name"
@@ -451,20 +452,6 @@ def noter_forme_tableau(forme: str) -> None:
     for holder in (_CALL_TRACE.get(), _REF_REST.get()):
         if holder is not None and rang > _RANG_REF.get(holder.get("ref_kind"), -1):
             holder["ref_kind"] = forme
-
-
-def noter_adresse_de_tableau(adresse, ns_id, nom: Optional[str] = None) -> None:
-    """L'adresse reçue `adresse` a résolu le tableau `ns_id` : note sa forme (numéro ou
-    nom) et, si c'est un nom, l'avis daté servi à l'agent
-    (`deprecations.avis_nom_de_tableau`). Le seul endroit qui juge une adresse résolue —
-    les faces qui en résolvent une l'appellent, pour que l'avis et le compte disent la
-    même chose. `slot:` n'arrive jamais ici sous sa forme : il est noté à sa résolution."""
-    from . import deprecations
-    if deprecations.adresse_par_nom(adresse, ns_id):
-        noter_forme_tableau(REF_NAME)
-        noter_avis(deprecations.avis_nom_de_tableau(nom or str(adresse), int(ns_id)))
-    else:
-        noter_forme_tableau(REF_NUMBER)
 
 
 # ── L'ancien nom sous lequel l'appel est arrivé (`deprecations.TOOLS`) ─────────
