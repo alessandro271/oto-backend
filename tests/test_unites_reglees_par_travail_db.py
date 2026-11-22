@@ -117,6 +117,9 @@ def test_un_travail_d_abonnement_se_lit_ZERO_a_cote(live):
     """Même agent, payé par un abonnement : aucun tour réglé, donc `0` — ses jetons
     restent comptés, et la case du travail sur la clé partagée ne bouge pas."""
     from oto_mcp.db._conn import _connect
+    # Lue avant : ce test ne dépend pas de l'ordre (la case de la clé partagée vient
+    # du test d'avant quand il a tourné sur ce worker, sinon elle n'existe pas).
+    avant = _cases(ORG).get((AGENT, "cle_plateforme"))
     with _connect() as c:
         c.execute(
             "INSERT INTO runner_jobs (org_id, kind, status, due_at, attempts, max_attempts, "
@@ -129,7 +132,7 @@ def test_un_travail_d_abonnement_se_lit_ZERO_a_cote(live):
     cases = _cases(ORG)
     assert cases[(AGENT, "abonnement")]["budget_units"] == 0
     assert cases[(AGENT, "abonnement")]["output"] == 20
-    assert cases[(AGENT, "cle_plateforme")]["budget_units"] == 67
+    assert cases.get((AGENT, "cle_plateforme")) == avant, "la case de la clé partagée ne bouge pas"
 
 
 def test_seuls_les_reglements_de_tours_DU_travail_comptent(live):
