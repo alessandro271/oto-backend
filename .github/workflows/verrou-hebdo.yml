@@ -32,7 +32,7 @@ jobs:
   au-plus-recent:
     name: La suite sur le verrou résolu au plus récent
     runs-on: ubuntu-latest
-    # Le job `test` de deploy-canari.yml tient en 20 min ; la résolution s'y ajoute.
+    # Le job `test` de ci.yml tenait en 20 min ; la résolution s'y ajoute.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

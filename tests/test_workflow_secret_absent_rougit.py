@@ -83,7 +83,7 @@ def test_une_reference_indirecte_sans_son_secret_rougit_par_son_nom_neutre(
 
 def _etape_liste() -> str:
     import yaml
-    wf = yaml.safe_load((_WORKFLOWS / "deploy-canari.yml").read_text())
+    wf = yaml.safe_load((_WORKFLOWS / "ci.yml").read_text())
     return next(s for s in wf["jobs"]["consommateurs"]["steps"] if s.get("id") == "liste")
 
 
@@ -126,7 +126,7 @@ def test_une_pr_de_fork_ne_juge_que_ce_qu_elle_peut_lire_et_le_dit(tmp_path):
 
 def test_la_garde_d_avant_deploiement_lit_la_liste_filtree_et_saute_si_vide():
     import yaml
-    wf = yaml.safe_load((_WORKFLOWS / "deploy-canari.yml").read_text())
+    wf = yaml.safe_load((_WORKFLOWS / "ci.yml").read_text())
     job = wf["jobs"]["contrat-front-code"]
     assert job["strategy"]["matrix"]["consommateur"] == \
         "${{ fromJSON(needs.consommateurs.outputs.liste_code) }}"
@@ -134,30 +134,28 @@ def test_la_garde_d_avant_deploiement_lit_la_liste_filtree_et_saute_si_vide():
     # Le fork se reconnaît au dépôt de la tête de PR, pas à l'absence d'un secret : une
     # PR interne sans secret reste un échec nommé.
     assert "head.repo.full_name != github.repository" in _etape_liste()["env"]["EST_FORK"]
-    # Le constat d'après préproduction garde la liste complète.
-    assert wf["jobs"]["contrat-front"]["strategy"]["matrix"]["consommateur"] == \
-        "${{ fromJSON(needs.consommateurs.outputs.liste) }}"
 
 
 def test_les_jobs_de_contrat_passent_le_secret_de_chaque_consommateur():
     """Le secret d'un consommateur est lu par son NOM déclaré : un nom mal recopié dans
     le workflow retomberait sur une clé vide — que le script refuse (ci-dessus)."""
-    texte = (_WORKFLOWS / "deploy-canari.yml").read_text()
-    # Trois lectures : le contrat du constat (`contrat-front`), celui de la garde
-    # (`contrat-front-code`) et, dans la même garde, le contrat ADMIN (#1196).
+    texte = (_WORKFLOWS / "ci.yml").read_text()
+    # Deux lectures : le contrat de la garde (`contrat-front-code`) et, dans la même
+    # garde, le contrat ADMIN (#1196). Le constat d'après préproduction (`contrat-front`)
+    # est parti avec la préproduction (19/11/2026).
     assert texte.count(
         "CLE_LECTURE: ${{ matrix.consommateur.secret && "
-        "secrets[matrix.consommateur.secret] || '' }}") == 3
+        "secrets[matrix.consommateur.secret] || '' }}") == 2
     # Le dépôt et le chemin d'un consommateur à référence indirecte : des SECRETS lus par
     # leur nom déclaré (masqués d'office dans l'en-tête `env:` du journal), jamais `vars.`.
     assert texte.count(
         "DEPOT: ${{ matrix.consommateur.depot_ref && "
-        "secrets[matrix.consommateur.depot_ref] || matrix.consommateur.depot }}") == 3
+        "secrets[matrix.consommateur.depot_ref] || matrix.consommateur.depot }}") == 2
     assert texte.count(
         "CHEMIN: ${{ matrix.consommateur.chemin_ref && "
-        "secrets[matrix.consommateur.chemin_ref] || matrix.consommateur.chemin }}") == 2
-    assert texte.count("DEPOT_REF: ${{ matrix.consommateur.depot_ref || '' }}") == 3
-    assert texte.count("CHEMIN_REF: ${{ matrix.consommateur.chemin_ref || '' }}") == 3
+        "secrets[matrix.consommateur.chemin_ref] || matrix.consommateur.chemin }}") == 1
+    assert texte.count("DEPOT_REF: ${{ matrix.consommateur.depot_ref || '' }}") == 2
+    assert texte.count("CHEMIN_REF: ${{ matrix.consommateur.chemin_ref || '' }}") == 2
     assert "vars.consommateur" not in texte and "vars[" not in texte
 
 

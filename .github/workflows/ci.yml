@@ -1,13 +1,11 @@
-name: Deploy preprod
+name: CI
 
-# Modèle de release (ADR 0020, refonte 2026-07-20) : push sur `main` → PREPROD.
-# `main` est la branche de tronc ; tout merge/push y déploie l'environnement staging
-# (checkout /opt/oto-mcp-canari, service oto-mcp-canari, endpoint mcp-canari.oto.ninja,
-# base chiffrée oto_canari — l'ancien « canari » de l'ADR 0040, désormais alimenté par
-# main). La PROD ne se déploie QUE sur un tag `v*` (deploy.yml). La logique serveur
-# (reset origin/main + reinstall oto-core au tag + restart + healthcheck + rollback)
-# vit dans /opt/deploy/oto-backend-canari.sh — source de vérité unique.
-# Le job `test` tourne aussi sur PR vers main (= le check de validation avant merge).
+# Le tronc ne déploie plus (décision du 19/11/2026) : `main` n'a plus de préproduction.
+# Ce workflow juge chaque PR vers `main` et chaque poussée sur `main`, et ne déploie
+# rien. La PROD ne se déploie QUE sur un tag `v*` (deploy.yml), et sa garde
+# (`scripts/garde_tronc_vert.py`) exige que le job `test` de CE workflow ait conclu
+# `success` sur le sha exact du tag, poussé sur `main`. Le job `test` est aussi le check
+# requis de la protection de branche : son nom est un contrat.
 on:
   push:
     branches: [main]
@@ -23,16 +21,13 @@ jobs:
   # heures. Ce workflow part à chaque poussée sur le tronc ET à chaque PR — c'est le
   # plus exécuté du dépôt — et RIEN ne rattrape un job suspendu : il n'y a aucun
   # `concurrency` de workflow, donc pas d'annulation du run précédent, et les runs
-  # suspendus s'empilent en parallèle. Pire pour les deux jobs auto-hébergés : le parc
-  # ne compte qu'UN runner `oto-platform`, celui dont la PROD a besoin (deploy.yml) ;
-  # et `deploy-preprod` sérialise sur un groupe `cancel-in-progress: false`, donc une
-  # suspension y met tous les déploiements suivants en file derrière elle.
+  # suspendus s'empilent en parallèle.
   # Plafonds calés sur 60 runs terminés (05→07/09/2026), durée d'exécution maximale
   # observée par job — rappelée devant chaque valeur. Le 07/09, un job de tests s'est
   # suspendu 45 min sans écrire une ligne, jusqu'à une annulation à la main.
 
   # La syntaxe est vérifiée sur le Python du SERVEUR, pas sur celui de la CI.
-  # Le 27/08, un boot preprod est mort sur « f-string expression part cannot include
+  # Le 27/08, un boot de préproduction est mort sur « f-string expression part cannot include
   # a backslash » : légal en 3.12 (CI) et en 3.13 (poste), SyntaxError en 3.10 (box).
   # Ni les tests ni la CI ne pouvaient le voir — les deux tournaient sur un Python
   # plus récent que ce qui sert. `ast.parse(feature_version=(3,10))` ne l'attrape pas
@@ -56,8 +51,8 @@ jobs:
   #
   # Le 02/09/2026, `oto_mcp/billing.py` importait `billing_grants` : l'import était
   # dans le commit, le fichier n'y était pas — il n'existait que sur le disque de son
-  # auteur. Toute la suite échouait à la COLLECTE (pas quelques tests : tous), la
-  # préproduction était sautée, et plus rien ne pouvait partir en production.
+  # auteur. Toute la suite échouait à la COLLECTE (pas quelques tests : tous), et plus
+  # rien ne pouvait partir en production.
   #
   # ⚠️ Cette classe est INVISIBLE POUR SON AUTEUR et visible pour tous les autres :
   # son répertoire de travail complète le commit, donc chez lui tout s'importe. Deux
@@ -153,9 +148,9 @@ jobs:
     with:
       cible: ${{ needs.selection.outputs.cible }}
 
-  # LE NOM `test` EST UN CONTRAT. La garde de mise en production
-  # (`scripts/garde_preprod_verte.py`) exige un job nommé EXACTEMENT `test` qui conclut
-  # `success` ; or un job appelé par `uses:` s'affiche « suite / <job interne> », jamais
+  # LE NOM `test` EST UN CONTRAT, DOUBLE. La garde de mise en production
+  # (`scripts/garde_tronc_vert.py`) exige un job nommé EXACTEMENT `test` qui conclut
+  # `success`, et la protection de branche de `main` le requiert sous ce nom ; or un job appelé par `uses:` s'affiche « suite / <job interne> », jamais
   # `test`. Ce job porte donc le nom, et ne conclut `success` que si la suite entière a
   # conclu `success`. `always()` : il tourne aussi quand la suite a rougi ou a été sautée,
   # pour le DIRE en rouge au lieu d'apparaître `skipped` — un job sauté ne rend pas un run
@@ -188,12 +183,11 @@ jobs:
   #
   # Ce job produit ce chiffre. Il ne règle rien et ne décide rien.
   #
-  # ⚠️ `continue-on-error` N'EST PAS UNE PRÉCAUTION DE STYLE. Depuis le 08/09, la garde
-  # de mise en production exige que le run de préproduction de ce sha conclue
-  # `success` : un job qui échoue ici bloquerait une release. Un instrument ne doit
-  # jamais pouvoir faire ça. D'où la double ceinture — ce drapeau, ET un script qui ne
-  # sort jamais en échec. Il ne gate rien non plus : `deploy-preprod` ne l'attend pas,
-  # il tourne en parallèle de `test` (~9 min) et ne coûte donc aucune seconde de mur.
+  # ⚠️ `continue-on-error` N'EST PAS UNE PRÉCAUTION DE STYLE. La garde de mise en
+  # production exige que le run de CE workflow sur le sha du tag conclue `success` : un
+  # job qui échoue ici bloquerait une release. Un instrument ne doit jamais pouvoir faire
+  # ça. D'où la double ceinture — ce drapeau, ET un script qui ne sort jamais en échec.
+  # Il tourne en parallèle de `test` (~9 min) et ne coûte donc aucune seconde de mur.
   empreinte-collecte:
     name: Ce que pèse une collecte
     runs-on: ubuntu-latest
@@ -251,36 +245,12 @@ jobs:
       - name: Bancs de la garde d'exécution sous 3.10
         run: pytest -q tests/test_db_hors_boucle.py tests/test_lot1_sql_hors_boucle.py
 
-  deploy-preprod:
-    needs: [test, syntaxe-plancher, arbre-importable, garde-plancher-python, contrat-front-code]
-    # push main OU relance manuelle (workflow_dispatch depuis main) — un dispatch
-    # qui ne faisait que les tests laissait croire à un déploiement (vécu 23/07 :
-    # canari resté en arrière après un push failed, dispatch « success » sans effet).
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, oto-platform]
-    # max observé 1 min 16 s ; la marge couvre restart + healthcheck + rollback.
-    timeout-minutes: 15
-    concurrency:
-      group: deploy-preprod
-      cancel-in-progress: false
-    steps:
-      - name: Deploy preprod (build serveur via script root-restreint)
-        # oto-backend#948 (14/09/2026) : sans argument, le script installait
-        # `origin/main` — la POINTE du tronc au moment où il s'exécute, pas le sha
-        # que CE run vient de valider. Entre le début du run et son `deploy-preprod`
-        # (`needs: test`), d'autres commits peuvent arriver sur main ; le déploiement
-        # servait alors un sha dont AUCUNE CI n'avait été vue verte — 3 occurrences
-        # mesurées le 14/09. Préprod et prod partagent la même base : un DDL ou une
-        # semence non vérifiés s'y jouaient au boot. `github.sha` fige ce que ce run
-        # a réellement testé.
-        run: sudo /opt/deploy/oto-backend-canari.sh ${{ github.sha }}
-
   # ─────────────────────────────────────────────────────────────────────────────
   # LES CONSOMMATEURS DÉCLARÉS DE NOTRE API (#966).
   #
   # Un front (le dashboard) ou un service (le commerce) épingle dans SON
-  # dépôt ce qu'il appelle et lit de notre OpenAPI. Les deux jobs de contrat ci-dessous
-  # confrontent CHAQUE contrat épinglé à ce que nous servons : celui qui casse l'apprend
+  # dépôt ce qu'il appelle et lit de notre OpenAPI. Le job de contrat ci-dessous
+  # confronte CHAQUE contrat épinglé à ce que ce code servirait : celui qui casse l'apprend
   # le premier, ici, et non le lendemain dans le travail de quelqu'un d'autre (mesuré le
   # 31/08/2026 : deux blocages de livraison chez un front tiers dans la journée, pour
   # des changements venus de nous).
@@ -305,7 +275,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      liste: ${{ steps.liste.outputs.liste }}
       liste_code: ${{ steps.liste.outputs.liste_code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -338,15 +307,14 @@ jobs:
             echo "::error title=Liste des consommateurs refusée::.github/contrat-consommateurs.json ne respecte pas la forme attendue (nom ; dépôt owner/repo et chemin relatif, chemin_admin relatif facultatif, secret en MAJUSCULES ou null ; OU depot_ref, chemin_ref et secret, noms de secrets en MAJUSCULES) — aucun contrat n'est jugé."
             exit 1
           fi
-          echo "liste=$(jq -c . .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
           # La garde d'avant déploiement (`contrat-front-code`) ne juge que ce qu'elle PEUT
           # lire. Sur une PR de fork, un consommateur à secret est illisible : il quitte sa
           # matrice, et ce retrait est DIT (annotation), jamais rendu en vert. Il est jugé,
-          # secret en main, à la poussée sur main, avant le déploiement de préproduction.
+          # secret en main, à la poussée sur main — dont le run vert conditionne le tag.
           if [ "$EST_FORK" = "true" ]; then
             non_juges="$(jq -r '[.[] | select(.secret != null) | .nom] | join(", ")' .github/contrat-consommateurs.json)"
             if [ -n "$non_juges" ]; then
-              echo "::warning title=Contrat NON JUGÉ sur cette PR de fork::GitHub ne transmet aucun secret à une PR venue d'un fork : le contrat de $non_juges n'est pas confronté ici (jambes sautées). Rien à corriger côté contributeur — il est jugé à la poussée sur main, avant le déploiement de préproduction."
+              echo "::warning title=Contrat NON JUGÉ sur cette PR de fork::GitHub ne transmet aucun secret à une PR venue d'un fork : le contrat de $non_juges n'est pas confronté ici (jambes sautées). Rien à corriger côté contributeur — il est jugé à la poussée sur main, avant toute mise en production."
             fi
             echo "liste_code=$(jq -c '[.[] | select(.secret == null)]' .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
           else
@@ -354,94 +322,21 @@ jobs:
           fi
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # APRÈS la préproduction : ce qui est réellement SERVI. Un constat, pas une garde —
-  # un déploiement peut servir autre chose que ce que le code annonce.
-  #
-  # Il ne rougit QUE si les appels ou les lectures d'un consommateur cassent (opération
-  # disparue, entrée modifiée, champ lu retiré). Les écarts sans effet sortent en
-  # avertissement : un contrôle qui crie pour tout cesse d'être lu. Et il ne rougit
-  # JAMAIS pour un geste venu du consommateur — contrat déplacé, dépôt inaccessible :
-  # avertissement, avec le chemin cherché nommé (`scripts/lire-contrat-consommateur.sh`).
-  contrat-front:
-    name: Contrat servi — ${{ matrix.consommateur.nom }}
-    needs: [deploy-preprod, consommateurs]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, oto-platform]
-    strategy:
-      fail-fast: false
-      # Un seul runner auto-hébergé, partagé avec les déploiements : une jambe à la fois.
-      max-parallel: 1
-      matrix:
-        consommateur: ${{ fromJSON(needs.consommateurs.outputs.liste) }}
-    # max observé 15 s ; il clone un dépôt distant, donc il peut pendre au réseau.
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Lire le contrat épinglé
-        id: contrat
-        env:
-          CLE_LECTURE: ${{ matrix.consommateur.secret && secrets[matrix.consommateur.secret] || '' }}
-          NOM: ${{ matrix.consommateur.nom }}
-          # Référence indirecte : le dépôt et le chemin sont des SECRETS (masqués d'office
-          # dans l'en-tête `env:` du journal), lus par leur nom déclaré.
-          DEPOT: ${{ matrix.consommateur.depot_ref && secrets[matrix.consommateur.depot_ref] || matrix.consommateur.depot }}
-          DEPOT_REF: ${{ matrix.consommateur.depot_ref || '' }}
-          CHEMIN_REF: ${{ matrix.consommateur.chemin_ref || '' }}
-          CHEMIN: ${{ matrix.consommateur.chemin_ref && secrets[matrix.consommateur.chemin_ref] || matrix.consommateur.chemin }}
-          SECRET: ${{ matrix.consommateur.secret || '' }}
-        # Valeurs de la liste passées par l'environnement, jamais interpolées dans le
-        # script : une PR peut modifier la liste.
-        run: scripts/lire-contrat-consommateur.sh "$NOM" "$DEPOT" "$CHEMIN" "$SECRET"
-
-      - name: Confronter au contrat servi par la préproduction
-        if: steps.contrat.outputs.lu == 'oui'
-        env:
-          NOM: ${{ matrix.consommateur.nom }}
-          CONTRAT: ${{ steps.contrat.outputs.contrat }}
-        run: |
-          set -uo pipefail
-          COULEUR="$(cat /etc/oto-mcp/active-canari)"
-          case "$COULEUR" in
-            blue)  PORT=9105 ;;
-            green) PORT=9108 ;;
-            *) echo "::error title=Couleur de préproduction inconnue::/etc/oto-mcp/active-canari dit « $COULEUR » — rien n'a été confronté."; exit 1 ;;
-          esac
-          echo "préproduction : couleur $COULEUR, port $PORT"
-          code=0
-          python3 scripts/contrat-front.py --consommateur "$NOM" \
-            "$CONTRAT" "http://127.0.0.1:$PORT/api/openapi.json" || code=$?
-          if [ "$code" = "2" ]; then
-            echo "::error title=Contrat de $NOM — confrontation impossible::L'un des deux documents est illisible — le contrat N'A PAS été jugé."
-            exit 1
-          fi
-          if [ "$code" != "0" ]; then
-            echo "::error title=$NOM va casser::Une opération qu'il épingle a disparu, changé d'entrée, ou ne rend plus ce qu'il lit. Garder la compatibilité, ou le prévenir AVANT la mise en production."
-            exit 1
-          fi
-
-      - name: Effacer la clé de lecture
-        if: always()
-        env:
-          TRAVAIL: ${{ steps.contrat.outputs.travail }}
-        run: rm -rf "$TRAVAIL"
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # LE MÊME CONTRÔLE, MAIS AVANT LE DÉPLOIEMENT — une GARDE, pas un constat.
+  # LE CONTRÔLE AVANT LE DÉPLOIEMENT — une GARDE, pas un constat.
   #
   # Ce job-ci juge le contrat que CE CODE servirait, sans rien déployer : le document
   # est dérivé par simple import, sans serveur ni base, des routes que le serveur monte
   # (`server.routes_rest`, la source unique du montage). `OTO_BILLING_ENABLED=1` : la
-  # préproduction et la production servent la facturation ; la dériver sans elle ferait
+  # production sert la facturation ; la dériver sans elle ferait
   # juger un document que personne ne sert (mesuré le 25/09 : 43 routes « disparues »
   # pour le dashboard, toutes servies).
   #
   # 21/09/2026 — il ne tournait QUE sur les PR, or le tronc reçoit ses commits par
   # poussée directe : il était `skipped` à chaque déploiement réel, et deux retraits de
   # champs lus par le front sont partis en préproduction puis en production sans
-  # l'arrêter. Il tourne aussi sur la poussée, et `deploy-preprod` attend TOUTES ses
-  # jambes ; la production, qui exige un run de préproduction vert sur son sha
-  # (`scripts/garde_preprod_verte.py`), est gardée par ricochet.
+  # l'arrêter. Il tourne aussi sur la poussée ; un rouge d'une de ses jambes rend le run
+  # rouge, et la production, qui exige un run de CE workflow vert sur le sha du tag
+  # (`scripts/garde_tronc_vert.py`), est gardée par ricochet.
   #
   # Mêmes règles de verdict : seule une rupture d'appel ou de lecture bloque. Un ajout
   # compatible sort en avertissement et n'empêche PAS de fusionner.
@@ -451,7 +346,7 @@ jobs:
   # illisible. Il ne sort ni VERT (rien jugé) ni ROUGE (rien à voir avec le code) : il
   # quitte la matrice (`liste_code`, filtrée par `consommateurs`, qui l'annonce en
   # annotation), et si plus rien n'est lisible le job est SAUTÉ. Le même job rejuge le
-  # code, secret en main, à la poussée sur le tronc, avant la préproduction. Ailleurs
+  # code, secret en main, à la poussée sur le tronc, avant tout tag. Ailleurs
   # (PR interne, poussée), un secret déclaré mais absent reste un échec nommé.
   # ⚠️ Un job sauté compte comme réussi pour un contrôle REQUIS : ne pas rendre ce job
   # requis sans revoir ce point.
@@ -528,8 +423,8 @@ jobs:
       # `/api/admin/*` est absent du document public ; le consommateur qui appelle la
       # console (un front d'instance, un service d'usage) épingle ces opérations dans
       # un SECOND contrat, `chemin_admin`, jugé ICI contre le document admin dérivé du
-      # même code (`build(admin=True)`) — avant déploiement seulement, jamais sur la
-      # préproduction servie : pas de clé admin en CI (décision du 09/10/2026). Mêmes
+      # même code (`build(admin=True)`) — avant déploiement seulement, jamais sur une
+      # instance servie : pas de clé admin en CI (décision du 09/10/2026). Mêmes
       # règles de verdict, même outil de lecture, même secret. Sans `chemin_admin`,
       # ces quatre étapes sont sautées et rien ne change.
       - name: Dériver le contrat ADMIN que CE code servirait

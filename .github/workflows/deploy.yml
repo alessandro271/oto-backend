@@ -1,28 +1,25 @@
 name: Deploy prod
 
-# Modèle de release (ADR 0020, refonte 2026-07-20) : un TAG `v*` → PROD.
-# main = tronc/preprod (deploy-canari.yml) ; la prod est un acte explicite = poser un
-# tag `vX.Y.Z` sur le commit de main à promouvoir (`git tag vX.Y.Z && git push origin
-# vX.Y.Z`). Le tag est passé au script serveur root-restreint /opt/deploy/oto-backend.sh
-# (reset --hard <tag> + reinstall oto-core au tag pyproject + restart + healthcheck +
-# rollback). Cf. ADR 0020.
+# Modèle de release : un TAG `v*` → PROD, et rien d'autre ne déploie. `main` n'est que le
+# tronc (décision du 19/11/2026 : plus de préproduction) — `ci.yml` y juge chaque poussée
+# sans rien servir. La prod est un acte explicite = poser un tag `vX.Y.Z` sur un commit de
+# main (`git tag vX.Y.Z && git push origin vX.Y.Z`). Le tag est passé au script serveur
+# root-restreint /opt/deploy/oto-backend.sh (reset --hard <tag> + installation par le
+# verrou + bascule bleu/vert + healthcheck + rollback).
 #
-# 08/10/2026 — LA SUITE COMPLÈTE TOURNE ICI, UNE SEULE FOIS (#1185).
-# Du 08/09 au 08/10, ce workflow ne rejouait pas la suite : `scripts/garde_preprod_verte.py`
-# réutilisait le verdict du job `test` de la préproduction, qui jouait la suite entière au
-# même sha (100 mises en prod mesurées, 0 contradiction). La décision du 08/10 déplace la
-# suite complète : au push sur `main`, `test` ne joue plus que les volets touchés et le
-# socle de gardes (`scripts/selection_tests.py`, `tests/volets.toml`) ; la passe COMPLÈTE
-# est celle-ci, au tag, et `deploy` l'attend. Le vert de préproduction reste exigé par la
-# garde (déployée, sélection et socle verts), mais il ne vaut plus « suite complète ».
-# Conséquence : la prod est servie après la durée de la suite, non plus ~1 min 30 après le
-# tag. Cette suite est RÉPARTIE en parts parallèles (#1111, `suite-tests.yml` : plan par
-# durées mesurées, parts à `-n` dérivé de leur machine, verdict qui rougit sur un test
-# perdu) : ~3 min 30 à 4 min au lieu de ~9-14 min sur un seul runner. `test` n'est plus que
-# l'agrégateur (le nom que `deploy` attend). « Une seule fois » : une relance « Re-run
-# failed jobs » ne rejoue pas une part déjà verte, et `sans_garde_preprod` ne contourne QUE
-# la garde, jamais cette suite. Les durées se régénèrent depuis l'artefact `suite-durees`
-# d'un run complet vert (docs/commands.md §Suite parallèle en CI).
+# DEUX VERDICTS AVANT LE DÉPLOIEMENT.
+# 1. La garde du tronc (`scripts/garde_tronc_vert.py`) : le sha du tag est sur `main`, et
+#    le run de `ci.yml` poussé sur `main` à ce sha exact a conclu `success`, job `test`
+#    compris (volets touchés + socle de gardes, `scripts/selection_tests.py`, et les
+#    contrats des consommateurs). Elle réutilise ce verdict, elle ne le rejoue pas.
+# 2. La SUITE COMPLÈTE, jouée ici une seule fois sur l'arbre du tag (#1185), répartie en
+#    parts parallèles (#1111, `suite-tests.yml` : plan par durées mesurées, parts à `-n`
+#    dérivé de leur machine, verdict qui rougit sur un test perdu) : ~3 min 30 à 4 min.
+#    `test` n'est que l'agrégateur (le nom que `deploy` attend). « Une seule fois » : une
+#    relance « Re-run failed jobs » ne rejoue pas une part déjà verte, et
+#    `sans_garde_tronc` ne contourne QUE la garde 1, jamais cette suite. Les durées se
+#    régénèrent depuis l'artefact `suite-durees` d'un run complet vert (docs/commands.md
+#    §Suite parallèle en CI).
 on:
   push:
     tags: ["v*"]
@@ -31,9 +28,9 @@ on:
       tag:
         description: "Tag à déployer en prod (ex: v1.2.3)"
         required: true
-      sans_garde_preprod:
+      sans_garde_tronc:
         description: >-
-          CONTOURNEMENT : déployer SANS exiger un run de préproduction vert sur ce sha.
+          CONTOURNEMENT : déployer SANS exiger un run CI vert du tronc sur ce sha.
         type: boolean
         default: false
   # Appelé par `release.yml`, qui pose la version puis déclenche le déploiement.
@@ -46,8 +43,8 @@ on:
         description: "Tag à déployer en prod"
         required: true
         type: string
-      sans_garde_preprod:
-        description: "CONTOURNEMENT : déployer sans exiger un run de préproduction vert."
+      sans_garde_tronc:
+        description: "CONTOURNEMENT : déployer sans exiger un run CI vert du tronc sur ce sha."
         type: boolean
         default: false
 
@@ -58,13 +55,13 @@ jobs:
   # Chaque job porte un `timeout-minutes` : sans lui, le défaut de GitHub est de SIX
   # heures. Le 07/09, un job de tests s'est suspendu sur un runner hébergé et n'a plus
   # rien écrit pendant 45 min, jusqu'à une annulation à la main. Hors suite complète
-  # (`test`, plafonnée comme en préproduction), le déploiement tient en ~1 min 30 (garde
+  # (`test`, plafonnée comme dans `ci.yml`), le déploiement tient en ~1 min 30 (garde
   # ~5 s, script bleu/vert 49-69 s dont 20 s d'attente que la nouvelle couleur soit
   # prête) : les plafonds ci-dessous laissent une marge très large et transforment une
   # pendaison silencieuse en échec visible en quelques minutes.
 
   # La syntaxe est vérifiée sur le Python du SERVEUR, pas sur celui de la CI.
-  # Le 27/08, un boot preprod est mort sur « f-string expression part cannot include
+  # Le 27/08, un boot de préproduction est mort sur « f-string expression part cannot include
   # a backslash » : légal en 3.12 (CI) et en 3.13 (poste), SyntaxError en 3.10 (box).
   # Ni les tests ni la CI ne pouvaient le voir — les deux tournaient sur un Python
   # plus récent que ce qui sert. `ast.parse(feature_version=(3,10))` ne l'attrape pas
@@ -105,8 +102,8 @@ jobs:
           esac
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
 
-  # La suite complète, sur l'arbre DU TAG, répartie en parts parallèles comme en
-  # préproduction (`suite-tests.yml`, #1111) : cible vide.
+  # La suite complète, sur l'arbre DU TAG, répartie en parts parallèles comme dans
+  # `ci.yml` (`suite-tests.yml`, #1111) : cible vide.
   suite:
     needs: [tag]
     uses: ./.github/workflows/suite-tests.yml
@@ -163,8 +160,7 @@ jobs:
     concurrency:
       group: deploy-prod
       cancel-in-progress: false
-    # Le jeton n'a besoin de rien d'autre : lire l'arbre, et lire les runs de la
-    # préproduction. Déclaré ici plutôt que laissé au défaut du dépôt, pour que la
+    # Le jeton n'a besoin de rien d'autre : lire l'arbre, et lire les runs du tronc. Déclaré ici plutôt que laissé au défaut du dépôt, pour que la
     # garde ne se mette pas à échouer en 403 le jour où ce défaut se resserre.
     permissions:
       contents: read
@@ -190,36 +186,33 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
 
       # ─────────────────────────────────────────────────────────────────────────
-      # LE VERDICT SE RÉUTILISE, IL NE SE REJOUE PAS.
+      # LE VERDICT DU TRONC SE RÉUTILISE, IL NE SE REJOUE PAS.
       #
-      # Exige un run de préproduction VERT sur le sha exact que ce tag désigne, et
-      # refuse sinon — en nommant ce qu'il a lu (identifiant du run, date, conclusion
-      # exacte). Un refus qui ne dit pas ce qu'il a constaté fait rejouer le même
-      # geste ; celui-ci ferme la question.
+      # Exige (a) que le sha du tag soit sur `main` — ancêtre de sa pointe ou égal —, et
+      # (b) un run de `ci.yml` poussé sur `main` à ce sha exact, conclu `success`, dont le
+      # job `test` conclut `success`. Refuse sinon, en nommant ce qu'il a lu (identifiant
+      # du run, date, conclusion exacte). Un refus qui ne dit pas ce qu'il a constaté fait
+      # rejouer le même geste ; celui-ci ferme la question.
       #
-      # Il n'y a RIEN à créer côté préproduction : le run existe déjà sur chaque
-      # poussée du tronc et porte le sha. Aucun tag, aucun artefact, aucune
-      # publication de plus.
-      #
-      # ⚠️ LE CONTOURNEMENT, ET POURQUOI IL EXISTE. Une garde qui interroge l'API
-      # des runs dépend de ce que l'API garde. Le jour où le run de préproduction
-      # d'un commit a disparu — purge de rétention, run supprimé, incident côté
-      # GitHub — la production serait bloquée par sa propre garde, au pire moment :
-      # celui où l'on veut justement déployer un correctif. `sans_garde_preprod`
-      # rouvre ce chemin. Il n'est PAS atteignable depuis une poussée de tag : il
-      # faut un `workflow_dispatch` délibéré, donc quelqu'un qui l'a voulu, et le
-      # journal garde qui a demandé quoi.
-      - name: Cet arbre a déjà un verdict vert en préproduction
-        if: ${{ inputs.sans_garde_preprod != true }}
+      # ⚠️ LE CONTOURNEMENT, ET POURQUOI IL EXISTE ENCORE. Une garde qui interroge l'API
+      # des runs dépend de ce que l'API garde. Le jour où le run CI d'un commit a disparu
+      # — purge de rétention, run supprimé, incident côté GitHub — la production serait
+      # bloquée par sa propre garde, au pire moment : celui où l'on veut justement
+      # déployer un correctif. `sans_garde_tronc` rouvre ce chemin. Il n'est PAS
+      # atteignable depuis une poussée de tag : il faut un `workflow_dispatch` délibéré,
+      # donc quelqu'un qui l'a voulu, et le journal garde qui a demandé quoi. La suite
+      # complète (`test`, ci-dessus) tourne dans tous les cas.
+      - name: Ce sha est sur le tronc et y a un verdict CI vert
+        if: ${{ inputs.sans_garde_tronc != true }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: python3 scripts/garde_preprod_verte.py "$DEPLOY_REF"
+        run: python3 scripts/garde_tronc_vert.py "$DEPLOY_REF"
 
       - name: Contournement de la garde (demandé explicitement)
-        if: ${{ inputs.sans_garde_preprod == true }}
+        if: ${{ inputs.sans_garde_tronc == true }}
         run: |
-          echo "::warning title=Garde de préproduction CONTOURNÉE::Le déploiement de $DEPLOY_REF a été demandé SANS exiger un run de préproduction vert sur son sha. Aucune vérification n'a été faite sur l'arbre déployé. Qui l'a demandé est dans l'en-tête du run."
+          echo "::warning title=Garde du tronc CONTOURNÉE::Le déploiement de $DEPLOY_REF a été demandé SANS exiger que son sha soit sur main avec un run CI vert. Seule la suite complète du tag a jugé l'arbre déployé. Qui l'a demandé est dans l'en-tête du run."
 
       - name: Deploy prod (build serveur via script root-restreint)
         # Runner self-hosted sur la box dédiée (sudo NOPASSWD limité à

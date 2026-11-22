@@ -58,7 +58,7 @@ rendre() {
   rm -f "$tmp"
 }
 
-# --- le timer de maintenance vit au niveau du RÔLE, pas de la couleur : posé APRÈS la
+# --- les timers de maintenance et d'archive du journal vivent au niveau du RÔLE, pas de la couleur : posé APRÈS la
 # --- bascule, sur l'arbre de la couleur qui sert (comme install_timers de notre prod).
 # --- Chaque rôle a SA base, donc chacun a sa maintenance.
 if [ "$ETAPE" = maintenance ]; then
@@ -66,9 +66,14 @@ if [ "$ETAPE" = maintenance ]; then
   case "$actif" in blue|green) ;; *) refus "pointeur $BG_ACTIVE illisible (« $actif »)" ;; esac
   rendre "$ICI/maintenance.service" "/etc/systemd/system/${UNITE}-maintenance.service" "${BG_TREE}-${actif}"
   install -m 0644 "$DEPLOY/oto-mcp-maintenance.timer" "/etc/systemd/system/${UNITE}-maintenance.timer"
+  # L'archive du journal d'appels, même pose : sans elle, la rétention ne tourne jamais
+  # et le journal grossit sans que rien ne le signale.
+  rendre "$ICI/journal-archive.service" "/etc/systemd/system/${UNITE}-journal-archive.service" "${BG_TREE}-${actif}"
+  install -m 0644 "$DEPLOY/oto-journal-archive.timer" "/etc/systemd/system/${UNITE}-journal-archive.timer"
   systemctl daemon-reload
   systemctl enable --now "${UNITE}-maintenance.timer" >/dev/null
-  amorce_log "maintenance : ${UNITE}-maintenance.timer sur ${BG_TREE}-${actif}"
+  systemctl enable --now "${UNITE}-journal-archive.timer" >/dev/null
+  amorce_log "maintenance : ${UNITE}-maintenance.timer et ${UNITE}-journal-archive.timer sur ${BG_TREE}-${actif}"
   exit 0
 fi
 [ "$ETAPE" = socle ] || refus "étape inconnue « $ETAPE » (socle | maintenance)"

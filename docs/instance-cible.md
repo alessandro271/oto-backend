@@ -40,11 +40,11 @@ plus 10 essais et 20 s (`PUBLIC_PAS`, `PUBLIC_ESSAIS`, `PUBLIC_ATTENTE_MAX`), pu
 — nombre d'essais, durée, dernier code — et rebascule comme avant. Un code HTTP reçu autre
 que 200 échoue tout de suite : la couleur répond mal, l'attente serait servie au public.
 
-**Notre box fait exactement les mêmes gestes qu'avant.** Nos deux wrappers
-(`deploy/oto-backend.sh`, `deploy/oto-backend-canari.sh`) déclarent les valeurs qui
-étaient en dur, à l'identique. La preuve est un banc, pas une relecture :
+**Notre box fait exactement les mêmes gestes qu'avant.** Notre wrapper
+(`deploy/oto-backend.sh` ; celui de notre ancienne préproduction est retiré depuis le
+19/11/2026) déclare les valeurs qui étaient en dur, à l'identique. La preuve est un banc, pas une relecture :
 `tests/deploy/test_gestes_bleu_vert_967.py` rejoue chaque scénario réel — bascule dans
-les deux sens, retour arrière, préproduction, vidange, couleur morte, `caddy validate`
+les deux sens, retour arrière, vidange, couleur morte, `caddy validate`
 qui refuse, trafic public en échec, lanceur figé — avec des doublures qui journalisent
 chaque commande, et compare la trace (commandes, sortie, état final des fichiers) à la
 référence enregistrée depuis les scripts d'avant (`tests/deploy/gestes_bleu_vert/`).
@@ -82,10 +82,11 @@ est **dans le tag** : ni propagé, ni édité sur la machine.
   refuse le démarrage.
 
 Notre box démarre par ce lanceur depuis le 30/09/2026 (lot 5, décrit pas à pas plus bas,
-§Passer notre box au lanceur) : nos deux wrappers déclarent `BG_LANCEUR=versionne`.
-`deploy/start-encrypted.sh` et `-canari.sh`, l'ancienne déclaration de secrets **propre à
-notre cible** (identifiants de notre projet, Mollie, Pennylane), ne servent plus qu'au
-retour arrière du lot 5 : ils partent au lot 5b avec le mode `propage`.
+§Passer notre box au lanceur) : notre wrapper déclare `BG_LANCEUR=versionne`.
+`deploy/start-encrypted.sh`, l'ancienne déclaration de secrets **propre à notre cible**
+(identifiants de notre projet, Mollie, Pennylane), ne sert plus qu'au retour arrière du
+lot 5 : il part au lot 5b avec le mode `propage`. (Son pendant de préproduction est retiré
+avec elle, le 19/11/2026.)
 
 Le lanceur démarre le serveur, ou — `--script CHEMIN` — un script de l'arbre sous son
 Python (l'archive du journal, un script d'entretien), avec les mêmes secrets ; `--noms`
@@ -111,6 +112,7 @@ rien et réécrit seulement ce qui se dérive de la déclaration.
 | Amont Caddy initial | `/etc/caddy/upstream-<i>-<r>.conf` |
 | Vidange (chemin stable : elle tourne après le déploiement) | `/usr/local/lib/<i>/oto-mcp-drain.sh` |
 | Maintenance quotidienne, après la bascule, sur l'arbre qui sert — chaque rôle a sa base, donc la sienne | `<i>-<r>-maintenance.{service,timer}` |
+| Archive quotidienne du journal d'appels (rétention, mois sortis vers le seau du rôle), même pose que la maintenance | `<i>-<r>-journal-archive.{service,timer}` |
 
 Ce qu'elle **exige et ne pose jamais** — le socle, geste d'opérateur, chacun refusé en
 le nommant s'il manque : root ; `uv`, `git`, `caddy`, `python3` ; la clé d'API du

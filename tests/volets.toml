@@ -119,6 +119,7 @@ chemins = [
   "oto_mcp/db/jetons_de_lien.py",
   "oto_mcp/jetons_de_lien_rangement.py",
   "oto_mcp/alerte_agents_bloques.py",
+  "oto_mcp/alertes_equipe.py",
   "oto_mcp/medecin_agents.py",
   "oto_mcp/causes_pannes.py",
   "oto_mcp/db/issues_des_travaux.py",

@@ -13,6 +13,11 @@ status carries no price. What this file locks:
   the job; any other read traces 0 (a job failed or still running, the customer's own
   key);
 - a submission the table could not record is an ERROR (Sentry), never a warning;
+- a price that cannot be read is refused on the shared key and on a call whose key is not
+  known; on the customer's own key it is sent unpriced without `max_usd`, billing nothing,
+  and refused by name with one (`higgsfield_cap_unverifiable`, no signal); a refusal named
+  `higgsfield_price_unknown` files one platform signal per combination (simulated
+  `price_of`: these do not wait for the connectors lib that names it);
 - the settlement bills a completed job nobody read under the org that submitted it, with
   the line the read would have written, and closes the others at no cost.
 """
@@ -151,6 +156,135 @@ def test_the_price_is_rounded_up_to_the_micro_dollar():
     assert microdollars(0.004) == 4000
     assert microdollars(0.1 + 0.2) == 300000, "float noise is not billed"
     assert microdollars(0.0000001) == 1
+
+
+
+# --- a price that cannot be read ------------------------------------------------------
+
+_GPT = "marketing-studio/image/flare"
+_GPT_PARAMS = {"prompt": "a lamp", "aspect_ratio": "16:9", "quality": "high",
+               "resolution": "2k", "image_urls": ["https://x.test/r.png"]}
+_INCONNU = "higgsfield_price_unknown: no charge measured for 16:9 high 2k; measured: 1:1 high 4k"
+
+
+@pytest.fixture
+def sans_prix(monkeypatch):
+    """`price_of` as the connectors lib answers a combination it has no measure for."""
+    rendu = {"usd": None, "approximate": False, "basis": _INCONNU}
+    monkeypatch.setattr("oto.tools.higgsfield.price_of", lambda estimate, params: dict(rendu))
+    return rendu
+
+
+@pytest.fixture
+def signal():
+    with patch("oto_mcp.db.usage.insert_usage_signal") as depot:
+        yield depot
+
+
+def _generer(params=None, model=_GPT, max_usd=1.0):
+    return _tool("higgsfield_act")(op="create_generation", model=model,
+                                   params=params or _GPT_PARAMS, max_usd=max_usd)
+
+
+def test_an_unknown_price_is_refused_on_the_shared_key_and_signalled(
+        client, cle, releve, sans_prix, signal):
+    with patch("oto_mcp.db.higgsfield_jobs.noter") as noter, \
+            pytest.raises(McpError, match="higgsfield_price_unknown.*not sent"):
+        _generer()
+    client.generate.assert_not_called()
+    noter.assert_not_called()
+    assert "units" not in releve or releve["units"] == 0
+    kw = signal.call_args.kwargs
+    assert kw["target"] == ("higgsfield_price_unknown marketing-studio/image/flare "
+                            "aspect_ratio=16:9 quality=high resolution=2k image_urls=1")
+    assert kw["org_id"] is None and kw["sub"] is None and kw["signal"] == "gap"
+    assert _INCONNU in kw["body"]
+
+
+def test_the_signal_is_one_per_combination(client, cle, sans_prix, signal):
+    """The deposit attaches a repeat of a pending target as an occurrence: the same
+    combination must give the same target, another one another target."""
+    for params in (_GPT_PARAMS, dict(_GPT_PARAMS), {**_GPT_PARAMS, "quality": "low"}):
+        with pytest.raises(McpError):
+            _generer(params)
+    cibles = [c.kwargs["target"] for c in signal.call_args_list]
+    assert cibles[0] == cibles[1] != cibles[2]
+    assert "quality=low" in cibles[2]
+
+
+def test_another_unreadable_price_is_refused_without_a_signal(client, cle, sans_prix, signal):
+    sans_prix["basis"] = "a per-second price needs `duration` in params"
+    with pytest.raises(McpError, match="cannot be read .*duration.*not sent"):
+        _generer()
+    client.generate.assert_not_called()
+    signal.assert_not_called()
+
+
+def test_a_signal_that_cannot_be_filed_never_lifts_the_refusal(client, cle, sans_prix, caplog):
+    with caplog.at_level("WARNING", logger="oto_mcp.tools.higgsfield"), \
+            patch("oto_mcp.db.usage.insert_usage_signal", side_effect=RuntimeError("base")), \
+            pytest.raises(McpError, match="not sent"):
+        _generer()
+    client.generate.assert_not_called()
+    assert [r.levelname for r in caplog.records if "not filed" in r.getMessage()] == ["ERROR"]
+
+
+@pytest.mark.parametrize("mode", ["user", "group", "org", "tenant"])
+def test_on_the_customers_own_key_an_unknown_price_without_a_cap_is_sent_unpriced(
+        client, cle, releve, sans_prix, signal, mode):
+    cle["mode"] = mode
+    with patch("oto_mcp.db.higgsfield_jobs.noter") as noter:
+        out = _generer(max_usd=None)
+    client.generate.assert_called_once()
+    assert out["price"] == {"usd": None, "approximate": False, "basis": _INCONNU,
+                            "note": "price not estimated; not billed by the platform"}
+    noter.assert_not_called()
+    signal.assert_not_called()
+    assert "units" not in releve and "quantity" not in releve, "nothing billed"
+
+
+@pytest.mark.parametrize("mode", ["user", "org"])
+def test_on_the_customers_own_key_a_cap_that_cannot_be_checked_is_refused_by_name(
+        client, cle, releve, sans_prix, signal, mode):
+    """The caller asked for a ceiling nobody can check: never dropped in silence. No
+    signal: the platform bills nothing on that key."""
+    cle["mode"] = mode
+    with pytest.raises(McpError, match=r"higgsfield_cap_unverifiable: .*max_usd \$1\.00 "
+                                       r"cannot be checked\. Nothing was sent"):
+        _generer(max_usd=1.0)
+    client.generate.assert_not_called()
+    signal.assert_not_called()
+    assert "units" not in releve and "quantity" not in releve
+
+
+@pytest.mark.parametrize("max_usd", [None, 1.0])
+def test_without_a_cap_the_shared_key_still_refuses_an_unknown_price(
+        client, cle, sans_prix, signal, max_usd):
+    with pytest.raises(McpError, match="cannot be read .*not sent"):
+        _generer(max_usd=max_usd)
+    client.generate.assert_not_called()
+    signal.assert_called_once()
+
+
+def test_a_call_whose_key_is_not_known_is_refused(client, cle, releve, sans_prix, signal):
+    """No `key_mode` noted: who pays is not known, so it is not taken for the customer."""
+    cle["mode"] = None
+    with pytest.raises(McpError, match="not sent"):
+        _generer()
+    client.generate.assert_not_called()
+
+
+def test_a_key_that_turns_shared_between_the_two_resolutions_is_refused(
+        client, cle, sans_prix, signal):
+    def bascule(*a, **kw):
+        cle["mode"] = "platform"
+        return {"type": "description", "pricing_description": "per 1M tokens"}
+    cle["mode"] = "org"
+    client.estimate.side_effect = bascule
+    with pytest.raises(McpError, match="not sent"):
+        _generer(max_usd=None)
+    client.generate.assert_not_called()
+    assert cle["units"] == [1, 1], "the second resolution asks for no price it does not have"
 
 
 # --- the read --------------------------------------------------------------------------

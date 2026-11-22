@@ -237,17 +237,17 @@ def _job_test_aggrege(jobs: dict) -> None:
     assert "needs.suite.result" in json.dumps(premier) and "exit 1" in premier["run"]
 
 
-def test_le_job_test_de_preproduction_porte_le_verdict_de_la_suite():
-    """`scripts/garde_preprod_verte.py` et le script de bascule lisent un job nommé
+def test_le_job_test_du_tronc_porte_le_verdict_de_la_suite():
+    """`scripts/garde_tronc_vert.py` et la protection de branche lisent un job nommé
     EXACTEMENT `test` ; un job appelé par `uses:` s'affiche « suite / … ». Le job `test`
     doit donc exister, attendre la suite, tourner même quand elle rougit, et ne conclure
     `success` que si elle a conclu `success`."""
-    jobs = _workflow("deploy-canari.yml")["jobs"]
+    jobs = _workflow("ci.yml")["jobs"]
     assert jobs["suite"]["uses"] == "./.github/workflows/suite-tests.yml"
     assert jobs["suite"]["needs"] == ["selection"]
     assert jobs["suite"]["with"]["cible"] == "${{ needs.selection.outputs.cible }}"
     _job_test_aggrege(jobs)
-    assert "test" in jobs["deploy-preprod"]["needs"]
+    assert "deploy-preprod" not in jobs, "le tronc ne déploie plus (19/11/2026)"
 
 
 def test_au_tag_la_suite_complete_tourne_sur_la_ref_validee_et_deploy_l_attend():

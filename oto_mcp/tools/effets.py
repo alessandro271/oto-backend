@@ -348,6 +348,12 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "cognism_filter_values": "lire",
     "cognism_redeem": {"lire": "contact account"},
     "cognism_search": {"lire": "contact account"},
+    # A note stays in the conversation, unseen by the contact; segments are added or removed
+    # one by one (read, changed, read again), removing one is a removal; `send_message`
+    # without `confirm_send` only reads a preview, with it reaches the contact.
+    "crisp_act": {"ecrire": "add_note set_state update_conversation update_person "
+                            "update_person_data add_segments",
+                  "envoyer": "send_message", "detruire": "remove_segments"},
     "crunchbase_connect_start": "ecrire",
     "crunchbase_connect_status": "lire",
     "crunchbase_get_company": "lire",
@@ -504,7 +510,6 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # add_members may also remove (remove_record_ids); copy_from moves up to 100 000 records
     "hubspot_list": {"lire": "search get members record_lists", "ecrire": "create restore", "detruire": "update delete add_members remove_members clear_members copy_from"},
     "hubspot_object": {"lire": "search list get associations", "ecrire": "create update add_note", "detruire": "delete merge"},
-    "hubspot_owners": "lire",
     # update PATCHes the raw definition: options given replace the whole option list
     "hubspot_property": {"lire": "list get groups", "ecrire": "create", "detruire": "update delete"},
     "hubspot_push_rows": "envoyer",
@@ -621,7 +626,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "linear_user": {"lire": "list get viewer"},
     # registers a webhook: data then leaves to its URL (decided: a send)
     "linear_webhook": {"lire": "list", "envoyer": "create update", "detruire": "delete"},
-    "linkedin_unipile_account": {"lire": "status contracts inmail_balance", "ecrire": "select"},
+    "linkedin_unipile_account": {"lire": "status contracts inmail_balance limits", "ecrire": "select"},
     # update can archive a thread; update_member can reject an applicant
     "linkedin_unipile_act": {"envoyer": "send react_message publish_post comment_post react_post invite accept_invitation endorse", "detruire": "update update_member decline_invitation cancel_invitation"},
     "linkedin_unipile_facets": "lire",
@@ -1543,6 +1548,8 @@ PAS_UN_LOT: dict[str, str] = {
     "cognism_enrich_account": "anchor_fields",
     "cognism_enrich_contact": "anchor_fields",
     "cognism_redeem": "ids redeem_ids",
+    # the segment names of ONE conversation or ONE contact, not a batch of records
+    "crisp_act": "segments",
     "figma_get_file": "node_ids",
     "figma_get_images": "node_ids",
     "finkare_invoice": "invoices",

@@ -55,6 +55,18 @@ OUTIL_S = 120
 SQL_MS = 30_000
 SESSION_INACTIVE_S = 30 * 60
 
+#: L'ARRÊT GRACIEUX du serveur (`timeout_graceful_shutdown` d'uvicorn, `server.main`) : sur
+#: SIGTERM, uvicorn n'accepte plus rien et laisse finir les requêtes en cours pendant au
+#: plus ce délai, puis annule ce qui reste (un flux qui ne finit jamais, par exemple).
+#: Sans lui, uvicorn attendait sans fin, et c'est systemd qui tuait au `TimeoutStopSec`
+#: sans réponse. Pas une borne d'appel : il ne vaut qu'à l'arrêt du processus.
+#: Égal au plafond de vidange du bleu/vert (`BG_DRAIN_MAX` de `deploy/oto-backend.sh`),
+#: relevé sur la durée réelle des appels (le plus long
+#: appel abouti en 30 jours : 190 s, le 19/11/2026) ; sous le `TimeoutStopSec` des unités
+#: de la couleur (5 min), la marge couvrant la fermeture du processus. Garde :
+#: `tests/deploy/test_vidange_sans_coupure.py`.
+ARRET_GRACIEUX_S = 240
+
 _JOURNAL_INTERVALLE_S = 60.0
 _JOURNAL_MAX = 10_000
 

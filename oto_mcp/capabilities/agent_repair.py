@@ -23,6 +23,13 @@ geste par une personne, et l'agent médecin agit sur toutes les orgs. `op=get` s
 procédure que suit l'agent en LECTURE seule (`_procedure_suivie`), son corps à qui a déjà
 le droit de la lire.
 Chaque geste s'écrit sur l'épisode avec son auteur (`ctx.sub`), avant d'être fait.
+
+⚠️ **Le choix de l'org lie toute réparation** (`_exiger_la_reparation_permise`) : `rerun`
+et `add_tool` sont refusés (403 `auto_repair_off`) tant qu'un admin de l'org n'a pas
+allumé la réparation automatique (`sante_agents.auto_repair`, coupée sans ligne). Cette
+porte est réservée à la plateforme : quiconque la passe répare en son nom, l'agent médecin
+comme un opérateur, d'où qu'il appelle — le refus se juge sur l'org, jamais sur le client
+de l'appel. Aucun forçage : lire, diagnostiquer, escalader et clore restent permis.
 """
 from __future__ import annotations
 
@@ -156,6 +163,18 @@ def _contexte(ep: dict) -> tuple[Optional[dict], Optional[dict]]:
 _REPARATIONS = ("ajout_outil",)
 
 
+def _exiger_la_reparation_permise(ep: dict) -> None:
+    """403 `auto_repair_off` si l'org de l'épisode n'a pas allumé la réparation
+    automatique. Fermé : une ligne absente vaut coupée."""
+    from ..db import sante_agents
+    if not sante_agents.auto_repair(int(ep["org_id"])):
+        raise AuthzDenied(
+            403, "auto_repair_off",
+            f"L'org #{ep['org_id']} n'a pas activé la réparation automatique de ses "
+            "agents : ni relance ni ajout d'outil. Diagnostique, escalade au titulaire "
+            "ou clos l'épisode.")
+
+
 def _outils_manquants(t: dict, org_id: int) -> list[dict]:
     """Ce que la procédure de l'agent et les recettes qu'elle lance appellent, hors de ses
     outils — `[{tool, called_by, read}]` (la même lecture que `missing_tools` d'oto_trigger)."""
@@ -237,18 +256,28 @@ def _ajouter_un_outil(ctx: ResolvedCtx, ep: dict, inp: AgentRepairInput) -> dict
             f"`{outil}` n'est appelé ni par la procédure de l'agent ni par une recette "
             "publiée qu'elle lance, ou l'agent l'a déjà"),
             "missing_tools": list(manquants.values())}
+    from ..db import runner_triggers as rt
+    if outil in rt.outils_annules(tid, org_id):
+        raise AuthzDenied(
+            409, "repair_undone",
+            f"`{outil}` a été retiré de cet agent après une réparation : il ne lui est pas "
+            "redonné. Escalade au titulaire.")
     if not manquants[outil]["read"]:
         return {"episode": ep, "refus": (
             f"`{outil}` n'est pas une lecture : donner un outil qui écrit ou envoie revient "
             "au titulaire de l'agent — escalade-le"),
             "missing_tools": list(manquants.values())}
-    if episodes_agents.noter_reparation(int(ep["id"]), action="ajout_outil",
+    if episodes_agents.noter_reparation(int(ep["id"]), action=episodes_agents.AJOUT_OUTIL,
                                         acteur=ctx.sub, detail=f"+ {outil}",
-                                        maximum=5) is None:
+                                        maximum=5, outil=outil) is None:
         return {"episode": episodes_agents.lire(int(ep["id"])),
                 "refus": "épisode clos, ou plafond d'ajouts atteint"}
     db.update_trigger(tid, org_id, {"tools": list(t.get("tools") or []) + [outil]},
                       par=ctx.sub)
+    # L'`updated_at` que cette écriture a donné à l'agent : à l'annulation, s'il a changé,
+    # quelqu'un a écrit l'agent depuis et l'outil n'est plus sûrement celui-ci.
+    episodes_agents.horodater_l_ajout(int(ep["id"]), outil, trigger_id=tid, org_id=org_id,
+                                      acteur=ctx.sub)
     db.noter_reparation_pour_le_client(tid, org_id, note)
     logger.info("épisode %s (agent %s, org %s) : + outil %s par %s", ep["id"], tid,
                 org_id, outil, ctx.sub)
@@ -268,6 +297,11 @@ def _valider_le_message_client(ep: dict, client: dict) -> None:
     if not client["headline"]:
         raise AuthzDenied(400, "client_headline_required",
                           "`client_headline` est requis avec les autres `client_*`.")
+    from .. import causes_pannes
+    for champ in ("headline", "todo"):
+        refus = causes_pannes.copie_refusee(client[champ])
+        if refus:
+            raise AuthzDenied(400, "client_copy_refused", f"`client_{champ}` : {refus}.")
     if client["link"]:
         t = db.get_trigger(int(ep["trigger_id"]), int(ep["org_id"]))
         sub = (t or {}).get("sub")
@@ -275,6 +309,28 @@ def _valider_le_message_client(ep: dict, client: dict) -> None:
             raise AuthzDenied(400, "client_link_off_instance",
                               "`client_link` : un chemin ou une adresse du tableau de bord "
                               "du client seulement.")
+
+
+def _proposer_a_la_cause(ep: dict, client: dict, *, acteur: str) -> None:
+    """Le texte écrit pour le client d'un épisode devient la copie PROPOSÉE de sa cause,
+    dans la langue de l'org, si elle n'en a pas encore dans cette langue. Elle porte son
+    origine (l'org et l'épisode, `causes_agents.decider`), que l'écran Admin des causes
+    montre ; elle ne sert aux autres orgs qu'une fois la cause approuvée par un opérateur
+    (`agent_causes_admin`). Une cause approuvée ou refusée ne se touche pas, même si elle
+    l'est devenue entre la lecture et l'écriture (`si_statut`) ; le lien, propre à l'org,
+    ne s'y range pas."""
+    from .. import alertes_slack_agents
+    from ..db import causes_agents
+    cause = causes_agents.lire(ep["empreinte"]) if ep.get("empreinte") else None
+    if cause is None or cause["statut"] != "proposee":
+        return
+    langue = alertes_slack_agents.langue(int(ep["org_id"]))
+    if langue in (cause.get("copie") or {}):
+        return
+    copie = {k: client[k] for k in ("headline", "todo", "action") if client.get(k)}
+    causes_agents.decider(cause["cle"], acteur=acteur, copie={langue: copie},
+                          origine={"org_id": int(ep["org_id"]), "episode_id": int(ep["id"])},
+                          si_statut="proposee")
 
 
 def _copie_lue(brute: dict) -> dict:
@@ -387,9 +443,11 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
                 "missing_tools": manquants, "procedure": procedure}
 
     if inp.op == "add_tool":
+        _exiger_la_reparation_permise(ep)
         return _ajouter_un_outil(ctx, ep, inp)
 
     if inp.op == "rerun":
+        _exiger_la_reparation_permise(ep)
         org_id = int(ep["org_id"])
         job = db.get_job(int(ep["dernier_job_id"]), org_id) if ep.get("dernier_job_id") \
             else None
@@ -430,6 +488,7 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
         if any(client.values()):
             from ..db import alertes_slack
             alertes_slack.poser_message_client(int(ep["id"]), client)
+            _proposer_a_la_cause(ep, client, acteur=ctx.sub)
         return {"episode": episodes_agents.lire(int(ep["id"]))}
 
     if inp.op == "escalate":
@@ -458,7 +517,8 @@ CAPABILITIES += [
             "its per-attempt log) / rerun (re-queue the last "
             "dead job — refused, with the reason in `refus`, when the episode is closed, "
             "the agent is off, the fault is the owner's, the job was already re-run, it is older than 24 h, "
-            "an occurrence is already waiting or running, or 2 re-runs were already spent; "
+            "an occurrence is already waiting or running, 2 re-runs were already spent on "
+            "the episode or 20 on the org within 24 h; "
             "it re-queues the job as it was, reading none of the agent's content. ⚠️ No "
             "guard knows whether the dead run already wrote or sent something: a re-run "
             "redoes it) / "
@@ -479,7 +539,10 @@ CAPABILITIES += [
             "client: add_tool (`tool`: ONE read tool from `missing_tools` — never a tool "
             "that writes or sends; `client_note`, one plain sentence in the workspace's "
             "language, required, served on the agent as `repair`). After it, `rerun` is "
-            "allowed even on an owner-side episode. Nothing here touches a key, an "
+            "allowed even on an owner-side episode. rerun and add_tool are refused (403 "
+            "`auto_repair_off`) unless an admin of the episode's org turned automatic "
+            "repair on — whoever calls; add_tool refuses (409 `repair_undone`) a tool "
+            "someone removed after an earlier repair. Nothing here touches a key, an "
             "identity, a procedure, a schedule or any data: those fixes belong to the "
             "agent's owner — say what they are in `diagnostic`. The CAUSE CATALOGUE "
             "(in shadow: it decides nothing yet, the loop compares it with its own "

@@ -228,8 +228,9 @@ BOUCLES: tuple[Boucle, ...] = (
     # (CAS sur `next_due`) : aucun doublon possible, d'où `tiers=False`.
     Boucle(nom="runner_tick", tiers=False,
            armee=_runner_tick_arme, fonction=_runner_tick),
-    # Prévient l'admin d'une org quand un de ses agents programmés est bloqué
-    # (`alerte_agents_bloques.py`, signal 1168) : ENVOIE un courriel à un client.
+    # Prévient une org quand un de ses agents programmés est bloqué
+    # (`alerte_agents_bloques.py`, signal 1168) : ENVOIE un courriel à un client, et un
+    # courriel séparé aux admins de plateforme de l'instance (`alertes_equipe`).
     Boucle(nom="alerte_agents_bloques", tiers=True,
            armee=_allumee_si_declaree("OTO_ALERTE_AGENTS_ENABLED"), fonction=_alerte_agents),
     # Soigne un agent hébergé avant que son titulaire ne le remarque

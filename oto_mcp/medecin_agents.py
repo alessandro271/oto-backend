@@ -90,6 +90,14 @@ FRAICHEUR = timedelta(seconds=6 * INTERVALLE_S)
 #: Ce qui n'est pas servi attend le passage suivant, sans rien dépenser de son plafond.
 RELANCES_PAR_PASSAGE = 20
 
+#: Au plus tant de relances par ORG sur 24 heures glissantes (`episodes_agents.
+#: FENETRE_PLAFOND_ORG`), boucle et agent médecin confondus, en plus des deux par
+#: épisode et du budget d'un passage. Glissantes plutôt que par jour UTC : un jour
+#: calendaire laisserait passer deux plafonds de part et d'autre de minuit. Une relance
+#: refusée par ce plafond est DIFFÉRÉE (rejouée au passage suivant, tant que son travail
+#: n'a pas `AGE_MAX`), jamais escaladée : ce n'est pas la panne qui résiste.
+RELANCES_PAR_ORG = 20
+
 #: Chaque relance automatique part avec un délai tiré entre 0 et ce nombre de secondes :
 #: les relances d'un passage n'arrivent pas en rafale chez le fournisseur.
 GIGUE_MAX_S = 240
@@ -125,6 +133,7 @@ QUI = "médecin des agents"
 REFUS_CLOS = "épisode clos"
 REFUS_DEJA_RELANCE = "ce travail a déjà été relancé"
 REFUS_PLAFOND = "plafond de relances atteint"
+REFUS_PLAFOND_ORG = "plafond de relances de l'org atteint sur 24 heures"
 
 #: Les orgs d'un tenant tiers déjà dites au journal par CE processus.
 _ECARTEES_DITES: set[int] = set()
@@ -207,7 +216,9 @@ def _refus_de_la_trace(episode_id: int, job_id) -> str:
         return REFUS_CLOS
     if _deja_relance(ep, job_id):
         return REFUS_DEJA_RELANCE
-    return REFUS_PLAFOND
+    faites = sum(1 for r in (ep.get("reparations") or [])
+                 if isinstance(r, dict) and r.get("action") == episodes_agents.RELANCE)
+    return REFUS_PLAFOND if faites >= RELANCES_MAX else REFUS_PLAFOND_ORG
 
 
 def _famille_servie(panne: dict) -> bool:
@@ -261,12 +272,12 @@ def relancer(panne: dict, episode: dict, *, acteur: str = ACTEUR,
     file = db.file_du_declencheur(int(panne["trigger_id"]), int(panne["org_id"]))
     if file["pending"] or file["held"] or file["claimed"]:
         return "une occurrence de l'agent attend déjà dans la file, ou tourne"
-    # La trace d'abord, sous garde EN BASE (plafond, et une relance par `job_id`) : deux
-    # processus sur le même épisode, un seul relance.
+    # La trace d'abord, sous garde EN BASE (plafond de l'épisode, plafond de l'org, et
+    # une relance par `job_id`) : deux processus sur le même épisode, un seul relance.
     if episodes_agents.noter_reparation(
-            int(episode["id"]), action="relance", acteur=acteur, job_id=job_id,
-            detail=f"relance du travail {job_id} ({episode.get('classe')})",
-            maximum=RELANCES_MAX) is None:
+            int(episode["id"]), action=episodes_agents.RELANCE, acteur=acteur,
+            job_id=job_id, detail=f"relance du travail {job_id} ({episode.get('classe')})",
+            maximum=RELANCES_MAX, plafond_org=RELANCES_PAR_ORG) is None:
         return _refus_de_la_trace(int(episode["id"]), job_id)
     db.enqueue_job(int(panne["org_id"]), panne.get("kind") or "start",
                    payload=dict(panne.get("payload") or {}), sub=panne.get("sub"),
@@ -313,6 +324,10 @@ def _soigner(panne: dict, episode: dict, maintenant: datetime, *,
         refus = relancer(panne, episode, maintenant=maintenant, delai_s=delai_s)
         if refus is None:
             return "relance"
+        if refus == REFUS_PLAFOND_ORG:
+            log.info("médecin des agents : relance de l'agent %s (org %s) différée — %s",
+                     panne["trigger_id"], panne["org_id"], refus)
+            return "plafond_org"
         if refus == REFUS_PLAFOND and statut != "escalade":
             episodes_agents.poser(int(episode["id"]), statut="escalade",
                                   diagnostic=f"{RELANCES_MAX} relances sans guérison")
@@ -392,16 +407,17 @@ def _incidents(plateforme: list[tuple[str, int]], *, orgs_en_panne: int) -> set[
 
 
 def _relacher(candidats: list[tuple[dict, dict]], incidents: set[str],
-              maintenant: datetime) -> tuple[int, int]:
+              maintenant: datetime) -> tuple[int, int, int]:
     """Relance les candidats de ce passage sous le budget : à tour de rôle par org (la
     plus anciennement en panne d'abord), `RELANCES_PAR_PASSAGE` au plus, `INCIDENT_SONDES`
-    par classe en incident, chacun avec sa gigue. Rend `(relances, différées)`. Une
-    relance qui ne part pas (garde, famille pas encore servie) ne coûte rien."""
+    par classe en incident, chacun avec sa gigue. Rend `(relances, différées, dont au
+    plafond de l'org)`. Une relance qui ne part pas (garde, famille pas encore servie)
+    ne coûte rien ; une relance refusée par le plafond de l'org est différée."""
     par_org: dict[int, deque] = defaultdict(deque)
     for panne, ep in sorted(candidats, key=lambda c: str(c[1].get("ouvert_at") or "")):
         par_org[int(panne["org_id"])].append((panne, ep))
     budget, sondes = RELANCES_PAR_PASSAGE, {c: INCIDENT_SONDES for c in incidents}
-    relances, differees = 0, 0
+    relances, differees, plafond_org = 0, 0, 0
     tour = deque(par_org)
     while tour:
         org = tour.popleft()
@@ -424,7 +440,28 @@ def _relacher(candidats: list[tuple[dict, dict]], incidents: set[str],
             budget -= 1
             if classe in sondes:
                 sondes[classe] -= 1
-    return relances, differees
+        elif fait == "plafond_org":
+            differees += 1
+            plafond_org += 1
+    return relances, differees, plafond_org
+
+
+def _avec_consentement(candidats: list[tuple[dict, dict]]) -> tuple[list, int]:
+    """Les candidats à la relance des seules orgs qui ont ALLUMÉ la réparation
+    automatique (`sante_agents.auto_repair` : coupée sans ligne). Les autres gardent
+    leur épisode ouvert et dit ; rien n'est relancé. Fermé sur erreur : un choix
+    illisible ne relance rien."""
+    from .db import sante_agents
+    if not candidats:
+        return candidats, 0
+    try:
+        allumees = sante_agents.orgs_avec_auto_repair(int(p["org_id"]) for p, _ in candidats)
+    except Exception as e:  # noqa: BLE001 — illisible : on ne relance rien
+        log.warning("médecin des agents : choix de réparation des orgs illisible (%s) — "
+                    "aucune relance à ce passage", e)
+        return [], len(candidats)
+    gardes = [(p, ep) for p, ep in candidats if int(p["org_id"]) in allumees]
+    return gardes, len(candidats) - len(gardes)
 
 
 def balayer(maintenant: Optional[datetime] = None) -> dict:
@@ -498,11 +535,13 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
             log.warning("médecin des agents : agent %s illisible (%s)",
                         panne.get("trigger_id"), e)
     incidents = _incidents(plateforme, orgs_en_panne=len({int(p["org_id"]) for p, *_ in relevees}))
-    relances, differees = _relacher(candidats, incidents, maintenant)
+    candidats, sans_consentement = _avec_consentement(candidats)
+    relances, differees, plafond_org = _relacher(candidats, incidents, maintenant)
     return {"pannes": pannes, "relances": relances, "relances_differees": differees,
             "incidents": sorted(incidents), "gueris": len(gueris),
             "gueris_apres_soin": sum(1 for g in gueris if g.get("reparations")),
             "erreurs": erreurs, "tenant_tiers_ecartes": len(ecartees),
+            "reparation_coupee": sans_consentement, "plafond_org": plafond_org,
             "catalogue_decidees": decidees,
             **_ombre_du_catalogue(vues, causes)}
 

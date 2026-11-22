@@ -4,7 +4,13 @@ Ce qu'on prouve : un problème par cause qui attend le client, avec les agents q
 arrête ; une panne de notre côté ne se dit qu'après six heures, à part, sans geste, et
 son agent compte d'ici là comme fonctionnant ; un membre ne voit que les agents qu'il
 voit ; ce que le médecin a réparé se lit avec sa phrase ; chaque item dit le connecteur
-et la réponse du fournisseur, jamais notre texte interne ; une org archivée ne se lit pas.
+et la réponse du fournisseur, jamais notre texte interne ; une org archivée ne se lit ni
+ne s'écrit (409).
+
+Et l'écriture : la réparation automatique naît coupée, un admin l'allume, rien ne s'écrit
+quand l'instance a éteint les alertes ; défaire une réparation retire l'outil ajouté s'il
+y est encore et que personne n'a écrit l'agent depuis, le garde sinon, en une transaction
+qui tient deux clics simultanés.
 """
 from __future__ import annotations
 
@@ -25,6 +31,7 @@ def base(live, monkeypatch):
     with _connect() as conn:
         conn.execute("DELETE FROM agent_episodes WHERE org_id = %s", (ORG,))
         conn.execute("DELETE FROM runner_triggers WHERE org_id = %s", (ORG,))
+        conn.execute("DELETE FROM agent_health_settings WHERE org_id = %s", (ORG,))
     monkeypatch.setenv("OTO_ALERTES_SLACK_AGENTS_ENABLED", "1")
     from oto_mcp import alerte_agents_bloques
     monkeypatch.setattr(alerte_agents_bloques, "org_a_nous", lambda org, qui: org == ORG)
@@ -66,7 +73,8 @@ def test_un_probleme_par_cause_avec_les_agents_qu_il_arrete(base):
     assert [x["label"] for x in pb["agents"]] == ["Relances", "Veille"]
     assert pb["since"] and out["covered"] is True
     assert out["on_us"] == [], "comme sur la carte de l'agent : rien avant six heures"
-    assert set(out) == {"watched", "working", "needs_you", "on_us", "fixed", "covered"}
+    assert set(out) == {"watched", "working", "needs_you", "on_us", "fixed", "auto_repair",
+                        "covered"}
 
 
 def test_un_membre_ne_voit_pas_l_agent_d_un_autre(base):
@@ -94,8 +102,10 @@ def test_ce_que_le_medecin_a_repare_se_lit_avec_sa_phrase(base):
     fixed = {f["agent"]["label"]: f for f in _lire()["fixed"]}
     assert fixed["Relances"]["what"].startswith("Il s'est arrêté sur une panne passagère")
     assert fixed["Veille"]["what"] == "Nous avons ajouté la recherche web."
-    assert set(fixed["Veille"]) == {"episode_id", "agent", "at", "what"}, \
-        "la lecture ne propose aucun geste"
+    assert set(fixed["Veille"]) == {"episode_id", "agent", "at", "what", "undo", "undone"}
+    assert (fixed["Veille"]["undo"], fixed["Veille"]["undone"]) == (True, False), \
+        "un ajout d'outil se défait, par qui peut modifier l'agent"
+    assert fixed["Relances"]["undo"] is False, "une relance ne se défait pas"
 
 
 def test_une_panne_pas_encore_comprise_est_a_nous(base):
@@ -157,24 +167,43 @@ def test_chaque_item_dit_le_connecteur_et_la_reponse_du_fournisseur(base):
 
 # ── La route se lit dans une org vivante (`ORG_MEMBER_OF_LIVE`) ───────────────────
 
-def _authz():
+def _authz(cle="org.agent_health.get"):
     from oto_mcp.capabilities.registry import CAPABILITIES
-    (cap,) = [c for c in CAPABILITIES if c.key == "org.agent_health.get"]
+    (cap,) = [c for c in CAPABILITIES if c.key == cle]
     return cap.authz
 
 
-def test_une_org_archivee_ne_se_lit_pas(monkeypatch):
+_ENTREES = {"org.agent_health.get": H.AgentHealthInput(org_id=ORG),
+            "org.agent_health.set": H.AgentHealthSaveInput(org_id=ORG, auto_repair=True),
+            "org.agent_health.undo": H.AgentHealthUndoInput(org_id=ORG, episode_id=1)}
+
+
+@pytest.mark.parametrize("cle", sorted(_ENTREES))
+def test_une_org_archivee_ne_se_lit_ni_ne_s_ecrit(monkeypatch, cle):
     from oto_mcp import access, org_store, roles
     monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: True)
     monkeypatch.setattr(access, "get_user_role", lambda sub: "user")
     archivee = {"v": False}
     monkeypatch.setattr(org_store, "is_archived_org", lambda org: archivee["v"])
-    inp = H.AgentHealthInput(org_id=ORG)
-    assert _authz()(RawCtx(sub="jane"), inp).org_id == ORG
+    inp = _ENTREES[cle]
+    assert _authz(cle)(RawCtx(sub="jane"), inp).org_id == ORG
     archivee["v"] = True
     with pytest.raises(AuthzDenied) as e:
-        _authz()(RawCtx(sub="jane"), inp)
+        _authz(cle)(RawCtx(sub="jane"), inp)
     assert (e.value.status, e.value.code) == (409, "org_archived")
+
+
+def test_seul_un_admin_choisit_la_reparation(live, monkeypatch):
+    from oto_mcp import access, org_store, roles
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: False)
+    monkeypatch.setattr(access, "get_user_role", lambda sub: "user")
+    monkeypatch.setattr(access, "is_platform_operator", lambda sub: False)
+    monkeypatch.setattr(org_store, "is_archived_org", lambda org: False)
+    with pytest.raises(AuthzDenied) as e:
+        _authz("org.agent_health.set")(RawCtx(sub="jane"), _ENTREES["org.agent_health.set"])
+    assert e.value.status == 403
 
 
 def test_un_non_membre_n_apprend_pas_que_l_org_est_archivee(monkeypatch):
@@ -184,3 +213,186 @@ def test_un_non_membre_n_apprend_pas_que_l_org_est_archivee(monkeypatch):
     with pytest.raises(AuthzDenied) as e:
         _authz()(RawCtx(sub="intrus"), H.AgentHealthInput(org_id=ORG))
     assert e.value.status == 403
+
+
+# ── Le choix de l'org : PUT ────────────────────────────────────────────────────────
+
+def _poser(valeur, sub="jane"):
+    return H._poser(ResolvedCtx(sub=sub),
+                    H.AgentHealthSaveInput(org_id=ORG, auto_repair=valeur))
+
+
+def test_la_reparation_automatique_nait_coupee_et_un_admin_l_allume(base):
+    from oto_mcp.db import sante_agents
+    assert _lire()["auto_repair"] is False, "aucune ligne : coupée"
+    assert _poser(True)["auto_repair"] is True
+    assert sante_agents.auto_repair(ORG) is True
+    assert _poser(False)["auto_repair"] is False
+
+
+def test_instance_eteinte_le_put_n_ecrit_rien(base, monkeypatch):
+    from oto_mcp.db._conn import _connect
+    monkeypatch.delenv("OTO_ALERTES_SLACK_AGENTS_ENABLED")
+    with pytest.raises(AuthzDenied) as e:
+        _poser(True)
+    assert (e.value.status, e.value.code) == (404, "agent_alerts_off")
+    with _connect() as conn:
+        assert conn.execute("SELECT 1 FROM agent_health_settings WHERE org_id = %s",
+                            (ORG,)).fetchone() is None, "refusé AVANT d'écrire"
+
+
+# ── Défaire une réparation : POST …/undo ────────────────────────────────────────────
+
+OUTIL = "serper_search"
+
+
+def _reparer(agent):
+    """Le geste du médecin, tel que `add_tool` l'écrit : la trace avec l'outil, l'outil
+    donné à l'agent, l'`updated_at` de cette écriture rangé sur la trace."""
+    from oto_mcp import db
+    from oto_mcp.db import episodes_agents
+    ep = _panne(agent, cote="inconnu", classe="inconnu")
+    episodes_agents.noter_reparation(ep["id"], action="ajout_outil", acteur="medecin",
+                                     detail=f"+ {OUTIL}", outil=OUTIL)
+    t = db.get_trigger(agent, ORG)
+    db.update_trigger(agent, ORG, {"tools": list(t["tools"]) + [OUTIL]}, par="medecin")
+    assert episodes_agents.horodater_l_ajout(ep["id"], OUTIL, trigger_id=agent, org_id=ORG,
+                                             acteur="medecin")
+    return ep
+
+
+def _defaire(ep, sub="jane"):
+    return H._defaire(ResolvedCtx(sub=sub),
+                      H.AgentHealthUndoInput(org_id=ORG, episode_id=int(ep["id"])))
+
+
+def test_defaire_retire_l_outil_et_le_medecin_ne_le_redonne_pas(base):
+    from oto_mcp import db
+    from oto_mcp.db import episodes_agents, runner_triggers as rt
+    a = _agent("Veille")
+    ep = _reparer(a)
+    rt.noter_reparation_pour_le_client(a, ORG, "Nous avons ajouté la recherche web.")
+    episodes_agents.poser(int(ep["id"]), statut="clos", resolution="gueri")
+    out = _defaire(ep)
+    assert out["undo_result"] == {"removed": [OUTIL], "kept": []}
+    assert db.get_trigger(a, ORG)["tools"] == ["a"]
+    assert db.get_trigger(a, ORG)["repair"] is None, "la note de cet épisode s'efface"
+    assert OUTIL in rt.outils_annules(a, ORG)
+    (f,) = out["fixed"]
+    assert (f["undo"], f["undone"]) == (False, True)
+    assert f["what"] == H._DEFAITE["fr"]
+    gestes = episodes_agents.lire(int(ep["id"]))["reparations"]
+    assert [g["action"] for g in gestes] == ["ajout_outil", "annulation"]
+    assert gestes[-1]["acteur"] == "jane"
+    with pytest.raises(AuthzDenied) as e:
+        _defaire(ep)
+    assert e.value.code == "repair_not_undoable", "une fois"
+
+
+def test_un_outil_remis_a_la_main_est_garde(base):
+    """Une personne a retiré l'outil puis l'a remis : l'agent a été écrit depuis la
+    réparation, l'outil présent n'est plus sûrement celui du médecin — il reste."""
+    from oto_mcp import db
+    from oto_mcp.db import runner_triggers as rt
+    a = _agent("Veille")
+    ep = _reparer(a)
+    db.update_trigger(a, ORG, {"tools": ["a"]}, par="jane")
+    db.update_trigger(a, ORG, {"tools": ["a", OUTIL]}, par="jane")
+    out = _defaire(ep)
+    assert out["undo_result"] == {"removed": [], "kept": [OUTIL]}
+    assert db.get_trigger(a, ORG)["tools"] == ["a", OUTIL]
+    assert OUTIL in rt.outils_annules(a, ORG), "le médecin ne le redonne pas pour autant"
+
+
+def test_un_outil_deja_retire_ne_se_retire_pas_deux_fois(base):
+    from oto_mcp import db
+    a = _agent("Veille")
+    ep = _reparer(a)
+    db.update_trigger(a, ORG, {"tools": ["a", "b"]}, par="jane")
+    out = _defaire(ep)
+    assert out["undo_result"] == {"removed": [], "kept": []}
+    assert db.get_trigger(a, ORG)["tools"] == ["a", "b"], "l'écriture de jane tient"
+
+
+def test_deux_annulations_simultanees_ne_font_qu_un_geste(base):
+    import threading
+    from oto_mcp import db
+    from oto_mcp.db import episodes_agents, sante_agents
+    a = _agent("Veille")
+    ep = _reparer(a)
+    depart, resultats = threading.Barrier(2), []
+
+    def _clic():
+        depart.wait()
+        resultats.append(sante_agents.defaire(int(ep["id"]), ORG, acteur="jane"))
+    fils = [threading.Thread(target=_clic) for _ in range(2)]
+    for f in fils:
+        f.start()
+    for f in fils:
+        f.join()
+    faits = [r for r in resultats if r is not None]
+    assert len(faits) == 1 and resultats.count(None) == 1
+    assert faits[0]["retires"] == [OUTIL]
+    assert db.get_trigger(a, ORG)["tools"] == ["a"]
+    gestes = episodes_agents.lire(int(ep["id"]))["reparations"]
+    assert [g["action"] for g in gestes].count("annulation") == 1
+
+
+def test_une_annulation_concurrente_d_une_retouche_ne_perd_pas_la_retouche(base):
+    """Une retouche des outils tient la ligne de l'agent ; l'annulation lancée pendant
+    elle attend, puis relit les outils APRÈS elle : la retouche n'est pas perdue, et
+    l'agent ayant été écrit depuis la réparation, l'outil est gardé."""
+    import threading
+    from oto_mcp import db
+    from oto_mcp.db import sante_agents
+    from oto_mcp.db._conn import _connect
+    a = _agent("Veille")
+    ep = _reparer(a)
+    resultat = {}
+
+    def _annuler():
+        resultat["fait"] = sante_agents.defaire(int(ep["id"]), ORG, acteur="jane")
+    fil = threading.Thread(target=_annuler)
+    with _connect() as conn:
+        conn.execute("SELECT 1 FROM runner_triggers WHERE id = %s FOR UPDATE", (a,))
+        fil.start()
+        fil.join(0.5)
+        assert fil.is_alive(), "l'annulation attend la ligne de l'agent"
+        conn.execute("UPDATE runner_triggers SET tools = %s::jsonb, updated_at = NOW(), "
+                     "updated_by = 'bob' WHERE id = %s", (f'["a", "{OUTIL}", "c"]', a))
+    fil.join()
+    assert resultat["fait"]["gardes"] == [OUTIL]
+    assert db.get_trigger(a, ORG)["tools"] == ["a", OUTIL, "c"]
+
+
+def test_l_episode_d_une_autre_org_ne_se_defait_pas(base):
+    from oto_mcp.db import sante_agents
+    a = _agent("Veille")
+    ep = _reparer(a)
+    assert sante_agents.defaire(int(ep["id"]), ORG + 1, acteur="jane") is None
+    with pytest.raises(AuthzDenied) as e:
+        H._defaire(ResolvedCtx(sub="jane"),
+                   H.AgentHealthUndoInput(org_id=ORG + 1, episode_id=int(ep["id"])))
+    assert e.value.code == "episode_not_found"
+
+
+def test_qui_ne_peut_pas_modifier_l_agent_ne_le_defait_pas(base):
+    from oto_mcp import db
+    a = _agent("Le sien", sub="bob")
+    ep = _reparer(a)
+    with pytest.raises(AuthzDenied):
+        _defaire(ep, sub="jane")
+    assert OUTIL in db.get_trigger(a, ORG)["tools"]
+
+
+def test_la_marque_d_un_outil_retire_expire(base):
+    from oto_mcp.db import runner_triggers as rt
+    from oto_mcp.db._conn import _connect
+    a = _agent("Veille")
+    _defaire(_reparer(a))
+    assert OUTIL in rt.outils_annules(a, ORG)
+    with _connect() as conn:
+        conn.execute("UPDATE runner_triggers SET repair_undone_tools = jsonb_build_object("
+                     "%s::text, '2000-01-01T00:00:00Z') WHERE id = %s", (OUTIL, a))
+    assert rt.outils_annules(a, ORG) == set(), "passé le terme, le médecin peut redonner"
+
