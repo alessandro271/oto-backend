@@ -63,7 +63,7 @@ def _mount(monkeypatch, *, match_return=None):
             "message": "…poll with the top-level `request_id` field…"},
     }
     monkeypatch.setattr(access, "resolve_credential",
-                        lambda *a, **k: MagicMock(key="k-byo"))
+                        lambda *a, **k: MagicMock(key="k-byo", is_platform=False))
     monkeypatch.setattr(access, "resolve_api_key", lambda *a, **k: ("k", False))
     monkeypatch.setattr(access, "platform_quota_hint", lambda p: None)
     monkeypatch.setattr(apollo_client, "ApolloClient", lambda **kw: client)
@@ -160,7 +160,7 @@ def test_the_poll_does_not_echo_a_damaged_id(monkeypatch):
                    "webhook_result": {"people": [{"phone_numbers": [{}]}]}},
     }
     monkeypatch.setattr(access, "resolve_credential",
-                        lambda *a, **k: MagicMock(key="k"))
+                        lambda *a, **k: MagicMock(key="k", is_platform=False))
     monkeypatch.setattr(apollo_client, "ApolloClient", lambda **kw: client)
     # Le receveur d'oto (éprouvé dans `test_apollo_receveur.py`) : rien de livré,
     # donc le sondage d'Apollo répond — le chemin que ce banc décrit.

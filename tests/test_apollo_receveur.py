@@ -487,3 +487,63 @@ def test_une_seule_ligne_ne_recoit_pas_un_lot(commanditaire, http, monkeypatch):
     with pytest.raises(McpError) as e:
         fn(request_id="7272", datastore=ns, row_id=ids[0])
     assert e.value.error.data["code"] == "apollo_phone_target"
+
+
+# ── 7. la clé PLATEFORME est partagée, ses reveals non ──────────────────────
+
+def _cle_plateforme():
+    from oto_mcp.access.resolved_credential import ResolvedCredential
+    return ResolvedCredential(provider="apollo", secret="k", is_platform=True,
+                              mode="platform", entity_type=None, entity_id=None)
+
+
+def test_sur_la_cle_plateforme_une_autre_org_ne_lit_pas_le_reveal(commanditaire, http,
+                                                                   monkeypatch):
+    """Toutes les orgs résolvent la MÊME clé plateforme : sans l'org dans la portée,
+    l'une lirait les numéros que l'autre a commandés, au seul `request_id`."""
+    from oto_mcp import access, apollo_receiver
+    cle = _cle_plateforme()
+    jeton, url = apollo_receiver.commander(cle)
+    apollo_receiver.lier(jeton, "5151")
+    http.post(_chemin(url), json={**_CORPS, "request_id": 5151})
+    assert apollo_receiver.resultat_recu("5151", cle) is not None
+    assert apollo_receiver.commande_connue("5151", cle)
+
+    monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "sub-ailleurs")
+    monkeypatch.setattr(access, "current_org", lambda sub: _AUTRE_ORG)
+    assert apollo_receiver.resultat_recu("5151", cle) is None
+    assert not apollo_receiver.commande_connue("5151", cle), (
+        "ni livré, ni connu : le repli ne sondera pas Apollo pour une autre org")
+
+
+def test_sur_la_cle_plateforme_un_collegue_de_l_org_lit_le_reveal(commanditaire, http,
+                                                                  monkeypatch):
+    from oto_mcp import access, apollo_receiver
+    cle = _cle_plateforme()
+    jeton, url = apollo_receiver.commander(cle)
+    apollo_receiver.lier(jeton, "5252")
+    http.post(_chemin(url), json={**_CORPS, "request_id": 5252})
+    monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "sub-collegue")
+    assert apollo_receiver.resultat_recu("5252", cle) is not None
+
+
+def test_sur_la_cle_plateforme_sans_org_chacun_ne_lit_que_les_siens(commanditaire, http,
+                                                                    monkeypatch):
+    from oto_mcp import access, apollo_receiver
+    monkeypatch.setattr(access, "current_org", lambda sub: None)
+    cle = _cle_plateforme()
+    jeton, url = apollo_receiver.commander(cle)
+    apollo_receiver.lier(jeton, "5353")
+    http.post(_chemin(url), json={**_CORPS, "request_id": 5353})
+    assert apollo_receiver.resultat_recu("5353", cle) is not None
+    monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "sub-autre")
+    assert apollo_receiver.resultat_recu("5353", cle) is None
+
+
+def test_une_commande_pas_encore_livree_est_connue_de_son_org(commanditaire):
+    from oto_mcp import apollo_receiver
+    cle = _cle_plateforme()
+    jeton, _ = apollo_receiver.commander(cle)
+    apollo_receiver.lier(jeton, "5454")
+    assert apollo_receiver.resultat_recu("5454", cle) is None, "rien de livré encore"
+    assert apollo_receiver.commande_connue("5454", cle), "mais la commande existe"

@@ -105,15 +105,16 @@ def test_revelation_apollo_non_livree_n_est_pas_un_trouve(calls):
     assert out["found"] is False
 
 
-def test_la_revelation_de_telephone_apollo_exige_la_cle_de_l_appelant(calls):
-    calls["modes"] = {"apollo_reveal_phone": "platform"}
-    out = _run("waterfall_phone", linkedin_url="https://linkedin.com/in/jane", providers=["apollo", "lusha"])
-    assert out["attempts"][0]["code"] == "own_key_required"
-    assert "apollo_reveal_phone" not in _made(calls)
-    calls["modes"] = {"apollo_reveal_phone": "org"}
-    calls["made"].clear()
-    _run("waterfall_phone", linkedin_url="https://linkedin.com/in/jane", providers=["apollo"])
-    assert _made(calls)[0] == "apollo_reveal_phone"
+def test_la_revelation_de_telephone_apollo_part_aussi_sur_la_cle_partagee(calls):
+    """Apollo déclare ce que coûte une révélation (`credits_consumed`, relevé à la
+    lecture) : l'étape n'exige plus la clé de l'appelant, elle part sur la clé
+    partagée comme sur la sienne."""
+    for mode in ("platform", "org"):
+        calls["modes"] = {"apollo_reveal_phone": mode}
+        calls["made"].clear()
+        _run("waterfall_phone", linkedin_url="https://linkedin.com/in/jane",
+             providers=["apollo"])
+        assert _made(calls)[0] == "apollo_reveal_phone", mode
 
 
 

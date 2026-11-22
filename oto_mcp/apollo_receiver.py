@@ -74,11 +74,22 @@ def url_de_reception(jeton: str) -> str:
     return config.public_base_url() + CHEMIN.format(token=jeton)
 
 
-def portee(cle: ResolvedCredential) -> str:
+def portee(cle: ResolvedCredential, sub: Optional[str] = None) -> str:
     """La portée d'une clé Apollo résolue : `niveau:entité:compte`. Deux appels qui
     résolvent la même clé (même niveau gagnant, même entité, même compte) ont la même
-    portée — c'est la clé de lecture d'un reveal reçu."""
-    return f"{cle.mode}:{cle.entity_type or ''}:{cle.entity_id or ''}:{cle.account or ''}"
+    portée — c'est la clé de lecture d'un reveal reçu.
+
+    ⚠️ **La clé PLATEFORME est mutualisée** : toutes les orgs la résolvent à
+    l'identique (`platform:::`). Sa portée seule ferait lire à une org les numéros
+    qu'une AUTRE a commandés, au seul `request_id`. Sur cette clé, la portée porte
+    donc l'org de l'appelant (son compte, sans org) : chacun ne lit que ses
+    commandes, comme sur une clé propre."""
+    base = f"{cle.mode}:{cle.entity_type or ''}:{cle.entity_id or ''}:{cle.account or ''}"
+    if not cle.is_platform:
+        return base
+    sub = sub or access.current_user_sub_or_raise()
+    org = access.current_org(sub)
+    return f"{base}:org:{org}" if org is not None else f"{base}:user:{sub}"
 
 
 def commander(cle: ResolvedCredential) -> tuple[str, str]:
@@ -87,7 +98,7 @@ def commander(cle: ResolvedCredential) -> tuple[str, str]:
     sub = access.current_user_sub_or_raise()
     jeton = secrets.token_urlsafe(32)
     url = url_de_reception(jeton)
-    db_apollo.ouvrir(empreinte(jeton), access.current_org(sub), sub, portee(cle))
+    db_apollo.ouvrir(empreinte(jeton), access.current_org(sub), sub, portee(cle, sub))
     return jeton, url
 
 
@@ -146,6 +157,14 @@ def resultat_recu(request_id: str,
     if not ligne or ligne.get("payload") is None:
         return None
     return enveloppe(ligne["payload"])
+
+
+def commande_connue(request_id: str, cle: ResolvedCredential) -> bool:
+    """Une commande de ce `request_id` existe-t-elle dans la portée de `cle`, livrée
+    ou pas encore ? Sur la clé plateforme, c'est la condition du repli : sonder
+    Apollo (`webhook_result/{id}`) avec la clé commune rendrait le reveal de
+    N'IMPORTE quelle org à qui devine son identifiant."""
+    return db_apollo.lire(portee(cle), str(request_id)) is not None
 
 
 def personnes(result: dict) -> list[dict]:
