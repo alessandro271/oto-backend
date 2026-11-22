@@ -33,6 +33,16 @@ _TIMEOUT = httpx.Timeout(connect=5.0, read=100.0, write=10.0, pool=5.0)
 # jitteré. 504 (scan trop long) n'est PAS retryé : le répéter regaspille un slot.
 _RETRY_ATTEMPTS = int(os.environ.get("FOD_RETRY_ATTEMPTS", "3"))
 _RETRY_BACKOFF_S = float(os.environ.get("FOD_RETRY_BACKOFF_S", "0.5"))
+# 502 (« source amont indisponible ») et délai de CONNEXION dépassé : une seule reprise,
+# et seulement si l'appel ENTIER tient dans `_DUREE_MAX_REPRISE_S`. Mesuré le
+# 2026-11-21 : `fr/entreprises/search` rendait 502 (page HTML de passerelle) en ~1 s
+# puis passait à l'appel suivant. Mais un 502 peut aussi coûter ~30 s (l'amont qui se
+# tait) : le reprendre en doublerait la durée au-delà des ~60 s où un client MCP
+# raccroche. D'où le budget : la reprise n'a lieu que s'il reste de quoi la faire, et
+# sa lecture est bornée par ce reste. Un délai de LECTURE dépassé n'est jamais repris.
+_REPRISES_TRANSITOIRES = 1
+_DUREE_MAX_REPRISE_S = 45.0
+_RESTE_MIN_S = 10.0         # en dessous, pas de reprise : elle n'aurait pas le temps
 
 _client: Optional[httpx.Client] = None
 
@@ -79,13 +89,24 @@ def _public(texte: str) -> str:
     return net
 
 
+_TITRE_HTML_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
 def _detail(r: httpx.Response) -> str:
     try:
         brut = r.json().get("detail", r.text)
     # noqa: SILENT — corps non-JSON : le texte brut EST le détail rendu
     except Exception:
         brut = r.text
-    return _public(str(brut))[:400]
+    brut = str(brut)
+    if brut.lstrip()[:15].lower().startswith(("<!doctype html", "<html")):
+        # Une page d'erreur de passerelle : 400 caractères de balisage ne disent rien
+        # à l'agent (servis tels quels le 2026-11-21). Son <title> dit l'essentiel.
+        m = _TITRE_HTML_RE.search(brut)
+        titre = " ".join(m.group(1).split()) if m else ""
+        brut = f"page d'erreur HTML de la passerelle : {titre}" if titre else \
+            "page d'erreur HTML de la passerelle"
+    return _public(brut)[:400]
 
 
 def _chemin(r: httpx.Response) -> str:
@@ -187,6 +208,9 @@ def _request(method: str, path: str, *, params: Optional[dict] = None,
     sans réessayer transforme une saturation passagère en fait sur la donnée.
 
     On honore le délai demandé quand l'amont le donne, sinon backoff exponentiel.
+
+    502 (source amont muette) et délai de connexion dépassé : UNE reprise, dans le
+    budget `_DUREE_MAX_REPRISE_S` de l'appel entier. 504 et délai de lecture : aucune.
     """
     r: Optional[httpx.Response] = None
     kw: dict[str, Any] = {}
@@ -195,17 +219,50 @@ def _request(method: str, path: str, *, params: Optional[dict] = None,
         # elle, l'appel s'échoue au timeout de la passerelle (~60 s mesurées) et rend
         # une panne lente et muette là où un refus nommé en quelques secondes suffit.
         kw["timeout"] = httpx.Timeout(connect=5.0, read=timeout, write=10.0, pool=5.0)
+    transitoires = 0
+    debut = time.monotonic()
+
+    def _reprise_possible(attente: float) -> bool:
+        """Reste-t-il, après `attente`, de quoi refaire l'appel dans le budget ? Si
+        oui, borne la lecture de la reprise par ce reste."""
+        reste = _DUREE_MAX_REPRISE_S - (time.monotonic() - debut) - attente
+        if transitoires >= _REPRISES_TRANSITOIRES or reste < _RESTE_MIN_S:
+            return False
+        lecture = min(reste, timeout if timeout is not None else _TIMEOUT.read)
+        kw["timeout"] = httpx.Timeout(connect=5.0, read=lecture, write=10.0, pool=5.0)
+        return True
+
     for attempt in range(_RETRY_ATTEMPTS + 1):
         try:
             r = _c().request(method, path, params=params, json=json_body,
                              headers=headers, **kw)
+        except httpx.ConnectTimeout as exc:
+            # La connexion n'a pas abouti en 5 s : rien n'a été lancé côté FOD,
+            # réessayer ne gaspille aucun slot.
+            attente = _RETRY_BACKOFF_S + random.uniform(0, _RETRY_BACKOFF_S)
+            if attempt < _RETRY_ATTEMPTS and _reprise_possible(attente):
+                transitoires += 1
+                time.sleep(attente)
+                continue
+            raise RuntimeError(
+                f"Source amont indisponible ({path}) : connexion impossible en "
+                f"{_TIMEOUT.connect:.0f} s. Ce n'est pas un fait sur la donnée "
+                f"demandée, RÉESSAYABLE plus tard."
+            ) from exc
         except httpx.TimeoutException as exc:
+            lu = kw["timeout"].read if "timeout" in kw else _TIMEOUT.read
             raise RuntimeError(
                 f"Source amont indisponible ({path}) : pas de réponse en "
-                f"{timeout or _TIMEOUT.read:.0f} s. L'API publique interrogée ne "
+                f"{lu:.0f} s. L'API publique interrogée ne "
                 f"répond pas — ce n'est pas un fait sur la donnée demandée, "
                 f"RÉESSAYABLE plus tard."
             ) from exc
+        if r.status_code == 502 and attempt < _RETRY_ATTEMPTS:
+            attente = _RETRY_BACKOFF_S * 2 + random.uniform(0, _RETRY_BACKOFF_S)
+            if _reprise_possible(attente):
+                transitoires += 1
+                time.sleep(attente)
+                continue
         if r.status_code not in (503, 429) or attempt == _RETRY_ATTEMPTS:
             break
         # Le délai DEMANDÉ prime sur le nôtre : l'amont sait quand son quota

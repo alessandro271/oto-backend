@@ -269,3 +269,20 @@ def _notice(ecartes: set[str], manquants: list[str]) -> Optional[dict]:
         notice["missing"] = manquants
     notice["hint"] = _HINT_SELECTION
     return notice
+
+
+def with_notice(out: Any, notice: Optional[dict], key: str = "selection",
+                fallback_key: Optional[str] = None) -> Any:
+    """`out` with the projection notice attached under `key`, never over a field of
+    the response: if `out` already carries `key`, the notice goes under
+    `fallback_key` (default `oto_<key>`). A non-dict result is wrapped as
+    `{"result": out, key: notice}`. No notice → `out` unchanged.
+
+    One seam for every tool that projects (`oto_call fields=`, Linear, Leexi): each
+    used to attach its notice by hand, and one of them forgot the collision guard."""
+    if notice is None:
+        return out
+    if not isinstance(out, dict):
+        return {"result": out, key: notice}
+    cle = key if key not in out else (fallback_key or f"oto_{key}")
+    return {**out, cle: notice}

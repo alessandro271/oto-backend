@@ -392,12 +392,7 @@ def _selectionner(result, fields: list[str]):
     if payload is None:
         return result
     out, notice = output_projection.select_fields(payload, fields)
-    if notice is not None:
-        if isinstance(out, dict):
-            out = {**out, ("selection" if "selection" not in out
-                           else "oto_call_selection"): notice}
-        else:
-            out = {"result": out, "selection": notice}
+    out = output_projection.with_notice(out, notice, "selection", "oto_call_selection")
     if out == payload:
         return result
     return redaction.rebuild_result(result, out)

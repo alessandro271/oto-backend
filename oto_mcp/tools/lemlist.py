@@ -75,6 +75,47 @@ from ..output_projection import project
 from .lecture import LECTURE
 from .lemlist_crm import raised_by_view
 
+
+# lemlist's POST /leads/{id}/variables refuses the WHOLE call when one name is already
+# on the lead: "Variables subject_1, email_1 already exist" (HTTP 400). Measured
+# 17-21 Nov 2026: 57 of 62 calls refused that way, each a re-run writing fresh copy
+# over the previous one. The add stays an ADD (lemlist's refusal protects a value
+# already set, a person may have reviewed it); the refusal now NAMES the variables and
+# the tool that changes them, instead of a raw HTTP 400.
+_DEJA_LA_RE = re.compile(r"Variables?\s+(.+?)\s+already exists?", re.I)
+
+
+def _deja_la(err) -> Optional[list]:
+    """The names lemlist says already exist, or None if `err` is another refusal."""
+    if getattr(err, "status_code", None) != 400:
+        return None
+    body = getattr(err, "body", None)
+    texte = (body.get("status") or body.get("message")) if isinstance(body, dict) else None
+    m = _DEJA_LA_RE.search(str(texte or err))
+    if not m:
+        return None
+    return [n.strip() for n in m.group(1).split(",") if n.strip()]
+
+
+def _poser_variables(client, lead_id: str, variables: dict) -> dict:
+    """Add the variables; a name the lead already carries is a named refusal."""
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    try:
+        return client.add_lead_variables(lead_id, variables)
+    except UpstreamHTTPError as e:
+        existantes = _deja_la(e)
+        if not existantes:
+            raise
+        nouvelles = sorted(set(variables) - set(existantes))
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+            f"lemlist refused the call: the lead already carries {sorted(existantes)}, "
+            f"and this tool only ADDS variables. To change their value, call "
+            f"`lemlist_lead(op=\"vars_update\", lead_id=\"{lead_id}\", "
+            f"variables={{...}})` with those names"
+            + (f", then this tool again for the new ones ({nouvelles})." if nouvelles
+               else "."))))
+
 #: Action vocabulary of lemlist's v2 bulk. Deliberately written by hand:
 #: it is NOT a snake_case of the v1 flags — email verification is called
 #: `verify` and not `verify_email`. Mirror of `LemlistClient.ENRICH_BULK_ACTIONS`,
@@ -1115,10 +1156,12 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def lemlist_add_lead_variables(lead_id: str, variables: dict) -> dict:
         """Set custom variables on a lead — merged into its personalization
-        data, e.g. for `{{variableName}}` placeholders in campaign templates."""
+        data, e.g. for `{{variableName}}` placeholders in campaign templates.
+
+        ADDS only: a name the lead already carries is refused, naming it; its
+        value is changed with `lemlist_lead(op="vars_update")`."""
         client, is_platform = _client()
-        result = client.add_lead_variables(lead_id, variables)
-        return result
+        return _poser_variables(client, lead_id, variables)
 
     # --- Campaign management ---------------------------------------------------
     #
