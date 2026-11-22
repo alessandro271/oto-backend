@@ -412,6 +412,20 @@ def test_search_console_is_inscribed_with_its_service_account_key():
     assert descriptions.refus_de_montage(descriptions.charger("google_search_console")) == []
 
 
+def test_search_console_is_read_by_its_service_account_access_only(monkeypatch):
+    """google_search_console 2.0.0 opens by two accesses; oto 1 serves the service account's, and a connector with
+    several accesses that `ACCES_SERVIS` does not name is refused at load, never served by a default one."""
+    from oto.connectors import descriptions as servies
+    from oto.connectors.engine import UnknownAccess
+    assert [a["name"] for a in servies.load("google_search_console")["connector"]["accesses"]] == [
+        "service_account", "google_account"]
+    vue = descriptions.charger("google_search_console")["connector"]
+    assert "accesses" not in vue and vue["auth"]["kind"] == "oauth2_jwt_bearer" and vue["modes"] == ["byo_org"]
+    monkeypatch.setattr(descriptions, "ACCES_SERVIS", {})
+    with pytest.raises(UnknownAccess, match="several accesses"):
+        descriptions.charger("google_search_console")
+
+
 def test_search_console_serves_its_reads_and_an_act_side_that_submits(search_console):
     outils, _ = search_console
     assert set(outils) == {"google_search_console", "google_search_console_act"}
