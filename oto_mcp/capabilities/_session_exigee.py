@@ -2,9 +2,10 @@
 
 Exigence : une modification de compte ou une transaction sensible se fait sous une
 session de connexion complète. Un jeton `oto_` (jusqu'à 90 jours, celui d'une personne,
-d'un agent hébergé ou une clé d'org) n'en est pas une. Il ne fait donc pas ces gestes-là — archiver une org, retirer un membre ou changer un rôle, donner le rang
-d'admin (invitation, ajout), transférer la propriété d'un objet, régler la sécurité d'une
-org, gérer les jetons et les clés.
+d'un agent hébergé ou une clé d'org) n'en est pas une. Il ne fait donc pas ces gestes-là
+— archiver une org, retirer un membre ou changer un rôle, donner le rang d'admin
+(invitation, ajout), transférer la propriété d'un objet, régler la sécurité d'une org,
+gérer les jetons et les clés.
 
 Deux crans, parce qu'il y a deux faces et des gestes conditionnels :
 

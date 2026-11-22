@@ -783,8 +783,8 @@ def _gouverner(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         return out
 
     if inp.op == "transfer":
-        # Céder la propriété d'un objet demande une session, jamais un jeton (
-        # `_session_exigee`) — sur les deux faces, `oto_resource` comme
+        # Céder la propriété d'un objet demande une session, jamais un jeton
+        # (`_session_exigee`) — sur les deux faces, `oto_resource` comme
         # `POST /api/resources`. Partager reste ouvert au jeton.
         exiger_session("Transférer la propriété d'une ressource")
         # Le TRANSFERT de propriété exclut le simple gérant (ADR 0048 §3) : owner ∪
