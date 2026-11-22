@@ -164,6 +164,27 @@ def meets_platform_floor(floor: Optional[str], role_plateforme: str) -> bool:
             >= PLATFORM_FLOORS.index(floor))
 
 
+def _refus_operateur(sub: str, defaut: AuthzDenied, *,
+                     exige: tuple[str, ...] = ("admin", "super_admin")) -> AuthzDenied:
+    """Le refus d'une règle à plancher plateforme, DIT quand c'est la garde des
+    administrateurs qui a retiré le rôle (CASA 3.3.1, `garde_admin`) : jeton d'API,
+    second facteur absent ou invérifiable. Sans quoi l'opérateur lirait « réservé à un
+    admin plateforme » — vrai, et sans issue. `exige` = les rôles que la règle ouvre."""
+    from .. import garde_admin
+    m = garde_admin.motif_brut(sub, exige)
+    if m is None:
+        return defaut
+    return AuthzDenied(403, m.code, m.message)
+
+
+def _garde_ou(refus_plateforme: AuthzDenied, defaut: AuthzDenied) -> AuthzDenied:
+    """Une règle qui retombe sur une autre voie après le refus de sa branche
+    plateforme rend le refus de la GARDE des administrateurs s'il y en a eu un — un
+    opérateur sans second facteur doit lire pourquoi, pas « réservé à un autre »."""
+    from .. import garde_admin
+    return refus_plateforme if refus_plateforme.code in garde_admin.CODES else defaut
+
+
 def SUB_ONLY(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     """Tout user authentifié (datastore, méta user-tools, oto_use_org)."""
     sub = _require_sub(raw)
@@ -290,7 +311,8 @@ def PLATFORM_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     (`PLATFORM_INVITE`)."""
     sub = _require_sub(raw)
     if not access.is_platform_operator(sub):
-        raise AuthzDenied(403, "forbidden", "Réservé à un admin plateforme.")
+        raise _refus_operateur(
+            sub, AuthzDenied(403, "forbidden", "Réservé à un admin plateforme."))
     return ResolvedCtx(sub=sub, org_id=access.current_org(sub),
                        role=access.get_user_role(sub))
 
@@ -300,7 +322,9 @@ def SUPER_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     écriture sur orgs tierces, création d'org, entitlements)."""
     sub = _require_sub(raw)
     if not access.is_super_admin(sub):
-        raise AuthzDenied(403, "forbidden", "Réservé au super admin.")
+        raise _refus_operateur(
+            sub, AuthzDenied(403, "forbidden", "Réservé au super admin."),
+            exige=("super_admin",))
     return ResolvedCtx(sub=sub, org_id=access.current_org(sub),
                        role=access.get_user_role(sub))
 
@@ -349,7 +373,8 @@ def LIBRARY_PUBLISHER(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedC
     (jamais d'un param client)."""
     sub = _require_sub(raw)
     if not access.is_super_admin(sub):
-        raise _refus_publication_bibliotheque()
+        raise _refus_operateur(sub, _refus_publication_bibliotheque(),
+                               exige=("super_admin",))
     org_id = access.current_org(sub)
     if org_id is None:
         raise AuthzDenied(400, "no_active_org",
@@ -640,9 +665,10 @@ def PLATFORM_OPERATOR_OPT(field: str):
     def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
         sub = _require_sub(raw)
         if not access.is_platform_operator(sub):
-            raise AuthzDenied(403, CODE_PLATEFORME_SEULE,
-                              "Writing to the platform scope is reserved to platform "
-                              "operators; reading and running stay open to everyone.")
+            raise _refus_operateur(sub, AuthzDenied(
+                403, CODE_PLATEFORME_SEULE,
+                "Writing to the platform scope is reserved to platform "
+                "operators; reading and running stay open to everyone."))
         return membre(raw, inp)
     rule.platform_floor = "operator"
     return rule
@@ -732,8 +758,10 @@ def TENANT_ADMIN_OF(field: str, *, platform):
         except AuthzDenied as refus:
             if refus.status != 403:
                 raise
+            refus_plateforme = refus
         if tenancy.current().tenant_of(sub) != slug or not db.is_tenant_admin(slug, sub):
-            raise AuthzDenied(403, "forbidden", f"Réservé à un admin du tenant `{slug}`.")
+            raise _garde_ou(refus_plateforme, AuthzDenied(
+                403, "forbidden", f"Réservé à un admin du tenant `{slug}`."))
         return ResolvedCtx(sub=sub, org_id=access.current_org(sub),
                            role=access.get_user_role(sub))
     rule.platform_floor = None
@@ -779,12 +807,13 @@ def TENANT_ADMIN_OF_TARGET(field: str, *, platform):
         except AuthzDenied as refus:
             if refus.status != 403:
                 raise
+            refus_plateforme = refus
         registre = tenancy.current()
         slug = registre.tenant_of(cible)
         if (slug == tenancy.primary_slug() or registre.tenant_of(sub) != slug
                 or not db.is_tenant_admin(slug, sub)):
-            raise AuthzDenied(403, "forbidden",
-                              "Réservé à un admin du tenant dont relève ce compte.")
+            raise _garde_ou(refus_plateforme, AuthzDenied(
+                403, "forbidden", "Réservé à un admin du tenant dont relève ce compte."))
         return ResolvedCtx(sub=sub, org_id=access.current_org(sub),
                            role=access.get_user_role(sub))
     rule.platform_floor = None

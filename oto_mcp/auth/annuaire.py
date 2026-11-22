@@ -157,6 +157,26 @@ def logto_user_primary_email(sub: str) -> str | None:
         return None
 
 
+def facteurs_mfa(sub: str, *, timeout: float = 15) -> list[str]:
+    """Les TYPES des seconds facteurs enrôlés d'un user Logto (Management API
+    `GET /api/users/{id}/mfa-verifications`) — `Totp`, `WebAuthn`, `BackupCode`, jamais
+    une valeur. Lu par la garde des administrateurs (`garde_admin`).
+
+    ⚠️ **Lève sur toute panne**, et sur un sub qualifié (`ForeignTenantDirectory`) :
+    c'est à l'appelant de refuser. Une liste vide veut dire « aucun facteur », jamais
+    « on ne sait pas »."""
+    import requests
+
+    from ..tenancy import require_primary_tenant
+    require_primary_tenant(sub, "lecture des facteurs MFA Logto")
+    base, tok = _logto_base(), _mgmt_token()
+    r = requests.get(f"{base}/api/users/{sub}/mfa-verifications",
+                     headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
+                     timeout=timeout)
+    r.raise_for_status()
+    return [str(v.get("type")) for v in r.json()]
+
+
 def reset_user_mfa(sub: str) -> list[str]:
     """Efface tous les facteurs de double authentification d'un user Logto (Management
     API) — geste de récupération de compte : perte de l'appli ET des codes de secours,
@@ -172,6 +192,9 @@ def reset_user_mfa(sub: str) -> list[str]:
         d = requests.delete(f"{base}/api/users/{sub}/mfa-verifications/{v['id']}", headers=h, timeout=15)
         d.raise_for_status()
         removed.append(v["type"])
+    # Le verdict de la garde des administrateurs ne survit pas à ses facteurs.
+    from .. import garde_admin
+    garde_admin.oublier(sub)
     return removed
 
 
