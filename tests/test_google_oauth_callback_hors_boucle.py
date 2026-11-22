@@ -2,8 +2,8 @@
 d'événements.
 
 `google_oauth_callback` (route Starlette `async def`) faisait `exchange_code` puis
-`persist_token` (→ `_fetch_email`) — deux appels HTTP synchrones. Depuis Google CASA
-(ADA 3.2.2, 22/11/2026) le callback n'échange PLUS rien : l'échange vit dans la
+`persist_token` (→ `_fetch_email`) — deux appels HTTP synchrones. Depuis le
+22/11/2026 le callback n'échange PLUS rien : l'échange vit dans la
 complétion `me.federation.google.complete`, qui tourne dans le threadpool de
 l'adaptateur REST comme toute capacité. Ce banc garde les deux moitiés : le callback
 ne touche à aucun appel bloquant, et l'échange de la complétion part hors boucle.
@@ -68,7 +68,7 @@ def wired(monkeypatch):
 
 def test_le_callback_n_echange_rien(monkeypatch, wired):
     def _jamais(*a, **k):
-        raise AssertionError("le callback ne doit plus échanger (CASA 3.2.2)")
+        raise AssertionError("le callback ne doit plus échanger")
 
     monkeypatch.setattr(wired.google_oauth, "exchange_code", _jamais)
     monkeypatch.setattr(wired.google_oauth, "persist_token", _jamais)

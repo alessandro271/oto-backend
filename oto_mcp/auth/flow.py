@@ -229,7 +229,7 @@ def return_url(app: Optional[str], suffix: str, *, org: Optional[int] = None) ->
 # administrateur), `admin_approved` / `admin_refused` (réponse d'un administrateur au
 # lien d'approbation, `auth/microsoft.admin_consent_url`).
 #
-# Et pour Google (22/11/2026, Google CASA ADA 3.2.2) : `confirm` — rien n'est encore
+# Et pour Google (22/11/2026) : `confirm` — rien n'est encore
 # rangé ; le code et le state sont dans le FRAGMENT de l'URL, et le front termine avec
 # son jeton (`POST /api/google/oauth/complete`), qui vérifie que le state est le sien.
 #

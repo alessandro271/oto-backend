@@ -16,12 +16,11 @@ Flow:
    refused), THEN the code is exchanged and the token persisted
    (`connector_credentials`, connector='google').
 
-Why step 3-4 (Google CASA, ADA 3.2.2 — state validation against CSRF): the callback
-is unauthenticated, so the browser that lands there proves nothing about WHO it is.
-Trusting the state's `sub` there let a consent URL minted by A, opened by B, store
-B's Google tokens under A's account. A cookie set at start could not bind the
-browser either: the start is a cross-origin bearer call (or an MCP agent, with no
-browser at all), and the callback may run on a tenant's host.
+Why steps 3-4: the link completes only for the person who started it, and only
+once. The callback is unauthenticated, so the completion is done by the front with
+its bearer token. A cookie set at start could not do it: the start is a cross-origin
+bearer call (or an MCP agent, with no browser at all), and the callback may run on a
+tenant's host.
 
 To use the credentials (tools side): `credentials_for(sub, account, service)`
 chooses the account by the common resolution (`access.resolve_credential`:
@@ -334,9 +333,8 @@ def make_state(sub: str, org_id: int, return_app: str = "",
     started the flow**: the callback no longer trusts the `sub` it carries. It hands
     the code and the state to the front, which completes the link with ITS bearer
     token; the completion refuses a state whose `sub` is not the bearer's
-    (`capabilities/federated_oauth.py::me.federation.google.complete`). Without that, a
-    consent URL minted by A and completed by B stored B's Google tokens under A's
-    account (account-linking CSRF).
+    (`capabilities/federated_oauth.py::me.federation.google.complete`): the link
+    completes only for the person who started it, once.
 
     `connector` (`c`): WHICH card requested the consent — the account, or one of
     its services (split of 2026-09-26). The front returns there.

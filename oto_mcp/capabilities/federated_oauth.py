@@ -6,7 +6,7 @@ révoquer, élire le compte par défaut.
 - `DELETE /api/google/oauth`         → révoque
 - `POST   /api/google/oauth/default` → élit le compte Google par défaut
 - `POST   /api/google/oauth/complete` → termine un consentement, AVEC le jeton de qui l'a
-  démarré (Google CASA, ADA 3.2.2 : le callback ne range plus rien, cf. `_google_complete`)
+  démarré (le callback ne range plus rien, cf. `_google_complete`)
 
 ⚠️ **Ce module a porté `atlassian` et `folkmcp` jusqu'au 2026-09-09** — d'où son nom
 et les clés de capacité `me.federation.google.*`, gardés tels quels : ce sont des

@@ -95,7 +95,7 @@ def test_un_front_inconnu_est_reduit_a_rien():
 
 
 def test_un_state_emis_avant_le_jti_est_refuse():
-    """Changé VOLONTAIREMENT le 22/11/2026 (Google CASA, ADA 3.2.2) : un state d'avant
+    """Changé VOLONTAIREMENT le 22/11/2026 : un state d'avant
     — sans audience ni `jti` — ne peut pas être à usage unique, donc il est refusé.
     Il vit dix minutes au plus : un consentement en vol au déploiement se relance."""
     import base64
@@ -153,7 +153,7 @@ def test_l_url_de_consentement_filtre_le_front_avant_de_signer(monkeypatch):
 
 @pytest.fixture
 def _echange_ok(monkeypatch):
-    """Le callback n'échange ni ne range RIEN (CASA 3.2.2) : s'il y touchait, ces
+    """Le callback n'échange ni ne range RIEN : s'il y touchait, ces
     bancs rougiraient ici plutôt que de passer sur un faux succès."""
     def _jamais(*a, **k):
         raise AssertionError("le callback ne doit ni échanger ni ranger")
@@ -166,7 +166,7 @@ def test_le_callback_ramene_au_front_tiers(_echange_ok):
     reponse = asyncio.run(_callback()(_requete(f"code=c&state={etat}")))
     url = reponse.headers["location"]
     assert url.startswith("https://app.acme.test/"), url
-    # Le callback ne range plus rien (CASA 3.2.2) : `confirm`, le front termine.
+    # Le callback ne range plus rien : `confirm`, le front termine.
     assert "connect=confirm" in url, "la convention de retour de #670 doit tenir"
 
 
@@ -190,7 +190,7 @@ def test_le_callback_sans_front_declare_ramene_sur_une_route_QUI_EXISTE(_echange
 def test_un_echec_ramene_AUSSI_au_front_tiers(monkeypatch):
     """Le piège du retour OAuth : on soigne le succès et on oublie l'échec, donc
     la personne est renvoyée chez nous au pire moment — quand elle doit
-    recommencer. Depuis CASA 3.2.2 l'échange vit dans la complétion : l'échec du
+    recommencer. Depuis le 22/11/2026 l'échange vit dans la complétion : l'échec du
     callback, c'est un retour sans code (une erreur du fournisseur)."""
     etat = google_oauth.make_state("sub-1", 42, "acme")
     url = asyncio.run(_callback()(_requete(

@@ -310,7 +310,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   bougeait pas) ; ils ne servaient AUCUNE distinction succès/échec avant ce lot (le
   repli cassé rendait toujours la même destination), donc rien n'y avait de lecteur à
   préserver — et ils sont partis le 2026-09-09.
-  ⚠️ **Google ajoute `connect=confirm` (22/11/2026, Google CASA ADA 3.2.2)** : le
+  ⚠️ **Google ajoute `connect=confirm` (22/11/2026)** : le
   callback ne range plus rien, il remet `#code=…&state=…` au front (FRAGMENT), qui
   termine par `POST /api/google/oauth/complete` avec son jeton — le `sub` du state
   doit être celui du porteur, le state ne sert qu'une fois. Un front qui ne lit pas

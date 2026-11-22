@@ -25,13 +25,12 @@ le lit) ; l'échec REDIRIGE avec `connect=error` — pur ajout, rien à doubler 
 rien n'existait à cette place. Le diagnostic (state illisible, timeout, échange
 refusé) va au journal, plus jamais dans le corps de la réponse.
 
-**Google CASA, ADA 3.2.2 (22/11/2026)** : le callback ne range PLUS rien. Il lit le
+**Google, depuis le 22/11/2026** : le callback ne range PLUS rien. Il lit le
 state (signé, audience `google`, 10 min) pour savoir où renvoyer, et remet code et
 state au front dans le fragment (`?connector=<carte>&connect=confirm#code=…&state=…`).
 Le front termine avec son jeton (`me.federation.google.complete`) : `sub` du state
-= `sub` du porteur, state consommé une fois, puis échange et rangement. Faire
-confiance au `sub` du state ICI rangeait les jetons Google de B sous le compte de A
-dès que B ouvrait une URL de consentement fabriquée par A.
+= `sub` du porteur, state consommé une fois, puis échange et rangement : la liaison
+n'aboutit que pour la personne qui l'a démarrée, et une seule fois.
 """
 from __future__ import annotations
 
@@ -103,9 +102,8 @@ def make_routes(
         return oauth_flow.connector_return_url(app, connector, etat, org=org)
 
     async def google_oauth_callback(request: Request) -> Response:
-        # Pas d'auth Logto — Google redirige le navigateur. ⚠️ Ce navigateur ne prouve
-        # RIEN de qui le tient : le callback n'échange donc plus rien et ne range rien
-        # (Google CASA, ADA 3.2.2). Il lit le state (signature, audience, TTL) pour
+        # Pas d'auth Logto — Google redirige le navigateur, sans identité : le callback
+        # n'échange donc rien et ne range rien. Il lit le state (signature, audience, TTL) pour
         # savoir OÙ renvoyer, puis remet code et state au front, qui termine avec SON
         # jeton (`POST /api/google/oauth/complete`) — c'est là que le `sub` du state
         # est comparé à celui du porteur, et le state consommé.

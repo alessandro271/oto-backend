@@ -1,10 +1,8 @@
-"""Google CASA, ADA 3.2.2 — le state d'un consentement Google est validé, à usage
-unique, et LIÉ à la personne qui a démarré le flux.
+"""Le state d'un consentement Google est validé, à usage unique, et LIÉ à la
+personne qui a démarré le flux : la liaison n'aboutit que pour elle, et une fois.
 
 Avant ce lot, le callback (`/api/google/oauth/callback`, sans authentification)
-échangeait le code et rangeait le jeton sous le `sub` que le state portait. Une URL
-de consentement fabriquée par A et ouverte par B rangeait donc le compte Google de B
-sous le compte de A (CSRF de liaison de compte). Désormais :
+échangeait le code et rangeait le jeton sous le `sub` que le state portait. Désormais :
 
 - le callback ne range RIEN — il remet code et state au front, dans le fragment ;
 - le front termine avec SON jeton (`me.federation.google.complete`) : le `sub` du
@@ -105,8 +103,8 @@ def test_un_state_rejoue_est_refuse(google):
 
 
 def test_le_state_d_une_autre_personne_est_refuse_sans_rien_consommer(google):
-    """LE scénario du constat : A fabrique l'URL, B consent et termine dans SA session.
-    Refus, rien d'échangé ni de rangé — et le state de A n'est pas brûlé pour autant."""
+    """Un state émis pour A, présenté par B : refus, rien d'échangé ni de rangé — et le
+    state de A reste utilisable par A."""
     etat = google_oauth.make_state(A, ORG)
     code, out = _terminer(etat, sub=B)
     assert (code, out["error"]) == (403, "state_not_yours")

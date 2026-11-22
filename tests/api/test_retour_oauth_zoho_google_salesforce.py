@@ -180,13 +180,13 @@ GOOGLE_CALLBACK = "/api/google/oauth/callback"
 
 def _jamais_d_echange(monkeypatch):
     def _jamais(*a, **k):
-        raise AssertionError("le callback Google ne doit ni échanger ni ranger (CASA 3.2.2)")
+        raise AssertionError("le callback Google ne doit ni échanger ni ranger")
     monkeypatch.setattr(datastore_routes.google_oauth, "exchange_code", _jamais)
     monkeypatch.setattr(datastore_routes.google_oauth, "persist_token", _jamais)
 
 
 def test_google_succes_ne_sert_que_la_forme_neuve(monkeypatch):
-    """Le succès du CALLBACK est désormais `confirm` (Google CASA, ADA 3.2.2) : rien
+    """Le succès du CALLBACK est désormais `confirm` : rien
     n'est échangé ni rangé ici, code et state partent au front dans le FRAGMENT."""
     monkeypatch.setattr(datastore_routes.google_oauth, "verify_state",
                         lambda s: ("sub-1", 7, "", "drive", "org", None))

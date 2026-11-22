@@ -2150,7 +2150,7 @@ OAuth Google per-user (Gmail + Tasks ; scopes Sheets/Drive latents pour l'export
   ouvrir dans le browser. `prompt=consent select_account` → l'user choisit
   quel compte Google connecter (rejouer le flow ajoute un 2e compte).
 - `GET /api/google/oauth/callback?code=…&state=…` — Google redirige ici. ⚠️ Depuis
-  le 22/11/2026 (Google CASA, ADA 3.2.2) **le callback ne range plus rien** : il lit
+  le 22/11/2026 **le callback ne range plus rien** : il lit
   le state (signé, audience `google`, `jti`, 10 min) et renvoie au front
   `?connector=<carte>&connect=confirm#code=…&state=…` (fragment).
 - `POST /api/google/oauth/complete` body `{code, state}` (Logto auth) — le front
