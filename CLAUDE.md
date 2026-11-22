@@ -60,9 +60,10 @@ le PRM porte l'`issuer` (`LOGTO_ENDPOINT` + `/oidc`), jamais un autre domaine du
 et la métadonnée RFC 8414 divergeraient sinon ; « openid » sans `resource` = jeton opaque, 401 (`docs/auth-logto.md`) · ⚠️ **un env-liste s'ÉTEND, ne se
 remplace jamais** (`MCP_AUDIENCE_ALT`, `OTO_MCP_CORS_ORIGINS`, `MAILER_FROM_DOMAINS`, SPF, redirect URIs), chaque env
 ayant la sienne (`docs/auth-logto.md`, `docs/tenants.md`).
-Paliers `member < admin < super_admin` · ⚠️ **`admin`/`super_admin` ne s'exercent qu'en session Logto avec un second
-facteur enrôlé** : jeton `oto_`, compte sans TOTP ni clé d'accès, Logto injoignable ⇒ `member`, au seam `role_effectif`
-(`garde_admin.py`, `docs/auth-logto.md` §Administration de la plateforme) ; clé résolue à chaque appel par le **walker unique** `access.walk_cascade`
+Paliers `member < admin < super_admin` · ⚠️ **sous `OTO_ADMIN_MFA=enforce` (réglage d'instance, non posé = `off`),
+`admin`/`super_admin` ne s'exercent qu'en session Logto avec un second facteur enrôlé** : jeton `oto_`, compte sans TOTP
+ni clé d'accès, Logto injoignable ⇒ `member`, au seam `role_effectif` (`garde_admin.py`, `docs/auth-logto.md`
+§Administration de la plateforme) ; clé résolue à chaque appel par le **walker unique** `access.walk_cascade`
 (`perso > cross-org > équipe active > org > tenant > plateforme`), jamais recopié ; un credential qui se **pose** est
 **multi-compte** · ⚠️ compte nommé introuvable ⇒ « introuvable », **jamais un repli plateforme silencieux**
 (`docs/roles-and-resolution.md`, `docs/connector-vault.md`) · ⚠️ `connector_settings` est en clair et **refuse toute clé

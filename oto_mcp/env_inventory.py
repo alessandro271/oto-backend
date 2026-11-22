@@ -390,14 +390,15 @@ _REGLAGES: tuple[Variable, ...] = (
              "`report` la journalise et la laisse passer, `off` le coupe. Une valeur "
              "inconnue vaut `enforce`.",
              ("oto_mcp/verrou_org.py:141",)),
-    Variable("OTO_ADMIN_MFA", Classe.REGLAGE, "enforce",
-             "Garde des rôles PLATEFORME (`garde_admin.py`, CASA 3.3.1) : `enforce` "
-             "(défaut) lit `member` le porteur `admin`/`super_admin` d'une requête qui "
-             "n'est pas une session Logto interactive avec un second facteur enrôlé "
-             "(jeton `oto_`, compte sans TOTP ni clé d'accès, Logto injoignable), "
-             "`report` journalise ce qui serait retiré et ne retire rien, `off` la "
-             "coupe. Une valeur inconnue vaut `enforce`.",
-             ("oto_mcp/garde_admin.py:142",)),
+    Variable("OTO_ADMIN_MFA", Classe.REGLAGE, "",
+             "Garde des rôles PLATEFORME (`garde_admin.py`, CASA 3.3.1), réglage "
+             "d'instance : non posé = `off` (le tronc inchangé). `enforce` lit `member` "
+             "le porteur `admin`/`super_admin` d'une requête qui n'est pas une session "
+             "Logto interactive avec un second facteur enrôlé (jeton `oto_`, compte sans "
+             "TOTP ni clé d'accès, Logto injoignable) ; `report` journalise ce qui serait "
+             "retiré et ne retire rien (à jouer avant `enforce`). Posée mais inconnue, "
+             "elle vaut `enforce`. Lue à chaque requête.",
+             ("oto_mcp/garde_admin.py:146",)),
     Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "report",
              "Verrou des rôles PLATEFORME des jetons de délégation (`verrou_org.py`) : "
              "`enforce` lit `member` le porteur `admin`/`super_admin` d'un travail du "

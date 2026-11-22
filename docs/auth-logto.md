@@ -336,7 +336,12 @@ Logto, l'`iss` reste le sien (RFC 9207), et seuls trois chemins du domaine de l'
 
 ## Administration de la plateforme : session interactive ET second facteur (CASA 3.3.1)
 
-**La règle** : un compte `admin` ou `super_admin` n'exerce son rôle plateforme que dans
+**Réglage d'instance, éteint par défaut** (`OTO_ADMIN_MFA`, non posé = `off`) : la règle
+ci-dessous ne mord que sur une instance qui s'y inscrit — `report` d'abord, puis
+`enforce`. Sans déclaration, le tronc est inchangé : un opérateur exerce son rôle comme
+avant, sous jeton compris, et Logto n'est jamais lu.
+
+**La règle** (sous `enforce`) : un compte `admin` ou `super_admin` n'exerce son rôle plateforme que dans
 une **session Logto interactive** (JWT vérifié) d'un compte qui a un **second facteur
 fort enrôlé** (`Totp` ou `WebAuthn`). Sinon il lit `member`, à chaque requête. Exigence
 CASA AL1 3.3.1 (« le MFA est imposé à tout compte d'administration ») ; code :
@@ -384,9 +389,15 @@ CASA AL1 3.3.1 (« le MFA est imposé à tout compte d'administration ») ; code
   `admin_interactive_session_required`, `admin_mfa_required` (enrôler TOTP ou clé
   d'accès, se reconnecter), `admin_mfa_unverifiable` (réessayer) — au lieu de « réservé à
   un admin plateforme ».
-- **`OTO_ADMIN_MFA`** : `enforce` (défaut, et toute valeur inconnue), `report`
-  (journalise, ne retire rien), `off`. Retour arrière sans déploiement, sur le modèle des
-  verrous de délégation — pas un réglage d'exploitation courant.
+- **`OTO_ADMIN_MFA`** : non posé ou vide = `off` (défaut du tronc) ; `report`
+  (journalise ce qui serait retiré, ne retire rien) ; `enforce`. Une valeur POSÉE mais
+  inconnue vaut `enforce`, sur le modèle des verrous de délégation : une faute de frappe
+  dans une déclaration qui voulait fermer n'ouvre pas l'administration. Lu à chaque
+  requête ; en changer demande un redémarrage du processus (environnement).
+- **S'inscrire** (une instance) : poser `OTO_ADMIN_MFA=report`, relever dans le journal
+  (`garde admin (report)`) les opérateurs qui perdraient le rôle ; quand chaque
+  `admin`/`super_admin` a enrôlé TOTP ou une clé d'accès ET s'est reconnecté, passer à
+  `enforce`.
 
 **Pourquoi « enrôlé » et pas « utilisé dans cette session »** : Logto re-vérifie le
 facteur enrôlé à chaque connexion (§ MFA par org, `guardMfaVerificationStatus`), et le
@@ -401,11 +412,12 @@ quelles :
 - les agents hébergés d'un opérateur qui appellent un `oto_admin_*` doivent le nommer
   dans `platform_tools` : hors de cette liste, ils lisent `member` même en mode
   `report` du verrou des rôles ;
-- **prérequis de déploiement** : tout compte `admin`/`super_admin`, et le sub de
-  `OTO_MCP_ADMIN_SUB`, doit avoir enrôlé TOTP ou une clé d'accès AVANT le tag — sinon il
-  perd l'administration à la première requête (récupérable : enrôler, se reconnecter ;
-  ou `OTO_ADMIN_MFA=report` le temps de le faire). Un opérateur dont le seul second
-  facteur est un code par SMS doit enrôler TOTP ou une clé d'accès en plus.
+- **prérequis d'`enforce`** : tout compte `admin`/`super_admin`, et le sub de
+  `OTO_MCP_ADMIN_SUB`, doit avoir enrôlé TOTP ou une clé d'accès AVANT le passage à
+  `enforce` — sinon il perd l'administration à la première requête (récupérable :
+  enrôler, se reconnecter ; ou revenir à `OTO_ADMIN_MFA=report` le temps de le faire).
+  Un opérateur dont le seul second facteur est un code par SMS doit enrôler TOTP ou une
+  clé d'accès en plus.
 
 ## MFA par org## MFA par org (« une org impose le 2ᵉ facteur à ses membres »)
 

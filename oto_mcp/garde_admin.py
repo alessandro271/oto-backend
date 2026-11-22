@@ -39,9 +39,12 @@ garde vise ce qui arrive par le réseau. Le porteur se pose au bord : la face RE
 `api/base._authenticate` (chaque branche), la face MCP se lit sur le jeton vérifié par
 FastMCP (`get_access_token`).
 
-`OTO_ADMIN_MFA` : `enforce` (défaut, et valeur de toute valeur inconnue), `report`
-(journalise ce qui serait retiré, ne retire rien) ou `off` — un retour arrière sans
-déploiement, sur le modèle des verrous de délégation.
+**Réglage d'instance, éteint par défaut** — `OTO_ADMIN_MFA` : non posé (ou vide) = `off`,
+le tronc inchangé (un opérateur exerce son rôle comme avant, sous jeton compris) ; une
+instance s'y inscrit avec `report` (journalise ce qui serait retiré, ne retire rien : le
+relevé à faire avant de fermer) puis `enforce`. Une valeur POSÉE mais inconnue vaut
+`enforce`, sur le modèle des verrous de délégation : une faute de frappe dans une
+déclaration qui voulait fermer ne doit pas ouvrir l'administration.
 """
 from __future__ import annotations
 
@@ -137,9 +140,12 @@ _verrous_compte: dict[str, threading.Lock] = {}
 
 
 def mode() -> str:
-    """Le mode de la garde, lu à chaque appel. Une valeur inconnue vaut `enforce` :
-    une faute de frappe ne doit pas ouvrir l'administration."""
-    m = (os.environ.get(_ENV) or "enforce").strip().lower()
+    """Le mode de la garde, lu à chaque appel. Non posé ou vide : `off` (le tronc
+    inchangé, l'instance s'inscrit). Posé mais inconnu : `enforce` — une faute de frappe
+    ne doit pas ouvrir l'administration."""
+    m = (os.environ.get(_ENV) or "").strip().lower()
+    if not m:
+        return "off"
     return m if m in _MODES else "enforce"
 
 

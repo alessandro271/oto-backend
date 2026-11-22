@@ -12,7 +12,9 @@ Ce que ce banc fige :
 4. les règles à plancher plateforme DISENT pourquoi elles refusent (code nommé) ;
 5. les deux portes posent le porteur POSITIVEMENT (REST : chaque branche
    d'`_authenticate`, y compris le rejeu ; MCP : le jeton vérifié par FastMCP) ;
-6. le mode (`OTO_ADMIN_MFA`) : `enforce` par défaut ET sur valeur inconnue ;
+6. le mode (`OTO_ADMIN_MFA`) : réglage d'instance — non posé = `off` (le tronc inchangé,
+   aucune lecture Logto) ; posé mais inconnu = `enforce`. Tout le reste du banc joue
+   SOUS `enforce` (fixture autouse) ;
 7. un tripwire : toute règle à plancher plateforme refuse un opérateur sous jeton d'API.
 """
 from __future__ import annotations
@@ -31,6 +33,13 @@ OP = "op-1"          # un opérateur (son rôle est doublé par `roles`)
 TIERS = "u-2"
 
 
+@pytest.fixture(autouse=True)
+def _garde_armee(monkeypatch):
+    """L'instance s'est inscrite : la garde joue en `enforce`, sauf test qui dit autre
+    chose (section 6)."""
+    monkeypatch.setenv("OTO_ADMIN_MFA", "enforce")
+
+
 @pytest.fixture
 def roles(monkeypatch):
     """Le rôle en base, doublé : `db.get_user` est ce que lit `get_user_role`."""
@@ -38,7 +47,6 @@ def roles(monkeypatch):
     monkeypatch.setattr(db, "get_user",
                         lambda sub: {"sub": sub, "role": table[sub]} if sub in table else None)
     monkeypatch.delenv("OTO_MCP_ADMIN_SUB", raising=False)
-    monkeypatch.delenv("OTO_ADMIN_MFA", raising=False)
     # Les règles enrichissent le ctx de l'org active : sans base ici.
     monkeypatch.setattr(access, "current_org", lambda sub: None)
     return table
@@ -347,9 +355,9 @@ def test_mcp_hors_requete_aucun_porteur(monkeypatch):
 # ── 6. Le mode ───────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("valeur,attendu", [
-    (None, "enforce"), ("", "enforce"), ("ENFORCE", "enforce"), ("report", "report"),
-    ("off", "off"), ("of", "enforce"), ("disabled", "enforce")])
-def test_le_mode_ferme_par_defaut(monkeypatch, valeur, attendu):
+    (None, "off"), ("", "off"), ("  ", "off"), ("ENFORCE", "enforce"),
+    ("report", "report"), ("off", "off"), ("of", "enforce"), ("disabled", "enforce")])
+def test_le_mode_eteint_sans_declaration_ferme_sur_faute(monkeypatch, valeur, attendu):
     if valeur is None:
         monkeypatch.delenv("OTO_ADMIN_MFA", raising=False)
     else:
@@ -362,6 +370,23 @@ def test_report_et_off_ne_retirent_rien(roles, facteurs, porteur, monkeypatch, v
     monkeypatch.setenv("OTO_ADMIN_MFA", valeur)
     porteur(garde_admin.JETON)
     assert access.is_super_admin(OP)
+
+
+@pytest.mark.parametrize("nature", [garde_admin.JETON, garde_admin.SESSION,
+                                    garde_admin.DELEGATION])
+def test_non_pose_le_tronc_est_inchange(roles, facteurs, porteur, monkeypatch, nature):
+    """Une instance qui ne déclare rien : l'opérateur garde son rôle sous tout porteur,
+    jeton d'API compris, aucune règle ne cite la garde, et Logto n'est jamais lu."""
+    monkeypatch.delenv("OTO_ADMIN_MFA", raising=False)
+    facteurs["types"] = []          # même sans facteur enrôlé
+    porteur(nature)
+    assert access.get_user_role(OP) == "super_admin"
+    assert access.is_super_admin(OP) and access.is_platform_operator(OP)
+    assert garde_admin.motif(OP, "super_admin") is None
+    assert garde_admin.motif_brut(OP) is None
+    ctx = _authz.SUPER_ADMIN(RawCtx(sub=OP))
+    assert ctx.sub == OP
+    assert facteurs["appels"] == 0
 
 
 # ── 7. Tripwire : les surfaces d'administration ──────────────────────────────
