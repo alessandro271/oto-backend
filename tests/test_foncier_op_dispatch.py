@@ -379,9 +379,11 @@ def test_conso_elec_still_refuses_a_national_scan(clients):
     with pytest.raises(McpError, match="perimeter"):
         _tool("foncier_conso_elec")(annee="2024")
     clients["enedis"].consommation_par_adresse.assert_not_called()
-    # `annee` reste obligatoire dans le schéma : rien ne la devine.
-    sig = inspect.signature(_tool("foncier_conso_elec"))
-    assert sig.parameters["annee"].default is inspect.Parameter.empty
+    # `annee` reste obligatoire pour la consommation : rien ne la devine. Elle a quitté
+    # le schéma (optionnelle depuis `op="annees"`, qui n'en prend pas) pour le corps.
+    with pytest.raises(McpError, match="requires annee"):
+        _tool("foncier_conso_elec")(dept="13")
+    clients["enedis"].consommation_par_adresse.assert_not_called()
     # Un périmètre, quel qu'il soit, passe.
     for scope in ({"dept": "13"}, {"code_commune": ["13201"]}, {"code_epci": "243300316"}):
         _tool("foncier_conso_elec")(annee="2024", **scope)
