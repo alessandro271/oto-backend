@@ -30,7 +30,7 @@ from starlette.routing import Route
 
 logger = logging.getLogger(__name__)
 
-from .. import client_trace, geste
+from .. import client_trace, deprecations, geste
 from ..datastore.errors import (CODE_TABLEAU_PAR_NOM, est_un_nom_de_tableau,
                                refus_tableau_par_nom)
 from ..json_body import InvalidJsonBody, read_json_body
@@ -160,10 +160,22 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
         for ph, value in request.path_params.items():
             field = (binding.path_map or {}).get(ph, ph)
             data[field] = value
+        # Le tampon de compatibilité (`deprecations`) : une ancienne forme d'argument
+        # allumée sur l'instance — un tableau désigné par son NOM, dans le chemin ou un
+        # champ déclaré du corps — est traduite ICI, avant le handler, par la même
+        # fonction que la face MCP (`middleware/compat`).
+        surface = cap.mcp or cap.key
+        if deprecations.a_traduire(surface, data):
+            from starlette.concurrency import run_in_threadpool
+            try:
+                await run_in_threadpool(deprecations.traduire_arguments, surface, data, sub)
+            except deprecations.TableauIntrouvable as e:
+                return json_error(request, 404, "datastore_not_found", str(e))
         # Un tableau désigné par son NOM dans le chemin est refusé (08/11/2026), avant
         # tout handler : le même code et la même phrase sur toutes les routes
         # `/api/datastores/{datastore}/…`, aucun repli.
-        adresse = request.path_params.get("datastore")
+        adresse = (data.get((binding.path_map or {}).get("datastore", "datastore"))
+                   if "datastore" in request.path_params else None)
         if est_un_nom_de_tableau(adresse):
             return json_error(request, 400, CODE_TABLEAU_PAR_NOM,
                               refus_tableau_par_nom(adresse))
