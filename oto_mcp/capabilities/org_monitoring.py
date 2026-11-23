@@ -597,11 +597,17 @@ def _adoption(ctx: ResolvedCtx, inp: OrgDaysInput) -> dict:
 def _run_servi(r: dict) -> dict:
     """Une ligne de run sous les noms SERVIS. Ses colonnes portent le nom de la clé du
     journal d'avant #519 (`db.usage._ARG_PROCEDURE` : une valeur en base se migre, elle
-    ne se renomme pas) ; le contrat sert `guide` et `guide_version`."""
+    ne se renomme pas) ; le contrat sert `guide` et `guide_version`.
+
+    ⚠️ `doctrine_version` reste servie À CÔTÉ de `guide_version`, même valeur : un client
+    la lit encore. C'est la seule clé d'hier gardée au lot D (#526) ; elle part au lot
+    suivant, une fois ce client passé à `guide_version`. Elle n'est pas déclarée dans
+    `RunRow` : `/openapi.json` ne promet que le nom d'aujourd'hui."""
     hier = db.usage._ARG_PROCEDURE
     hier_version = f"{hier}_version"
     servi = {k: v for k, v in r.items() if k not in (hier, hier_version)}
-    return {**servi, "guide": r.get(hier), "guide_version": r.get(hier_version)}
+    return {**servi, "guide": r.get(hier), "guide_version": r.get(hier_version),
+            hier_version: r.get(hier_version)}
 
 
 def _runs(ctx: ResolvedCtx, inp: OrgRunsInput) -> dict:

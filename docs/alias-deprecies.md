@@ -197,7 +197,7 @@ hérité, schéma OpenAPI d'hier ; la relation en base attend sa migration.
 | Clé de capacité | `org.doctrine.admin_list` | `org.guide.admin_list` | **renommée, sans alias** ; son `operationId` historique, porté par l'ancien chemin, est parti avec lui le 23/11/2026 | B2 |
 | Clé de capacité | `admin.doctrine` | `admin.guide` | **renommée, sans alias** ; son `operationId` historique, porté par l'ancien chemin, est parti avec lui le 23/11/2026 | B2 |
 | Clé de réponse | `doctrine_id` | `guide_id` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
-| Clé de réponse | `doctrine_version` | `guide_version` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
+| Clé de réponse | `doctrine_version` | `guide_version` | **retiré le 23/11/2026** (lot D) partout, SAUF dans les lignes de `GET /api/orgs/{id}/monitoring/runs`, où un client la lit encore : servie à côté de `guide_version`, même valeur, non déclarée dans `/openapi.json` ; part au lot suivant | B3 |
 | Clé de réponse | `doctrine_ref_count` | `guide_ref_count` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
 | Clé de réponse | `doctrines` | `guides` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
 | Clé de réponse | `group_doctrine` | `group_guide` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |

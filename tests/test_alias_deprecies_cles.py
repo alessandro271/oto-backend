@@ -90,11 +90,12 @@ def test_le_bundle_vide_dune_org_absente_ne_sert_que_les_noms_d_aujourd_hui():
 
 def test_une_ligne_de_run_est_servie_sous_guide():
     """Les colonnes du journal gardent leur nom d'avant #519 : la lentille des runs
-    les sert sous `guide` / `guide_version`, et sous ce nom seul."""
+    les sert sous `guide` / `guide_version`. Seule exception gardée au lot D :
+    `doctrine_version`, encore lue par un client, servie à côté avec la même valeur."""
     from oto_mcp.capabilities import org_monitoring as om
     ligne = {"run_id": "r1", "label": "x", "doctrine": "relance", "doctrine_version": 3}
     assert om._run_servi(ligne) == {"run_id": "r1", "label": "x", "guide": "relance",
-                                    "guide_version": 3}
+                                    "guide_version": 3, "doctrine_version": 3}
 
 
 # ── 5. Le code d'erreur d'hier ──────────────────────────────────────────────
