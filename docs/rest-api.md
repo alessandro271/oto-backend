@@ -710,6 +710,40 @@ celui qu'il coiffait, et rien n'échouait. Les trois refus sont **déclarés**
 (`Capability.errors`), donc publiés dans `/openapi.json` : trois gestes différents derrière
 un même 400, et un client ne devrait pas avoir à les distinguer en lisant une phrase.
 
+## Routes d'administration ouvertes au service (`SERVICE_OU`)
+
+Ces routes `/api/admin/*` acceptent, en plus de leur règle de compte, l'identité de
+service de rôle `commerce` (`docs/auth-logto.md` §Identité de service). Même chemin, même
+handler, même forme de réponse : le consommateur change de jeton, pas d'adresse. Sans
+identité de service, la règle d'origine décide seule — le jeton `oto_` et la session
+passent comme avant. Un service qui ne porte pas le rôle est refusé
+(`403 service_role_missing`).
+
+| Route | Règle de compte (inchangée) |
+|---|---|
+| `GET /api/admin/tenants/{slug}` | `TENANT_ADMIN_OF(platform=PLATFORM_ADMIN)` |
+| `GET /api/admin/tenants/{slug}/keys` | `TENANT_ADMIN_OF(platform=PLATFORM_ADMIN)` |
+| `GET /api/admin/tenants/{slug}/keys/{provider}/grants` | `TENANT_ADMIN_OF(platform=PLATFORM_ADMIN)` |
+| `PUT\|DELETE /api/admin/tenants/{slug}/keys/{provider}/grants/{org_id}` | `TENANT_ADMIN_OF(platform=SUPER_ADMIN)` |
+| `GET /api/admin/platform-keys` | `SUPER_ADMIN` |
+| `GET /api/admin/connectors/{provider}/platform-access` | `PLATFORM_ADMIN` |
+| `POST\|DELETE /api/admin/orgs/{id}/grants/{provider}` | `SUPER_ADMIN` |
+| `GET /api/admin/orgs/{id}/unipile-limit` | `PLATFORM_ADMIN` |
+| `PUT /api/admin/orgs/{id}/unipile-limit` | `SUPER_ADMIN` |
+| `GET /api/admin/usage/first-calls` | `PLATFORM_ADMIN` |
+| `GET /api/admin/orgs` | `PLATFORM_ADMIN` |
+| `GET /api/admin/orgs/{id}` | `PLATFORM_ADMIN` |
+| `GET /api/admin/unipile/seats` | `SUPER_ADMIN` |
+| `DELETE /api/admin/unipile/seats/{account_id}` | `SUPER_ADMIN` |
+
+Le service n'a pas de borne : il voit tous les tenants et toutes les orgs de l'instance.
+Ce qu'il écrit porte son nom (`created_by` d'un octroi de tenant, journal d'un siège
+repris : `service:<client_id>`). La fiche `GET /api/admin/orgs/{id}` lui sert
+`members[].is_platform_operator` comme à l'opérateur. La suspension et la fin d'essai
+restent servies au service sous `/api/service/orgs/{id}/suspension|trial` ; la suspension
+d'administration (`POST /api/admin/orgs/{id}/suspension`) reste au super admin.
+Banc : `tests/test_admin_ouvert_au_service.py`.
+
 ## Renommer un chemin servi : on double, on date, on retire
 
 Un chemin `/api/*` est un contrat avec des appelants qui vivent **hors de ce dépôt**.

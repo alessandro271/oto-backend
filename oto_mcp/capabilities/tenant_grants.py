@@ -18,7 +18,8 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from .. import db, grants_chain, org_store, tenant_vault
-from ._authz import PLATFORM_ADMIN, SUPER_ADMIN, TENANT_ADMIN_OF
+from ._authz import PLATFORM_ADMIN, SERVICE_OU, SUPER_ADMIN, TENANT_ADMIN_OF
+from ..auth.service_identity import COMMERCE
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -118,20 +119,23 @@ _PATH = "/api/admin/tenants/{slug}/keys/{provider}/grants"
 CAPABILITIES += [
     Capability(
         key="admin.tenant_org_grants", handler=_list, Input=TenantOrgGrantsInput,
-        Output=TenantOrgGrants, authz=TENANT_ADMIN_OF("slug", platform=PLATFORM_ADMIN),
+        Output=TenantOrgGrants,
+        authz=SERVICE_OU(COMMERCE, TENANT_ADMIN_OF("slug", platform=PLATFORM_ADMIN)),
         description="Orgs granted the tenant's key, with their daily budget and usage.",
         rest=RestBinding("GET", _PATH),
     ),
     Capability(
         key="admin.tenant_org_grant", handler=_grant, Input=TenantOrgGrantInput,
-        Output=TenantOrgGranted, authz=TENANT_ADMIN_OF("slug", platform=SUPER_ADMIN),
+        Output=TenantOrgGranted,
+        authz=SERVICE_OU(COMMERCE, TENANT_ADMIN_OF("slug", platform=SUPER_ADMIN)),
         description=("Grant the tenant's key to one org with a shared daily budget "
                      "(`daily_quota`, 0 = unlimited). Replaces a previous grant."),
         rest=RestBinding("PUT", _PATH + "/{org_id}"),
     ),
     Capability(
         key="admin.tenant_org_revoke", handler=_revoke, Input=TenantOrgRevokeInput,
-        Output=TenantOrgRevoked, authz=TENANT_ADMIN_OF("slug", platform=SUPER_ADMIN),
+        Output=TenantOrgRevoked,
+        authz=SERVICE_OU(COMMERCE, TENANT_ADMIN_OF("slug", platform=SUPER_ADMIN)),
         description="Revoke the tenant's key for one org (it falls back to the platform key).",
         rest=RestBinding("DELETE", _PATH + "/{org_id}"),
     ),

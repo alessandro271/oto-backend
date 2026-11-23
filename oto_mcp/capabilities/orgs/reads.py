@@ -22,7 +22,8 @@ from ...db import etat_abonnement
 from ...org_store import ORG_ROLES
 from ...tool_visibility import BETA_OPTION
 from .. import droits_admin
-from .._authz import ORG_MEMBER_OF, PLATFORM_ADMIN, SUB_ONLY
+from .._authz import ORG_MEMBER_OF, PLATFORM_ADMIN, SERVICE_OU, SUB_ONLY, est_service
+from ...auth.service_identity import COMMERCE
 # Le quota de création vit avec la capacité qui REFUSE (`org.create`) : le lire ici
 # plutôt que le recalculer est ce qui garantit que la liste et le refus ne pourront
 # jamais annoncer deux nombres différents (#464).
@@ -389,7 +390,10 @@ def _fiche(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
     # org (le seul à agir dessus, « voir en tant que ») et à un opérateur plateforme
     # (déjà au courant, `org.admin.get`) — pas à un simple membre. Une requête, pas
     # une par membre (cf. `_members`).
-    exposer_operateur = my_role == "org_admin" or access.is_platform_operator(ctx.sub)
+    # Le service (`org.admin.get` sous identité de service) lit la même fiche que
+    # l'opérateur : même forme de réponse, quel que soit le porteur.
+    exposer_operateur = (my_role == "org_admin" or est_service(ctx)
+                         or access.is_platform_operator(ctx.sub))
     # La liste des membres est lue UNE fois : elle donne aussi `member_count`.
     membres = _members(inp.org_id, exposer_operateur=exposer_operateur)
     # `logo_url` = EFFECTIF (upload > logo.dev du domaine) ; `logo_custom` dit
@@ -464,7 +468,8 @@ CAPABILITIES += [
                    "teammate's personal space you were invited into is `true` too."),
                mcp="oto_list_orgs", rest=RestBinding("GET", "/api/me/orgs")),
     # MCP fusionné dans oto_admin_org(op=list). REST conservé (dashboard).
-    Capability(key="org.admin.list", handler=_list_all_orgs, Input=NoInput, authz=PLATFORM_ADMIN,
+    Capability(key="org.admin.list", handler=_list_all_orgs, Input=NoInput,
+               authz=SERVICE_OU(COMMERCE, PLATFORM_ADMIN),
                description="[platform admin] List all organizations.",
                rest=RestBinding("GET", "/api/admin/orgs")),
     # org.get : REST-only, deux faces (membre vs platform), handler partagé.
@@ -472,7 +477,7 @@ CAPABILITIES += [
                Output=OrgDetail,
                rest=RestBinding("GET", "/api/orgs/{id}", _ID)),
     Capability(key="org.admin.get", handler=_org_admin_detail, Input=OrgIdInput,
-               authz=PLATFORM_ADMIN, Output=OrgAdminDetail,
+               authz=SERVICE_OU(COMMERCE, PLATFORM_ADMIN), Output=OrgAdminDetail,
                rest=RestBinding("GET", "/api/admin/orgs/{id}", _ID)),
     # org.member.list (MCP-only) fusionné dans oto_admin_org_member(op=list).
     # org.secret.list (MCP-only) retiré du MCP (2026-06-25) : le dashboard lit les
