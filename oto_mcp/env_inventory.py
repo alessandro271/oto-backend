@@ -389,15 +389,16 @@ _REGLAGES: tuple[Variable, ...] = (
              "(défaut) refuse toute résolution du porteur hors de l'org de son travail, "
              "`report` la journalise et la laisse passer, `off` le coupe. Une valeur "
              "inconnue vaut `enforce`.",
-             ("oto_mcp/verrou_org.py:141",)),
-    Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "report",
+             ("oto_mcp/verrou_org.py:142",)),
+    Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "enforce",
              "Verrou des rôles PLATEFORME des jetons de délégation (`verrou_org.py`) : "
-             "`enforce` lit `member` le porteur `admin`/`super_admin` d'un travail du "
-             "runner (aucune garde plateforme, aucun `oto_admin_*` — sauf, pendant leur "
-             "appel, ceux que son agent nomme : `platform_tools`), `report` (défaut) "
-             "journalise ce qui serait retiré et ne retire rien, `off` le coupe. Une "
-             "valeur inconnue vaut `report`. Indépendant d'`OTO_VERROU_ORG_DELEGATION`.",
-             ("oto_mcp/verrou_org.py:226",)),
+             "`enforce` (défaut) lit `member` le porteur `admin`/`super_admin` d'un "
+             "travail du runner (aucune garde plateforme, aucun `oto_admin_*` — sauf, "
+             "pendant leur appel, ceux que son agent nomme : `platform_tools`), `report` "
+             "(posé explicitement) journalise ce qui serait retiré et ne retire rien, "
+             "`off` le coupe. Une valeur inconnue vaut `enforce`. Indépendant "
+             "d'`OTO_VERROU_ORG_DELEGATION`.",
+             ("oto_mcp/verrou_org.py:227",)),
     Variable("OTO_COPILOT_SUBS", Classe.REGLAGE, "",
              "L'agent intégré à l'application (`capabilities/copilot`, docs/copilot.md) : "
              "les `sub` autorisés, séparés par des virgules. Vide (défaut) = personne — les "
@@ -779,6 +780,18 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_EMBED_WORKER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : worker d'embeddings.",
              ("oto_mcp/boucles_de_fond.py:152",)),
+    Variable("OTO_EMBED_PLAFOND_TOKENS_JOUR", Classe.REGLAGE, "5000000",
+             "Plafond de tokens d'embedding FACTURÉS (Mistral) par jour UTC et par "
+             "instance, indexation et requêtes de recherche confondues. Atteint : le "
+             "worker d'indexation s'arrête jusqu'à minuit UTC et prévient les admins de "
+             "plateforme ; la recherche passe en lexical seul (journalisé). `0` "
+             "n'embarque rien ; illisible : refus.",
+             ("oto_mcp/embeddings.py:123",)),
+    Variable("OTO_EMBED_STABILITE_S", Classe.REGLAGE, "600",
+             "Secondes sans écriture avant qu'une source (page, brief, couche, ligne) "
+             "soit indexée : une rafale d'écritures se paie une fois. `0` : aussitôt ; "
+             "illisible : refus.",
+             ("oto_mcp/embed_worker.py:75",)),
     Variable("OTO_FILE_EXTRACT_WORKER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : worker d'extraction de fichiers.",
              ("oto_mcp/boucles_de_fond.py:157",)),

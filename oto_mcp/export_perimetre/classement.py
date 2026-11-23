@@ -312,6 +312,9 @@ CLASSEMENT: dict[str, Table] = {
                            "voyage à part, par tranches (`JOURNAL`)"),
     "journal_archives": instance("registre des mois archivés au froid : les archives "
                                  "mêlent tous les propriétaires, hors base"),
+    "embed_sources": instance("file d'indexation sémantique de l'instance : réservations "
+                              "et échecs, recalculés par la cible à sa propre indexation"),
+    "embed_consommation": instance("tokens d'embedding facturés à l'instance, par jour"),
     "journal_archive_passages": instance("passages de l'archive du journal de "
                                          "l'instance : son exploitation, sans propriétaire"),
     # Les totaux par jour (#1147) sont DÉRIVÉS du journal : la cible les recalcule du

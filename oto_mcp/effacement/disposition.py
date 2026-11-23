@@ -144,6 +144,10 @@ NON_EXPORTEES: dict[str, Decision] = {
     "journal_jours_consolides": sans_objet("registre des jours consolidés"),
     "journal_archive_passages": sans_objet("passages de l'archive du journal de "
                                            "l'instance : son exploitation, sans org"),
+    "embed_sources": sans_objet("file d'indexation sémantique : identifiants de sources "
+                                "sans leur contenu ; celle d'une page effacée ne désigne "
+                                "plus rien et n'est plus jamais lue"),
+    "embed_consommation": sans_objet("tokens d'embedding facturés à l'instance, par jour"),
     "agent_causes": sans_objet("catalogue de la plateforme des causes de panne d'agent, "
                                "une par empreinte de motif, sans org ni propriétaire"),
     "connector_schemas": sans_objet("cache des schémas d'outils"),

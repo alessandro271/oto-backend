@@ -24,7 +24,9 @@ def bouchon(monkeypatch):
 
     def _repondre(req: httpx.Request) -> httpx.Response:
         requetes.append(req)
-        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.5, 0.25]}]})
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.5, 0.25]}],
+                                         "usage": {"prompt_tokens": 3, "completion_tokens": 0,
+                                                   "total_tokens": 3}})
 
     def _nouveau():
         c = httpx.AsyncClient(transport=httpx.MockTransport(_repondre),
@@ -33,11 +35,18 @@ def bouchon(monkeypatch):
         return c
 
     monkeypatch.setattr(embeddings, "_nouveau_client", _nouveau)
-    return requetes, construits
+    # Le compte du jour, en base ailleurs : ici un compteur en mémoire.
+    from oto_mcp.db import embed_file
+    compte = {"tokens": 0, "plafond_atteint": False}
+    monkeypatch.setattr(embed_file, "jour", lambda: dict(compte))
+    monkeypatch.setattr(embed_file, "ajouter_tokens",
+                        lambda n: compte.update(tokens=compte["tokens"] + n))
+    monkeypatch.delenv("OTO_EMBED_PLAFOND_TOKENS_JOUR", raising=False)
+    return requetes, construits, compte
 
 
 def test_deux_appels_reutilisent_le_meme_client(bouchon):
-    requetes, construits = bouchon
+    requetes, construits, _ = bouchon
 
     async def _deux():
         a = await embeddings.embed_query("premier")
@@ -55,7 +64,7 @@ def test_deux_appels_reutilisent_le_meme_client(bouchon):
 
 def test_un_client_par_boucle(bouchon):
     """Deux boucles (tests, processus annexes) ne se passent jamais leur client."""
-    _, construits = bouchon
+    _, construits, _ = bouchon
     asyncio.run(embeddings.embed_query("boucle une"))
     asyncio.run(embeddings.embed_query("boucle deux"))
     assert len(construits) == 2
@@ -76,3 +85,21 @@ def test_l_import_ne_cree_aucun_client():
     import importlib
     mod = importlib.reload(embeddings)
     assert len(mod._CLIENTS) == 0
+
+
+def test_les_tokens_de_la_recherche_comptent_contre_le_plafond(bouchon):
+    _, _, compte = bouchon
+    asyncio.run(embeddings.embed_query("une recherche"))
+    assert compte["tokens"] == 3
+
+
+def test_au_plafond_la_recherche_passe_en_lexical_et_le_dit(bouchon, monkeypatch, caplog):
+    requetes, _, compte = bouchon
+    compte["plafond_atteint"] = True
+    monkeypatch.setattr(embeddings, "_PLAFOND_DIT", set())
+    with caplog.at_level("WARNING", logger="oto_mcp.embeddings"):
+        assert asyncio.run(embeddings.embed_query("une recherche")) is None
+        assert asyncio.run(embeddings.embed_query("une autre")) is None
+    assert requetes == []
+    dits = [r for r in caplog.records if "plafond journalier" in r.getMessage()]
+    assert len(dits) == 1, "le repli se dit, une fois par jour"

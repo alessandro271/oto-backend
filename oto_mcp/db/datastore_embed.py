@@ -21,18 +21,26 @@ _VALUES_TEXT = ROW_VALUES_TEXT_SQL.replace("data", "r.data")
 
 from ._conn import _connect
 
+# La clé d'une ligne dans la file d'indexation (`embed_file`) : `<ns_id>/<row_id>`
+# (`row_id` peut porter un `/`, `ns_id` non : la première barre sépare).
+ROW_REF_SQL = "r.ns_id::text || '/' || r.row_id"
 
-def list_dirty_rows(limit: int = 16) -> list[dict]:
+
+def list_dirty_rows(limit: int = 16, *, stable_s: int = 0) -> list[dict]:
     """Rows à (ré)indexer : `embed_dirty` ET namespace opt-in (`semantic_search`).
     Forme `{ns_id, row_id, text}` (text = le JSON rendu). Ne prend que du contenu non
-    trivial (une row vide n'a rien à indexer)."""
+    trivial (une row vide n'a rien à indexer), inchangées depuis `stable_s` secondes, hors
+    de celles qu'un autre processus a réservées."""
+    from . import embed_file
     with _connect() as conn:
         rows = conn.execute(
             f"SELECT r.ns_id, r.row_id, {_VALUES_TEXT} AS text "
             "FROM datastore_rows r JOIN user_datastores d ON d.id = r.ns_id "
             f"WHERE r.embed_dirty AND d.semantic_search AND length({_VALUES_TEXT}) > 2 "
+            f"AND {embed_file.hors_bail_sql('row', ROW_REF_SQL)} "
+            "AND r.updated_at <= NOW() - make_interval(secs => %s) "
             "ORDER BY r.ns_id, r.row_id LIMIT %s",
-            (limit,)).fetchall()
+            (stable_s, limit)).fetchall()
         return [dict(r) for r in rows]
 
 

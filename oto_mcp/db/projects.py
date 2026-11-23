@@ -1487,50 +1487,72 @@ def doc_backlinks(doc_id: int) -> list[dict]:
 
 # --- Recherche sémantique : outbox d'embeddings (lot 3) ----------------------
 
-def list_dirty_docs(limit: int = 32) -> list[dict]:
-    """Pages à (ré)indexer (`embed_dirty`) — le worker les draine. Le TEXTE embarqué
-    = titre + corps (la même matière que le FTS)."""
+# Le texte indexé d'une page — titre + corps, la même matière que le FTS. Une seule
+# écriture : la liste le lit, `finir_doc` en compare l'empreinte.
+_DOC_EMBED_TEXT = "coalesce(title,'') || E'\\n' || coalesce(body_md,'')"
+
+
+def list_dirty_docs(limit: int = 32, *, stable_s: int = 0) -> list[dict]:
+    """Pages à (ré)indexer (`embed_dirty`), inchangées depuis `stable_s` secondes, hors
+    de celles qu'un autre processus a réservées (`embed_file`) — le worker les draine."""
+    from . import embed_file
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT id, coalesce(title,'') || E'\n' || coalesce(body_md,'') AS text "
-            "FROM docs WHERE embed_dirty ORDER BY id LIMIT %s", (limit,)).fetchall()
+            f"SELECT id, {_DOC_EMBED_TEXT} AS text FROM docs "
+            f"WHERE embed_dirty AND {embed_file.hors_bail_sql('doc', 'docs.id')} "
+            "AND updated_at <= NOW() - make_interval(secs => %s) "
+            "ORDER BY id LIMIT %s", (stable_s, limit)).fetchall()
         return [dict(r) for r in rows]
 
 
-def upsert_doc_embedding(doc_id: int, content_sha: str, embedding_literal: str,
-                         model: str) -> None:
-    """Pose/rafraîchit l'embedding d'une page ET lève son drapeau dirty — en UNE
-    transaction (le worker ne perd pas une écriture concurrente : si le doc a été
-    re-touché entretemps il reste dirty via le WHERE ci-dessous)."""
+def doc_morceaux_stockes(doc_id: int) -> dict[int, dict]:
+    """Les vecteurs posés d'une page, par rang de morceau : `{rang: {sha, embedding}}`
+    (le rang 0 dans `doc_embeddings`, les suivants dans `doc_chunk_embeddings`).
+    `sha` est l'empreinte du TEXTE du morceau ; `embedding` le littéral halfvec."""
     with _connect() as conn:
-        conn.execute(
-            "INSERT INTO doc_embeddings (doc_id, content_sha, embedding, model) "
-            "VALUES (%s, %s, %s::halfvec, %s) "
-            "ON CONFLICT (doc_id) DO UPDATE SET content_sha = EXCLUDED.content_sha, "
-            "embedding = EXCLUDED.embedding, model = EXCLUDED.model, updated_at = NOW()",
-            (doc_id, content_sha, embedding_literal, model))
-        conn.execute("UPDATE docs SET embed_dirty = FALSE WHERE id = %s", (doc_id,))
+        rows = conn.execute(
+            "SELECT 0 AS rang, content_sha AS sha, embedding::text AS embedding "
+            "FROM doc_embeddings WHERE doc_id = %s "
+            "UNION ALL SELECT chunk_index, content_sha, embedding::text "
+            "FROM doc_chunk_embeddings WHERE doc_id = %s",
+            (doc_id, doc_id)).fetchall()
+    return {int(r["rang"]): {"sha": r["sha"], "embedding": r["embedding"]} for r in rows}
 
 
-def replace_doc_chunk_embeddings(doc_id: int, content_sha: str,
-                                 chunks: list, model: str) -> None:
-    """Remplace TOUS les chunks de débordement (index ≥ 1) d'une page longue (#6 C).
-    `chunks` = list[(chunk_index:int, embedding_literal:str)]. Liste vide = la page est
-    (re)devenue courte → on efface ses chunks. Transaction unique."""
+def poser_morceau_doc(doc_id: int, rang: int, sha: str, embedding_literal: str,
+                      model: str) -> None:
+    """Pose le vecteur du morceau `rang` d'une page (empreinte `sha` de son texte).
+    Ne touche pas au drapeau d'indexation : la page reste à finir (`finir_doc`)."""
     with _connect() as conn:
-        conn.execute("DELETE FROM doc_chunk_embeddings WHERE doc_id = %s", (doc_id,))
-        for idx, lit in chunks:
+        if rang == 0:
             conn.execute(
-                "INSERT INTO doc_chunk_embeddings (doc_id, chunk_index, content_sha, embedding, model) "
-                "VALUES (%s, %s, %s, %s::halfvec, %s)",
-                (doc_id, idx, content_sha, lit, model))
+                "INSERT INTO doc_embeddings (doc_id, content_sha, embedding, model) "
+                "VALUES (%s, %s, %s::halfvec, %s) "
+                "ON CONFLICT (doc_id) DO UPDATE SET content_sha = EXCLUDED.content_sha, "
+                "embedding = EXCLUDED.embedding, model = EXCLUDED.model, updated_at = NOW()",
+                (doc_id, sha, embedding_literal, model))
+            return
+        conn.execute(
+            "INSERT INTO doc_chunk_embeddings (doc_id, chunk_index, content_sha, embedding, model) "
+            "VALUES (%s, %s, %s, %s::halfvec, %s) "
+            "ON CONFLICT (doc_id, chunk_index) DO UPDATE SET content_sha = EXCLUDED.content_sha, "
+            "embedding = EXCLUDED.embedding, model = EXCLUDED.model, updated_at = NOW()",
+            (doc_id, rang, sha, embedding_literal, model))
 
 
-def get_doc_embedding_sha(doc_id: int) -> Optional[str]:
+def finir_doc(doc_id: int, morceaux: int, texte_sha: str) -> None:
+    """Clôt l'indexation d'une page de `morceaux` morceaux, en UNE transaction : retire
+    les vecteurs de rang au-delà, puis baisse le drapeau SI le texte est encore celui
+    qui a été indexé (empreinte `texte_sha`, SHA-256 hex du texte) — une page réécrite
+    pendant l'indexation reste à indexer."""
     with _connect() as conn:
-        row = conn.execute("SELECT content_sha FROM doc_embeddings WHERE doc_id = %s",
-                           (doc_id,)).fetchone()
-        return row["content_sha"] if row else None
+        if morceaux == 0:
+            conn.execute("DELETE FROM doc_embeddings WHERE doc_id = %s", (doc_id,))
+        conn.execute("DELETE FROM doc_chunk_embeddings WHERE doc_id = %s AND chunk_index >= %s",
+                     (doc_id, max(morceaux, 1)))
+        conn.execute(
+            "UPDATE docs SET embed_dirty = FALSE WHERE id = %s AND encode(sha256(convert_to("
+            f"{_DOC_EMBED_TEXT}, 'UTF8')), 'hex') = %s", (doc_id, texte_sha))
 
 
 def clear_embed_dirty(doc_id: int) -> None:
