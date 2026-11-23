@@ -35,7 +35,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, NoReturn, Optional
 from urllib.parse import urlencode
 
 import requests
@@ -334,10 +334,10 @@ class CompletionRefused(Exception):
         self.status, self.code, self.message, self.details = status, code, message, details
 
 
-def not_allowed(message: str) -> CompletionRefused:
-    """403 `not_allowed` : la personne n'a plus le droit d'écrire au niveau demandé au
-    départ (rôle perdu, org quittée, connecteur coupé entre le clic et le retour)."""
-    return CompletionRefused(403, "not_allowed", message)
+def not_allowed(message: str) -> NoReturn:
+    """Lève 403 `not_allowed` : la personne n'a plus le droit d'écrire au niveau demandé
+    au départ (rôle perdu, org quittée, connecteur coupé entre le clic et le retour)."""
+    raise CompletionRefused(403, "not_allowed", message)
 
 
 @dataclass(frozen=True)

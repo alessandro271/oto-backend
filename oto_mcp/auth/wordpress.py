@@ -322,7 +322,7 @@ def _finish_return(d: dict, code: str) -> dict:
             "This WordPress connection link is invalid or has expired. "
             "Start the connection again.")
     if not still_allowed(d):
-        raise oauth_flow.not_allowed(
+        oauth_flow.not_allowed(
             "You no longer have the right to connect a WordPress site at this level.")
     account = finish(d, recu.get("site_url") or "", recu.get("user_login") or "",
                      recu.get("password") or "")

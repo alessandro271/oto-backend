@@ -1160,7 +1160,7 @@ def _finish_return(etat: EtatConnexion, code: str) -> dict:
     try:
         fin = finish_connection(etat, code)
     except PermissionError as e:
-        raise oauth_flow.not_allowed(str(e))
+        oauth_flow.not_allowed(str(e))
     except Exception as e:
         aadsts = getattr(e, "code", None)
         if isinstance(aadsts, str) and aadsts in _ADMIN_REQUIS:

@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from .. import access, db
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .connectors import complete as connector_complete
 from .registry import CAPABILITIES
 
 
@@ -152,8 +153,8 @@ def _google_complete(ctx: ResolvedCtx, inp: GoogleCompleteInput) -> dict:
     et la forme de réponse de Google. L'ordre : state lu, `sub` du porteur, state
     consommé, puis échange et rangement pour l'org et la carte que le state porte."""
     from ..auth import google as google_oauth
-    from .connectors.complete import complete_for
-    return complete_for(google_oauth.RETURN, ctx.sub, inp.code, inp.state)
+    return connector_complete.complete_for(google_oauth.RETURN, ctx.sub, inp.code,
+                                           inp.state)
 
 
 def _google_status(ctx: ResolvedCtx, inp: OAuthStatusInput) -> dict:

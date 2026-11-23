@@ -770,7 +770,7 @@ def _finish_return(d: dict, code: str) -> dict:
     level's app and the storage. The `code` and the tokens never enter a log line."""
     sub, org_id, scope, group_id = d["sub"], d["org"], d["scope"], d.get("group")
     if not can_write(sub, org_id, scope, group_id):
-        raise oauth_flow.not_allowed(
+        oauth_flow.not_allowed(
             "You no longer have the right to connect HubSpot at this level.")
     result = persist(sub, org_id, scope, group_id, exchange_code(code, d["kind"]))
     logger.info("hubspot: portal connected (hub_id=%s, scope=%s, app=%s, org=%s)",

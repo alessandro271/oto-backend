@@ -347,7 +347,7 @@ def _finish_return(d: dict, code: str) -> dict:
     """The right to write at the state's tier, re-read ON RETURN; then the exchange and
     the vault. The `code` and the tokens never enter a log line."""
     if not still_allowed(d):
-        raise oauth_flow.not_allowed(
+        oauth_flow.not_allowed(
             "You no longer have the right to connect a Slack workspace at this level.")
     account = finish(d, exchange(code))
     return {"account": account, "scope": d["scope"]}

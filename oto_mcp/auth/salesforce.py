@@ -380,10 +380,10 @@ def _finish_return(d: dict, code: str) -> dict:
 
     sub, org_id, scope, group_id = d["sub"], d["org"], d["scope"], d["group"]
     if scope == "org" and not roles.is_org_admin(sub, org_id):
-        raise oauth_flow.not_allowed(
+        oauth_flow.not_allowed(
             "Only an org admin can connect Salesforce for the whole org.")
     if scope == "group" and not roles.can_admin_group(sub, group_id):
-        raise oauth_flow.not_allowed(
+        oauth_flow.not_allowed(
             "Only a team lead can connect Salesforce for the team.")
     fields = read_saved_fields(sub, org_id, scope, group_id)
     if not fields:

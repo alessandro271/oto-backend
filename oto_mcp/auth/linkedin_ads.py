@@ -508,7 +508,7 @@ def _finish_return(d: dict, code: str) -> dict:
     """Re-read ON RETURN (`still_allowed`): still a member of the org, connector still
     open there; then the exchange and the vault."""
     if not still_allowed(d):
-        raise oauth_flow.not_allowed(
+        oauth_flow.not_allowed(
             "You are no longer a member of this organization, or LinkedIn Ads is now "
             "turned off there.")
     exchange_and_persist(d, code)

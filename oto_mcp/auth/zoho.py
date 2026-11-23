@@ -811,7 +811,7 @@ def _finish_return(parsed: dict, code: str) -> dict:
     from .. import roles
 
     if parsed["org"] and not roles.is_org_member(parsed["sub"], parsed["org"]):
-        raise oauth_flow.not_allowed(
+        oauth_flow.not_allowed(
             "You are no longer a member of the organization where this Zoho connection "
             "was started.")
     app = app_fields(parsed["connector"], parsed["sub"], parsed["data_center"],
