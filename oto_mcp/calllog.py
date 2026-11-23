@@ -55,13 +55,19 @@ def apply_call_trace(row: dict, trace: Optional[dict], traced_args: tuple) -> di
     Le reste du relevé (`resolved_connector`, `resolved_account`…) sert l'ÉCHO rendu à
     l'agent, pas le journal : il n'est pas écrit.
 
-    Hors relevé : un appel arrivé sous un ANCIEN nom d'outil (`deprecations.TOOLS`)
+    Hors liste fermée : un appel arrivé sous un ANCIEN nom d'outil (`deprecations.TOOLS`)
     garde `tool` = le nom d'aujourd'hui, et porte `args.deprecated_name` = le nom
-    demandé — c'est ce qui compte l'usage d'un alias avant son retrait."""
+    demandé ; un appel dont une valeur dépréciée a été réécrite
+    (`deprecations.valeur_canonique`) porte `args.deprecated_value` =
+    `"<champ>=<valeur reçue>"`. C'est ce qui compte l'usage d'un alias : son retrait
+    n'est ouvert que quand ce compte est nul."""
     traced = {k: v for k, v in (trace or {}).items() if k in traced_args}
     ancien = session_org.nom_deprecie_de_l_appel()
     if ancien:
         traced["deprecated_name"] = ancien
+    valeur = (trace or {}).get(session_org.CLE_VALEUR_DEPRECIEE)
+    if valeur:
+        traced[session_org.CLE_VALEUR_DEPRECIEE] = valeur
     if traced:
         row["args"] = {**(row.get("args") or {}), **traced}
     if not trace:

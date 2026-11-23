@@ -2,8 +2,10 @@
 
 Un chemin servi ne se renomme pas : il se DOUBLE. Le nouveau chemin est la vraie
 route (dérivée d'une capacité, décrite dans `/openapi.json`, avec son autz) ;
-l'ancien est monté ici, ne fait rien d'autre que rediriger, et **s'en va à une date
-écrite** (`deprecations.RETRAIT`, retrait suivi en #526).
+l'ancien est monté ici, ne fait rien d'autre que rediriger, et **reste servi tant que
+son usage compté n'est pas nul** (décision du 23/11/2026, retrait suivi en #526) :
+chaque redirection laisse une ligne dans `tool_calls`, et la 308 porte
+`Deprecation: true` sans `Sunset` — aucune date de retrait n'est servie.
 
 **Pourquoi 308 et pas 301/302.** Un 301/302 autorise le client à retomber en GET —
 un `POST …/publish` deviendrait un `GET` sur la nouvelle route, donc un 405 ou pire,
@@ -24,8 +26,15 @@ dit « même requête, autre adresse ».
   alors capturer que ce que rien d'autre ne sert : il ne peut pas éclipser une vraie
   route par un placeholder trop gourmand.
 
+**Le compteur.** La redirection n'authentifie pas et n'écrit rien elle-même : elle
+dépose dans le scope ce que le journal des routes (`routes.RestCallLogger`, chemin
+d'écriture asynchrone habituel, `kind='rest'`) doit écrire — `tool` = verbe + chemin
+d'aujourd'hui, `args.deprecated_name` = l'ancien chemin GABARIT (jamais le chemin
+réel, qui peut porter un identifiant). L'org, le compte et le jeton y sont ceux que le
+journal connaît déjà ; sans authentification, la ligne porte ce qui est connu.
+
 Ces chemins sont classés `NATURE` dans `tests/test_rest_modules_are_capabilities.py`
-et non `DEBT` : ils ne portent aucun métier à migrer, ils portent une date.
+et non `DEBT` : ils ne portent aucun métier à migrer, ils portent un compteur.
 """
 from __future__ import annotations
 
@@ -34,7 +43,7 @@ from starlette.responses import RedirectResponse, Response
 from starlette.routing import Route
 
 from .. import deprecations
-from .base import _cors_headers
+from .base import CLE_ALIAS_DEPRECIE, _cors_headers
 
 
 def _redirection(alias: deprecations.AliasRest):
@@ -44,9 +53,13 @@ def _redirection(alias: deprecations.AliasRest):
         r = RedirectResponse(url, status_code=308)
         for k, v in _cors_headers(request.headers.get("origin")).items():
             r.headers[k] = v
-        # Un intégrateur qui lit ses logs voit la date sans avoir à ouvrir la doc.
+        # Un intégrateur qui lit ses logs voit la dépréciation sans ouvrir la doc. Pas
+        # de `Sunset` : aucune date de retrait n'est servie (décision du 23/11/2026).
         r.headers["Deprecation"] = "true"
-        r.headers["Sunset"] = deprecations._sunset(alias)
+        request.scope[CLE_ALIAS_DEPRECIE] = {
+            "tool": f"{alias.verbe} {alias.nouveau}",
+            "deprecated_name": alias.ancien,
+        }
         return r
 
     _handler.__name__ = "alias_deprecie"

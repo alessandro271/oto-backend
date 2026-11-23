@@ -720,8 +720,11 @@ sans trace. La forme retenue (#519, lot B) :
 2. l'**ancien** reste monté et répond **308** — même méthode, même corps, query string
    reportée. Ni 301 ni 302 : ils autorisent le client à retomber en `GET`, ce qui
    transforme un `POST` en no-op silencieux ;
-3. il porte les en-têtes `Deprecation` / `Sunset`, est marqué `deprecated: true` dans
-   `/openapi.json` avec son remplaçant et sa date, et **s'en va à une date écrite** ;
+3. il porte l'en-tête `Deprecation: true` (sans `Sunset`), est marqué `deprecated: true`
+   dans `/openapi.json` avec son remplaçant, sans date, et **reste servi tant que son
+   usage compté n'est pas nul** — chaque 308 laisse sa ligne `kind='rest'` au journal
+   (`args.deprecated_name` = l'ancien gabarit) ; la PR de retrait pose seule une date
+   ferme (décision du 23/11/2026, `docs/alias-deprecies.md`) ;
 4. il est monté **en dernier** — un alias ne capture que ce que rien d'autre ne sert ;
 5. le préflight `OPTIONS` n'est **jamais** redirigé, et la 308 porte les en-têtes CORS :
    un navigateur vérifie CORS sur chaque réponse d'une chaîne de redirections.

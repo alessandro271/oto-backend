@@ -1,11 +1,12 @@
-"""Un outil renommé répond sous ses DEUX noms — et l'ancien annonce sa date (#519).
+"""Un outil renommé répond sous ses DEUX noms — l'ancien se dit déprécié, sans date (#519).
 
 Lot B1 de #519 : le produit ne dit plus « doctrine », il dit **guide**. Renommer un
 outil MCP casserait tout appelant qui vit hors de ce dépôt — dashboard, extension,
 CLI, fronts partenaires, flotte d'agents, et toute la prose déjà écrite (procédures
 d'org, guides, corps de guide) qui cite l'ancien nom. Alors on ne renomme pas : on
 DOUBLE. Le nouveau nom naît, l'ancien continue de répondre, et il porte en tête de
-sa description la date à laquelle il s'en va (lot D, #526).
+sa description un avis de dépréciation SANS DATE : il s'en ira quand son usage compté
+sera nul, par une PR qui datera alors le retrait (lot D, #526 ; décision du 23/11/2026).
 
 Ce que ces tests gardent, dans l'ordre de ce qui coûterait le plus cher :
 
@@ -19,12 +20,14 @@ Ce que ces tests gardent, dans l'ordre de ce qui coûterait le plus cher :
 3. **Les deux entrées de `tools/list` sont identiques** hors le nom et l'avis :
    schéma d'entrée, schéma de sortie, annotations. Un alias qui dérive de son outil
    est un piège — l'agent lit un contrat et en appelle un autre.
-4. **La date est écrite une fois** (`deprecations.RETRAIT`) et recopiée depuis là.
-   Une date en dur dans une description est une date qu'on oubliera de décaler.
+4. **Aucune date de retrait n'est servie**, et une date de REVUE passée
+   (`deprecations.REVUE*`) ne change rien à ce qui est servi : plus de couperet.
 5. **La table ne ment pas** : chaque cible est un outil réellement monté, et aucun
    ancien nom ne recouvre un outil réel.
 """
 from __future__ import annotations
+
+import re
 
 from _mcp_app import static_mcp as _test_mcp
 
@@ -121,7 +124,7 @@ async def test_lalias_decrit_le_meme_contrat_que_son_outil(monkeypatch):
                 == c.model_dump(exclude=hors_contrat)), (
             f"`{ancien}` a dérivé de `{canonique}` : l'agent lirait un contrat et en "
             "appellerait un autre.")
-        assert a.description == deprecations.avis(canonique, ancien) + (c.description or "")
+        assert a.description == deprecations.avis(canonique) + (c.description or "")
 
 
 @pytest.mark.asyncio
@@ -130,37 +133,78 @@ async def test_lavis_est_en_TETE_de_la_description(monkeypatch):
     personne, et c'est la première chose que le modèle lit pour choisir."""
     servis = {t.name: t for t in await _liste_servie(monkeypatch)}
     for ancien, canonique in deprecations.TOOLS.items():
-        debut = servis[ancien].description[:80]
+        debut = servis[ancien].description[:120]
         assert debut.startswith("Déprécié : utilisez `" + canonique + "`")
-        assert deprecations.date_de_retrait(ancien) in debut
+        assert deprecations.PREAVIS_DE_RETRAIT in debut
 
 
-# ── 4. La date vit à UN endroit ─────────────────────────────────────────────
+# ── 4. Aucune date de retrait servie ; une date de revue ne change rien ─────
+# Décision du 23/11/2026 : plus aucun couperet par date. Un ancien nom reste servi
+# tant que son usage compté n'est pas nul ; la PR de retrait posera seule une date
+# ferme, au moins `PREAVIS_MOIS` après le premier avis daté qu'elle servira.
+
+_UNE_DATE = re.compile(r"\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2}")
+
+
+async def _textes_servis(monkeypatch) -> list:
+    """Tous les textes d'avis que ce module fait servir : description et réponse de
+    chaque ancien nom d'outil, avis d'une valeur réécrite, annonce du connecteur `api`,
+    entrées dépréciées et schémas d'hier de l'OpenAPI, en-têtes des 308."""
+    from starlette.requests import Request
+
+    from oto_mcp import openapi
+    from oto_mcp.api import alias_routes
+
+    servis = {t.name: t for t in await _liste_servie(monkeypatch)}
+    textes = [deprecations.avis(c) for c in deprecations.TOOLS.values()]
+    # La description entière commence par l'avis (celle du canonique peut, elle,
+    # citer des dates qui ne sont pas des retraits).
+    assert all(servis[a].description.startswith(deprecations.avis(c))
+               for a, c in deprecations.TOOLS.items())
+    textes += [deprecations.avis_d_appel(a) for a in deprecations.TOOLS]
+    for champ, (renommees, _revue) in deprecations.VALEURS.items():
+        textes += [deprecations.valeur_canonique(champ, v)[1] for v in renommees]
+    textes.append(deprecations.annonce_connecteur_api_du_jour(
+        deprecations.ANNONCE_CONNECTEUR_API))
+    doc = openapi.build()
+    for alias in tuple(deprecations.REST) + tuple(deprecations.alias_rest_derives()):
+        op = doc["paths"][alias.ancien][alias.verbe.lower()]
+        textes += [op["summary"], op["description"], repr(op["responses"])]
+        requete = Request({"type": "http", "method": alias.verbe, "path": alias.ancien,
+                           "path_params": {}, "query_string": b"", "headers": []})
+        r = await alias_routes._redirection(alias)(requete)
+        assert "sunset" not in r.headers and r.headers["deprecation"] == "true"
+        textes.append(repr(dict(r.headers)))
+    textes += [doc["components"]["schemas"][a]["description"]
+               for a in deprecations.SCHEMAS]
+    return textes
+
 
 @pytest.mark.asyncio
-async def test_la_date_servie_suit_la_constante(monkeypatch):
-    """Décaler le retrait doit être UN geste. Si ce test tombe pour une date écrite
-    en dur ailleurs, c'est la date en dur qu'il faut retirer, pas ce test."""
-    import datetime
-    faux = datetime.date(2027, 1, 15)
-    monkeypatch.setattr(deprecations, "RETRAIT", faux)
-    servis = {t.name: t for t in await _liste_servie(monkeypatch)}
-    for ancien in deprecations.TOOLS:
-        if ancien in deprecations.OUTILS_CONNECTEUR_API:
-            continue                    # sa propre date : `test_la_date_propre_…`
-        assert "15/01/2027" in servis[ancien].description
+async def test_aucun_texte_servi_ne_porte_de_date_de_retrait(monkeypatch):
+    for texte in await _textes_servis(monkeypatch):
+        assert not _UNE_DATE.search(texte), f"date servie dans un avis : {texte!r}"
+        assert "Sunset" not in texte and "retrait le" not in texte, texte
 
 
 @pytest.mark.asyncio
-async def test_la_date_propre_au_connecteur_api_suit_sa_constante(monkeypatch):
-    """Les anciens noms du connecteur Custom API portent LEUR date, pas celle du lot
-    #519 : une seule date pour deux renommages est une copie qui devient fausse."""
+async def test_une_date_de_revue_passee_ne_change_rien_a_ce_qui_est_servi(monkeypatch):
+    """Une date de revue dit quand relire les compteurs, jamais quand l'alias s'en va :
+    passée, elle laisse chaque alias servi, avec le même avis, à l'octet."""
     import datetime
-    monkeypatch.setitem(deprecations._RETRAIT_DES_OUTILS, "http_get",
-                        datetime.date(2027, 3, 2))
-    servis = {t.name: t for t in await _liste_servie(monkeypatch)}
-    assert "02/03/2027" in servis["http_get"].description
-    assert "02/03/2027" not in servis["oto_admin_doctrine"].description
+    avant = await _textes_servis(monkeypatch)
+    passee = datetime.date(2000, 1, 1)
+    for nom in ("REVUE", "REVUE_CONNECTEUR_API", "REVUE_DATASTORE", "REVUE_PROCEDURE"):
+        monkeypatch.setattr(deprecations, nom, passee)
+    monkeypatch.setattr(deprecations, "_REVUE_DES_OUTILS",
+                        {a: passee for a in deprecations._REVUE_DES_OUTILS})
+    monkeypatch.setattr(deprecations, "VALEURS",
+                        {c: (r, passee) for c, (r, _) in deprecations.VALEURS.items()})
+    assert all(a.revue == passee for a in deprecations._alias_datastore())
+    assert await _textes_servis(monkeypatch) == avant
+    noms = {t.name for t in await _liste_servie(monkeypatch)}
+    assert set(deprecations.TOOLS) <= noms, "un alias a disparu à sa date de revue"
+    assert deprecations.tool_canonique("http_get") == "api_get"
 
 
 # ── 5. La table ne ment pas ─────────────────────────────────────────────────
@@ -206,37 +250,23 @@ async def test_un_outil_absent_de_la_liste_ne_revient_pas_par_son_ancien_nom(
     assert rendus == []
 
 
-def test_le_retrait_est_une_date_a_venir_ou_le_lot_D_est_du():
-    """Un alias qui a dépassé sa date n'est plus un préavis : c'est un mensonge servi.
-    Ce test devient la sonnerie — quand il rougit, le lot D (#526) est dû."""
-    import datetime
-    assert deprecations.RETRAIT >= datetime.date.today(), (
-        f"La date de retrait ({deprecations.date_de_retrait()}) est passée et les "
-        f"alias sont toujours servis : {sorted(deprecations.TOOLS)}. Retire-les "
-        "(lot D, #526) ou décale RETRAIT en le décidant — mais ne sers plus une date "
-        "dépassée à des intégrateurs qui la lisent.")
-
 # ── 6. Le préavis tient l'engagement CONTRACTUEL ────────────────────────────
 # L'Art 8.2 du contrat de service promet un préavis de deux mois avant toute rupture
 # d'interface (référence et constat d'écart : #767). Ces deux tests existent pour qu'on ne
 # puisse pas raccourcir ce préavis sans savoir ce qu'on touche — il a valu 30 jours du
-# 29/08 au 01/09/2026 (#767), et personne ne l'avait décidé contre l'article.
+# 29/08 au 01/09/2026 (#767), et personne ne l'avait décidé contre l'article. Il ne
+# produit plus de date servie : c'est la PR de retrait qui la posera, au moins
+# `PREAVIS_MOIS` après le premier avis daté qu'elle servira.
 
 
 def test_le_preavis_annonce_tient_les_deux_mois_ecrits_au_contrat():
     """PLANCHER, pas égalité : allonger un préavis est toujours favorable à celui à
     qui il est dû ; descendre sous deux mois est un manquement, pas un réglage."""
-    import datetime
     assert deprecations.PREAVIS_MOIS >= 2, (
         f"Le préavis servi est de {deprecations.PREAVIS_MOIS} mois. L'Art 8.2 en "
         "promet DEUX avant toute rupture d'interface : ce chiffre n'est pas un "
         "réglage d'opportunité, c'est ce qui a été écrit au client. Pour le "
         "raccourcir, il faut d'abord amender l'engagement.")
-    plancher = deprecations._plus_de_mois(deprecations.ANNONCE, 2)
-    assert deprecations.RETRAIT >= plancher, (
-        f"Retrait annoncé le {deprecations.date_de_retrait()}, soit AVANT les deux "
-        f"mois dus depuis l'annonce du {deprecations.ANNONCE:%d/%m/%Y} (plancher : "
-        f"{plancher:%d/%m/%Y}).")
 
 
 def test_le_preavis_se_compte_en_mois_CALENDAIRES_jamais_en_jours():
@@ -283,7 +313,7 @@ async def test_la_reponse_d_un_ancien_nom_porte_l_avis_en_tete(monkeypatch, anci
     assert textes[-1] == "réponse", "la réponse de l'outil est rendue telle quelle"
     assert textes[0] == deprecations.avis_d_appel(ancien)
     assert f"`{ancien}` est renommé `{canonique}`" in textes[0]
-    assert deprecations.date_de_retrait(ancien) in textes[0]
+    assert deprecations.PREAVIS_DE_RETRAIT in textes[0]
     assert session_org.nom_deprecie_de_l_appel() is None, "l'ancien nom ne fuit pas"
 
 
@@ -308,10 +338,77 @@ def test_le_journal_compte_l_appel_par_un_ancien_nom():
         "tool": "api_get", "args": {}}
 
 
-def test_le_retrait_du_connecteur_api_tient_les_deux_mois():
-    """Même PLANCHER que le lot #519, compté depuis l'annonce de CE renommage."""
-    plancher = deprecations._plus_de_mois(deprecations.ANNONCE_CONNECTEUR_API,
-                                          deprecations.PREAVIS_MOIS)
-    assert deprecations.RETRAIT_CONNECTEUR_API >= plancher
-    assert all(deprecations._RETRAIT_DES_OUTILS[a] == deprecations.RETRAIT_CONNECTEUR_API
+def test_les_anciens_noms_du_connecteur_api_ont_leur_propre_date_de_revue():
+    assert all(deprecations.date_de_revue(a) == deprecations.REVUE_CONNECTEUR_API
                for a in deprecations.OUTILS_CONNECTEUR_API)
+    assert deprecations.date_de_revue("oto_admin_doctrine") == deprecations.REVUE
+
+
+# ── 8. Une VALEUR dépréciée réécrite est comptée, sur les deux faces ─────────
+
+def _entree_d_hier():
+    from oto_mcp.capabilities.resources import ResourceInput
+    return ResourceInput.model_validate({"op": "list", "resource_type": "doctrine"})
+
+
+def test_face_mcp_la_valeur_d_hier_rejoint_args_deprecated_value():
+    """`resource_type=doctrine` réécrit en `procedure` : la ligne MCP porte
+    `args.deprecated_value`, par le relevé de l'appel (`apply_call_trace`)."""
+    from oto_mcp.calllog import apply_call_trace
+    trace: dict = {}
+    jeton = session_org.set_call_trace(trace)
+    try:
+        inp = _entree_d_hier()
+    finally:
+        session_org.reset_call_trace(jeton)
+    assert inp.resource_type == "procedure"
+    row = apply_call_trace({"tool": "oto_resource", "args": {"op": "list"}}, trace,
+                           server._TRACED_ARGS)
+    assert row["args"] == {"op": "list", "deprecated_value": "resource_type=doctrine"}
+
+
+def test_face_rest_la_valeur_d_hier_rejoint_la_ligne_de_route(monkeypatch):
+    """Même compteur sur la face REST : la ligne de `RestCallLogger` le porte."""
+    import dataclasses
+
+    from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.testclient import TestClient
+
+    from oto_mcp.api import base as api_base
+    from oto_mcp.api import routes as ar
+    from oto_mcp.capabilities import _rest_adapter
+    from oto_mcp.capabilities._types import ResolvedCtx
+    from oto_mcp.capabilities.registry import CAPABILITIES
+
+    lignes: list = []
+
+    def _emet(row):
+        lignes.append(dict(row))
+
+        async def _fait():
+            return None
+        return _fait()
+
+    monkeypatch.setattr(ar, "_emit_rest_event", _emet)
+
+    async def authentifie(request, verifier, **kw):
+        return "u-1", None
+
+    (cap,) = [c for c in CAPABILITIES if c.key == "resources.govern"]
+    cap = dataclasses.replace(cap, authz=lambda raw, inp: ResolvedCtx(sub=raw.sub,
+                                                                      org_id=None),
+                              handler=lambda ctx, inp: {"resource_type": inp.resource_type})
+    routes = _rest_adapter.make_routes(None, authentifie, api_base._json,
+                                       api_base._json_error, api_base.options_handler,
+                                       [cap])
+    client = TestClient(Starlette(routes=routes,
+                                  middleware=[Middleware(ar.RestCallLogger)]))
+    r = client.post("/api/resources", json={"op": "list", "resource_type": "doctrine"})
+    assert r.status_code == 200, r.text
+    (ligne,) = lignes
+    assert ligne["args"]["deprecated_value"] == "resource_type=doctrine"
+    # Hors réécriture, rien.
+    lignes.clear()
+    client.post("/api/resources", json={"op": "list", "resource_type": "procedure"})
+    assert "deprecated_value" not in (lignes[0]["args"] or {})

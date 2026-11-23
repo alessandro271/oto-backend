@@ -2,7 +2,7 @@
 
 ⚠️ **C'était le dernier endroit du produit où l'ancien nom était servi SEUL.** Partout
 ailleurs la bascule du 09/09/2026 sert les deux clés, et le retrait commun
-(`RETRAIT_DATASTORE`, 08/11/2026) enlèvera simplement le doublon. Ici il n'y avait pas de
+(`REVUE_DATASTORE`, date de revue) enlèvera simplement le doublon. Ici il n'y avait pas de
 doublon à enlever : ce lieu serait donc devenu soit le dernier `namespace` servi de la
 plateforme, soit une rupture sèche pour ses lecteurs le jour du retrait.
 
@@ -99,7 +99,7 @@ def test_aucun_lecteur_interne_ne_depend_du_nom_qui_DISPARAIT():
             var = m.group(1) or m.group(2)
             if var in {"r", "row", "cur", "d"}:
                 continue              # une LIGNE SQL, pas un lien
-            if "RETRAIT_DATASTORE" in ligne:
+            if "REVUE_DATASTORE" in ligne:
                 continue              # la POSE du doublon, datée et assumée
             coupables.append(f"{f.relative_to(racine)}:{n}  ({var})")
     assert not coupables, (

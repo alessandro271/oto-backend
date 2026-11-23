@@ -86,12 +86,12 @@ def test_la_valeur_voyage_meme_si_le_placeholder_change_de_nom(client):
     assert r.headers["location"] == "/api/datastores/mon-tableau/schema"
 
 
-def test_l_alias_annonce_SA_date_de_retrait_pas_celle_d_un_autre_lot(client):
-    """⚠️ Défaut mesuré le 08/09/2026 : ces alias servaient la date du renommage #519,
-    annoncée dix jours plus tôt. Un intégrateur qui lit ses en-têtes aurait daté son
-    travail sur une échéance qui n'était pas la sienne."""
+def test_l_alias_se_dit_deprecie_sans_date_de_retrait(client):
+    """`Deprecation: true`, sans `Sunset` : l'ancien chemin reste servi tant que son
+    usage compté n'est pas nul (décision du 23/11/2026)."""
     r = client.get("/api/datastore/namespaces", headers={"Origin": ORIGINE},
                    follow_redirects=False)
     assert r.headers["Deprecation"] == "true"
-    assert r.headers["Sunset"] == deprecations.RETRAIT_DATASTORE.strftime("%d/%m/%Y")
-    assert r.headers["Sunset"] != deprecations.date_de_retrait()
+    assert "Sunset" not in r.headers
+    assert all(a.revue == deprecations.REVUE_DATASTORE
+               for a in deprecations._alias_datastore())
