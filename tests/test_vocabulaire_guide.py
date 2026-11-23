@@ -106,6 +106,9 @@ PLAFONDS: dict[str, int] = {
     # — Le même paramètre d'entrée `doctrine_id`, refusé sous délégation comme
     #   `guide_id` (il passait jusqu'ici par la table `deprecations.CLES`, retirée).
     "oto_mcp/capabilities/_procedure_du_travail.py": 1,
+    # — Clé de réponse `doctrine_version` gardée dans les lignes de runs du suivi
+    #   d'org : un client hors dépôt la lit encore (lot D) ; elle part au lot suivant.
+    "oto_mcp/capabilities/org_monitoring.py": 1,
     # (`capabilities/resources*.py` sont sortis le 23/09/2026 — otomata-tech/oto#65,
     #  arbitrage d'Alexis : « doctrine est l'ancien terme, ne doit plus apparaître ».
     #  La famille publique s'appelle `procedure` ; sa valeur STOCKÉE est nommée une
