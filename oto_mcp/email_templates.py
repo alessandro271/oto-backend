@@ -674,3 +674,28 @@ def send_org_erasure_done_email(to: str, *, org_name: str | None, brand: str | N
     return _envoyer(m, to, subject, _charte.page(
         m, contenu, preheader=subject,
         mention=_charte.mention_transactionnelle(m, locale), locale=locale))
+
+
+def _milliers(n: int) -> str:
+    return f"{int(n):,}".replace(",", "\u202f")
+
+
+def send_embed_plafond_email(to: str, *, consommes: int, plafond: int) -> bool:
+    """L'alerte d'équipe du worker d'indexation (`embed_worker`) : le plafond journalier
+    de tokens d'embedding de l'instance est atteint, l'indexation sémantique est arrêtée
+    jusqu'à minuit UTC. Un message par admin de plateforme, une fois par jour."""
+    m = _charte.marque(None)
+    subject = "[équipe] Indexation sémantique arrêtée : plafond journalier atteint"
+    contenu = (
+        f'<p style="{_charte.PARA}">Le worker d\'indexation sémantique a consommé '
+        f'<strong>{_milliers(consommes)}</strong> tokens d\'embedding aujourd\'hui (UTC), pour un '
+        f'plafond de <strong>{_milliers(plafond)}</strong> '
+        f'(<code>OTO_EMBED_PLAFOND_TOKENS_JOUR</code>).</p>'
+        f'<p style="{_charte.PARA}">Il ne fait plus aucun appel jusqu\'à minuit UTC. Les '
+        f'pages modifiées restent à indexer et le seront ensuite. Si ce volume n\'est pas '
+        f'attendu, couper le worker (<code>OTO_EMBED_WORKER_ENABLED=0</code>) et lire '
+        f'<code>embed_sources</code> et <code>embed_consommation</code>.</p>'
+    ).replace(",", " ")
+    return _envoyer(m, to, subject, _charte.page(
+        m, contenu, preheader="indexation sémantique arrêtée pour la journée",
+        mention=_charte.mention_transactionnelle(m, None), locale="fr"))

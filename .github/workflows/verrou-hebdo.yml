@@ -68,6 +68,7 @@ jobs:
         with:
           name: uv-lock-au-plus-recent
           path: uv.lock
+          retention-days: 7
       - name: Bac à sable des fonctions (ADR 0073)
         # Comme `test` : sans lui, les bancs de l'exécuteur échouent.
         # Le conteneur de CI n'a ni systemd ni utilisateur dédié : l'isolement système
