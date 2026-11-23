@@ -1084,6 +1084,11 @@ def main():
         level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Les clients HTTP écrivent une ligne INFO par requête (« HTTP Request: POST … 200 ») :
+    # ~6 300 par heure pour le seul worker d'indexation le 23/11/2026, de quoi faire
+    # tourner le journal système. Leurs avertissements et erreurs restent.
+    for bavard in ("httpx", "httpcore"):
+        logging.getLogger(bavard).setLevel(logging.WARNING)
 
     # Garde-fou (revue de sécurité 2026-08-29, oto-backend#572) : refuse de démarrer
     # si le repli d'identité dev (`OTO_MCP_DEV_SUB`) est posé en même temps qu'un

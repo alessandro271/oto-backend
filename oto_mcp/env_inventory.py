@@ -780,6 +780,18 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_EMBED_WORKER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : worker d'embeddings.",
              ("oto_mcp/boucles_de_fond.py:152",)),
+    Variable("OTO_EMBED_PLAFOND_TOKENS_JOUR", Classe.REGLAGE, "5000000",
+             "Plafond de tokens d'embedding FACTURÉS (Mistral) par jour UTC et par "
+             "instance, indexation et requêtes de recherche confondues. Atteint : le "
+             "worker d'indexation s'arrête jusqu'à minuit UTC et prévient les admins de "
+             "plateforme ; la recherche passe en lexical seul (journalisé). `0` "
+             "n'embarque rien ; illisible : refus.",
+             ("oto_mcp/embeddings.py:123",)),
+    Variable("OTO_EMBED_STABILITE_S", Classe.REGLAGE, "600",
+             "Secondes sans écriture avant qu'une source (page, brief, couche, ligne) "
+             "soit indexée : une rafale d'écritures se paie une fois. `0` : aussitôt ; "
+             "illisible : refus.",
+             ("oto_mcp/embed_worker.py:75",)),
     Variable("OTO_FILE_EXTRACT_WORKER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : worker d'extraction de fichiers.",
              ("oto_mcp/boucles_de_fond.py:157",)),

@@ -52,25 +52,33 @@ MARK_NODES_TO_EMBED_SQL = f"""
        AND ({NODE_DIRTY_SQL}) IS NOT TRUE
        AND length(COALESCE(props->>'body_md', '')) > 0
        AND id NOT IN (SELECT ref FROM aux_embeddings WHERE kind = '{NODE_KIND}')
+       AND NOT EXISTS (SELECT 1 FROM embed_sources s WHERE s.source = '{NODE_KIND}'
+                       AND s.ref = nodes.id::text AND s.echec_raison IS NOT NULL)
 """
 
 
-def list_dirty_aux(limit: int = 16) -> list[dict]:
+def list_dirty_aux(limit: int = 16, *, stable_s: int = 0) -> list[dict]:
     """Briefs + guides on-demand à (ré)indexer (`embed_dirty`), forme uniforme
     `{kind, ref, text}`. Ne prend que les sources à TEXTE non trivial (un brief vide
-    n'a rien à indexer)."""
+    n'a rien à indexer), inchangées depuis `stable_s` secondes, hors de celles qu'un
+    autre processus a réservées."""
+    from . import embed_file
     with _connect() as conn:
         briefs = conn.execute(
             "SELECT 'brief' AS kind, id AS ref, "
             "coalesce(name,'') || E'\n' || coalesce(brief_md,'') AS text "
             "FROM projects WHERE embed_dirty AND archived_at IS NULL "
-            "AND length(coalesce(brief_md,'')) > 0 ORDER BY id LIMIT %s",
-            (limit,)).fetchall()
+            "AND length(coalesce(brief_md,'')) > 0 "
+            f"AND {embed_file.hors_bail_sql('brief', 'projects.id')} "
+            "AND updated_at <= NOW() - make_interval(secs => %s) ORDER BY id LIMIT %s",
+            (stable_s, limit)).fetchall()
         guides = conn.execute(
             f"SELECT '{NODE_KIND}' AS kind, id AS ref, {_NODE_TEXT} AS text "
             f"FROM nodes WHERE {NODE_DIRTY_SQL} AND props->>'delivery' = 'on-demand' "
-            "AND length(coalesce(props->>'body_md','')) > 0 ORDER BY id LIMIT %s",
-            (limit,)).fetchall()
+            "AND length(coalesce(props->>'body_md','')) > 0 "
+            f"AND {embed_file.hors_bail_sql(NODE_KIND, 'nodes.id')} "
+            "AND updated_at <= NOW() - make_interval(secs => %s) ORDER BY id LIMIT %s",
+            (stable_s, limit)).fetchall()
         return [dict(r) for r in list(briefs) + list(guides)]
 
 
