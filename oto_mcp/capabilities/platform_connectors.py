@@ -461,7 +461,8 @@ CAPABILITIES += [
             "via `platform.org.grant_key` (an org) or `platform.key.grant` (an account)."),
                 quota_d_octroi.declaration()),
         mcp=None,
-        rest=RestBinding("POST", _ACCESS),
+        # Option et octroi de clé en un geste : session seule (`_session_exigee`).
+        rest=RestBinding("POST", _ACCESS, allow_api_token=False),
     ),
 ]
 

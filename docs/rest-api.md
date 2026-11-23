@@ -1262,7 +1262,10 @@ déploiement : **`docs/version-servie.md`**.
   `oto_admin_account`, `oto_admin_set_option`, `oto_admin_set_plan`,
   `oto_admin_set_contract`, `oto_admin_cancel_contract`. Création d'org par l'admin
   plateforme, qui nomme un org_admin : `POST /api/admin/orgs` et `oto_admin_org op=create`
-  (la création en libre-service `POST /api/me/orgs` reste ouverte). **Restent ouvertes au jeton**,
+  (la création en libre-service `POST /api/me/orgs` reste ouverte). Clé plateforme d'une
+  équipe et accès plateforme à un connecteur : `POST|DELETE /api/admin/groups/{id}/grants/{provider}`
+  et `oto_admin_key_grant op=grant|revoke scope=group`,
+  `POST /api/admin/connectors/{provider}/platform-access`. **Restent ouvertes au jeton**,
   appelées sous jeton par un service d'instance (liste nominative tenue par
   `tests/test_session_exigee.py`) : `GET /api/admin/tenants/{slug}`, `GET …/keys`,
   `GET|PUT|DELETE …/keys/{provider}/grants[/{org_id}]` (et `oto_admin_tenant
@@ -1272,8 +1275,7 @@ déploiement : **`docs/version-servie.md`**.
   `GET /api/admin/usage/first-calls`, `POST /api/admin/orgs/{id}/suspension`,
   `POST /api/admin/orgs/{id}/trial`, `GET /api/admin/orgs[/{id}]`,
   `GET /api/admin/unipile/seats`, `DELETE /api/admin/unipile/seats/{account_id}`. Ouvertes
-  aussi, en attente de décision : `POST|DELETE /api/admin/groups/{id}/grants/{provider}`,
-  `POST /api/admin/connectors/{provider}/platform-access`,
+  aussi, en attente de décision : `POST|DELETE /api/admin/users/{sub}/grants/{provider}`,
   `PUT|DELETE /api/orgs/{id}/secrets/{provider}` et leur miroir `/api/admin/…`.
 - **Portée opt-in** (`auth/token_scopes.py`, colonne `user_api_tokens.scopes` JSONB) : à la
   création, `POST /api/me/tokens {"label":"scout", "scopes":{"datastores":{"leads":"read"}}}`

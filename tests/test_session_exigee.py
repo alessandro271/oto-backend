@@ -72,6 +72,8 @@ _SESSION_SEULE = [
     ("billing.admin_cancel_contract", 0),
     ("admin.tenant_key_set", 0), ("admin.tenant_key_clear", 0),
     ("admin.orgs.billing_identity.set", 0), ("org.admin.create", 0),
+    ("platform.group.grant_key", 0), ("platform.group.revoke_key", 0),
+    ("platform.connector.access_set", 0),
     ("admin.tenant_app_set", 0), ("admin.tenant_app_clear", 0),
     ("platform.editor_app.set", 0), ("platform.editor_app.delete", 0),
     ("platform.key.create", 0), ("platform.key.delete", 0),
@@ -96,8 +98,6 @@ def test_la_route_sensible_refuse_le_porteur_de_jeton(cle, index):
     ("connectors.bulk_select", 0),
     # Restent ouverts en attendant une décision (#1913) : leur fermeture tiendrait en
     # une ligne (`allow_api_token=False` sur le binding).
-    ("platform.group.grant_key", 0), ("platform.group.revoke_key", 0),
-    ("platform.connector.access_set", 0),
     ("org.secret.set", 0), ("org.secret.set", 1),
     ("org.secret.delete", 0), ("org.secret.delete", 1)])
 def test_les_routes_laissees_ouvertes_le_restent(cle, index):
@@ -311,6 +311,16 @@ def _gestes():
             _CTX, oa.CreateOrgInput(name="acme", admin="u-x")),
         "oto_admin_org op=create": lambda: admin_console._org(
             _CTX, admin_console.OrgAdminInput(op="create", name="acme", admin="u-x")),
+        "platform.group.grant_key": lambda: users_admin._grant_group_key(
+            _CTX, users_admin.GroupGrantKeyInput(group_id=9, provider="serper")),
+        "oto_admin_key_grant op=grant scope=group": lambda: admin_console._key_grant(
+            _CTX, admin_console.KeyGrantInput(op="grant", scope="group", group_id=9,
+                                              provider="serper")),
+        "platform.group.revoke_key": lambda: users_admin._revoke_group_key(
+            _CTX, users_admin.GroupRevokeKeyInput(group_id=9, provider="serper")),
+        "oto_admin_key_grant op=revoke scope=group": lambda: admin_console._key_grant(
+            _CTX, admin_console.KeyGrantInput(op="revoke", scope="group", group_id=9,
+                                              provider="serper")),
         "platform.option.set": lambda: users_admin._set_option(
             _CTX, users_admin.OptionInput(entity_type="user", entity_id="u-x",
                                           option="beta", on=True)),

@@ -275,7 +275,11 @@ def _revoke_org_key(ctx: ResolvedCtx, inp: OrgRevokeKeyInput) -> dict:
 def _grant_group_key(ctx: ResolvedCtx, inp: GroupGrantKeyInput) -> dict:
     """The included key granted to a TEAM (#1239): its members resolve it while that team
     is their active one — with the org's personal-key policy, this is what reserves a
-    connector to the team."""
+    connector to the team.
+
+    Session seule (`_session_exigee`), sur les deux faces — la route et
+    `oto_admin_key_grant scope=group`."""
+    exiger_session("Accorder une clé plateforme à une équipe")
     if not group_store.get_group(inp.group_id):
         raise AuthzDenied(404, "unknown_group", f"Équipe #{inp.group_id} inconnue.")
     if not _has_platform_instance(inp.provider):
@@ -288,6 +292,7 @@ def _grant_group_key(ctx: ResolvedCtx, inp: GroupGrantKeyInput) -> dict:
 
 
 def _revoke_group_key(ctx: ResolvedCtx, inp: GroupRevokeKeyInput) -> dict:
+    exiger_session("Retirer une clé plateforme à une équipe")  # `_session_exigee`
     credentials_store.platform_revoke(inp.provider, f"group:{inp.group_id}")
     return {"ok": True, "group_id": inp.group_id, "provider": inp.provider}
 
@@ -555,13 +560,15 @@ CAPABILITIES += [
                     "TEAM — its members resolve it while the team is their active one. "
                     "Optional per-day quota. With the org forbidding personal keys for the "
                     "connector, this reserves it to the team. " + quota_d_octroi.AIDE,
-        rest=RestBinding("POST", "/api/admin/groups/{id}/grants/{provider}", _GID),
+        rest=RestBinding("POST", "/api/admin/groups/{id}/grants/{provider}", _GID,
+                         allow_api_token=False),
     ),
     Capability(
         key="platform.group.revoke_key", handler=_revoke_group_key, Input=GroupRevokeKeyInput,
         Output=GroupKeyGrant, authz=SUPER_ADMIN,
         description="[super admin] Revoke a team's grant of a connector's platform key.",
-        rest=RestBinding("DELETE", "/api/admin/groups/{id}/grants/{provider}", _GID),
+        rest=RestBinding("DELETE", "/api/admin/groups/{id}/grants/{provider}", _GID,
+                         allow_api_token=False),
     ),
     Capability(
         key="platform.org.unipile_limit_get", handler=_get_unipile_limit,
