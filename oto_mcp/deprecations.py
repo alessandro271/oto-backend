@@ -407,7 +407,7 @@ def cible(alias: AliasRest, path_params: dict, query: str = "") -> str:
 # toute autre lecture (autz comprise), et la réponse porte `deprecation_warning`, qui
 # nomme le nom d'aujourd'hui, sans date. Rien en aval n'apprend que l'alias existe ;
 # la réponse, elle, ne sert que le nom d'aujourd'hui (`resource_type: "procedure"`).
-# Le journal, lui, le compte : `args.deprecated_value = "resource_type=doctrine"`.
+# Le journal, lui, le compte : `args.deprecated_value = "resource_type=<valeur d'hier>"`.
 ANNONCE_PROCEDURE = datetime.date(2026, 9, 23)
 REVUE_PROCEDURE = _plus_de_mois(ANNONCE_PROCEDURE, PREAVIS_MOIS)
 

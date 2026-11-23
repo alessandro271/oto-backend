@@ -479,7 +479,7 @@ def nom_deprecie_de_l_appel() -> Optional[str]:
 
 # ── La valeur dépréciée que l'appel a envoyée (`deprecations.VALEURS`) ─────────
 # Même compteur que l'ancien nom ci-dessus, pour une VALEUR réécrite par
-# `deprecations.valeur_canonique` (`resource_type=doctrine` → `procedure`). La
+# `deprecations.valeur_canonique` (une valeur d'hier de `resource_type`). La
 # réécriture a lieu DANS la validation de l'entrée, souvent en threadpool : un `.set()`
 # n'y remonterait pas. Elle s'écrit donc dans les holders MUTABLES déjà posés autour
 # de l'appel — le relevé MCP (`_CALL_TRACE`, versé par `calllog.apply_call_trace`) et
