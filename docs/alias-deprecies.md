@@ -33,7 +33,7 @@ champ — reste servi **tant que son usage compté n'est pas à zéro**.
   vides. C'est elle qui pose une date ferme, **au moins deux mois après le premier
   avis daté qu'elle servira** (art. 8.2 du contrat de service,
   `deprecations.PREAVIS_MOIS`).
-- **Les constantes `REVUE`, `REVUE_PROCEDURE`, `REVUE_CONNECTEUR_API`,
+- **Les constantes `REVUE`, `REVUE_CONNECTEUR_API`,
   `REVUE_DATASTORE`** (`oto_mcp/deprecations.py`) sont des **dates de revue** : le jour
   où relire les compteurs. Elles n'ont aucun effet sur ce qui est servi — une date de
   revue passée ne change rien, et aucun test ne les compare au jour
@@ -177,27 +177,31 @@ basculé) et la migration en base.
 
 ## La table
 
-Une ligne par surface. « Forme » dit comment les deux noms coexistent.
+Une ligne par surface. « Forme » dit comment les deux noms coexistent — ou depuis quand
+l'ancien est retiré. **Lot D (#526) : outil, chemins REST et clés de réponse retirés le
+23/11/2026**, les mesures étant à zéro sur toutes les instances (décision du 23/11/2026 :
+l'avis déjà servi valait préavis). Restent servis : paramètres d'entrée, code d'erreur
+hérité, schéma OpenAPI d'hier ; la relation en base attend sa migration.
 
-| Surface | Ancien nom (revue le 30/11/2026) | Nouveau nom | Forme | Lot |
+| Surface | Ancien nom | Nouveau nom | Forme | Lot |
 | --- | --- | --- | --- | --- |
-| Outil MCP | `oto_admin_doctrine` | `oto_admin_guide` | les deux listés et appelables ; l'ancien porte l'avis en tête de sa description | B1 |
-| Chemin REST | `GET /api/me/doctrines/library` | `GET /api/me/guide-library` | 308 | B2 |
-| Chemin REST | `GET /api/me/doctrines/library/{slug}` | `GET /api/me/guide-library/{slug}` | 308 | B2 |
-| Chemin REST | `DELETE /api/me/doctrines/library/{id}` | `DELETE /api/me/guide-library/{id}` | 308 | B2 |
-| Chemin REST | `POST /api/me/doctrines/publish` | `POST /api/me/guide-library/publish` | 308 | B2 |
-| Chemin REST | `POST /api/me/doctrines/fork` | `POST /api/me/guide-library/fork` | 308 | B2 |
-| Chemin REST | `GET /api/me/doctrines/{doctrine_id}` | `GET /api/me/guides/{guide_id}` | 308 | B2 |
-| Clé de capacité | `org.doctrine.get` | `org.guide.get` | **renommée, sans alias** (voir plus bas) | B2 |
-| Clé de capacité | `org.doctrine.admin_get` | `org.guide.admin_get` | idem | B2 |
-| Clé de capacité | `org.doctrine.admin_list` | `org.guide.admin_list` | idem | B2 |
-| Clé de capacité | `admin.doctrine` | `admin.guide` | idem | B2 |
-| Clé de réponse | `doctrine_id` | `guide_id` | les deux servies, même valeur | B3 |
-| Clé de réponse | `doctrine_version` | `guide_version` | idem | B3 |
-| Clé de réponse | `doctrine_ref_count` | `guide_ref_count` | idem | B3 |
-| Clé de réponse | `doctrines` | `guides` | idem | B3 |
-| Clé de réponse | `group_doctrine` | `group_guide` | idem | B3 |
-| Clé de réponse | `doctrine` | `guide` | idem | B3 |
+| Outil MCP | `oto_admin_doctrine` | `oto_admin_guide` | **retiré le 23/11/2026** (lot D) : nom inconnu | B1 |
+| Chemin REST | `GET /api/me/doctrines/library` | `GET /api/me/guide-library` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Chemin REST | `GET /api/me/doctrines/library/{slug}` | `GET /api/me/guide-library/{slug}` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Chemin REST | `DELETE /api/me/doctrines/library/{id}` | `DELETE /api/me/guide-library/{id}` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Chemin REST | `POST /api/me/doctrines/publish` | `POST /api/me/guide-library/publish` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Chemin REST | `POST /api/me/doctrines/fork` | `POST /api/me/guide-library/fork` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Chemin REST | `GET /api/me/doctrines/{doctrine_id}` | `GET /api/me/guides/{guide_id}` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Clé de capacité | `org.doctrine.get` | `org.guide.get` | **renommée, sans alias** ; son `operationId` historique, porté par l'ancien chemin, est parti avec lui le 23/11/2026 | B2 |
+| Clé de capacité | `org.doctrine.admin_get` | `org.guide.admin_get` | **renommée, sans alias** ; son `operationId` historique, porté par l'ancien chemin, est parti avec lui le 23/11/2026 | B2 |
+| Clé de capacité | `org.doctrine.admin_list` | `org.guide.admin_list` | **renommée, sans alias** ; son `operationId` historique, porté par l'ancien chemin, est parti avec lui le 23/11/2026 | B2 |
+| Clé de capacité | `admin.doctrine` | `admin.guide` | **renommée, sans alias** ; son `operationId` historique, porté par l'ancien chemin, est parti avec lui le 23/11/2026 | B2 |
+| Clé de réponse | `doctrine_id` | `guide_id` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
+| Clé de réponse | `doctrine_version` | `guide_version` | **retiré le 23/11/2026** (lot D) partout, SAUF dans les lignes de `GET /api/orgs/{id}/monitoring/runs`, où un client la lit encore : servie à côté de `guide_version`, même valeur, non déclarée dans `/openapi.json` ; part au lot suivant | B3 |
+| Clé de réponse | `doctrine_ref_count` | `guide_ref_count` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
+| Clé de réponse | `doctrines` | `guides` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
+| Clé de réponse | `group_doctrine` | `group_guide` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
+| Clé de réponse | `doctrine` | `guide` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
 | Paramètre d'entrée | `doctrine_id` | `guide_id` | les deux acceptés | B3 |
 | Paramètre d'entrée | `run_start(doctrine=)` | `run_start(guide=)` | les deux acceptés | B3 |
 | Code d'erreur | `unknown_doctrine` | `unknown_guide` | l'ancien dans `details.legacy_code` | B3 |
@@ -206,26 +210,24 @@ Une ligne par surface. « Forme » dit comment les deux noms coexistent.
 
 ### Une valeur d'entrée renommée : la famille « procédure » d'`oto_resource` (oto#65)
 
-**Sa propre date de revue : 23/11/2026** (`deprecations.REVUE_PROCEDURE` =
-`ANNONCE_PROCEDURE` 23/09/2026 + `PREAVIS_MOIS`), sans effet sur ce qui est servi. Ce
-n'est pas celle du lot #519 : ce renommage-là a été oublié par le lot B. Son usage se
-compte par `args.deprecated_value = "resource_type=doctrine"`.
+**Retirée le 23/11/2026** avec le lot D : l'ancienne valeur est inconnue, refusée comme
+toute valeur invalide. Son usage, compté par `args.deprecated_value`, était à zéro.
 
 Arbitrage d'Alexis du 23/09/2026 : « doctrine est l'ancien terme, ne doit plus
 apparaître ». `oto_resource` / `oto_resource_v2` (et `POST /api/resources[/v2]`) ne
 publient plus que `resource_type ∈ {datastore_namespace, project, procedure, doc}` —
 énuméré, discriminant de la réponse, descriptions, refus.
 
-| Surface | Ancien nom (revue le 23/11/2026) | Nouveau nom | Forme |
+| Surface | Ancien nom | Nouveau nom | Forme |
 | --- | --- | --- | --- |
-| Valeur d'entrée `resource_type` | `doctrine` | `procedure` | l'ancienne est ACCEPTÉE sur les deux surfaces, réécrite avant l'autz, et la réponse porte `deprecation_warning` (nom d'aujourd'hui, sans date) et le journal `args.deprecated_value` ; la réponse ne sert QUE `procedure` |
+| Valeur d'entrée `resource_type` | `doctrine` | `procedure` | **retiré le 23/11/2026** (lot D) : valeur inconnue, refusée comme toute valeur invalide (`unsupported_resource_type` sur la surface héritée, refus de validation sur la stricte) |
 | Motif de cascade `reason` | `doctrine_needs_org_owner` | — | **retiré sec** : inatteignable depuis l'ADR 0068 (les trois paliers d'un nouveau propriétaire sont ceux d'une procédure) ; un palier inconnu ressort `status: "failed"` avec la raison du store |
 
 **Pourquoi un alias** : un appelant vivant l'envoie — l'écran de partage d'une procédure
 du dashboard (`DoctrineView` → `SharePrincipalDialog`, valeur codée en dur, op
 `get`/`share`/`unshare`), mesuré le 23/09/2026. Ni le nouveau front, ni le plugin, ni
 oto-core, ni la CLI ne l'emploient. **Le porteur du pont** est donc le dashboard : sa
-valeur passe à `procedure`, puis l'alias part quand son usage compté est nul.
+valeur est passée à `procedure`, puis l'alias est parti, à compteur nul.
 
 **Ce qui ne change pas** : la valeur ÉCRITE en base (`resource_grants.resource_type`)
 garde le mot d'avant #519 — nommée une seule fois, `ownership.TYPE_RESSOURCE_PROCEDURE`,
@@ -276,8 +278,8 @@ qu'à partir de ce lot — à moins de deux mois. `PREAVIS_MOIS` ne bouge pas.
 
 Forme de la coexistence : **servi, et dit**. Une réponse MCP obtenue par un nom
 (`data_*`, `oto_project op=link`, `oto_fleet op=create`) porte en tête l'avis qui donne le
-numéro et la date ; une route REST adressée par un nom répond `Deprecation: true` et
-`Sunset`. La portée d'un jeton range ses tableaux par numéro (oto#158) : une portée
+numéro et la date ; une route REST adressée par un nom répond `Deprecation: true` (sans
+`Sunset` depuis le 23/11/2026). La portée d'un jeton range ses tableaux par numéro (oto#158) : une portée
 émise avant, encore par nom, est refusée en le disant (`token_scope_by_name`). Les
 données qui gardent un nom se migrent par `scripts/tableaux_par_numero.py`.
 

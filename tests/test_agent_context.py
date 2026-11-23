@@ -15,11 +15,8 @@ def test_assembles_layers(monkeypatch):
     monkeypatch.setattr(ac.tool_registry, "bound_instance", lambda: None)
     ctx = ResolvedCtx(sub="u1", org_id=None)
     out = asyncio.run(ac._agent_context(ctx, ac.AgentContextInput()))
-    # `doctrine` est l'ALIAS déprécié de `guide` (#519, retiré avec un préavis) : les
-    # deux sont servis, et c'est bien la MÊME valeur — sinon un client migré et un
-    # client resté en arrière ne liraient pas la même chose.
-    assert set(out) == {"org_id", "instructions", "layers", "guide", "doctrine", "tools"}
-    assert out["guide"] is out["doctrine"]
+    # L'ancien nom de `guide` est RETIRÉ (lot D de #519, #526) : seul `guide` est servi.
+    assert set(out) == {"org_id", "instructions", "layers", "guide", "tools"}
     assert "TA boîte à outils" in out["instructions"]                 # bloc A prose
     assert "data_*" in out["instructions"] and "apollo_*" in out["instructions"]  # catalogue (bloc A)
     # `layers` = le même artefact décomposé (pile de la vue /context), avec poids.

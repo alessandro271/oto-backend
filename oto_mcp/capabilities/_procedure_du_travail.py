@@ -65,7 +65,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from .. import db, deprecations, org_store, verrou_org
+from .. import db, org_store, verrou_org
 from ._types import AuthzDenied, DeclaredError, ResolvedCtx
 
 #: Le code du refus d'exécution. Testé par les appelants, jamais la phrase.
@@ -75,8 +75,8 @@ CODE_INCONNUE = "unknown_procedure"
 
 #: Les seuls gestes servis sous un jeton de délégation : relire ses procédures.
 _LECTURES = ("get", "list")
-#: La lecture par id stable, sous ses deux noms (l'ancien vit dans `deprecations.CLES`).
-_NOMS_DE_L_ID = ("guide_id", *(a for a, n in deprecations.CLES.items() if n == "guide_id"))
+#: La lecture par id stable, sous les deux noms que le paramètre d'ENTRÉE accepte.
+_NOMS_DE_L_ID = ("guide_id", "doctrine_id")
 
 #: La fermeture des procédures nommées : sauts depuis celle du travail, et taille de
 #: l'ensemble, celle du travail COMPRISE.
@@ -240,16 +240,12 @@ def liste_bornee(sorties: list[dict], permises: dict[str, Optional[str]],
                  base: dict) -> dict:
     """La liste réduite aux procédures permises (`op=list` sous délégation), chacune À SON
     palier : `sorties` = une liste par palier présent dans `permises`, `base` = la forme
-    rendue quand il n'y en a aucune.
-
-    ⚠️ Sous ses DEUX noms (`guides` et l'ancien, `deprecations.CLES`) : filtrer l'un
-    laisserait l'autre servir la liste entière."""
+    rendue quand il n'y en a aucune."""
     paires = {(s, p) for s, p in permises.items() if p is not None}
     guides = [g for out in sorties for g in out.get("guides") or []
               if (org_store.normalize_slug(g.get("slug") or ""), g.get("scope")) in paires]
     tete = sorties[0] if sorties else base
-    reste = {k: v for k, v in tete.items() if k not in deprecations.CLES}
-    return deprecations.avec_les_deux_noms({**reste, "guides": guides})
+    return {**tete, "guides": guides}
 
 
 def exiger_connue(org_id: Optional[int], proprietaire: Optional[str], slug: str) -> None:
