@@ -94,6 +94,11 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                             la joue AVANT `migrer upgrade head`
                                             (une révision de renommage lit ces
                                             copies) — PAS un travail : voir plus bas
+    oto-mcp maintenance partages-office --dry-run|--appliquer|--retablir
+                                            les partages d'org posés d'office sur les
+                                            agents : aperçu par org (lecture seule),
+                                            passage en lecture, retour arrière — un
+                                            GESTE sur décision, PAS un travail
     oto-mcp maintenance key-index-rebuild   (#421 — voir plus bas, PAS dans `all`)
     oto-mcp maintenance journal-tokens      purge rétroactive des jetons écrits en
                                             clair dans le journal (#558) — À BLANC
@@ -1228,6 +1233,52 @@ def apps_lecteurs_actifs(argv: list[str]) -> int:
     return LECTEURS_RESTE if lecteurs.reste(rapport) else LECTEURS_FAIT
 
 
+# Codes de sortie de `partages-office`. Pas un travail : un geste d'exploitant, jamais
+# joué par le démarrage, une révision ni le timer, dont l'issue se lit au code.
+PARTAGES_OFFICE_FAIT = 0
+PARTAGES_OFFICE_ERREUR = 2     # base injoignable, lecture ou écriture en échec (annulée)
+
+
+def partages_office(argv: list[str]) -> int:
+    """`oto-mcp maintenance partages-office --dry-run | --appliquer | --retablir` : les
+    partages d'org posés d'office sur les agents (`db.partages_office`). `--dry-run`
+    compte par org sans rien écrire (transaction `READ ONLY`, `statement_timeout` 15 s) ;
+    `--appliquer` les rabat en lecture ; `--retablir` défait exactement ce geste. Un des
+    trois est exigé : rien ne s'écrit par défaut."""
+    from .db import partages_office as po
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance partages-office",
+        description=("Les partages d'org posés d'office sur les agents d'avant le "
+                     "02/10/2026 : aperçu par org (--dry-run, n'écrit rien), passage en "
+                     "lecture (--appliquer), retour arrière exact (--retablir)."))
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true",
+                      help="compte par org, en lecture seule ; n'écrit rien")
+    mode.add_argument("--appliquer", action="store_true",
+                      help="rabat ces partages en lecture (viewer/read), sous sa marque")
+    mode.add_argument("--retablir", action="store_true",
+                      help="remet en écriture ce que --appliquer a rabattu")
+    args = p.parse_args(argv)
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if args.dry_run:
+        geste, verbe = po.compter_a_blanc, "à rabattre"
+    elif args.appliquer:
+        geste, verbe = po.rabattre, "rabattus en lecture"
+    else:
+        geste, verbe = po.retablir, "remis en écriture"
+    try:
+        compte = geste()
+    except Exception:
+        logger.error("partages-office : ERREUR — rien n'est écrit (transaction annulée)",
+                     exc_info=True)
+        return PARTAGES_OFFICE_ERREUR
+    print(f"partages d'org d'office {verbe} :")
+    print("\n".join(po.lignes_du_compte(compte)))
+    return PARTAGES_OFFICE_FAIT
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "index-concurrents":
@@ -1244,6 +1295,8 @@ def main(argv: list[str] | None = None) -> int:
         return copies_du_coffre(argv[1:])
     if argv and argv[0] == "apps-lecteurs-actifs":
         return apps_lecteurs_actifs(argv[1:])
+    if argv and argv[0] == "partages-office":
+        return partages_office(argv[1:])
     p = argparse.ArgumentParser(
         prog="oto-mcp maintenance",
         description="Les travaux de maintenance du backend (ADR 0065, lot 0).")
