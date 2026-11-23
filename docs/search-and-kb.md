@@ -54,6 +54,37 @@ une page qui la cite (`[[…]]`, `op=backlinks`). Aucune option de recherche ne 
 la réponse serait un second chemin de découverte à scoper et à garder, pour un besoin
 que la liste sert.
 
+## Les sources brutes : un genre à part, à la demande (12/11/2026)
+
+`docs.kind = 'source'` (transcriptions, imports) se verse en continu : un projet peut en
+porter des dizaines de milliers pour une centaine de pages de travail (`doc`, `note`).
+Elles noyaient la recherche et la ralentissaient. Décision du propriétaire du produit :
+elles sont traitées **à part**.
+
+- **`oto_search`** : `page` ne couvre plus que `doc` et `note`, au lexical
+  (`search_docs_fts`) comme au sémantique (`search_docs_semantic`). Un genre `source`
+  s'ajoute à `kinds`, **absent du défaut** (`search.KINDS_A_LA_DEMANDE`) : on le
+  demande (`kinds=['source']`, ou `['page','source']`). Lexical seul : une source se
+  retrouve par ses mots. Le hit a la forme d'une page (`ref` = l'id d'`oto_doc op=get`).
+- **Pas de silence** : quand les pages sont cherchées sans `source` et que le périmètre
+  en porte, la réponse porte `sources_skipped: true` et `hint_sources` (comment les
+  inclure). Une sonde `EXISTS` par l'index partiel des sources, jamais un compte.
+- **`oto_doc op=list`** (la liste que lit l'arbre du dashboard) : par défaut l'arbre de
+  TRAVAIL, sans les sources — sauf une source qui est l'ancêtre d'une page de travail,
+  gardée pour que l'arbre reste entier — et `sources_hidden` dit combien il en laisse,
+  comme `archived_hidden`. `kind="source"` liste les sources seules, les plus récentes
+  d'abord (`created_at`, puis `id`), paginées : `limit` (50, au plus 200), `cursor` (le
+  `next_cursor` précédent, `null` sur la dernière page), `since`/`until`, et `total`
+  sur la période. Une source se lit toujours par son id (`op=get`).
+- **Index** : les prédicats `kind <> 'source'` et `kind = 'source' AND archived_at IS
+  NULL` (`db/projects.py`) sont la source unique de quatre index partiels — les deux
+  GIN des pages de travail (`db/search.py::INDEX_PAGES_DE_TRAVAIL`), l'arbre de travail
+  par projet, les sources récentes par projet —, posés CONCURRENTLY par la révision
+  `20261120_2240_docs_par_genre` (au-delà de 10 000 lignes : `oto-mcp maintenance
+  index-concurrents 20261120_2240_docs_par_genre`). Les GIN de la table entière restent
+  et servent la recherche des sources. Sans les index partiels, tout répond juste, plus
+  lentement.
+
 ## L'org d'un résultat : où vit l'objet, pas par où on l'atteint (21/09/2026)
 
 Signal #1005 (et #1006, son doublon sur `data_list_datastores`) : un agent qui audite
@@ -103,18 +134,44 @@ de tableau, 200 textes de fichier) :
 ## Sémantique + RRF (20/07)
 
 **Sémantique + RRF (20/07, LIVE preprod)** : fusion LEXICAL + SÉMANTIQUE des pages.
-`embeddings.py` = client Mistral `mistral-embed` (1024) — **sync `embed_texts`** (worker, batch DÉCOUPÉ sous le
-budget de tokens/requête : 400 « too many tokens overall » sinon ; cap ~16k ch/input)
-+ **async `embed_query`** (chemin requête). Outbox `docs.embed_dirty` (marqué à
+`embeddings.py` = client Mistral `mistral-embed` (1024) — **sync `embed_requete`** (worker, une
+requête, rend les tokens facturés) + **async `embed_query`** (chemin requête). Outbox `docs.embed_dirty` (marqué à
 create/update, coût nul) + `doc_embeddings(halfvec(1024))` + index HNSW cosine ; worker
 `embed_worker` (boucle de fond composée au lifespan, embed HORS event loop via
-`run_in_threadpool`, idempotent par `content_sha`) draine. Handler `oto_search` ASYNC :
+`run_in_threadpool`) draine — voir « Ce que l'indexation dépense » ci-dessous. Handler `oto_search` ASYNC :
 embed la requête hors boucle → `search.search(query_embedding=…)` ajoute la source
 `page`/`matched_by='semantic'`, la fusion RRF DÉDUPLIQUE (kind,ref) + SOMME les rangs
 (une page trouvée par les deux remonte ; passage lexical conservé). **Dégradation
 gracieuse** : sans `MISTRAL_API_KEY` ou sur échec → lexical seul, jamais un prérequis.
 pgvector 0.8.2 sur otomata-main (`CREATE EXTENSION vector` AVANT `_SCHEMA` car halfvec en
 dépend). Le **golden set** cale désormais la QUALITÉ (plus le *si*).
+
+## Ce que l'indexation dépense (23/11/2026)
+
+Novembre 2026 : 6,4 milliards de tokens `mistral-embed` en 23 jours (548 € HT), contre
+59 millions en octobre, et aucun vecteur écrit après le 19/11. La file se lisait par id
+croissant, 16 pages par tour, tous leurs morceaux embarqués d'un bloc ; un morceau de
+16 000 caractères (« ~4 caractères par token ») dépasse les 8 192 tokens du modèle dès
+que le texte est dense (code, JSON, URL, base64, non latin) : la requête faisait 400,
+tout le lot était jeté APRÈS paiement des requêtes précédentes, et le même lot repartait
+20 s plus tard. Le worker est coupé (`OTO_EMBED_WORKER_ENABLED=0`) depuis le 23/11. Ce
+qui le borne depuis :
+
+| garde | où |
+|---|---|
+| un morceau ≤ 6 000 octets UTF-8, une requête ≤ 8 000 : le tokenizer ne fait jamais plus d'un token par octet | `embeddings.MAX_OCTETS_MORCEAU`, `chunks`, `lots` |
+| chaque requête payée est écrite aussitôt ; un échec plus loin ne jette rien | `embed_worker._indexer` |
+| empreinte PAR MORCEAU (`content_sha` de chaque ligne de vecteur) : une retouche ne paie que les morceaux changés, un morceau déplacé reprend son vecteur | `embed_worker._plan` |
+| refus (400/413/422) d'une requête à plusieurs morceaux : chacun repart seul ; d'un morceau seul : la source sort de la file, raison notée, et le démarrage ne l'y remet pas | `embed_sources`, `db/_init.py` |
+| écriture ratée après un appel payé : comptée, 5 d'affilée et la source sort de la file | `embed_sources.tentatives` |
+| fournisseur indisponible (429, 5xx, réseau ; non facturé) : rien ne se compte, l'attente entre deux tours double jusqu'à 30 min | `embed_worker.prochaine_attente` |
+| une source n'est indexée qu'inchangée depuis `OTO_EMBED_STABILITE_S` (défaut 600 s) : une rafale d'écritures se paie une fois | listes `list_dirty_*` |
+| un seul processus : verrou de boucle (`pg_try_advisory_lock` de session) + bail par source | `verrou_de_boucle`, `db/embed_file.py` |
+| plafond de tokens FACTURÉS (`usage.prompt_tokens`) par jour UTC et par instance, compté en base, indexation et recherche confondues : `OTO_EMBED_PLAFOND_TOKENS_JOUR` (défaut 5 000 000). Atteint : indexation arrêtée jusqu'à minuit UTC, courriel aux admins de plateforme une fois par jour ; la recherche passe en lexical seul et le journalise (WARNING, une fois par jour et par processus) | `embed_consommation` |
+
+Une source sortie en échec revient dans la file quand son texte change. Pour la remettre
+sans l'écrire : supprimer sa ligne d'`embed_sources` et relever son drapeau
+(`docs.embed_dirty = TRUE`).
 
 ## Se repérer : chapô, ordre curé, épine, backlinks
 

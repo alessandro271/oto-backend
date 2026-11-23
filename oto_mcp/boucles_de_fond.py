@@ -33,7 +33,8 @@ la composition qui tient, c'est la base : chaque boucle tierce a SOIT une réser
 ligne à ligne qui sort le travail de la file (`transcription_worker`, `jev_jobs_worker`,
 `runner_tick`), SOIT le verrou de boucle, qui ne laisse jouer un tour qu'à un processus
 à la fois (`db/verrou_de_boucle.py` : `scheduler`, `alerte_agents_bloques`,
-`medecin_agents`, `alertes_slack_agents`, `billing_runner`). Une boucle tierce neuve
+`medecin_agents`, `alertes_slack_agents`, `billing_runner`). `embed_worker`, qui
+n'agit sur aucun tiers mais paie chaque appel, prend aussi le verrou de boucle. Une boucle tierce neuve
 choisit l'un ou l'autre : `tests/test_verrou_de_boucle.py` y veille.
 """
 from __future__ import annotations
@@ -185,8 +186,10 @@ BOUCLES: tuple[Boucle, ...] = (
     Boucle(nom="scheduler", tiers=True,
            armee=_interrupteur("OTO_SCHEDULER_ENABLED"), fonction=_scheduler),
     # Indexation sémantique (lot 3) : draine l'outbox `embed_dirty`. Appelle Mistral, un
-    # FOURNISSEUR : aucun effet chez un client. En double, elle coûte des jetons, elle ne
-    # touche personne. No-op sans MISTRAL_API_KEY (la recherche reste lexicale).
+    # FOURNISSEUR : aucun effet chez un client, mais chaque appel se paie. Un seul
+    # processus à la fois (verrou de boucle) et une réservation par source (bail en
+    # base, `db/embed_file.py`) ; un plafond de tokens par jour l'arrête. No-op sans
+    # MISTRAL_API_KEY (la recherche reste lexicale).
     Boucle(nom="embed_worker", tiers=False,
            armee=_interrupteur("OTO_EMBED_WORKER_ENABLED"), fonction=_embed),
     # Extraction du texte des fichiers déposés (#298), locale. Séparée de l'indexation

@@ -14,7 +14,7 @@ import time
 import psycopg
 
 from . import (_prerequis, org_d_inscription, slack_reglage, regions_de_modeles, modeles_eteints, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, attribution_cellules, regles_de_comptes,
-               projects, recipes, revision, runner_fleets, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
+               embed_file, projects, recipes, revision, runner_fleets, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
 from ._schema import _SCHEMA
@@ -614,15 +614,19 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # tout ce qui n'a pas encore d'embedding est marqué dirty (idempotent).
     conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS embed_dirty BOOLEAN NOT NULL DEFAULT TRUE")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_embed_dirty ON docs(id) WHERE embed_dirty")
+    # Une page sortie de la file en échec (`embed_sources`) n'y revient pas ici : elle
+    # reviendrait à chaque démarrage, donc à chaque bascule.
     conn.execute("UPDATE docs SET embed_dirty = TRUE "
-                 "WHERE embed_dirty = FALSE AND id NOT IN (SELECT doc_id FROM doc_embeddings)")
+                 "WHERE embed_dirty = FALSE AND id NOT IN (SELECT doc_id FROM doc_embeddings) "
+                 f"AND {embed_file.hors_echec_sql('doc', 'docs.id')}")
     # Sémantique AUSSI sur les briefs de projet (#6 C) : même outbox. Additif
     # (ADD COLUMN IF NOT EXISTS) → sûr sur la base partagée. Backfill dirty. (Les
     # couches de contexte, elles, portent leur marqueur dans `props` — voir plus bas.)
     conn.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS embed_dirty BOOLEAN NOT NULL DEFAULT TRUE")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_embed_dirty ON projects(id) WHERE embed_dirty")
     conn.execute("UPDATE projects SET embed_dirty = TRUE "
-                 "WHERE embed_dirty = FALSE AND id NOT IN (SELECT ref FROM aux_embeddings WHERE kind='brief')")
+                 "WHERE embed_dirty = FALSE AND id NOT IN (SELECT ref FROM aux_embeddings WHERE kind='brief') "
+                 f"AND {embed_file.hors_echec_sql('brief', 'projects.id')}")
     # Sémantique OPT-IN des LIGNES de datastore (#67 V2.2) : flag par namespace
     # (`semantic_search`, défaut FALSE = jamais systématique — coût variable maîtrisé)
     # + outbox `embed_dirty` sur les rows (défaut FALSE, PAS de backfill massif : une
@@ -814,6 +818,13 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     if not index_concurrent.scalaire_de(conn)(_paths.SQL_FONCTION_VALEURS_PRESENTE):
         conn.execute(_paths.DDL_FONCTION_VALEURS_TEXTE)
     for index in _search.INDEX_VALEURS:
+        index_concurrent.poser_au_demarrage(conn, index)
+    # Les pages de travail à part des sources brutes (`docs.kind`) : leurs index
+    # partiels sous le même verdict — construits ici sur une base neuve seulement ; une
+    # base servie les reçoit de la révision `20261120_2240_docs_par_genre`.
+    from . import projects as _projects
+    for index in (*_search.INDEX_PAGES_DE_TRAVAIL, _projects.INDEX_TRAVAIL_PAR_PROJET,
+                  _projects.INDEX_SOURCES_RECENTES):
         index_concurrent.poser_au_demarrage(conn, index)
     # Le texte des valeurs servies MATÉRIALISÉ par ligne (16/10/2026) : colonnes,
     # déclencheur qui les remplit à chaque écriture de `data` (ancien code compris,
