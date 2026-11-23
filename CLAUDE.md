@@ -282,6 +282,7 @@ sur un tiers (`boucles_de_fond.py`, `config.est_la_production()`) · **détails 
 - `partages-de-procedure.md` — une procédure partagée par lien : vitrine sans le corps, lecteurs, copie, résumé quotidien
 - `commentaires-de-procedure.md` — les commentaires d'un process, à côté du corps : optionnels (aucune version, aucune écriture ne les exige), jamais servis à `op=get` ni à un agent hébergé
 - `alias-deprecies.md` — noms doublés, date de retrait
+- `compat-surfaces-servies.md` — changement cassant d'une surface servie : métier propre tout de suite, ancienne forme traduite en bordure (`deprecations.py`), réglage d'instance éteint par défaut, trace, retrait au compteur zéro, date de REVUE
 - `onboarding-et-profil.md` — Découverte, `me.profile`
 - `unipile.md` — split compte/canaux, DSN, identités
 - `browser-automation.md` — Browserbase, cookie-bound

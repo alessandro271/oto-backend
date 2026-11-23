@@ -23,6 +23,21 @@ qui s'exécute. L'ancien mot servait pour deux choses à la fois, l'objet produi
 
 ⚠️ **Cette page couvre CE renommage-là (#519) — pas tous les renommages datés.**
 
+⚠️ **23/11/2026 — la règle générale est désormais `docs/compat-surfaces-servies.md`**
+(décision d'Alexis) : tout changement cassant d'une surface servie rend le code métier
+propre tout de suite et traduit l'ancienne forme EN BORDURE, par une entrée du tampon
+`oto_mcp/deprecations.py`. Chaque entrée = un réglage d'instance éteint par défaut, une
+trace par appel, un critère de retrait (compteur à zéro chez toutes les instances qui
+l'ont allumée) et une date de REVUE, jamais une date couperet. Les entrées sous cette
+règle :
+
+| Entrée | Réglage d'instance | Trace (`tool_calls.args`) | Revue |
+| --- | --- | --- | --- |
+| Tableau désigné par son NOM (§ ci-dessous) | `OTO_MCP_COMPAT_TABLEAU_PAR_NOM` | `ref_kind = 'name'` | 14/12/2026 (#1296) |
+
+Les renommages qui suivent sont antérieurs à cette règle. Ils gardent leur date de
+retrait servie sous préavis contractuel.
+
 ⚠️ **25/09/2026 — la règle de retrait change** (Alexis, #966) : plus de délai fixe (les
 « deux mois habituels » ci-dessous). Une ancienne forme se retire quand **tous les
 consommateurs déclarés** (`.github/contrat-consommateurs.json`) ont suivi, ce que la garde
@@ -180,11 +195,21 @@ Les vitrines anonymes `/api/guide-library[/{slug}]` (marché) et `/api/guides/li
 qui n'y menaient plus que vers un 404 (otomata-tech/oto#84). La face authentifiée
 `/api/me/guide-library` reste.
 
-### Une adresse : le NOM d'un tableau (lot 0 du retrait, 29/09/2026) — RETIRÉ
+### Une adresse : le NOM d'un tableau (lot 0 du retrait, 29/09/2026) — RETIRÉ du métier, TAMPON par instance
 
-⚠️ **Retiré** : un nom de tableau est refusé, sans repli, sur toutes les faces (`400
-datastore_by_name`, `datastore/errors.TableauParNom`) — décision d'Alexis, prise alors que
-le journal montrait encore quelques appels par nom. Ce qui suit est l'histoire.
+⚠️ **Retiré du code métier** : un nom de tableau y est refusé, sans repli, sur toutes les
+faces (`400 datastore_by_name`, `datastore/errors.TableauParNom`, #1786). C'est ce qui est
+servi par défaut.
+
+**Tampon depuis le 23/11/2026** : une instance dont des consommateurs désignent encore un
+tableau par son nom allume `OTO_MCP_COMPAT_TABLEAU_PAR_NOM`. Le nom est alors traduit en
+numéro au bord (MCP, REST, portée d'un jeton), avec la résolution d'avant le retrait, et
+chaque désignation laisse `args.ref_kind = 'name'` au journal. Un nom qui ne désigne rien
+reste refusé comme introuvable. La réponse MCP le signale comme accepté et déprécié, avec
+le numéro à passer. La description des outils ne documente que le numéro. Revue le
+14/12/2026 (#1296) : l'entrée part quand le compteur est à zéro chez toutes les instances
+qui l'ont allumée. Détails, lieux couverts et requête :
+`docs/compat-surfaces-servies.md` §Les entrées. Ce qui suit est l'histoire.
 
 **Sa propre date : un nom de tableau est refusé à partir du 08/11/2026**
 (`deprecations.RETRAIT_NOM_DE_TABLEAU` = `RETRAIT_DATASTORE`, décision d'Alexis : un seul
