@@ -13,7 +13,7 @@ import pytest
 from oto.tools.http import AUTH_MODES as CORE_AUTH_MODES, build_auth
 
 from oto_mcp import credentials_store
-from oto_mcp.providers.api import AUTH_MODES, CONNECTOR
+from oto_mcp.providers.api import AUTH_MODES, CONNECTOR, CORE_AUTH_MODES as LIB_MODES, HOST_AUTH_MODES
 
 BASE = {"base_url": "https://api.acme.test"}
 
@@ -42,17 +42,21 @@ def _required_for(mode: str) -> list:
 # --- Le tripwire registre ↔ oto-core ---------------------------------------
 
 def test_le_jeu_de_modes_recopie_celui_doto_core():
-    assert AUTH_MODES == CORE_AUTH_MODES
+    """Les modes servis par la lib sont exactement les siens ; ceux que l'hôte résout
+    lui-même (`HOST_AUTH_MODES`) n'y sont pas et s'ajoutent après."""
+    assert LIB_MODES == CORE_AUTH_MODES
+    assert AUTH_MODES == LIB_MODES + HOST_AUTH_MODES
+    assert not set(HOST_AUTH_MODES) & set(CORE_AUTH_MODES)
 
 
-@pytest.mark.parametrize("mode", AUTH_MODES)
+@pytest.mark.parametrize("mode", LIB_MODES)
 def test_les_champs_declares_suffisent_a_construire_lauth(mode):
     """Ce que le registre demande de saisir CONSTRUIT l'auth : pas de sous-déclaration
     (un formulaire complet qui échoue quand même au premier appel)."""
     _build(mode, {f.name: _valeur(mode, f.name) for f in _required_for(mode)})
 
 
-@pytest.mark.parametrize("mode", AUTH_MODES)
+@pytest.mark.parametrize("mode", LIB_MODES)
 def test_aucun_champ_declare_nest_superflu(mode):
     """…et pas de sur-déclaration non plus : retirer n'importe lequel des champs que
     le registre dit requis DOIT casser `build_auth`. Sans ce sens-là, le registre
@@ -186,3 +190,14 @@ def test_les_connecteurs_sans_discriminant_ne_changent_pas():
     for c in providers.REGISTRY.values():
         if not c.field_discriminator:
             assert c.fields_for({"auth_mode": "bearer"}) == c.secret_fields
+
+
+def test_oauth2_user_ne_demande_que_la_connexion_de_l_app_et_le_jeton_du_membre():
+    """Une connexion par personne : l'app porte où se connecter (jamais un secret), le
+    membre ne porte que son jeton de renouvellement, posé par le flux « Connecter »."""
+    by_name = {f.name: f for f in CONNECTOR.fields_for({"auth_mode": "oauth2_user"})}
+    assert list(by_name) == ["base_url", "auth_mode", "label", "doc_path", "token_url",
+                             "scope", "authorize_url", "oauth_client_id", "resource",
+                             "refresh_token"]
+    assert [n for n, f in by_name.items() if f.secret] == ["refresh_token"]
+    assert by_name["resource"].required is False and by_name["scope"].required is False

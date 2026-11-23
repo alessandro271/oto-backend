@@ -378,7 +378,7 @@ def declare_return(retour: OAuthReturn) -> None:
 def load_returns() -> dict[str, OAuthReturn]:
     """Les retours déclarés, une fois chargés les modules qui les déclarent — quel que
     soit l'ordre d'import du processus (serveur, test, script)."""
-    from . import (google, hubspot, instagram_meta, jefacture,  # noqa: F401
+    from . import (api_oauth, google, hubspot, instagram_meta, jefacture,  # noqa: F401
                    linkedin_ads, meta_ads, microsoft, salesforce, slack,
                    ubersuggest, wordpress, zoho)
     return dict(_RETURNS)

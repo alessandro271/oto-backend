@@ -20,7 +20,11 @@ app's `account`, with their secret fields only: the app fills the rest and binds
 - `POST   /api/orgs/{id}/connectors/api/apps/{account}/import` — org admin: candidate
   actions from an OpenAPI document (`url` or `inline`), saved by a PATCH;
 - `DELETE /api/orgs/{id}/connectors/api/apps/{account}`      — org admin: retire it
-  (archived); its keys stay in the vault and refuse by name until removed.
+  (archived); its keys stay in the vault and refuse by name until removed;
+- `POST   /api/orgs/{id}/connectors/api/apps/{account}/connect` — members: an app in
+  `oauth2_user` mode — the URL of the API's sign-in page for the caller; on return the
+  front completes (`POST /api/me/connectors/api/complete`) and the caller's own key of
+  the app holds their refresh token (`auth/api_oauth.py`).
 """
 from __future__ import annotations
 
@@ -131,6 +135,21 @@ class PatchInput(_DefinitionParts):
         "Only the fields given change; an empty value clears an optional one."))
 
 
+class ConnectInput(BaseModel):
+    org_id: int
+    account: str
+    app: Optional[str] = Field(default=None, description=(
+        "The front to come back to after sign-in (a known key, e.g. `tulina`); "
+        "unknown or absent = the default dashboard."))
+
+
+class ApiAppConnect(BaseModel):
+    """Open `auth_url` in the browser: the API's own sign-in page. `redirect_uri` = oto's
+    callback, the one registered for the app's client at the sign-in server."""
+    auth_url: str
+    redirect_uri: str
+
+
 class ImportInput(BaseModel):
     org_id: int
     account: str
@@ -163,6 +182,9 @@ def _vue(ctx: ResolvedCtx, app: dict) -> dict:
     out["access_team"] = team if out["access"] == "group" else None
     for k in ("operations", "scope", "id"):
         out.pop(k, None)
+    if (out.get("connection") or {}).get("auth_mode") == "oauth2_user":
+        from ...auth import api_oauth
+        out["redirect_uri"] = api_oauth.redirect()
     return out
 
 
@@ -261,6 +283,21 @@ def _import(ctx: ResolvedCtx, inp: ImportInput) -> dict:
     return {"account": app["account"], "operations": cands, "skipped": skipped}
 
 
+def _connect(ctx: ResolvedCtx, inp: ConnectInput) -> dict:
+    from ...auth import api_oauth
+    from ...connectors import activation_gate, cle_perso
+    app = _app(inp.org_id, inp.account)
+    if cle_perso.interdite(inp.org_id, store.CONNECTOR):
+        raise AuthzDenied(403, "personal_key_forbidden", cle_perso.texte_refus(
+            inp.org_id, store.CONNECTOR, cle_perso.A_LA_CONNEXION))
+    activation_gate.exiger_connectable_capacite(store.CONNECTOR, ctx.sub, perso=True)
+    try:
+        url = api_oauth.authorize_url(app, ctx.sub, inp.app or "")
+    except api_oauth.ApiOAuthRefused as e:
+        raise AuthzDenied(409, e.code, e.message)
+    return {"auth_url": url, "redirect_uri": api_oauth.redirect()}
+
+
 def _remove(ctx: ResolvedCtx, inp: OneInput) -> dict:
     app = _app(inp.org_id, inp.account)
     store.archiver(int(app["id"]), ctx.sub)
@@ -316,6 +353,18 @@ CAPABILITIES += [
                errors=(_NOT_FOUND, DeclaredError(400, "import_failed",
                                                  "the document cannot be read")),
                rest=RestBinding("POST", _ONE + "/import", _ID)),
+    Capability(key="custom_api.apps.connect", handler=_connect, Input=ConnectInput,
+               Output=ApiAppConnect, authz=ORG_MEMBER_OF("org_id"), mcp=None,
+               description=("Start the caller's own sign-in to a Custom API app in "
+                            "`oauth2_user` mode: the URL of the API's sign-in page."),
+               errors=(_NOT_FOUND,
+                       DeclaredError(409, "api_app_not_oauth_user",
+                                     "the app does not use per-member sign-in"),
+                       DeclaredError(409, "api_app_incomplete",
+                                     "the app's sign-in coordinates are incomplete"),
+                       DeclaredError(403, "personal_key_forbidden",
+                                     "the org forbids personal keys for the Custom API")),
+               rest=RestBinding("POST", _ONE + "/connect", _ID)),
     Capability(key="custom_api.apps.remove", handler=_remove, Input=OneInput,
                Output=ApiAppRemoved, authz=ORG_ADMIN_OF("org_id"), mcp=None,
                description="Retire a Custom API app (org admin); its keys then refuse.",

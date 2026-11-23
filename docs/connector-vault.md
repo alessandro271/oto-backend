@@ -775,6 +775,35 @@ propriétaire : un agent monté sur une application à droits étendus, partagé
 leur rend ce que son propriétaire voit. Pas d'import GraphQL (l'import lit OpenAPI ; une
 API GraphQL se décrit par une action `POST /graphql`).
 
+### Le mode `oauth2_user` des applications de Custom API : chaque membre se connecte (23/11/2026)
+
+Une API interne qui applique ses droits PAR PERSONNE (un CRM où chaque commercial ne voit
+que ses comptes) n'était joignable qu'avec UNE identité : une clé, un couple basic, un
+client `client_credentials`. Le mode `oauth2_user` donne à chaque membre la sienne
+(`auth/api_oauth.py`) :
+
+- **l'application** porte où se connecter, jamais un secret : `authorize_url`,
+  `token_url`, `oauth_client_id` (un client PUBLIC, PKCE S256, sans secret — type
+  natif / SPA chez le serveur d'autorisation), `scope`, `resource` (RFC 8707, envoyé à
+  l'autorisation, à l'échange et au renouvellement : sans lui, un serveur OpenID qui émet
+  ses jetons par ressource rend un jeton opaque que l'API refuse). `offline_access` dans
+  les scopes fait envoyer `prompt=consent` (sans lui, pas de refresh token) ;
+- **« Connecter »** = `POST /api/orgs/{id}/connectors/api/apps/{account}/connect`
+  (membre de l'org ; refusé si l'org interdit la clé perso du Custom API). Le retour suit
+  la règle commune (`auth/flow.py`) : callback `/api/custom-api/oauth/callback`, carte
+  `api`, complétion par le front avec le jeton de la personne ;
+- **la clé du membre** = une ligne ordinaire du coffre, palier membre, sous le nom de
+  compte de l'application, liée par `meta.api_app` (`completer_la_pose`, comme une clé
+  posée à la main) ; son seul secret est `refresh_token` ;
+- **à l'appel**, `tools/api.client_for` demande un jeton d'accès à `access_token_for` et
+  appelle en `bearer` : oto-core ne connaît pas ce mode (`HOST_AUTH_MODES`, hors du
+  tripwire `test_api_auth_modes.py`). Renouvellement sous verrou consultatif de la LIGNE,
+  rotation écrite dans la même transaction, grant mort revérifié contre la ligne puis
+  MARQUÉ (`health_ko`), jamais purgé ; le jeton d'accès ne va jamais en base.
+
+Pas de clé d'équipe ni d'org dans ce mode côté produit : l'intérêt est l'identité de la
+personne. Un agent hébergé appelle sous l'identité de son propriétaire, donc avec SA clé.
+
 ### Le renommage `http` → `api` (12/11/2026)
 
 Décision du propriétaire du produit : le connecteur s'appelle `api`, ses outils `api`, `api_act`, `api_get`,
