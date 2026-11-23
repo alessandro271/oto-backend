@@ -21,5 +21,5 @@ CONNECTOR = service(
 CATEGORY = "Workspace"
 LOGO_DOMAIN = "google.com"
 DESCRIPTION = (
-    "Google Sheets, on your Google account: read and write a spreadsheet's cells, create an empty one, copy a template tab and format cells, columns and drop-downs. A consent that only asks for the Sheets scope."
+    "Google Sheets, on your Google account: read and write a spreadsheet's cells, create one, copy a template tab, insert, delete or hide rows and columns, format cells (borders, merges, conditional colours, drop-downs), sort, filter, find and replace, fill a range, and draw charts. A consent that only asks for the Sheets scope."
 )
