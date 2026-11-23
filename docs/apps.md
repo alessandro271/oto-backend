@@ -107,7 +107,7 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
   rien ; chaque `find` exact et unique (deux occurrences qui se chevauchent sont
   ambiguës aussi ; sinon `all: true`), absent ou ambigu → 400 `invalid_edits` qui
   nomme l'edit, rien d'écrit ; la longueur que le HTML AURAIT est jugée avant chaque
-  remplacement (au plus 512 000 caractères). Mêmes gardes que `update` : bêta,
+  remplacement (au plus 1 000 000 de caractères, `MAX_HTML`). Mêmes gardes que `update` : bêta,
   écriture sur l'app, auteur qui lit ce que l'app déclare (→ 403 `would_break_app`),
   révision ; `expected_rev` → 409, et sans `expected_rev`, la révision LUE (une
   écriture concurrente n'est jamais écrasée sans un mot). Il rend un **reçu** (`rev`,

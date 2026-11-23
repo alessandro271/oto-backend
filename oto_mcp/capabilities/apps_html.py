@@ -20,7 +20,8 @@ colonne (`tags[]`, `contacts[].role`) ; sans liste de champs, tout ; `_created_a
 et `_updated_at` en plus pour trier et filtrer ; la recherche (`q`) seulement sans
 liste de champs.
 
-**Borné** : le HTML fait jusqu'à 512 Ko, écrit par un agent. On examine au plus
+**Borné** : le HTML fait jusqu'à 1 000 000 de caractères (`apps.MAX_HTML`), écrit par
+un agent ; la lecture reste linéaire (~0,1 s à cette taille). On examine au plus
 `MAX_APPELS` appels (et autant de tris libres), les arguments d'un appel au plus sur
 `MAX_ARGS` caractères (au-delà, non jugé), et une balise `<script` sans `>` s'arrête
 au prochain `<` : aucune lecture ne repart du début pour chaque occurrence.
