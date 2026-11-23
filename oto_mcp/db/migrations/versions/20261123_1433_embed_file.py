@@ -15,7 +15,7 @@ Retour arrière : retire les deux tables (les échecs notés et le compte du jou
 perdent ; rien d'autre).
 
 Révision : 20261123_1433_embed_file
-Précédente : 20261120_2240_docs_par_genre
+Précédente : 20261120_2250_org_erasures
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from alembic import op
 from oto_mcp.db.schema.embeddings import EMBED_FILE
 
 revision = "20261123_1433_embed_file"
-down_revision = "20261120_2240_docs_par_genre"
+down_revision = "20261120_2250_org_erasures"
 branch_labels = None
 depends_on = None
 
