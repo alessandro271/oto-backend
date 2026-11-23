@@ -949,6 +949,12 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         ToolCallLogger(_calllog_sink, server="oto", identity=_calllog_identity)
     )
 
+    # Le tampon de compatibilité (`deprecations`) : une ancienne forme d'argument
+    # allumée sur l'instance est traduite ICI — sous le journal (l'appel traduit y a sa
+    # ligne et sa trace), après le contexte de l'appel (org, run). Cf. `middleware/compat`.
+    from .middleware.compat import CompatMiddleware
+    instance.add_middleware(CompatMiddleware())
+
     # 8. Capture des exceptions de tools vers Sentry (no-op si OTO_SENTRY_DSN absent) —
     # INNERMOST des appels d'outil (la visibilité anonyme, sous lui, n'agit qu'au handshake) :
     # au plus près du handler, capture le vrai traceback AVANT le calllog
@@ -1168,6 +1174,11 @@ def main():
     # écrit. Cf. `identite_instance`.
     from . import identite_instance
     identite_instance.verifier()
+
+    # Les réglages du tampon de compatibilité (`OTO_MCP_COMPAT_*`) : une valeur
+    # illisible refuse le démarrage ici. Cf. `deprecations.verifier_reglages`.
+    from . import deprecations
+    deprecations.verifier_reglages()
 
     # Le trousseau du coffre : les modes de clé sont DÉCLARÉS (plate, Key Manager) ; une
     # déclaration incohérente, aucune clé, ou Key Manager injoignable refuse le démarrage

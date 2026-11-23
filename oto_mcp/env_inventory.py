@@ -764,6 +764,12 @@ _REGLAGES: tuple[Variable, ...] = (
              "anonyme des projets publiés, séparés par des virgules.",
              ("oto_mcp/auth/anon.py:59",)),
     # -- interrupteurs booléens (défaut neutre = comportement historique) -----
+    Variable("OTO_MCP_COMPAT_TABLEAU_PAR_NOM", Classe.REGLAGE, "0",
+             "Tampon de compatibilité (`deprecations`) : allumé, un tableau désigné "
+             "par son NOM est traduit en numéro au bord (MCP, REST) et tracé "
+             "(`args.ref_kind = 'name'`) ; éteint, il est refusé (`datastore_by_name`). "
+             "Valeur illisible = refus de démarrer. Retrait au compteur zéro.",
+             ("oto_mcp/deprecations.py:477",)),
     Variable("OTO_HANG_WATCH_ENABLED", Classe.REGLAGE, "1",
              "Surveillance des callbacks lents de l'event loop.",
              ("oto_mcp/hang_watch.py:68", "oto_mcp/hang_watch.py:85")),

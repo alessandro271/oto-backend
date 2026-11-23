@@ -1,50 +1,52 @@
-"""Les noms SERVIS qu'on remplace — et LA date à laquelle l'ancien s'en va (#519).
+"""Le TAMPON DE COMPATIBILITÉ des surfaces servies — une entrée par changement cassant.
 
-Le produit a changé de mot (#519) : il dit **guide** (ADR 0042, le guide =
-primitive unique d'instruction) et **procédure** pour ce qui s'exécute. Le lot A a
-retiré l'ancien de l'interne sans changer un octet servi. Le lot B renomme les
-SURFACES — et une surface ne se renomme pas, elle se DOUBLE : le nouveau nom naît à
-côté de l'ancien, l'ancien continue de répondre, et la date de son retrait est
-écrite là où le consommateur la lit.
+Un changement cassant d'une surface servie (outil MCP, route REST, argument, forme
+d'adresse, contrat de réponse) se fait en deux temps qui ne se mélangent pas :
 
-**Ce module est cette date.** Elle vit ici et nulle part ailleurs ; chaque avis de
-dépréciation servi la recopie depuis `RETRAIT`. Décaler le retrait est alors un
-geste — changer cette constante — et non une chasse aux chaînes de caractères dans
-quarante descriptions, dont on oublierait trois.
+1. **Le code métier est propre tout de suite.** Il ne connaît que la forme
+   d'aujourd'hui : pas de repli, pas de double chemin, pas de « legacy ».
+2. **L'ancienne forme est traduite EN BORDURE, ici.** Une entrée de ce module dit ce
+   qui a changé, comment l'ancienne forme se traduit vers la nouvelle, et à quel bord
+   (middleware MCP, adaptateur REST, authentification) la traduction s'applique.
+   Rien en aval n'apprend qu'une ancienne forme existe.
 
-Pourquoi un TAG et pas une date de merge (`RETRAIT` se lit « premier tag `vX.Y.Z`
-posé à partir de cette date ») : seul un tag déploie, `main` n'est que le tronc. Une
-date de merge ne dit pas quand le retrait est SERVI : c'est le premier tag qui l'emporte
-qui le sert aux intégrateurs. Le retrait est le lot D — issue #526, qui porte la
-liste complète de ce que la date emporte.
+Chaque entrée porte trois choses, sans exception :
 
-⚠️ **Ce module n'est pas un fourre-tout de compatibilité.** Il ne porte que des
-renommages de vocabulaire à durée de vie FINIE, chacun avec sa contrepartie dans
-#526. Un alias sans date de retrait est un second nom permanent : ça se décide, ça
-ne s'ajoute pas ici.
+- **un compteur d'usage** : chaque appel servi par l'ancienne forme laisse une trace
+  dans le journal `tool_calls` (une clé de `args`, jamais la valeur reçue), et la
+  requête qui le compte est écrite avec l'entrée ;
+- **un critère de retrait** : l'entrée part quand le compteur est à ZÉRO chez tous les
+  consommateurs qui la servent (règle du 25/09/2026, #966) — mesuré, jamais supposé ;
+- **un réglage d'instance éteint par défaut** (pour une forme déjà RETIRÉE du code
+  métier) : éteint, le refus du code métier est servi tel quel ; allumé, l'ancienne
+  forme est traduite et tracée. Une valeur de réglage illisible refuse le démarrage
+  (`verifier_reglages`) ;
+- **une date de REVUE**, écrite ici : le jour où l'on va lire le compteur. Elle ne
+  change RIEN au comportement servi — jamais une date couperet : un tampon allumé
+  traduit tant qu'il est allumé.
 
-⚠️ **Et ce qu'il ne tient PAS — à ne pas croire tenu.** Depuis #767 la DURÉE du
-préavis vaut l'engagement contractuel (Art 8.2, deux mois). Deux écarts restent
-ouverts, et ils ne se corrigent pas avec une constante :
+Retrait d'une entrée : quand la trace ne montre plus aucun appel par l'ancienne forme
+chez toutes les instances qui ont allumé son réglage. Revue sans zéro : on reporte la
+date de revue, on ne coupe pas. (Les renommages de vocabulaire plus bas, antérieurs à
+cette règle, portent encore une date de retrait servie sous préavis contractuel.) Le document de décision est
+`docs/compat-surfaces-servies.md` ; la table des entrées, `docs/alias-deprecies.md`.
 
-1. **Le module ne couvre que les renommages ; l'engagement, lui, est plus large.**
-   Il porte sur toute rupture d'interface (#767) — donc aussi sur un paramètre qui
-   devient obligatoire, un champ retiré, un type changé. Rien de tout cela n'a ici
-   d'alias, de date de retrait ni d'en-tête `Sunset`. Le cas vécu (rendre
-   `resource_type` obligatoire, #756)
-   a d'ailleurs été réglé par une autre voie : la surface s'est **DOUBLÉE**
-   (l'héritée intacte, la stricte en bêta, #774/#780) au lieu de se durcir. C'est
-   aujourd'hui la seule réponse outillée à une rupture qui n'est pas un
-   renommage — et elle ne passe par aucun préavis daté.
-2. **Le préavis est PASSIF.** `Deprecation` / `Sunset` et l'avis en tête de
-   description se voient quand le consommateur inspecte ses réponses ; rien n'est
-   poussé vers lui. Rendre le préavis actif demande le canal de notification qui
-   manque à toute la plateforme (#766), pas un réglage de ce module.
+Pourquoi une date et un TAG (`RETRAIT` se lit « premier tag `vX.Y.Z` posé à partir de
+cette date ») pour les renommages : seul un tag déploie, `main` n'est que le tronc. Une
+date de merge ne dit pas quand le retrait est SERVI. La date vit ici et nulle part
+ailleurs ; chaque avis servi la recopie depuis sa constante.
+
+⚠️ **Ce que le module ne tient PAS — à ne pas croire tenu.** Le préavis est PASSIF :
+`Deprecation` / `Sunset` et l'avis en tête de description ou de réponse se voient
+quand le consommateur inspecte ses réponses ; rien n'est poussé vers lui. Rendre le
+préavis actif demande le canal de notification qui manque à toute la plateforme
+(#766), pas un réglage de ce module.
 """
 from __future__ import annotations
 
 import calendar
 import datetime
+import os
 from typing import Any, NamedTuple, Optional
 from urllib.parse import quote
 
@@ -433,8 +435,151 @@ def valeur_canonique(champ: str, valeur: Any) -> tuple:
         f"comme `{nouvelle}` ; envoie désormais `{nouvelle}`.")
 
 
-# (Adresser un tableau par son NOM : préavis servi du 07/09 au 08/11/2026, puis RETIRÉ.
-# Un nom est désormais refusé, sans date ni repli : `datastore.errors.TableauParNom`.)
+# ── Tampon : un tableau désigné par son NOM (retiré du code le 08/11/2026) ─────
+#
+# Le code métier ne connaît que le NUMÉRO (`ns_id`) et `slot:<nom>` : un nom y est
+# refusé (`datastore.errors.TableauParNom`, `400 datastore_by_name`, #1786), et ce
+# refus reste la règle. Une instance dont des consommateurs désignent encore un
+# tableau par son nom ALLUME ce tampon (`OTO_MCP_COMPAT_TABLEAU_PAR_NOM`, éteint par
+# défaut) : le nom est alors traduit en numéro AU BORD, avec la résolution d'avant le
+# retrait (propriétaire, org active, partages — `db.resolve_datastore_ns`), puis le
+# code métier reçoit le numéro et applique toutes ses gardes.
+#
+# Les bords qui appellent `traduire_arguments` / `traduire_tableau` — quatre, une
+# seule traduction :
+#   - MCP, appel direct d'un outil : `middleware/compat.CompatMiddleware` ;
+#   - MCP, appel relayé (`oto_call`, recettes) : `tools/meta.executer_cible` ;
+#   - REST, toute capacité : `capabilities/_rest_adapter` (chemin `{datastore}` et
+#     champs déclarés du corps) ;
+#   - REST, jeton porté : `api/base._authenticate` (le tableau du chemin, jugé sur la
+#     portée par son numéro).
+#
+# **Compteur** : chaque désignation par nom laisse `args.ref_kind = 'name'` dans le
+# journal `tool_calls` (#1802), qu'elle soit traduite (`ok`) ou refusée
+# (`refused(datastore_by_name)` / `error`) ; `index_releve.MESURE_TABLEAU_PAR_NOM` les
+# compte par face, org, compte et jeton.
+# **Retrait** : quand ce compteur est à zéro chez toutes les instances qui ont allumé
+# le tampon. `REVUE_COMPAT_TABLEAU_PAR_NOM` est le jour où l'on va le lire — une date
+# de REVUE, sans aucun effet sur ce qui est servi (allumé, le tampon traduit, avant
+# comme après). Échéance suivie : #1296.
+ENV_COMPAT_TABLEAU_PAR_NOM = "OTO_MCP_COMPAT_TABLEAU_PAR_NOM"
+REVUE_COMPAT_TABLEAU_PAR_NOM = datetime.date(2026, 12, 14)
+
+#: Les surfaces où `datastore` NOMME un tableau à créer : jamais traduit.
+_NOMME_UN_TABLEAU_NEUF = frozenset({"data_create_datastore",
+                                    "me.datastore.create_datastore"})
+
+
+def compat_tableau_par_nom_allume() -> bool:
+    """Le réglage d'instance, tel qu'il est déclaré — lève sur une valeur illisible."""
+    from . import interrupteurs
+    return interrupteurs.oui_non(ENV_COMPAT_TABLEAU_PAR_NOM,
+                                 os.environ.get("OTO_MCP_COMPAT_TABLEAU_PAR_NOM"))
+
+
+def verifier_reglages() -> None:
+    """Au démarrage : un réglage de tampon illisible refuse de démarrer."""
+    compat_tableau_par_nom_allume()
+
+
+def _adresses_de_tableau(surface: Optional[str], args: dict) -> list:
+    """`(conteneur, clé)` de chaque adresse de tableau que `args` porte pour `surface`
+    (nom d'outil MCP, ou clé de capacité pour une route REST sans outil) — la seule
+    déclaration de l'endroit où un tableau se désigne dans des arguments."""
+    from .datastore.errors import est_un_nom_de_tableau
+    if not isinstance(args, dict):
+        return []
+    lieux: list = []
+    if surface not in _NOMME_UN_TABLEAU_NEUF and "datastore" in args:
+        lieux.append((args, "datastore"))
+    if (surface == "oto_project" and args.get("target_type") == "tableau"
+            and args.get("op") in ("link", "unlink")):
+        lieux.append((args, "target_ref"))
+    if surface == "oto_fleet" and args.get("op") == "create":
+        lieux.append((args, "namespace"))
+    if surface == "oto_apps" and isinstance(args.get("manifest"), dict):
+        tables = args["manifest"].get("tables")
+        for t in (tables.values() if isinstance(tables, dict) else ()):
+            if isinstance(t, dict):
+                lieux.append((t, "table"))
+    return [(c, k) for c, k in lieux
+            if isinstance(c.get(k), str) and est_un_nom_de_tableau(c[k])]
+
+
+def _portees_de_jeton(surface: Optional[str], args: dict) -> list:
+    """Les dictionnaires `{tableau: droit}` d'une portée de jeton émise par
+    `me.token.create` (la portée, et le plafond d'un émetteur) qui nomment un tableau
+    par son nom."""
+    from .datastore.errors import est_un_nom_de_tableau
+    if surface != "me.token.create" or not isinstance(args, dict):
+        return []
+    scopes = args.get("scopes")
+    portees = [scopes, (scopes or {}).get("issue") if isinstance(scopes, dict) else None]
+    return [p["namespaces"] for p in portees
+            if isinstance(p, dict) and isinstance(p.get("namespaces"), dict)
+            and any(est_un_nom_de_tableau(k) for k in p["namespaces"])]
+
+
+def a_traduire(surface: Optional[str], args: dict) -> bool:
+    """`args` porte-t-il un nom de tableau que le tampon traduirait ? Sans base : sert
+    au bord asynchrone à ne quitter la boucle que s'il y a quelque chose à faire."""
+    return bool(_adresses_de_tableau(surface, args) or _portees_de_jeton(surface, args))
+
+
+def traduire_tableau(adresse: str, sub: Optional[str]) -> Optional[str]:
+    """Le NUMÉRO (en texte) du tableau que le nom `adresse` désigne pour `sub`, dans
+    son org active — la résolution d'avant le retrait du nom. `None` si le nom ne
+    désigne aucun tableau visible : l'appelant le refuse comme INTROUVABLE.
+
+    Compte la désignation (`ref_kind = name`) et, sur la face MCP, dit à l'appelant le
+    numéro à passer. Ne juge rien d'autre : le code métier reçoit le numéro et applique
+    ses gardes (écriture, vue bornée, projet partagé)."""
+    from . import db, session_org
+    from .datastore.core import make_store
+    session_org.noter_forme_tableau(session_org.REF_NAME)
+    if not sub:
+        return None
+    org_ids, group_ids = make_store(sub)._active_scope()
+    ns = db.resolve_datastore_ns(adresse, sub=sub, org_ids=org_ids, group_ids=group_ids)
+    if not ns:
+        return None
+    ns_id = str(int(ns["id"]))
+    session_org.noter_avis(
+        f"⚠️ Table `{adresse}` was addressed by its NAME — accepted, deprecated: pass "
+        f"`datastore={ns_id}`. The NUMBER is the documented form; a table name is "
+        "refused wherever this compatibility is off (`datastore_by_name`).")
+    return ns_id
+
+
+class TableauIntrouvable(Exception):
+    """Un nom de tableau que le tampon n'a pas pu traduire : refusé comme introuvable."""
+
+    def __init__(self, adresse: str):
+        super().__init__(f"datastore `{adresse}` unknown")
+        self.adresse = adresse
+
+
+def traduire_arguments(surface: Optional[str], args: dict, sub: Optional[str]) -> None:
+    """Traduit EN PLACE chaque nom de tableau que `args` porte pour `surface`, si le
+    tampon est actif ; ne fait rien sinon (le code métier refuse le nom). Lit la base :
+    hors de la boucle. Lève `TableauIntrouvable` sur un nom qui ne désigne rien."""
+    from .datastore.errors import est_un_nom_de_tableau
+    if not a_traduire(surface, args) or not compat_tableau_par_nom_allume():
+        return
+    for conteneur, cle in _adresses_de_tableau(surface, args):
+        ns_id = traduire_tableau(conteneur[cle].strip(), sub)
+        if ns_id is None:
+            raise TableauIntrouvable(conteneur[cle])
+        conteneur[cle] = ns_id
+    for portee in _portees_de_jeton(surface, args):
+        traduite = {}
+        for nom, droit in portee.items():
+            ns_id = traduire_tableau(nom.strip(), sub) if est_un_nom_de_tableau(nom) else nom
+            if ns_id is None:
+                raise TableauIntrouvable(nom)
+            traduite[ns_id] = droit
+        portee.clear()
+        portee.update(traduite)
 
 
 # ── Clés de capacité (lot B2) ───────────────────────────────────────────────
