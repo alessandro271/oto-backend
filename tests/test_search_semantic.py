@@ -1,9 +1,9 @@
 """Recherche sémantique (lot 3 V2) — fusion RRF lexical+sémantique (dédup + somme
-des rangs), worker d'indexation idempotent, dégradation gracieuse sans embedding.
+des rangs), dégradation gracieuse sans embedding. Le worker d'indexation :
+`test_embed_worker.py`.
 DB stubée ; l'API Mistral n'est jamais appelée."""
-import pytest
 
-from oto_mcp import search as S, embed_worker as W, embeddings as E
+from oto_mcp import search as S, embeddings as E
 
 
 def _stub_sources(monkeypatch, *, lexical=(), semantic=()):
@@ -64,38 +64,6 @@ def test_no_embedding_is_lexical_only(monkeypatch):
                         lambda *a, **k: called.update(sem=True) or [])
     out = S.search("u1", 7, "x", query_embedding=None)     # pas de vecteur
     assert called["sem"] is False and [h["ref"] for h in out["hits"]] == [10]
-
-
-# ── worker d'indexation ──────────────────────────────────────────────────────
-
-def test_worker_skips_unchanged_sha(monkeypatch):
-    rows = [{"id": 1, "text": "contenu"}, {"id": 2, "text": "autre"}]
-    monkeypatch.setattr(W.db, "list_dirty_docs", lambda n: rows)
-    # doc 1 : sha identique → dé-marqué sans ré-embed ; doc 2 : nouveau → embed.
-    monkeypatch.setattr(W.db, "get_doc_embedding_sha",
-                        lambda did: W._sha("contenu") if did == 1 else None)
-    cleared, upserts, embedded = [], [], []
-    monkeypatch.setattr(W.db, "clear_embed_dirty", lambda did: cleared.append(did))
-    monkeypatch.setattr(W.db, "upsert_doc_embedding",
-                        lambda did, sha, lit, model: upserts.append(did))
-    monkeypatch.setattr(W.db, "replace_doc_chunk_embeddings",
-                        lambda did, sha, chunks, model: None)   # #6 C : chunking (débordement)
-    monkeypatch.setattr(W.embeddings, "embed_texts",
-                        lambda texts: embedded.append(texts) or [[0.0] * 3])
-    n = W._index_batch()
-    assert cleared == [1]                      # inchangé → juste dé-marqué
-    assert embedded == [["autre"]]             # seul le doc 2 embed
-    assert upserts == [2] and n == 2
-
-
-def test_worker_network_error_leaves_dirty(monkeypatch):
-    monkeypatch.setattr(W.db, "list_dirty_docs", lambda n: [{"id": 1, "text": "x"}])
-    monkeypatch.setattr(W.db, "get_doc_embedding_sha", lambda did: None)
-    def _boom(texts):
-        raise RuntimeError("API 503")
-    monkeypatch.setattr(W.embeddings, "embed_texts", _boom)
-    monkeypatch.setattr(W.db, "upsert_doc_embedding", lambda *a: pytest.fail("ne doit pas upsert"))
-    assert W._index_batch() == 0               # rien fait → la page reste dirty
 
 
 def test_to_pg_literal():
