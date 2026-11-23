@@ -96,9 +96,17 @@ def test_un_arbre_qui_suit_un_autre_depot_refuse(banc):
     assert fini.returncode == 1 and "pas le tronc" in fini.stderr
 
 
-def test_un_venv_hors_du_plancher_refuse(banc):
-    fini = banc.lancer("amorcer.sh", "prod", BANC_PYV="3.12")
-    assert fini.returncode == 1 and "le tag exige 3.10" in fini.stderr
+def test_un_venv_hors_du_plancher_se_dit_sans_refus_ni_recreation(banc):
+    """Le venv d'une couleur ne change de Python qu'à la montée qui l'installe : l'amorce
+    tourne aussi au retour arrière, quand la couleur inactive EST le retour
+    (tests/deploy/test_plancher_python_cible.py)."""
+    assert banc.lancer("amorcer.sh", "prod", BANC_PYV="3.12").returncode == 0
+    banc.trace.write_text("")
+    fini = banc.lancer("amorcer.sh", "prod")
+    assert fini.returncode == 0, fini.stderr
+    assert "/opt/exemple/prod-green/.venv est en Python 3.12, le plancher du tag est 3.10" in \
+        fini.stdout.replace(str(banc.racine), "")
+    assert not [c for c in banc.commandes() if c.startswith("uv venv")]
 
 
 def test_sans_depot_du_tronc_refuse(banc):

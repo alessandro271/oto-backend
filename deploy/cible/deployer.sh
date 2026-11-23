@@ -69,6 +69,52 @@ bg_garde_avant_retour() {
   return 1
 }
 
+# --- le venv de la couleur qu'on INSTALLE suit le plancher Python du tag. Appelée par la
+# --- bibliothèque bleu/vert sur cette seule couleur, après l'attente de vidange et son arrêt,
+# --- AVANT `bg_install` (donc avant le `git reset`) — jamais au retour arrière. L'amorce,
+# --- elle, ne fait que dire l'écart : elle tourne aussi quand la couleur inactive est le
+# --- retour arrière. Même version : rien. Sinon le venv est recréé à l'identique de sa
+# --- naissance (amorcer.sh), sur l'interpréteur géré par uv que l'amorce vient de poser,
+# --- jamais le Python du système ; `uv sync --frozen` le remplit ensuite. Refus, sans rien
+# --- toucher, si la couleur sert ou pourrait servir : son unité tourne, ou le pointeur est
+# --- illisible ou la désigne.
+PYV=$(grep -oP '^requires-python\s*=\s*">=\K[0-9]+\.[0-9]+' "$ICI/../../pyproject.toml") \
+  || { echo "déploiement : REFUS — plancher Python introuvable dans le pyproject du tag" >&2; exit 1; }
+bg_avant_installation() {
+  local couleur=$1 arbre=$2 version actif
+  if [ -x "$arbre/.venv/bin/python" ]; then
+    version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null) \
+      || version="illisible"
+  else
+    version="absent"
+  fi
+  [ "$version" = "$PYV" ] && return 0
+  # Le plancher change, et seulement alors : les interpréteurs gérés du rôle (posés par
+  # l'amorce), et eux seuls — pour le venv recréé ici, et pour le `uv sync` de
+  # l'installation qui suit (même shell), s'il devait en recréer un. À plancher égal,
+  # l'environnement de l'installation reste celui d'avant.
+  export UV_PYTHON_INSTALL_DIR="$PYTHONS" UV_PYTHON_PREFERENCE=only-managed
+  actif=$(bg_active) || { echo "déploiement : REFUS — pointeur de couleur illisible, le venv de ${arbre} n'est pas touché" >&2; return 1; }
+  if [ "$actif" = "$couleur" ]; then
+    echo "déploiement : REFUS — ${couleur} est la couleur en service, son venv (Python ${version}) n'est pas touché" >&2
+    return 1
+  fi
+  if systemctl is-active --quiet "${BG_UNIT}@${couleur}"; then
+    echo "déploiement : REFUS — ${BG_UNIT}@${couleur} tourne encore, son venv (Python ${version}) n'est pas touché" >&2
+    return 1
+  fi
+  rm -rf "$arbre/.venv.avant-plancher"
+  [ ! -e "$arbre/.venv" ] || mv "$arbre/.venv" "$arbre/.venv.avant-plancher" || return 1
+  if ! uv venv --quiet --seed --python "$PYV" --python-preference only-managed "$arbre/.venv"; then
+    rm -rf "$arbre/.venv"
+    [ ! -e "$arbre/.venv.avant-plancher" ] || mv "$arbre/.venv.avant-plancher" "$arbre/.venv"
+    echo "déploiement : REFUS — venv Python ${PYV} non créé dans ${arbre} (l'ancien est remis)" >&2
+    return 1
+  fi
+  rm -rf "$arbre/.venv.avant-plancher"
+  bg_log "venv ${version} → ${PYV} recréé dans ${arbre}"
+}
+
 # --- le bac à sable des fonctions : l'exécution de contrôle de l'installation passe par
 # --- l'isolement que l'unité du rôle déclare (`instance@.service` : `bwrap`, l'unité n'a
 # --- aucun privilège). Sans cela, elle prendrait le défaut `systemd`, qui n'est pas celui

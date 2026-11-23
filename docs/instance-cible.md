@@ -104,7 +104,7 @@ rien et réécrit seulement ce qui se dérive de la déclaration.
 | Ce qu'elle pose | Où (dérivé du nom d'instance `<i>` et du rôle `<r>`) |
 |---|---|
 | Utilisateur de service, système, sans shell — **jamais root** | `oto-<i>` |
-| Python du plancher du `pyproject` (3.10), via uv | `/opt/<i>/python` |
+| Python du plancher du `pyproject` du tag, via uv (géré, jamais celui du système) | `/opt/<i>/python` |
 | Deux arbres (clone du tronc) et leur venv | `/opt/<i>/<r>-blue`, `/opt/<i>/<r>-green` |
 | Environnement du rôle : `app.env` (non-secret), `lanceur.env`, ports | `/etc/<i>/<r>/` (0700, root) |
 | Pointeur de couleur, posé à la naissance seulement (bleu : le 1er déploiement installe la verte) | `/etc/<i>/<r>/active` |
@@ -132,6 +132,44 @@ import /etc/caddy/upstream-<i>-<r>.conf          # en tête, avant le bloc globa
 
 Le service ne peut pas réécrire son code (les arbres sont à root), n'a d'état que dans
 son `StateDirectory`, et ne voit sa clé d'API que par `LoadCredential`.
+
+## Changer de plancher Python, sans coupure
+
+Le `requires-python` du tag fixe le Python des venvs. Les deux couleurs n'en changent
+**jamais ensemble** : la couleur en service garde le sien tant qu'elle sert, et la couleur
+inactive **est le retour arrière** jusqu'à la montée suivante. Donc :
+
+- **l'amorce dit l'écart et ne touche à rien.** Elle tourne à chaque montée, à chaque retour et
+  avant la maintenance ; un venv hors du plancher du tag y est journalisé (« laissé tel quel »),
+  jamais refusé ni recréé. Elle ne crée un venv qu'à la naissance d'un arbre ;
+- **la montée recrée le venv de la couleur qu'elle installe, et d'elle seule**
+  (`bg_avant_installation`, `deploy/cible/deployer.sh`, appelée par la bibliothèque bleu/vert
+  après l'attente de vidange et l'arrêt de cette couleur, avant `git reset` et `uv sync`).
+  Même version : rien. Sinon l'ancien venv est mis de côté, le neuf naît comme à la naissance
+  (`uv venv --seed --python <plancher> --python-preference only-managed`, interpréteurs gérés
+  du rôle : `UV_PYTHON_INSTALL_DIR=/opt/<i>/python`, `UV_PYTHON_PREFERENCE=only-managed`, posés
+  seulement quand le plancher change, et alors aussi pour le `uv sync` qui suit), « venv <ancien> → <plancher> recréé » au journal, puis l'installation par le
+  verrou. Création en échec : l'ancien est remis, rien n'est installé. **Refus sans rien
+  toucher** si l'unité de cette couleur tourne, ou si le pointeur est illisible ou la désigne ;
+- le retour arrière ne recrée jamais rien : la couleur d'avant repart sur son venv d'avant.
+
+Un relèvement de plancher prend donc **deux montées** par rôle (une couleur chacune) ; entre les
+deux, le retour arrière reste ouvert.
+
+⚠️ **L'ordre des tags.** Le retour (`action=retour <rôle> <tag>`) exécute l'amorce **du tag
+nommé dans la commande** (la porte extrait son `deploy/`), pas celle du tag en service. Une
+amorce d'avant cette tolérance refusait tout venv hors de SON plancher : nommée au retour
+après une montée qui a migré une couleur, elle bloque le retour. D'où : (1) un tag qui porte la
+tolérance, **plancher inchangé**, monté sur la préprod et la prod de la cible ; (2) seulement
+ensuite, le tag qui relève le plancher ; (3) une fois une couleur migrée, ne plus nommer ni
+monter sur ce rôle un tag antérieur à la tolérance — au retour, nommer le tag en service ou
+celui d'avant, s'ils portent tous deux la tolérance.
+
+Bancs : `tests/deploy/test_plancher_python_cible.py` (doublures : quelle couleur est recréée,
+le retour, la maintenance, la montée suivante, le refus, l'amorce d'avant qui bloque le retour)
+et `tests/deploy/test_plancher_python_cible_uv_reel.py` (le vrai uv, deux interpréteurs gérés
+déjà présents, ignoré sinon : le venv recréé l'est sur l'interpréteur géré du rôle, et
+`uv sync --frozen` ne recrée rien à plancher égal).
 
 ## Les migrations, jouées par la montée (#1163, #1195)
 
