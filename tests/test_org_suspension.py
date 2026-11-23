@@ -402,7 +402,9 @@ def test_la_lecture_est_une_operation_de_plateforme():
     from _datastore_rest import cap
     from oto_mcp.capabilities._authz import PLATFORM_ADMIN
     c = cap("platform.usage.first_calls")
-    assert c.authz is PLATFORM_ADMIN and org_suspension.ouverte(c.key)
+    # Ouverte aussi au service de facturation (`SERVICE_OU`) : la règle de compte reste
+    # `PLATFORM_ADMIN`.
+    assert c.authz.autz_branches[1] is PLATFORM_ADMIN and org_suspension.ouverte(c.key)
     [b] = c.rest_bindings()
     assert (b.verb, b.path) == ("GET", "/api/admin/usage/first-calls")
 

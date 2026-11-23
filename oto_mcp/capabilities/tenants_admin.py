@@ -31,7 +31,8 @@ from pydantic import BaseModel, Field, field_validator
 from .. import db, tenancy, tool_alias
 from ..auth import annuaire
 from . import tenant_admins, tenant_desactivation, tenant_grants, tenant_keys
-from ._authz import ADMIN_BY_OP, PLATFORM_ADMIN, SUPER_ADMIN, TENANT_ADMIN_OF
+from ._authz import ADMIN_BY_OP, PLATFORM_ADMIN, SERVICE_OU, SUPER_ADMIN, TENANT_ADMIN_OF
+from ..auth.service_identity import COMMERCE
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding, cap_limit
 from ._lecture_bornee import bornee
 from .registry import CAPABILITIES
@@ -357,7 +358,7 @@ CAPABILITIES += [
     Capability(key="admin.tenant", handler=bornee(_tenant), Input=TenantInput,
                Output=TenantDetail,
                # PR 2 : l'admin de tenant voit SES orgs (la fiche de son tenant).
-               authz=TENANT_ADMIN_OF("slug", platform=PLATFORM_ADMIN),
+               authz=SERVICE_OU(COMMERCE, TENANT_ADMIN_OF("slug", platform=PLATFORM_ADMIN)),
                description="Fiche d'un tenant : ses compteurs et les listes derrière.",
                rest=RestBinding("GET", "/api/admin/tenants/{slug}")),
     Capability(key="admin.tenants_reload", handler=_reload, Input=ReloadInput,
