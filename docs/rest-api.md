@@ -247,7 +247,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 - `PUT|POST|GET /api/upload/{token}` — **réception d'un upload signé out-of-bande** (issue #105), **pas de JWT** : le `{token}` est un jeton HMAC scellant `(sub, org, cible)` + TTL court + usage unique (émis par `POST /api/me/upload-url` ou `oto_upload_url`, module `upload_tokens.py`). ⚠️ **Route de NATURE à contrat déclaré** (oto#106) : `api/uploads.py` pose un `ContratDeRoute` sur ses handlers (description, corps par verbe, accusé `AccuseDeDepot`, refus `DeclaredError` jugés atteignables par `tests/test_capability_declared_errors.py`) et `/openapi.json` le publie (`security: []`, tag `_nature`) au lieu de la souche « écrite à la main ». ⚠️ **Compatible avec les contrats épinglés d'avant** : les en-têtes `X-Oto-Org`/`X-Oto-Group` restent déclarés (le middleware précède la route) et le corps est décrit `required: false` — le retrait des uns et un corps devenu obligatoire avaient rougi le contrôle « Contrat avant déploiement » d'un front consommateur. Les refus de la cible portent désormais leur phrase dans `detail` (« ligne NDJSON N invalide »). **PUT** = un agent avec shell y pousse le corps brut (`curl --data-binary @fichier`) ; **POST** multipart `file` = le formulaire humain ; **GET** = page HTML d'upload autoportée (fallback quand l'agent n'a pas de shell, ex. claude.ai : il transmet le lien à l'humain — le jeton n'est PAS consommé au GET). Le backend matérialise dans la cible en **réappliquant** son autz, consomme le jeton (anti-rejeu), renvoie un **accusé léger** (id + compteurs), jamais le body. Cibles : page Documents (`doc`), fichier brut de projet (`project_file`, autz `ownership.can_access(project, write)`), lot de lignes datastore (`datastore` — NDJSON/CSV batch-upsert sur clé, autz `ownership.can_access(datastore_namespace, write)`, ns_id scellé au mint). Évite de faire transiter du gros contenu par le contexte du LLM. ⚠️ **Le plafond (`upload_tokens.max_bytes()`, 25 Mo) se tient PENDANT la lecture** depuis #562 : le corps se lit en flux et la lecture s'arrête au premier octet au-delà (`413 content_too_large`), un `Content-Length` annoncé au-delà est refusé sans rien lire, et le POST ne confie au parseur multipart qu'un corps déjà borné (plafond + 64 Kio d'enveloppe, une seule partie `file`, aucun autre champ). Avant, `request.body()`/`request.form()` prenaient tout, puis on comptait. ⚠️ **Le type SERVI d'un `project_file` se décide sur le contenu** (#562, `media_store.type_servi`) : une signature de format reconnue fait foi (le type déclaré — au mint, sinon l'en-tête — ne départage qu'une famille : docx/xlsx dans un zip, m4a/mp4 dans un `ftyp`) ; un texte UTF-8 déclaré passif (`text/plain`, `text/csv`, `text/markdown`, `application/json`…) garde son type s'il ne porte pas de balisage actif ; tout le reste — non reconnu, ou actif (HTML, SVG, XML, JavaScript, quel que soit le type déclaré) — est écrit en `application/octet-stream` avec `Content-Disposition: attachment`. Rien n'est refusé. La ligne du fichier (`mime`) enregistre le type servi ; les objets écrits avant le 23/09/2026 gardent le leur. ⚠️ **Le payload du jeton est LISIBLE, et c'est accepté** (#562, 23/09/2026) : signé HMAC mais pas chiffré, il porte `sub` (compte émetteur), `org`, la cible complète (kind, `project_id`/`doc_id`/`ns_id`, nom de fichier, titre, type déclaré), `jti` et `exp`. Rien de cela n'est un secret — sans la signature il n'ouvre rien, les identifiants n'authentifient pas seuls, et la cible est réautorisée à la réception — et le jeton vit **15 min**, à **usage unique**. Qui émet un lien le confie à un tiers : ne pas y sceller un titre ou un nom de fichier confidentiel. ⚠️ **`project_file` ne rend QUE `filename` + `bytes` depuis oto#86** : l'accusé servait la ligne de base entière (id, `created_by` — le compte DÉPOSANT — état de publication…) à un tiers anonyme porteur du lien, allow-list `redaction.champs_autorises` désormais. Le libellé de la page GET (`target_label`) ne porte plus non plus `doc_id`/`project_id` (cf. `docs/redaction.md` §Face REST).
 - `POST /api/datastores/{ns}/rows` — **UNE ligne** : le corps EST la ligne (un objet, une clé par colonne ; capacité `me.datastore.append_row`, 201). Pas de lot sur cette route : un corps dont l'unique clé porte une liste d'objets — ou dont la clé `rows` en porte une, quelles que soient les autres (oto#151) — est refusé `400 batch_body` — sans schéma il faisait une ligne imbriquée en 201 muet, sous `strict: true` une ligne imbriquée avec relevé `hors_schema` (oto#48, mesuré le 04/09/2026) ; une colonne DÉCLARÉE sous ce nom reste écrivable. Garde : `tests/datastore/test_lot_dans_ligne_oto48.py`.
 - `POST /api/datastores/{ns}/rows/batch` — **le lot JSON** (oto#151, capacité `me.datastore.write_rows`, 200) : corps `{"rows": [{…}, …], "key": "<colonne>", "upsert": true, "donnees_d_origine": true}`, `key` (défaut : la clé métier déclarée), `upsert` et `donnees_d_origine` facultatifs, `readonly_override`/`force`/`origine_override` comme sur l'ajout d'une ligne. Le moteur est celui de `data_write(rows=…)` : `key` NOMMÉ désigne (une ligne dont la clé existe la modifie, une neuve est créée) ; omis, le lot AJOUTE sur la clé déclarée, et une clé déjà en base ne fusionne qu'avec `upsert=true` (oto#141 — sans lui, lot refusé ENTIER avant sa première ligne, `409 business_key_exists`, `details.doublons`/`details.existantes`) ; deux lignes du lot à la même clé suivent cette dernière règle dans les deux cas ; refus qui nomment la ligne et disent où reprendre (le lot n'est pas atomique), `@keep`/`@clear` jugés sur le lot entier avant la première ligne, notices cumulées. Réponse `{datastore, ns_id, inserted, updated, count, key, ids, fusions?, …relevés}` — `ids` un par ligne envoyée, rang pour rang ; `fusions` = `[{rang, dans_rang, id, cle}]` les lignes qui ont fusionné (`dans_rang` : la ligne du même lot qui a posé la ligne visée, `null` si elle était en base). `POST …/rows` (une ligne) prend en query `?key=` (la clé déclarée : désigne la ligne, sans `upsert`) et `?upsert=true`, et rend le même `409 business_key_exists` sur un ajout (`details` : `key`, `valeur`, `id` de la ligne en place). La frappe d'un upload signé (`POST /api/me/upload-url`) prend `key` (désigne) et `upsert`, SCELLÉS dans le jeton (`400 upsert_without_key` sans clé) ; la réception rend `fusions` sans `id` et `409 business_key_exists` sans nommer de ligne par son identifiant. Avant elle, un client REST pur n'avait que le `PATCH` ligne à ligne (8 907 appels mesurés). Pour les volumes, l'upload signé ci-dessus. Garde : `tests/api/test_rest_lot_oto151_live.py`.
-- **Datastore — les 24 chemins sous `/api/datastores`** (= `NS` ; relevés le 2026-09-05 depuis l'`openapi.json` **servi** : `curl -s https://mcp.oto.ninja/api/openapi.json`), tous capacités `me.datastore.*` de `capabilities/datastore/` — aucune route écrite à la main depuis le 2026-08-12 (#302). `{datastore}` = le **numéro** du tableau (`ns_id` ; son nom résout encore jusqu'au 08/11/2026, puis sera refusé — la réponse porte alors `Deprecation: true` et `Sunset`, cf. `docs/datastore.md`), `slot:<nom>` compris (même résolution que la face agent, sinon `400 jeton_mal_place` — qui porte aussi le refus du pronom `@claimed`, retiré le 07/09/2026) ; un tableau d'une autre de mes orgs rend `404 datastore_not_found` **avec l'org où il vit** (rejouer avec `X-Oto-Org`).
+- **Datastore — les 24 chemins sous `/api/datastores`** (= `NS` ; relevés le 2026-09-05 depuis l'`openapi.json` **servi** : `curl -s https://mcp.oto.ninja/api/openapi.json`), tous capacités `me.datastore.*` de `capabilities/datastore/` — aucune route écrite à la main depuis le 2026-08-12 (#302). `{datastore}` = le **numéro** du tableau (`ns_id` ; son nom résout encore jusqu'au 08/11/2026, puis sera refusé — la réponse porte alors `Deprecation: true`, sans `Sunset`, cf. `docs/datastore.md`), `slot:<nom>` compris (même résolution que la face agent, sinon `400 jeton_mal_place` — qui porte aussi le refus du pronom `@claimed`, retiré le 07/09/2026) ; un tableau d'une autre de mes orgs rend `404 datastore_not_found` **avec l'org où il vit** (rejouer avec `X-Oto-Org`).
   - **tableaux** : `GET NS` (possédés + partagés ; seule réponse *filtrée* par la portée d'un jeton porté) · `POST NS` (créer) · `PATCH NS/{datastore}` (renommer — id, URL et partages stables) · `DELETE NS/{datastore}` (gouvernance) · `GET NS/{datastore}/url` (deep-link dashboard) ;
   - **lignes** : `GET NS/{datastore}/rows` (page `offset` + `limit` ≤ 1000, `total` du jeu filtré, **pas de curseur** — la fin se calcule, un `offset` au-delà rend `rows: []` en 200 ; `filter`/`filters` = JSON dans UNE chaîne de query ; **pas de `fields`**, la ligne entière) · `POST …/rows` (UNE ligne, 201, ci-dessus) · `GET|PATCH|DELETE …/rows/{row_id}` (`?readonly_override=true` sur `POST`/`PATCH`, propriétaire ou gouvernant, journalisé ; `?expected_revision=` sur `PATCH` **et sur `DELETE`** (oto#217), en query et jamais dans le corps, avec le `_revision` que porte chaque ligne lue : précondition d'un geste décidé d'après cette lecture — la révision avance quand les données ou le bail changent ; si elle a bougé, rien n'est écrit ni supprimé, `409 revision_conflict` avec `details.current_revision` ; un bail d'un autre reste `409 row_locked`, y compris sur la suppression, qui est désormais jugée SOUS le verrou de la ligne — bail, révision, puis suppression) ;
   - **schéma** : `GET|PUT|PATCH NS/{datastore}/schema` (`PUT` pose, ou retire avec `schema: null` ; `PATCH` par clé) · `POST NS/{datastore}/drop_column` (destructif, `confirm=true`) ;
@@ -545,8 +545,8 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   servie survivait au nettoyage du dépôt. La face authentifiée `/api/me/guide-library`
   sert la ligne entière — `library.fork`/`library.unpublish` visent une entrée par `id`.
   ⚠️ Les chemins `/api/me/guide-library…` s'appelaient `/api/me/doctrines/…` jusqu'au
-  2026-08-28 (#519) ; les anciens répondent **308** jusqu'au retrait — cf.
-  `docs/alias-deprecies.md`.
+  2026-08-28 (#519) ; les anciens ont répondu **308** jusqu'à leur retrait le
+  23/11/2026 (lot D) et rendent désormais 404 — cf. `docs/alias-deprecies.md`.
   **`visibility`** : `public` (dans le catalogue) vs `unlisted` = **lien non listé** (style
   YouTube) — servie par `library.get` (slug exact, tout user authentifié) mais **jamais**
   listée (`list` force `include_unlisted=False`) ni servie en anonyme. Partage par lien, pas
@@ -715,6 +715,40 @@ celui qu'il coiffait, et rien n'échouait. Les trois refus sont **déclarés**
 (`Capability.errors`), donc publiés dans `/openapi.json` : trois gestes différents derrière
 un même 400, et un client ne devrait pas avoir à les distinguer en lisant une phrase.
 
+## Routes d'administration ouvertes au service (`SERVICE_OU`)
+
+Ces routes `/api/admin/*` acceptent, en plus de leur règle de compte, l'identité de
+service de rôle `commerce` (`docs/auth-logto.md` §Identité de service). Même chemin, même
+handler, même forme de réponse : le consommateur change de jeton, pas d'adresse. Sans
+identité de service, la règle d'origine décide seule — le jeton `oto_` et la session
+passent comme avant. Un service qui ne porte pas le rôle est refusé
+(`403 service_role_missing`).
+
+| Route | Règle de compte (inchangée) |
+|---|---|
+| `GET /api/admin/tenants/{slug}` | `TENANT_ADMIN_OF(platform=PLATFORM_ADMIN)` |
+| `GET /api/admin/tenants/{slug}/keys` | `TENANT_ADMIN_OF(platform=PLATFORM_ADMIN)` |
+| `GET /api/admin/tenants/{slug}/keys/{provider}/grants` | `TENANT_ADMIN_OF(platform=PLATFORM_ADMIN)` |
+| `PUT\|DELETE /api/admin/tenants/{slug}/keys/{provider}/grants/{org_id}` | `TENANT_ADMIN_OF(platform=SUPER_ADMIN)` |
+| `GET /api/admin/platform-keys` | `SUPER_ADMIN` |
+| `GET /api/admin/connectors/{provider}/platform-access` | `PLATFORM_ADMIN` |
+| `POST\|DELETE /api/admin/orgs/{id}/grants/{provider}` | `SUPER_ADMIN` |
+| `GET /api/admin/orgs/{id}/unipile-limit` | `PLATFORM_ADMIN` |
+| `PUT /api/admin/orgs/{id}/unipile-limit` | `SUPER_ADMIN` |
+| `GET /api/admin/usage/first-calls` | `PLATFORM_ADMIN` |
+| `GET /api/admin/orgs` | `PLATFORM_ADMIN` |
+| `GET /api/admin/orgs/{id}` | `PLATFORM_ADMIN` |
+| `GET /api/admin/unipile/seats` | `SUPER_ADMIN` |
+| `DELETE /api/admin/unipile/seats/{account_id}` | `SUPER_ADMIN` |
+
+Le service n'a pas de borne : il voit tous les tenants et toutes les orgs de l'instance.
+Ce qu'il écrit porte son nom (`created_by` d'un octroi de tenant, journal d'un siège
+repris : `service:<client_id>`). La fiche `GET /api/admin/orgs/{id}` lui sert
+`members[].is_platform_operator` comme à l'opérateur. La suspension et la fin d'essai
+restent servies au service sous `/api/service/orgs/{id}/suspension|trial` ; la suspension
+d'administration (`POST /api/admin/orgs/{id}/suspension`) reste au super admin.
+Banc : `tests/test_admin_ouvert_au_service.py`.
+
 ## Renommer un chemin servi : on double, on date, on retire
 
 Un chemin `/api/*` est un contrat avec des appelants qui vivent **hors de ce dépôt**.
@@ -725,13 +759,16 @@ sans trace. La forme retenue (#519, lot B) :
 2. l'**ancien** reste monté et répond **308** — même méthode, même corps, query string
    reportée. Ni 301 ni 302 : ils autorisent le client à retomber en `GET`, ce qui
    transforme un `POST` en no-op silencieux ;
-3. il porte les en-têtes `Deprecation` / `Sunset`, est marqué `deprecated: true` dans
-   `/openapi.json` avec son remplaçant et sa date, et **s'en va à une date écrite** ;
+3. il porte l'en-tête `Deprecation: true` (sans `Sunset`), est marqué `deprecated: true`
+   dans `/openapi.json` avec son remplaçant, sans date, et **reste servi tant que son
+   usage compté n'est pas nul** — chaque 308 laisse sa ligne `kind='rest'` au journal
+   (`args.deprecated_name` = l'ancien gabarit) ; la PR de retrait pose seule une date
+   ferme (décision du 23/11/2026, `docs/alias-deprecies.md`) ;
 4. il est monté **en dernier** — un alias ne capture que ce que rien d'autre ne sert ;
 5. le préflight `OPTIONS` n'est **jamais** redirigé, et la 308 porte les en-têtes CORS :
    un navigateur vérifie CORS sur chaque réponse d'une chaîne de redirections.
 
-Déclaration unique : `oto_mcp/deprecations.REST` (montage `api/alias_routes.py`,
+Déclaration unique : `oto_mcp/deprecations.alias_rest_derives` (montage `api/alias_routes.py`,
 document `openapi._alias_deprecies`, garde `tests/api/test_alias_deprecies_rest.py`).
 **Table des alias en cours et de leur date : `docs/alias-deprecies.md`.**
 
@@ -1247,10 +1284,8 @@ déploiement : **`docs/version-servie.md`**.
   - La table des routes autorisées (`auth.token_scopes._ALLOWED`) est la **seule** porte : une
     route ajoutée demain est refusée sans qu'on ait à y penser.
   - La portée nomme le tableau par son **identifiant** (oto#158, 29/09/2026) : un renommage
-    ne déplace plus ce que le jeton atteint. L'émission accepte encore un nom et le range
-    sous son identifiant (la réponse rend la portée rangée ; un nom porté par deux tableaux
-    visibles → `400 ambiguous_namespace`). Une URL qui adresse le tableau par son nom est
-    jugée sur l'identifiant que ce nom résout pour le porteur, jusqu'au 08/11/2026. ⚠️ Une
+    ne déplace plus ce que le jeton atteint. Depuis le 08/11/2026, un nom de tableau est
+    refusé à l'émission comme dans une URL (`400 datastore_by_name`), sans rien résoudre. ⚠️ Une
     portée émise avant qui nomme encore un tableau par son nom n'ouvre plus rien :
     `403 token_scope_by_name`, qui les liste — elle se migre
     (`scripts/tableaux_par_numero.py --seulement jetons`) ou se réémet.

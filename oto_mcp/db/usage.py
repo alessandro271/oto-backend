@@ -19,7 +19,6 @@ import psycopg
 
 logger = logging.getLogger(__name__)
 
-from .. import deprecations
 from ..journal_secrets import masquer_urls, masquer_urls_des_valeurs
 from . import journal_calls, journal_jour
 from ._conn import _connect
@@ -1335,6 +1334,28 @@ def aggregate_tool_feedback(days: int = 30, *, org_id: Optional[int] = None) -> 
     """Qualité d'outil agrégée : feedback par (outil, kind). `users`/`org_id` :
     cf. aggregate_gaps."""
     return _signal_agg("tool_feedback", "s.target AS tool", "s.target", days, org_id)
+
+
+def journal_archive_passages() -> dict:
+    """Les derniers passages de l'archive du journal, réussi et en échec, et l'heure de la
+    base — lus dans `journal_archive_passages` (écrite par `deploy/archive_tool_calls.py`
+    à la fin de chaque passage). Une table d'une ligne par jour : lue entière.
+
+    Rend `last_success_at`, `last_failure_at` (None quand il n'y en a jamais eu),
+    `last_failure_detail` et `maintenant`, l'heure de la BASE : c'est elle qui date les
+    passages, l'écart se mesure sur la même horloge."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT max(finished_at) FILTER (WHERE ok) AS last_success_at,
+                   max(finished_at) FILTER (WHERE NOT ok) AS last_failure_at,
+                   (SELECT detail FROM journal_archive_passages WHERE NOT ok
+                     ORDER BY finished_at DESC, id DESC LIMIT 1) AS last_failure_detail,
+                   now() AS maintenant
+              FROM journal_archive_passages
+            """
+        ).fetchone()
+    return dict(row)
 
 
 def agents_en_echec(days: int = 1, *, org_id: Optional[int] = None,
@@ -2913,7 +2934,7 @@ def _ds_activity_entry(r: dict) -> dict:
     """
     args = r.get("args") if isinstance(r.get("args"), dict) else {}
     fields = args.get("fields")
-    return deprecations.avec_les_deux_noms({
+    return {
         "created_at": r.get("created_at"),
         "kind": r.get("kind") or "mcp",
         "tool": r.get("tool"),
@@ -2923,7 +2944,8 @@ def _ds_activity_entry(r: dict) -> dict:
         "email": r.get("email"),
         "run_id": r.get("run_id"),
         "run_label": r.get("run_label"),
-        "doctrine": r.get("doctrine"),
+        # La colonne `runs` garde son nom d'avant #519 ; le contrat sert `guide`.
+        "guide": r.get("doctrine"),
         "outcome": r.get("outcome"),
         "row_id": args.get("id"),
         "row_title": None,
@@ -2939,7 +2961,7 @@ def _ds_activity_entry(r: dict) -> dict:
         "source": None,
         "acteur": None,
         "revisions": [],
-    })
+    }
 
 
 #: L'axe « clé métier » ne retrouve QUE l'écriture qui a créé la ligne (append/batch :

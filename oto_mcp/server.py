@@ -515,7 +515,7 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # `ref_kind` (17/11/2026) — la FORME sous laquelle l'appel a désigné un tableau
 # (`number`|`slot`|`name`, `session_org.noter_forme_tableau`), jamais le nom : `ns_id`
 # cite le tableau résolu, il ne dit pas si l'agent l'a nommé. C'est ce qui compte
-# l'usage d'un nom de tableau avant son retrait (`deprecations.RETRAIT_NOM_DE_TABLEAU`).
+# les désignations par nom, refusées depuis le retrait (`datastore_by_name`).
 # Même clé sur la ligne de route REST (`api.routes.RestCallLogger`).
 _TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced",
                 "readonly_forced_bilan", "found_work_emails", "found_personal_emails", "found_phones",
@@ -949,6 +949,12 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         ToolCallLogger(_calllog_sink, server="oto", identity=_calllog_identity)
     )
 
+    # Le tampon de compatibilité (`deprecations`) : une ancienne forme d'argument
+    # allumée sur l'instance est traduite ICI — sous le journal (l'appel traduit y a sa
+    # ligne et sa trace), après le contexte de l'appel (org, run). Cf. `middleware/compat`.
+    from .middleware.compat import CompatMiddleware
+    instance.add_middleware(CompatMiddleware())
+
     # 8. Capture des exceptions de tools vers Sentry (no-op si OTO_SENTRY_DSN absent) —
     # INNERMOST des appels d'outil (la visibilité anonyme, sous lui, n'agit qu'au handshake) :
     # au plus près du handler, capture le vrai traceback AVANT le calllog
@@ -1078,6 +1084,11 @@ def main():
         level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Les clients HTTP écrivent une ligne INFO par requête (« HTTP Request: POST … 200 ») :
+    # ~6 300 par heure pour le seul worker d'indexation le 23/11/2026, de quoi faire
+    # tourner le journal système. Leurs avertissements et erreurs restent.
+    for bavard in ("httpx", "httpcore"):
+        logging.getLogger(bavard).setLevel(logging.WARNING)
 
     # Garde-fou (revue de sécurité 2026-08-29, oto-backend#572) : refuse de démarrer
     # si le repli d'identité dev (`OTO_MCP_DEV_SUB`) est posé en même temps qu'un
@@ -1168,6 +1179,11 @@ def main():
     # écrit. Cf. `identite_instance`.
     from . import identite_instance
     identite_instance.verifier()
+
+    # Les réglages du tampon de compatibilité (`OTO_MCP_COMPAT_*`) : une valeur
+    # illisible refuse le démarrage ici. Cf. `deprecations.verifier_reglages`.
+    from . import deprecations
+    deprecations.verifier_reglages()
 
     # Le trousseau du coffre : les modes de clé sont DÉCLARÉS (plate, Key Manager) ; une
     # déclaration incohérente, aucune clé, ou Key Manager injoignable refuse le démarrage

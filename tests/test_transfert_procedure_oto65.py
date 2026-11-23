@@ -13,9 +13,8 @@ Ce fichier tient trois choses :
    projet et le partage suivent. Jusqu'ici c'était prouvé entre paliers d'une MÊME org
    (`test_procedure_paliers_681.py`, par `ownership.transfer` en direct) et, d'org à
    org, par une sonde jamais commitée.
-2. **L'alias daté** : un appelant vivant (l'écran de partage du dashboard) envoie
-   encore l'ancien nom. Il est servi, sous le nom d'aujourd'hui, avec un avis qui dit
-   quoi envoyer et jusqu'à quand.
+2. **L'ancienne valeur est retirée** (lot D, #526, 23/11/2026) : elle est refusée
+   comme toute valeur invalide, sur les deux surfaces.
 3. **Le texte servi** : ni l'énuméré publié ni les descriptions ne portent l'ancien
    mot, et la description dit ce que `transfer` fait d'une procédure — et que la
    cascade d'un projet, elle, COPIE (#52).
@@ -29,10 +28,9 @@ import uuid
 
 import pytest
 
-from oto_mcp import deprecations
 from oto_mcp.capabilities._types import RawCtx
 
-ANCIEN = "doc" + "trine"   # la valeur d'hier, telle qu'un appelant l'envoie encore
+ANCIEN = "doc" + "trine"   # la valeur d'hier, retirée
 
 
 @pytest.fixture(scope="module")
@@ -144,33 +142,10 @@ def test_op_list_sert_les_procedures_sous_leur_nom(monde):
     assert {r["resource_type"] for r in out["resources"]} == {"procedure"}
 
 
-# ── 2. L'alias daté : servi, sous le nom d'aujourd'hui, avec son avis ────────
-
-@pytest.mark.parametrize("key", ["resources.govern", "resources.govern.v2"])
-def test_l_ancien_nom_est_servi_avec_un_avis_date(monde, key):
-    proc, _ = _procedure_chargee(monde, "alias-" + key.replace(".", "-"), versions=1)
-    out = _appel(key, "u-admin", op="get", resource_type=ANCIEN,
-                 resource_id=str(proc["id"]))
-    assert out["resource_type"] == "procedure", "la réponse ne sert que le nom d'aujourd'hui"
-    avis = out["deprecation_warning"]
-    assert "resource_type=procedure" in avis
-    assert deprecations.RETRAIT_PROCEDURE.strftime("%d/%m/%Y") in avis
-
-
-def test_l_alias_couvre_aussi_le_transfert(monde):
-    """Le geste qui compte : l'écran du dashboard partage et transfère sous l'ancien
-    nom. L'autz et `ownership` ne voient que la famille d'aujourd'hui."""
-    from oto_mcp import org_store
-    proc, _ = _procedure_chargee(monde, "relance-bis", versions=2)
-    out = _appel("resources.govern", "u-admin", op="transfer", resource_type=ANCIEN,
-                 resource_id=str(proc["id"]), new_owner_org=monde["b"])
-    assert out["ok"] is True and "deprecation_warning" in out
-    assert org_store.get_instruction_by_id(proc["id"])["owner_id"] == str(monde["b"])
-
-
-def test_la_date_de_retrait_tient_le_preavis_contractuel():
-    assert deprecations.RETRAIT_PROCEDURE == deprecations._plus_de_mois(
-        deprecations.ANNONCE_PROCEDURE, deprecations.PREAVIS_MOIS)
+# ── 2. L'ancienne valeur est RETIRÉE (lot D, #526) ───────────────────────────
+#
+# Refusée comme toute valeur invalide, sur les deux surfaces : la garde, sans base,
+# est `tests/api/test_retrait_lot_d.py`.
 
 
 # ── 3. Le texte servi ────────────────────────────────────────────────────────

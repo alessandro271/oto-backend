@@ -23,7 +23,8 @@ from . import _facturation_externe as facturation_externe
 from . import _quota_d_octroi as quota_d_octroi
 from . import _identite
 from . import droits_admin
-from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
+from ._authz import PLATFORM_ADMIN, SERVICE_OU, SUPER_ADMIN
+from ..auth.service_identity import COMMERCE
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -526,7 +527,7 @@ CAPABILITIES += [
     ),
     Capability(
         key="platform.org.grant_key", handler=_grant_org_key, Input=OrgGrantKeyInput,
-        authz=SUPER_ADMIN,
+        authz=SERVICE_OU(COMMERCE, SUPER_ADMIN),
         description="[super admin] Share a connector's platform key with a WHOLE org — every member "
                     "resolves it (metered per-member). Optional per-day quota. "
                     + quota_d_octroi.AIDE,
@@ -535,7 +536,7 @@ CAPABILITIES += [
     ),
     Capability(
         key="platform.org.revoke_key", handler=_revoke_org_key, Input=OrgRevokeKeyInput,
-        authz=SUPER_ADMIN,
+        authz=SERVICE_OU(COMMERCE, SUPER_ADMIN),
         description="[super admin] Revoke an org's share of a connector's platform key.",
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}/grants/{provider}", _ID),
     ),
@@ -559,7 +560,8 @@ CAPABILITIES += [
     ),
     Capability(
         key="platform.org.unipile_limit_get", handler=_get_unipile_limit,
-        Input=OrgUnipileLimitInput, Output=OrgUnipileLimitView, authz=PLATFORM_ADMIN,
+        Input=OrgUnipileLimitInput, Output=OrgUnipileLimitView,
+        authz=SERVICE_OU(COMMERCE, PLATFORM_ADMIN),
         description="[platform admin] An org's cap on hosted messaging accounts (Unipile "
                     "platform-key seats): `limit` = the org's own cap (null = none, the org "
                     "follows `default_limit`, the platform default from the environment), "
@@ -571,7 +573,8 @@ CAPABILITIES += [
     ),
     Capability(
         key="platform.org.unipile_limit_set", handler=_set_unipile_limit,
-        Input=OrgUnipileLimitSetInput, Output=OrgUnipileLimitView, authz=SUPER_ADMIN,
+        Input=OrgUnipileLimitSetInput, Output=OrgUnipileLimitView,
+        authz=SERVICE_OU(COMMERCE, SUPER_ADMIN),
         description="[super admin] Set an org's cap on hosted messaging accounts. Body "
                     "`{\"limit\": int | null}` (required): an integer >= 0 (0 = no cap), or "
                     "null to drop the org's own cap and fall back to the platform default. "

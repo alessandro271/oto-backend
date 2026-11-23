@@ -126,14 +126,6 @@ def test_la_liste_du_travail_ne_rend_que_sa_procedure(travail):
     assert _slugs(out) == [(SLUG_ORG, "org")]
 
 
-def test_l_ancien_nom_de_la_liste_est_borne_aussi(travail):
-    from oto_mcp import deprecations
-    ancien = next(a for a, n in deprecations.CLES.items() if n == "guides")
-    travail(_agent(SLUG_ORG))
-    out = _appel(PORTEUR, op="list")
-    assert [g["slug"] for g in out[ancien]] == [SLUG_ORG]
-
-
 def test_la_liste_d_une_procedure_introuvable_est_vide(travail):
     travail(_agent(SLUG_EQUIPE))
     assert _appel(PORTEUR, op="list")["guides"] == []
@@ -419,13 +411,10 @@ def test_un_cycle_se_suit_une_fois(chaine, travail):
 
 
 def test_la_liste_rend_l_ensemble_chacune_a_son_palier(chaine, travail):
-    from oto_mcp import deprecations
-    ancien = next(a for a, n in deprecations.CLES.items() if n == "guides")
     travail(_agent(ORCH))
     out = _appel(PORTEUR, op="list")
     attendu = {(ORCH, "org"), (ETAPE_A, "org"), (ETAPE_B, "user"), (ETAPE_C, "org")}
     assert set(_slugs(out)) == attendu and len(out["guides"]) == len(attendu)
-    assert {g["slug"] for g in out[ancien]} == {s for s, _ in attendu}
     assert set(_slugs(_appel(PORTEUR, op="list", scope="user"))) == {(ETAPE_B, "user")}
     e = _refus(PORTEUR, op="list", scope="group")
     assert (e.status, e.code) == (403, CODE)

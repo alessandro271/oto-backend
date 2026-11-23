@@ -73,3 +73,38 @@ CREATE TABLE IF NOT EXISTS datastore_row_embeddings (
 CREATE INDEX IF NOT EXISTS idx_datastore_row_embeddings_hnsw
     ON datastore_row_embeddings USING hnsw (embedding halfvec_cosine_ops);
 """
+
+# La file d'indexation : réservations, échecs, consommation du jour — fragment séparé :
+# la révision Alembic `20261123_1433_embed_file` l'exécute tel quel (une seule écriture
+# du DDL), et le démarrage d'une base neuve le pose avec le reste.
+EMBED_FILE = """
+-- L'état d'une source dans la file d'indexation (`embed_worker`), keyée comme le worker
+-- la nomme : `source` = 'doc' | 'brief' | 'node' | 'row', `ref` = son identifiant en
+-- texte ('<ns_id>/<row_id>' pour une ligne). Une ligne n'existe que pour une source
+-- réservée ou en échec ; un succès l'efface.
+-- `bail_jusqu_a` : réservation d'un processus — une source sous bail n'est prise par
+-- aucun autre. `tentatives` : échecs passagers d'affilée sur le texte `sha` ; au-delà
+-- de la borne du worker, la source sort de la file. `echec_raison` non NULL : la
+-- source est sortie de la file en échec (son drapeau d'indexation baissé), avec la
+-- réponse du fournisseur ; une nouvelle écriture de la source la remet dans la file.
+CREATE TABLE IF NOT EXISTS embed_sources (
+    source TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    bail_jusqu_a TIMESTAMPTZ,
+    sha TEXT,
+    tentatives INTEGER NOT NULL DEFAULT 0,
+    echec_raison TEXT,
+    echec_at TIMESTAMPTZ,
+    PRIMARY KEY (source, ref)
+);
+
+-- Les tokens d'embedding facturés par jour (UTC) à CETTE instance, tels que le
+-- fournisseur les compte (`usage.prompt_tokens`). Le worker s'arrête pour la journée
+-- au plafond (`OTO_EMBED_PLAFOND_TOKENS_JOUR`) ; `plafond_atteint_at` le dit, et sa
+-- pose (une seule fois par jour) déclenche l'alerte d'équipe.
+CREATE TABLE IF NOT EXISTS embed_consommation (
+    jour DATE PRIMARY KEY,
+    tokens BIGINT NOT NULL DEFAULT 0,
+    plafond_atteint_at TIMESTAMPTZ
+);
+"""

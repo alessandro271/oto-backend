@@ -17,7 +17,7 @@ from fastmcp import Context, FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import deprecations, guide_run as dr, run_status
+from .. import guide_run as dr, run_status
 
 logger = logging.getLogger(__name__)
 
@@ -209,14 +209,12 @@ def register(mcp: FastMCP) -> None:
 
         Returns `guide_version` — the version of that procedure frozen for this run
         (null for an ad-hoc run, or if the slug matches no procedure you can read).
-        The response also carries the deprecated `doctrine`/`doctrine_version` keys
-        until 29/10/2026.
 
         Args:
             label: short human description of what this run does (always logged).
             guide: optional — the guide/skill slug being executed (as passed to
                 oto_procedure op=get). Omit for a one-shot/ad-hoc run.
-            doctrine: DEPRECATED alias of `guide`, removed on 30/11/2026 — pass
+            doctrine: DEPRECATED alias of `guide`, removed with prior notice — pass
                 `guide` instead.
         """
         guide = guide if guide is not None else doctrine
@@ -234,9 +232,8 @@ def register(mcp: FastMCP) -> None:
         session_org.note_call_trace(**{db_usage._ARG_PROCEDURE: guide})
         version = await _note_procedure_version(guide)
         await _persist_open(run_id, label, guide)
-        return deprecations.avec_les_deux_noms(
-            {"run_id": run_id, "label": label, "guide": guide,
-             "guide_version": version})
+        return {"run_id": run_id, "label": label, "guide": guide,
+                "guide_version": version}
 
     @mcp.tool()
     async def run_finish(

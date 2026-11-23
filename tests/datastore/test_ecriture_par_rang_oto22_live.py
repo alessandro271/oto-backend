@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 
 import pytest
@@ -93,13 +94,31 @@ def _stockee(ns_id: int, row_id: str) -> dict:
     return db.datastore_get_row(ns_id, row_id)["data"]
 
 
+_CREES: list[int] = []
+
+
+@pytest.fixture(autouse=True)
+def _nettoyer_les_tableaux():
+    """Chaque tableau créé par le test est supprimé à sa sortie, même sur échec."""
+    try:
+        yield
+    finally:
+        from oto_mcp import db
+        while _CREES:
+            db.delete_datastore_by_id(_CREES.pop())
+
+
 def _table(schema: dict, contacts: list) -> tuple:
     """Un tableau neuf, une ligne dont les contacts sont POSÉS EN BASE — l'état de départ
     ne dépend d'aucun des gestes que le banc éprouve."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t22-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    # uuid complet (6 hex = 24 bits : collision par anniversaire sur les ~20 tableaux du
+    # module) + identifiant du worker xdist ; le tableau est inscrit pour être supprimé.
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    ns_id = db.create_datastore("user", SUB, f"t22-{worker}-{uuid.uuid4().hex}")
+    _CREES.append(ns_id)
+    ns = str(ns_id)
     st = make_store(SUB)
     st.set_schema(ns, schema)
     rid = st.append_row(ns, {"siren": "552032534"})["_id"]
