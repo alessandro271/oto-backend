@@ -1,9 +1,10 @@
-"""Un chemin REST renommé répond encore — en **308**, et il annonce sa date (#519).
+"""Un chemin REST renommé répond encore — en **308**, déprécié et sans date (#519).
 
 Lot B2 de #519. Renommer un chemin, c'est casser tout appelant qui vit hors de ce
 dépôt : le build de la vitrine, un `fetch` de navigateur, une intégration tierce, un
 `curl` dans un script. Alors l'ancien chemin reste monté, ne fait rien d'autre que
-rediriger, et s'en va à une date écrite (lot D, #526).
+rediriger, et s'en ira quand son usage compté sera nul (lot D, #526 ; décision
+du 23/11/2026) : chaque redirection laisse sa ligne dans `tool_calls`.
 
 Ce que ces tests gardent, dans l'ordre de ce qui coûterait le plus cher :
 
@@ -21,8 +22,11 @@ Ce que ces tests gardent, dans l'ordre de ce qui coûterait le plus cher :
    navigateur abandonne avant d'essayer.
 5. **Les alias sont montés EN DERNIER, et aucun n'éclipse une vraie route.** Un
    placeholder trop gourmand posé trop haut avalerait un chemin littéral servi.
-6. **Le document OpenAPI les dit dépréciés**, avec le chemin de remplacement et la
+6. **Le document OpenAPI les dit dépréciés**, avec le chemin de remplacement, sans
    date — et sans voler l'`operationId` d'une autre entrée.
+7. **Chaque redirection est comptée** au journal `tool_calls` (`kind='rest'`) : `tool`
+   = le chemin d'aujourd'hui, `args.deprecated_name` = l'ancien GABARIT, jamais le
+   chemin réel.
 """
 from __future__ import annotations
 
@@ -86,11 +90,12 @@ def test_la_query_string_est_reportee(client):
     assert r.headers["location"] == "/api/me/guide-library?limit=200&q=x"
 
 
-def test_lavis_de_retrait_est_dans_les_en_tetes(client):
-    """Un intégrateur qui lit ses logs voit la date sans ouvrir la doc."""
+def test_lavis_de_depreciation_est_dans_les_en_tetes_sans_date(client):
+    """Un intégrateur qui lit ses logs voit la dépréciation sans ouvrir la doc — et
+    aucune date de retrait (décision du 23/11/2026)."""
     r = client.get("/api/me/doctrines/library", follow_redirects=False)
     assert r.headers["deprecation"] == "true"
-    assert r.headers["sunset"] == deprecations.date_de_retrait()
+    assert "sunset" not in r.headers
 
 
 # ── 3. La cible existe et n'est pas, elle-même, un alias ────────────────────
@@ -164,7 +169,7 @@ def test_chaque_ancien_chemin_atteint_bien_son_alias(alias):
         "un chemin littéral doit précéder le placeholder qui l'engloberait.")
 
 
-# ── 6. Le document le dit, avec le remplaçant et la date ────────────────────
+# ── 6. Le document le dit, avec le remplaçant et sans date ──────────────────
 
 @pytest.mark.parametrize("alias", deprecations.REST, ids=lambda a: a.ancien)
 def test_lopenapi_marque_lancien_chemin_deprecie(alias):
@@ -173,8 +178,10 @@ def test_lopenapi_marque_lancien_chemin_deprecie(alias):
     assert op["deprecated"] is True
     assert alias.nouveau in op["summary"], (
         "« déprécié » sans chemin de remplacement n'est qu'un reproche")
-    assert deprecations.date_de_retrait() in op["summary"]
+    assert "préavis" in op["summary"]
+    assert deprecations.REVUE.strftime("%d/%m/%Y") not in op["summary"] + op["description"]
     assert "308" in op["responses"]
+    assert "Sunset" not in op["responses"]["308"]["headers"]
 
 
 def test_les_nouveaux_chemins_sont_documentes():
@@ -212,3 +219,39 @@ def test_le_registre_ne_porte_plus_les_anciennes_cles():
     assert not restantes, f"clés de capacité non renommées : {restantes}"
     manquantes = sorted(n for n in deprecations.CAPACITES.values() if n not in cles)
     assert not manquantes, f"clés d'aujourd'hui absentes du registre : {manquantes}"
+
+
+# ── 7. Chaque redirection laisse sa ligne au journal ────────────────────────
+
+def test_chaque_redirection_est_comptee_au_journal_sans_le_chemin_reel(monkeypatch):
+    """La mesure qui décide du retrait ne dépend plus des 7 jours du journal du
+    proxy : la 308 écrit sa ligne par le chemin habituel du journal des routes
+    (`RestCallLogger`, écriture asynchrone), sans authentifier ni requêter."""
+    from starlette.middleware import Middleware
+
+    from oto_mcp.api import alias_routes
+    from oto_mcp.api import base as api_base
+
+    lignes: list = []
+
+    def _emet(row):
+        lignes.append(dict(row))
+
+        async def _fait():
+            return None
+        return _fait()
+
+    monkeypatch.setattr(api_routes, "_emit_rest_event", _emet)
+    app = Starlette(routes=alias_routes.make_routes(api_base.options_handler),
+                    middleware=[Middleware(api_routes.RestCallLogger)])
+    alias = next(a for a in deprecations.REST if "{doctrine_id}" in a.ancien)
+    r = TestClient(app).request(alias.verbe, "/api/me/doctrines/957",
+                                headers={"X-Oto-Org": "12"}, follow_redirects=False)
+    assert r.status_code == 308
+    (ligne,) = lignes
+    assert ligne["kind"] == "rest"
+    assert ligne["tool"] == f"{alias.verbe} {alias.nouveau}"
+    assert ligne["args"]["deprecated_name"] == alias.ancien
+    assert "957" not in repr(ligne["tool"]) + repr(ligne["args"]), (
+        "le chemin réel peut porter un identifiant : seul le gabarit est écrit")
+    assert ligne["sub"] is None and ligne["org_id"] == 12, "ce qui est connu, sans plus"

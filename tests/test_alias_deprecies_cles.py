@@ -169,7 +169,8 @@ def test_les_noms_de_schema_dhier_resolvent():
             f"`{ancien}` ne résout plus : un $ref cassé fait rater la génération "
             "ENTIÈRE d'un client, pas seulement le modèle visé.")
         assert schemas[ancien]["deprecated"] is True
-        assert deprecations.date_de_retrait() in schemas[ancien]["description"]
+        assert deprecations.PREAVIS_DE_RETRAIT in schemas[ancien]["description"]
+        assert deprecations.REVUE.strftime("%d/%m/%Y") not in schemas[ancien]["description"]
 
 
 def test_la_table_des_schemas_ne_porte_que_de_vrais_composants():

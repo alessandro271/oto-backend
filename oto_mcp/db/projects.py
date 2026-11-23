@@ -552,7 +552,7 @@ def _apply_tableau_names(links: list[dict], name_by_id: dict[int, str]) -> None:
     lecteurs. Mesuré au moment du correctif : 322 liens dans 112 projets.
 
     `datastore` est la clé neuve, `namespace` reste jusqu'à la date de retrait commune
-    (`deprecations.RETRAIT_DATASTORE`) — même échéance que les alias REST et que la clé
+    (`deprecations.REVUE_DATASTORE`, date de revue) — même échéance que les alias REST et que la clé
     doublée des réponses du datastore, pour qu'un seul geste les retire tous."""
     for l in links:
         if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit():

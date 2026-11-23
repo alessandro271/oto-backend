@@ -141,6 +141,12 @@ def _maybe_view_as(real_sub: str, apply_view_as: bool) -> str:
 # de vrai ; il suffisait de ne pas jeter ce qu'elle avait déjà en main.
 CLE_PRINCIPAL = "oto_principal"
 
+# Clé de la redirection d'un ancien chemin REST (`api.alias_routes`), déposée dans le
+# `scope` ASGI par la 308 et relue par le journal des routes (`routes.RestCallLogger`) :
+# `{"tool": "<VERBE> <chemin d'aujourd'hui>", "deprecated_name": "<ancien gabarit>"}`.
+# Même motif que `CLE_PRINCIPAL` : publié dans le scope, relu au `finally`, zéro requête.
+CLE_ALIAS_DEPRECIE = "oto_alias_deprecie"
+
 
 def _publier_principal(request: Request, sub: str, *,
                        token_id: int | None = None,

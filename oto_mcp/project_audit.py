@@ -150,7 +150,7 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
         t = l.get("target_type")
         try:
             if t == "tableau":
-                # Lit la clé NEUVE : `namespace` est doublée jusqu'au 08/11/2026 et
+                # Lit la clé NEUVE : `namespace` est doublée le temps du préavis et
                 # disparaîtra — un lecteur interne qui s'y accroche casserait ce jour-là.
                 if l.get("datastore_ambigu"):
                     # #365 : le nom désigne plusieurs tableaux dans la portée du projet.

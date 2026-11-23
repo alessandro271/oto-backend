@@ -130,3 +130,39 @@ requête de l'entrée sur sa base (lecture seule, `statement_timeout`).
 - **Non couvert** : le jeton émis par un admin plateforme pour un autre compte
   (`platform.token.create`), dont la portée se résout chez la cible. Il reste refusé
   par nom.
+
+### Renommages de vocabulaire : anciens noms d'outils, chemins REST, valeurs
+
+Les renommages tenus par `deprecations.py` hors réglage d'instance — les anciens noms
+d'outils (`TOOLS`, dont `http*` → `api*`), les anciens chemins REST montés en 308
+(`REST` et `alias_rest_derives`), les valeurs réécrites (`VALEURS`, aujourd'hui
+`resource_type=doctrine` → `procedure`) — suivent la même règle (décision du
+23/11/2026) :
+
+- **Aucune date de retrait servie.** Chaque avis dit « déprécié, utilise X ; l'ancien
+  nom sera retiré avec un préavis » (`PREAVIS_DE_RETRAIT`). Les 308 portent
+  `Deprecation: true`, sans `Sunset`, ni en en-tête ni dans `/openapi.json`.
+- **Trace** : `args.deprecated_name` (ancien nom d'outil ; pour une 308, l'ancien
+  chemin gabarit, sur une ligne `kind='rest'` dont `tool` est le chemin d'aujourd'hui)
+  et `args.deprecated_value = "<champ>=<valeur reçue>"` (valeur réécrite, faces MCP et
+  REST). La valeur reçue n'est écrite que parce qu'elle appartient à la liste fermée
+  des valeurs dépréciées.
+- **Requête** :
+
+  ```sql
+  SET statement_timeout = '15s';
+  SELECT kind AS face, tool, args->>'deprecated_name' AS ancien,
+         args->>'deprecated_value' AS valeur, org_id, sub, token_id,
+         count(*) AS appels, max(created_at) AS dernier
+    FROM tool_calls
+   WHERE (args ? 'deprecated_name' OR args ? 'deprecated_value')
+     AND created_at >= now() - interval '30 days'
+   GROUP BY 1, 2, 3, 4, 5, 6, 7
+   ORDER BY appels DESC;
+  ```
+- **Dates de revue** : `REVUE` (30/11/2026), `REVUE_PROCEDURE` (23/11/2026),
+  `REVUE_CONNECTEUR_API` (31/01/2027), `REVUE_DATASTORE` — sans effet sur ce qui est
+  servi.
+- **Retrait** : une PR séparée, ouverte quand le compteur est vide. Elle pose alors une
+  date ferme, **au moins deux mois après le premier avis daté qu'elle servira** (art.
+  8.2 du contrat de service, `PREAVIS_MOIS`).

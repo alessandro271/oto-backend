@@ -27,17 +27,33 @@ Chaque entrée porte trois choses, sans exception :
 
 Retrait d'une entrée : quand la trace ne montre plus aucun appel par l'ancienne forme
 chez toutes les instances qui ont allumé son réglage. Revue sans zéro : on reporte la
-date de revue, on ne coupe pas. (Les renommages de vocabulaire plus bas, antérieurs à
-cette règle, portent encore une date de retrait servie sous préavis contractuel.) Le document de décision est
+date de revue, on ne coupe pas. Le document de décision est
 `docs/compat-surfaces-servies.md` ; la table des entrées, `docs/alias-deprecies.md`.
 
-Pourquoi une date et un TAG (`RETRAIT` se lit « premier tag `vX.Y.Z` posé à partir de
-cette date ») pour les renommages : seul un tag déploie, `main` n'est que le tronc. Une
-date de merge ne dit pas quand le retrait est SERVI. La date vit ici et nulle part
-ailleurs ; chaque avis servi la recopie depuis sa constante.
+**Les renommages de vocabulaire plus bas suivent la même règle (décision du
+23/11/2026) : plus aucun couperet par date.** Un ancien nom (outil, chemin REST,
+valeur d'un champ) reste servi tant que son usage compté n'est pas nul. Aucun texte
+servi ne porte de date de retrait : chaque avis dit « déprécié, utilise X ; l'ancien
+nom sera retiré avec un préavis » (`PREAVIS_DE_RETRAIT`), et les redirections des
+anciens chemins REST portent `Deprecation: true`, sans `Sunset`. Leurs compteurs, dans
+le journal `tool_calls` :
+
+- `args.deprecated_name` = l'ancien nom d'outil sous lequel l'appel est arrivé
+  (`calllog.apply_call_trace`, `session_org.nom_deprecie_de_l_appel`) ;
+- `args.deprecated_value` = `"<champ>=<valeur reçue>"` quand `valeur_canonique` a
+  réécrit une valeur dépréciée (faces MCP et REST) ;
+- une ligne `kind='rest'` par redirection 308 d'un ancien chemin REST
+  (`api.alias_routes`) : `tool` = verbe + chemin d'aujourd'hui, `args.deprecated_name`
+  = l'ancien chemin GABARIT, jamais le chemin réel.
+
+**Le retrait réel est une PR séparée**, ouverte quand ces mesures sont vides. C'est
+elle qui pose une date ferme, au moins `PREAVIS_MOIS` (deux mois, art. 8.2 du contrat
+de service) après le premier avis daté qu'elle servira. Les constantes `REVUE*` sont
+des dates de REVUE, sans AUCUN effet sur ce qui est servi : une date de revue passée
+ne change rien.
 
 ⚠️ **Ce que le module ne tient PAS — à ne pas croire tenu.** Le préavis est PASSIF :
-`Deprecation` / `Sunset` et l'avis en tête de description ou de réponse se voient
+`Deprecation` et l'avis en tête de description ou de réponse se voient
 quand le consommateur inspecte ses réponses ; rien n'est poussé vers lui. Rendre le
 préavis actif demande le canal de notification qui manque à toute la plateforme
 (#766), pas un réglage de ce module.
@@ -58,16 +74,20 @@ from urllib.parse import quote
 # de l'article, sont dans oto-backend#767. Un test en fait un plancher
 # (`tests/test_alias_deprecies_outils.py`), pour que personne ne la « rationalise » un
 # jour sans savoir ce qu'il touche : allonger reste libre, descendre sous deux mois
-# rougit.
+# rougit. ⚠️ Il ne produit AUCUNE date servie : c'est la PR de retrait qui datera le
+# retrait, au moins cette durée après le premier avis daté qu'elle servira.
 #
 # ⚠️ La formulation exacte de l'article ne se recopie pas ici, et ce commentaire n'en
 # tient pas lieu : pour arbitrer un cas limite — une rupture imposée par la sécurité,
 # le point de départ du préavis — aller lire la pièce.
 PREAVIS_MOIS = 2
 
-# Le jour où le préavis a commencé à être SERVI EN PRODUCTION — pas celui du merge.
-# Même raison que le retrait au tag (ci-dessus) : `main` est la préproduction, et un
-# préavis que le consommateur ne peut pas encore lire n'a averti personne. Les trois
+#: Ce que tout avis de dépréciation SERVI dit du retrait — jamais un jour.
+PREAVIS_DE_RETRAIT = "l'ancien nom sera retiré avec un préavis"
+
+# Le jour où l'avis a commencé à être SERVI EN PRODUCTION — pas celui du merge :
+# `main` est la préproduction, et un avis que le consommateur ne peut pas encore lire
+# n'a averti personne. Les trois
 # lots d'alias ont été mergés le 28/08/2026 et sont partis en production avec le tag
 # `v1.159.0`, le 29/08/2026 — c'est ce jour-là que la fenêtre s'ouvre.
 ANNONCE = datetime.date(2026, 8, 29)
@@ -86,14 +106,10 @@ def _plus_de_mois(depart: datetime.date, mois: int) -> datetime.date:
     return datetime.date(annee, mois_cible, jour)
 
 
-# Premier tag `vX.Y.Z` posé à partir de cette date. Le préavis DÛ reste dérivé (un
-# test en fait le plancher) ; le retrait servi peut être plus TARD, jamais plus tôt.
-# Reporté du 29/10 au 30/11/2026, décidé le 30/10/2026 : le dashboard lit encore les
-# clés d'hier, et le journal `tool_calls` ne voit pas les anciens noms d'outils (le
-# bord du protocole les traduit avant lui) — l'usage reste à mesurer avant le lot D
-# (#526).
+# DATE DE REVUE du lot #519 : le jour où relire les compteurs d'usage (lot D, #526).
+# Sans effet sur ce qui est servi — rien ne la formate, rien ne la compare au jour.
 PREAVIS_DU = _plus_de_mois(ANNONCE, PREAVIS_MOIS)
-RETRAIT = max(PREAVIS_DU, datetime.date(2026, 11, 30))
+REVUE = max(PREAVIS_DU, datetime.date(2026, 11, 30))
 
 
 # ── Le connecteur Custom API renommé `api` (ex-`http`, 12/11/2026) ──────────
@@ -101,21 +117,17 @@ RETRAIT = max(PREAVIS_DU, datetime.date(2026, 11, 30))
 # pas ce que le connecteur sert. Le connecteur s'appelle `api`, ses outils `api*` —
 # mêmes ops, mêmes arguments, même effet. Comme tout renommage servi, il se DOUBLE :
 # les anciens noms d'outils et les anciens chemins REST continuent de répondre, en
-# disant le nom d'aujourd'hui et la date.
+# disant le nom d'aujourd'hui.
 #
 # **Quand l'ancien nom part** : quand tous les consommateurs déclarés ont suivi
 # (`.github/contrat-consommateurs.json`, règle du 25/09/2026) ET que l'usage compté
 # des alias est nul — le journal `tool_calls` porte `args.deprecated_name` sur chaque
-# appel servi par un ancien nom d'outil (`calllog.apply_call_trace`). La date
-# ci-dessous est le PLUS TÔT possible, jamais une échéance automatique.
-#
-# Sa propre date — même raison que `RETRAIT_DATASTORE`. Le plancher contractuel se
-# compte depuis l'annonce (deux mois, `PREAVIS_MOIS`) ; la fenêtre s'ouvre au tag de
-# production, d'où la marge : un tag posé jusqu'au 30/11/2026 tient encore ses deux
-# mois. Posé plus tard, `ANNONCE_CONNECTEUR_API` prend la date du tag.
+# appel servi par un ancien nom d'outil (`calllog.apply_call_trace`), et une ligne
+# par redirection d'un ancien chemin REST. La date ci-dessous est une DATE DE REVUE,
+# sans effet sur ce qui est servi.
 ANNONCE_CONNECTEUR_API = datetime.date(2026, 11, 12)
-RETRAIT_CONNECTEUR_API = max(_plus_de_mois(ANNONCE_CONNECTEUR_API, PREAVIS_MOIS),
-                             datetime.date(2027, 1, 31))
+REVUE_CONNECTEUR_API = max(_plus_de_mois(ANNONCE_CONNECTEUR_API, PREAVIS_MOIS),
+                           datetime.date(2027, 1, 31))
 
 #: Ancien nom d'outil → nom d'aujourd'hui, le même suffixe des deux côtés.
 OUTILS_CONNECTEUR_API: dict = {f"http{suffixe}": f"api{suffixe}"
@@ -123,7 +135,7 @@ OUTILS_CONNECTEUR_API: dict = {f"http{suffixe}": f"api{suffixe}"
 
 #: L'annonce du renommage est servie aux agents (`instructions`) jusqu'à ce jour
 #: inclus — un mois. La description et chaque réponse de l'ancien nom le disent
-#: ensuite jusqu'au retrait.
+#: ensuite, tant qu'il est servi.
 ANNONCE_CONNECTEUR_API_JUSQU_AU = _plus_de_mois(ANNONCE_CONNECTEUR_API, 1)
 
 
@@ -136,13 +148,12 @@ def annonce_connecteur_api_du_jour(aujourd_hui: Optional[datetime.date] = None
     return ("The Custom API connector is now `api`, and its tools renamed — "
             + " · ".join(f"`{a}` → `{n}`" for a, n in OUTILS_CONNECTEUR_API.items())
             + ". Same arguments, same effect. The old names still answer as deprecated "
-            f"aliases until {RETRAIT_CONNECTEUR_API.isoformat()} at the earliest: "
-            "call the new ones.")
+            "aliases and will be removed with prior notice: call the new ones.")
 
 
 # ── Outils MCP (lot B1) ─────────────────────────────────────────────────────
-# ancien nom SERVI → nom canonique. L'ancien reste listé et appelable jusqu'au
-# retrait ; le bord du protocole (`middleware/alias.ToolAliasMiddleware`) rétablit
+# ancien nom SERVI → nom canonique. L'ancien reste listé et appelable tant que son
+# usage n'est pas nul ; le bord du protocole (`middleware/alias.ToolAliasMiddleware`) rétablit
 # le canonique AVANT que quoi que ce soit d'autre ne le lise, exactement comme pour
 # le renommage par tenant — donc rien en aval n'apprend que l'alias existe : les
 # gates, la denylist de visibilité, le journal `tool_calls` et les références
@@ -160,35 +171,35 @@ TOOLS: dict = {
     **OUTILS_CONNECTEUR_API,
 }
 
-#: La date de retrait PROPRE à un ancien nom d'outil, quand elle n'est pas `RETRAIT`.
-_RETRAIT_DES_OUTILS: dict = {a: RETRAIT_CONNECTEUR_API for a in OUTILS_CONNECTEUR_API}
+#: La date de REVUE propre à un ancien nom d'outil, quand elle n'est pas `REVUE`.
+_REVUE_DES_OUTILS: dict = {a: REVUE_CONNECTEUR_API for a in OUTILS_CONNECTEUR_API}
 
 
-def date_de_retrait(ancien: Optional[str] = None) -> str:
-    """La date de retrait telle qu'elle est SERVIE (JJ/MM/AAAA) — celle de l'ancien
-    nom d'outil `ancien`, ou celle du lot #519."""
-    return _RETRAIT_DES_OUTILS.get(ancien, RETRAIT).strftime("%d/%m/%Y")
+def date_de_revue(ancien: Optional[str] = None) -> datetime.date:
+    """La date de REVUE de l'ancien nom d'outil `ancien` (ou du lot #519). Jamais
+    servie : elle dit quand relire les compteurs, pas quand l'alias s'en va."""
+    return _REVUE_DES_OUTILS.get(ancien, REVUE)
 
 
-def avis(canonique: str, ancien: Optional[str] = None) -> str:
+def avis(canonique: str) -> str:
     """L'avis qui PRÉFIXE la description d'un nom déprécié.
 
     En tête, pas en queue : beaucoup de clients tronquent une description longue,
     et un avis de dépréciation lu après 400 caractères n'a averti personne. C'est
     aussi la première chose que le modèle lit quand il choisit son outil.
     """
-    return (f"Déprécié : utilisez `{canonique}` (retrait le {date_de_retrait(ancien)}). ")
+    return f"Déprécié : utilisez `{canonique}` ({PREAVIS_DE_RETRAIT}). "
 
 
 def avis_d_appel(ancien: str) -> Optional[str]:
     """L'avis en tête de la RÉPONSE d'un appel fait sous un ancien nom — None si `ancien`
-    n'est pas déprécié. Il nomme ce qui a été appelé, ce qui a servi et la date : un
-    agent qui ne relit pas sa liste d'outils l'apprend au geste."""
+    n'est pas déprécié. Il nomme ce qui a été appelé et ce qui a servi : un agent qui
+    ne relit pas sa liste d'outils l'apprend au geste."""
     canonique = TOOLS.get(ancien)
     if canonique is None:
         return None
-    return (f"Déprécié : `{ancien}` est renommé `{canonique}` (retrait le "
-            f"{date_de_retrait(ancien)}). L'appel a été servi par `{canonique}` ; "
+    return (f"Déprécié : `{ancien}` est renommé `{canonique}` ({PREAVIS_DE_RETRAIT}). "
+            f"L'appel a été servi par `{canonique}` ; "
             f"appelle désormais `{canonique}`, mêmes arguments.")
 
 
@@ -232,20 +243,9 @@ class AliasRest(NamedTuple):
     # `org.guide.get`), l'id historique n'est plus réclamé par personne, et le garder
     # sur l'ancien chemin laisse un client déjà généré retrouver sa méthode.
     operation_id: str = ""
-    # ⚠️ La date de retrait PROPRE à cet alias, quand elle diffère de `RETRAIT`.
-    #
-    # Ce champ naît d'un défaut mesuré le 08/09/2026 : les alias du renommage
-    # `namespace` → `datastore` servaient l'en-tête `Sunset` du renommage #519, annoncé
-    # dix jours plus tôt. Un intégrateur qui lit ses en-têtes aurait daté son travail
-    # sur une échéance qui n'était pas la sienne. **Une seule date pour plusieurs
-    # renommages est une copie qui ne peut que devenir fausse dès le deuxième.**
-    retrait: object = None
-
-
-def _sunset(alias: "AliasRest") -> str:
-    """La date de retrait SERVIE pour cet alias — la sienne, ou celle du lot #519."""
-    d = getattr(alias, "retrait", None)
-    return (d or RETRAIT).strftime("%d/%m/%Y")
+    # La date de REVUE propre à cet alias, quand elle diffère de `REVUE` — jamais
+    # servie (plus d'en-tête `Sunset`, décision du 23/11/2026).
+    revue: object = None
 
 
 # ── Renommage `namespace` → `datastore` (08/09/2026) ────────────────────────
@@ -262,9 +262,9 @@ def _sunset(alias: "AliasRest") -> str:
 # coïncider à la seconde ; avec eux, chacune devient indépendante, et elles survivent à
 # un retour arrière du back.
 #
-# Comme tout ce module : ils portent une DATE. `ANNONCE_DATASTORE` ci-dessous.
+# Comme tout ce module : ils portent une date de REVUE, sans effet sur ce qui est servi.
 ANNONCE_DATASTORE = datetime.date(2026, 9, 8)
-RETRAIT_DATASTORE = _plus_de_mois(ANNONCE_DATASTORE, PREAVIS_MOIS)
+REVUE_DATASTORE = _plus_de_mois(ANNONCE_DATASTORE, PREAVIS_MOIS)
 
 #: L'ancien préfixe et le nouveau. Le placeholder change aussi de nom : seule la
 #: VALEUR capturée voyage (cf. `cible`).
@@ -322,7 +322,7 @@ def _alias_datastore() -> tuple:
         ancien = _DS_ANCIEN + chemin[len(_DS_NOUVEAU):]
         ancien = ancien.replace("{datastore}", "{namespace}")
         out.append(AliasRest(getattr(rest, "verb", "GET"), ancien, chemin,
-                             _DS_PARAMS, "", RETRAIT_DATASTORE))
+                             _DS_PARAMS, "", REVUE_DATASTORE))
     # Un chemin LITTÉRAL doit précéder un chemin à placeholder qui l'engloberait :
     # `…/namespaces` avant `…/namespaces/{namespace}`. Le tri par longueur puis par
     # nombre de placeholders donne cet ordre sans qu'on ait à le tenir à jour.
@@ -350,7 +350,7 @@ def _alias_connecteur_api() -> tuple:
             if rest.path.startswith(_API_NOUVEAU) and not rest.path.startswith(_API_NEES_APRES):
                 ancien = _API_ANCIEN + rest.path[len(_API_NOUVEAU):]
                 out.append(AliasRest(rest.verb, ancien, rest.path, {}, "",
-                                     RETRAIT_CONNECTEUR_API))
+                                     REVUE_CONNECTEUR_API))
     return tuple(sorted(out, key=lambda a: (a.ancien.count("{"), len(a.ancien))))
 
 
@@ -405,33 +405,37 @@ def cible(alias: AliasRest, path_params: dict, query: str = "") -> str:
 #
 # **Forme de la coexistence** : l'entrée est RÉÉCRITE vers le nom d'aujourd'hui avant
 # toute autre lecture (autz comprise), et la réponse porte `deprecation_warning`, qui
-# nomme le nom d'aujourd'hui et la date. Rien en aval n'apprend que l'alias existe ;
+# nomme le nom d'aujourd'hui, sans date. Rien en aval n'apprend que l'alias existe ;
 # la réponse, elle, ne sert que le nom d'aujourd'hui (`resource_type: "procedure"`).
-#
-# Sa propre date — même raison que `RETRAIT_DATASTORE` : une seule date pour deux
-# renommages est une copie qui ne peut que devenir fausse.
+# Le journal, lui, le compte : `args.deprecated_value = "resource_type=doctrine"`.
 ANNONCE_PROCEDURE = datetime.date(2026, 9, 23)
-RETRAIT_PROCEDURE = _plus_de_mois(ANNONCE_PROCEDURE, PREAVIS_MOIS)
+REVUE_PROCEDURE = _plus_de_mois(ANNONCE_PROCEDURE, PREAVIS_MOIS)
 
-#: champ → ({valeur d'hier → valeur d'aujourd'hui}, date de retrait).
+#: champ → ({valeur d'hier → valeur d'aujourd'hui}, date de REVUE — jamais servie).
 VALEURS: dict = {
-    "resource_type": ({"doctrine": "procedure"}, RETRAIT_PROCEDURE),
+    "resource_type": ({"doctrine": "procedure"}, REVUE_PROCEDURE),
 }
 
 
 def valeur_canonique(champ: str, valeur: Any) -> tuple:
     """`(valeur d'aujourd'hui, avis)` — l'avis vaut `None` si la valeur n'est pas dépréciée.
 
-    L'avis est le texte SERVI dans `deprecation_warning` : il nomme ce qu'on a reçu,
-    ce qu'il faut envoyer, et la date — les trois choses qui permettent à l'appelant
-    de se corriger sans lire cette page."""
-    renommees, retrait = VALEURS.get(champ, ({}, None))
+    L'avis est le texte SERVI dans `deprecation_warning` : il nomme ce qu'on a reçu et
+    ce qu'il faut envoyer — de quoi se corriger sans lire cette page. Sans date : le
+    retrait n'en aura une qu'une fois l'usage nul.
+
+    Une réécriture est COMPTÉE : le journal de l'appel courant (face MCP comme REST)
+    porte `args.deprecated_value = "<champ>=<valeur reçue>"`
+    (`session_org.noter_valeur_depreciee`)."""
+    renommees, _revue = VALEURS.get(champ, ({}, None))
     nouvelle = renommees.get(valeur) if isinstance(valeur, str) else None
     if nouvelle is None:
         return valeur, None
+    from . import session_org  # tardif : ce module est lu très tôt
+    session_org.noter_valeur_depreciee(f"{champ}={valeur}")
     return nouvelle, (
         f"Déprécié : `{champ}={valeur}` s'écrit `{champ}={nouvelle}` "
-        f"(retrait le {retrait.strftime('%d/%m/%Y')}). L'appel a été servi "
+        f"(l'ancienne valeur sera retirée avec un préavis). L'appel a été servi "
         f"comme `{nouvelle}` ; envoie désormais `{nouvelle}`.")
 
 
@@ -648,8 +652,8 @@ def lignes_avec_les_deux_noms(lignes) -> list:
 # ── Codes d'erreur (lot B3) ─────────────────────────────────────────────────
 # ancien code → code d'aujourd'hui. Un code d'erreur ne se DOUBLE pas — il n'y a
 # qu'un champ `error` — donc le nouveau prend la place, et l'ancien est conservé dans
-# `details.legacy_code`. Un client qui teste `error == "unknown_doctrine"` a un mois
-# pour aller lire `details.legacy_code`, ou mieux, le nouveau code.
+# `details.legacy_code`. Un client qui teste `error == "unknown_doctrine"` a le temps
+# du préavis pour aller lire `details.legacy_code`, ou mieux, le nouveau code.
 CODES: dict = {
     "unknown_doctrine": "unknown_guide",
 }
