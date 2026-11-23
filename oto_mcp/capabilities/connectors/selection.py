@@ -33,13 +33,15 @@ from ...connectors import credential_presence
 from ...connectors.credential_presence import CredentialPresence
 from ...connectors import readiness as connector_readiness
 from ...connectors import selection as connector_selection
-from .._authz import ORG_ADMIN_OF, SUB_ONLY
+from .._authz import COMMERCE_SERVICE, ORG_ADMIN_OF, SUB_ONLY
+from .._org_du_service import ORG_INCONNUE
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
 from ..registry import CAPABILITIES
 from . import custom_api
 from .kit import (BulkSelectInput, BulkSelectResult,  # noqa: F401 — re-exported
                   OrgRecommendedConnectors, RecommendInput, UnsetDefaultInput,
-                  UnsetDefaultResult, _bulk_select, _recommend, _unset_default)
+                  UnsetDefaultResult, _bulk_select, _bulk_select_service, _recommend,
+                  _unset_default)
 from .catalog_card import (AuthDescriptor, ConnectFlow, CredentialField,
                            DocSection, FreeTier)
 
@@ -803,6 +805,16 @@ def _unselect(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
     return {"connector": inp.name, "state": "not_selected", "removed": True}
 
 
+# The refusals of "add to the kit", for the org admin's route and the service's.
+_REFUS_BULK_SELECT = (
+    DeclaredError(404, "unknown_connector", "name unknown to the registry"),
+    DeclaredError(409, "org_disabled",
+                  "the org has disabled this connector: enabling it for everyone would "
+                  "contradict its own governance"),
+    DeclaredError(409, "platform_disabled",
+                  "the platform has cut this connector: the org cannot install it"),
+)
+
 CAPABILITIES += [
     Capability(
         key="connectors.me", handler=_me, Input=MyConnectorsInput, authz=SUB_ONLY,
@@ -924,15 +936,22 @@ CAPABILITIES += [
                     "Requires the org to expose the connector. Returns activated (installed "
                     "now), skipped, and the per-population detail in `changes`. Members' "
                     "agents see it at their NEXT conversation.",
-        errors=(DeclaredError(404, "unknown_connector",
-                              "name unknown to the registry"),
-                DeclaredError(409, "org_disabled",
-                              "the org has disabled this connector: enabling it for "
-                              "everyone would contradict its own governance"),
-                DeclaredError(409, "platform_disabled",
-                              "the platform has cut this connector: the org cannot "
-                              "install it"),),
+        errors=_REFUS_BULK_SELECT,
         rest=RestBinding("POST", "/api/orgs/{id}/connectors/{name}/bulk-select", _ID),
+    ),
+    # The same gesture for the COMMERCE service, under `/api/service/` like all its face:
+    # same handler, same response; the org is checked first (the service has no
+    # membership that proves it exists).
+    Capability(
+        key="service.org.connectors.bulk_select", handler=_bulk_select_service,
+        Input=BulkSelectInput, Output=BulkSelectResult, authz=COMMERCE_SERVICE, mcp=None,
+        description="[service commerce] Add a connector to an org's KIT, as "
+                    "`connectors.bulk_select` does for an org admin: installed now for "
+                    "every current member who doesn't have it, and for every member who "
+                    "joins later, never over a member's own choice.",
+        errors=(ORG_INCONNUE,) + _REFUS_BULK_SELECT,
+        rest=RestBinding("POST", "/api/service/orgs/{id}/connectors/{name}/bulk-select",
+                         _ID),
     ),
     Capability(
         key="connectors.unset_default", handler=_unset_default, Input=UnsetDefaultInput,
