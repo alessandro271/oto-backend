@@ -50,7 +50,7 @@ def _geste(m: dict, op: str, *, sub: str | None = None, **kw):
 def _inscrire(m: dict, email: str | None = None) -> str:
     from oto_mcp import db
     sub = f"new_{m['u']}_{uuid.uuid4().hex[:4]}"
-    db.upsert_user(sub, email=email or m["invitee"])
+    db.upsert_user(sub, email=email or m["invitee"], email_verified=True)
     return sub
 
 
