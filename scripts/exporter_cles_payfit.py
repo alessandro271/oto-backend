@@ -34,6 +34,15 @@ sont suspendues, rien ne sort (erreur).
 
 **Refus si stdout est un terminal** : la sortie ne s'écrit que dans un tuyau.
 
+**Le canal est protégé avant tout import d'oto** (`proteger_stdout`, premier geste de
+`main`) : le vrai stdout est gardé sur un descripteur PRIVÉ, puis le descripteur 1 est
+renvoyé vers stderr. Un `print` ou un journal émis par l'import d'`oto_mcp` ou par une
+bibliothèque part donc sur stderr, jamais dans le tuyau : seul le JSON s'écrit sur le
+descripteur privé. Le test de terminal porte sur ce descripteur.
+
+Le récapitulatif final (`JSON écrit : N société(s)`) n'est imprimé sur stderr qu'APRÈS
+l'écriture réussie du JSON : sa présence dit que le tuyau a été servi.
+
 **Aucune valeur dans une trace.** Une exception levée pendant la lecture est réduite
 à son type ; sa chaîne (qui pourrait recopier un fragment déchiffré) ne s'affiche pas,
 et `main` n'imprime jamais de pile.
@@ -54,6 +63,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import unicodedata
@@ -127,8 +137,9 @@ def lire_cle(equipe: int, account: str) -> str:
 
 # --- Le cœur ----------------------------------------------------------------------
 
-def collecter(org: int, equipe: int, err: TextIO) -> list[dict]:
-    """Lit et valide TOUT ; rend la liste à écrire, ou lève `Refus` sans rien rendre."""
+def collecter(org: int, equipe: int, err: TextIO) -> tuple[list[dict], str]:
+    """Lit et valide TOUT ; rend la liste à écrire et son récapitulatif, ou lève
+    `Refus` sans rien rendre."""
     groupe = lire_equipe(equipe)
     if groupe is None:
         raise Refus(f"l'équipe {equipe} n'existe pas")
@@ -143,11 +154,13 @@ def collecter(org: int, equipe: int, err: TextIO) -> list[dict]:
     vus: dict[str, str] = {}
     exclues = 0
     for ligne in lignes:
-        nom = nom_court(ligne.meta.get("label") or ligne.account)
         if ligne.meta.get("suspended"):
+            # Signalée par son seul compte : un libellé invalide sur une ligne exclue
+            # ne doit rien bloquer.
             exclues += 1
-            print(f"exclue (suspendue) : compte {ligne.account!r} → {nom}", file=err)
+            print(f"exclue (suspendue) : compte {ligne.account!r}", file=err)
             continue
+        nom = nom_court(ligne.meta.get("label") or ligne.account)
         if nom in vus:
             raise Refus(f"nom court {nom!r} en double : comptes {vus[nom]!r} et "
                         f"{ligne.account!r}")
@@ -161,9 +174,8 @@ def collecter(org: int, equipe: int, err: TextIO) -> list[dict]:
 
     if not sortie:
         raise Refus(f"toutes les lignes sont suspendues ({exclues})")
-    print(f"{len(lignes)} ligne(s) lue(s), {len(sortie)} retenue(s), "
-          f"{exclues} exclue(s)", file=err)
-    return sortie
+    return sortie, (f"{len(lignes)} ligne(s) lue(s), {len(sortie)} retenue(s), "
+                    f"{exclues} exclue(s)")
 
 
 def executer(org: int, equipe: int, compter: bool,
@@ -173,19 +185,34 @@ def executer(org: int, equipe: int, compter: bool,
               "(ou --compter)", file=err)
         return 2
     try:
-        sortie = collecter(org, equipe, err)
+        sortie, recap = collecter(org, equipe, err)
     except Refus as refus:
         print(f"REFUS — {refus} ; rien n'est sorti", file=err)
         return 1
     if compter:
-        print("--compter : aucune clé écrite", file=err)
+        print(f"{recap} — --compter : aucune clé écrite", file=err)
         return 0
     out.write(json.dumps(sortie, ensure_ascii=False, separators=(",", ":")))
     out.flush()
+    print(f"{recap} — JSON écrit : {len(sortie)} société(s)", file=err)
     return 0
 
 
-def main(argv: Optional[list] = None) -> int:
+def proteger_stdout() -> TextIO:
+    """Garde le vrai stdout sur un descripteur privé et renvoie le descripteur 1 vers
+    stderr. À appeler AVANT tout import d'oto : tout ce qui écrirait ensuite sur
+    stdout (print, journal, bibliothèque) part sur stderr, jamais dans le tuyau."""
+    sys.stdout.flush()
+    prive = os.dup(1)
+    os.dup2(2, 1)
+    return os.fdopen(prive, "w", encoding="utf-8", closefd=True)
+
+
+def main(argv: Optional[list] = None, canal: Optional[TextIO] = None) -> int:
+    """`canal` : le descripteur où écrire le JSON ; par défaut, le vrai stdout, protégé
+    par `proteger_stdout` avant toute autre chose."""
+    if canal is None:
+        canal = proteger_stdout()
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--org", type=int, required=True, help="org qui possède l'équipe")
     p.add_argument("--equipe", type=int, required=True, help="équipe qui porte les clés")
@@ -193,7 +220,7 @@ def main(argv: Optional[list] = None) -> int:
                    help="lit et vérifie tout, n'écrit que des comptes sur stderr")
     a = p.parse_args(argv)
     try:
-        return executer(a.org, a.equipe, a.compter)
+        return executer(a.org, a.equipe, a.compter, out=canal)
     except Exception as e:  # noqa: SILENT — jamais de pile : elle pourrait porter une valeur ; le type seul sort
         print(f"ERREUR — {type(e).__name__} ; rien n'est sorti", file=sys.stderr)
         return 1

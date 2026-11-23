@@ -74,6 +74,7 @@ def test_sortie_une_ligne_json_sans_autre_champ(monkeypatch):
     assert json.loads(out) == [{"societe": "clinique-saint-eloi", "cle": CLE_A},
                                {"societe": "b", "cle": CLE_B}]
     assert "compte 'a' → clinique-saint-eloi" in err
+    assert err.rstrip().endswith("JSON écrit : 2 société(s)")
     _sans_valeur(err)
 
 
@@ -89,7 +90,7 @@ def test_compter_accepte_un_terminal_et_n_ecrit_aucune_cle(monkeypatch):
     _poser(monkeypatch, [("a", {"label": "Société A"}), ("b", {})], {"a": CLE_A, "b": CLE_B})
     code, out, err = _lancer(compter=True, tty=True)
     assert code == 0 and out == ""
-    assert "2 ligne(s) lue(s), 2 retenue(s), 0 exclue(s)" in err
+    assert "2 ligne(s) lue(s), 2 retenue(s), 0 exclue(s) — --compter" in err
     assert "compte 'a' → societe-a" in err
     _sans_valeur(err)
 
@@ -135,6 +136,14 @@ def test_ligne_suspendue_exclue_et_signalee(monkeypatch):
     _sans_valeur(err)
 
 
+def test_ligne_suspendue_au_libelle_invalide_ne_bloque_rien(monkeypatch):
+    _poser(monkeypatch, [("a", {}), ("b", {"suspended": True, "label": "—"})],
+           {"a": CLE_A, "b": CLE_B})
+    code, out, err = _lancer()
+    assert code == 0
+    assert json.loads(out) == [{"societe": "a", "cle": CLE_A}]
+
+
 def test_toutes_suspendues_rien_ne_sort(monkeypatch):
     _poser(monkeypatch, [("a", {"suspended": True})], {"a": CLE_A})
     code, out, err = _lancer()
@@ -159,11 +168,10 @@ def test_main_n_imprime_jamais_de_pile(monkeypatch, capsys):
     def casse(*a, **k):
         raise RuntimeError(f"panne : {CLE_A}")
     monkeypatch.setattr(E, "lire_equipe", casse)
-    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
-    code = E.main(["--org", str(ORG), "--equipe", str(EQUIPE)])
-    assert code == 1
+    canal = Sortie()
+    code = E.main(["--org", str(ORG), "--equipe", str(EQUIPE)], canal=canal)
+    assert code == 1 and canal.getvalue() == ""
     cap = capsys.readouterr()
-    assert cap.out == ""
     assert "RuntimeError" in cap.err and "Traceback" not in cap.err
     _sans_valeur(cap.err)
 
@@ -175,3 +183,38 @@ def test_main_n_imprime_jamais_de_pile(monkeypatch, capsys):
 ])
 def test_nom_court(brut, nom):
     assert E.nom_court(brut) == nom
+
+
+_PARASITE = '''
+import logging, os, sys
+sys.path.insert(0, {racine!r})
+from scripts import exporter_cles_payfit as E
+
+def lignes(g):
+    # Ce qu'un import d'oto ou une bibliothèque pourrait émettre pendant la collecte.
+    print("parasite print")
+    logging.getLogger("x").warning("parasite journal")
+    os.write(1, b"parasite fd1")
+    return [E.Ligne("a", {{}})]
+
+E.lire_equipe = lambda g: {{"id": g, "org_id": 353}}
+E.lire_lignes = lignes
+E.lire_cle = lambda g, a: {cle!r}
+sys.exit(E.main(["--org", "353", "--equipe", "47"]))
+'''
+
+
+def test_un_parasite_sur_stdout_n_entre_pas_dans_le_tuyau():
+    """Bout en bout, dans un processus à part (le canal touche aux descripteurs) :
+    stdout est un tuyau, et il ne porte QUE le JSON."""
+    import subprocess
+    racine = str(pathlib.Path(__file__).resolve().parents[1])
+    r = subprocess.run([sys.executable, "-c", _PARASITE.format(racine=racine, cle=CLE_A)],
+                       capture_output=True, timeout=60)
+    assert r.returncode == 0, r.stderr.decode()
+    assert r.stdout == json.dumps([{"societe": "a", "cle": CLE_A}],
+                                  separators=(",", ":")).encode()
+    err = r.stderr.decode()
+    assert "parasite print" in err and "parasite fd1" in err
+    assert "JSON écrit : 1 société(s)" in err
+    _sans_valeur(err)
