@@ -167,7 +167,7 @@ async def _textes_servis(monkeypatch) -> list:
     textes.append(deprecations.annonce_connecteur_api_du_jour(
         deprecations.ANNONCE_CONNECTEUR_API))
     doc = openapi.build()
-    for alias in tuple(deprecations.REST) + tuple(deprecations.alias_rest_derives()):
+    for alias in deprecations.alias_rest_derives():
         op = doc["paths"][alias.ancien][alias.verbe.lower()]
         textes += [op["summary"], op["description"], repr(op["responses"])]
         requete = Request({"type": "http", "method": alias.verbe, "path": alias.ancien,
@@ -194,7 +194,7 @@ async def test_une_date_de_revue_passee_ne_change_rien_a_ce_qui_est_servi(monkey
     import datetime
     avant = await _textes_servis(monkeypatch)
     passee = datetime.date(2000, 1, 1)
-    for nom in ("REVUE", "REVUE_CONNECTEUR_API", "REVUE_DATASTORE", "REVUE_PROCEDURE"):
+    for nom in ("REVUE", "REVUE_CONNECTEUR_API", "REVUE_DATASTORE"):
         monkeypatch.setattr(deprecations, nom, passee)
     monkeypatch.setattr(deprecations, "_REVUE_DES_OUTILS",
                         {a: passee for a in deprecations._REVUE_DES_OUTILS})
@@ -341,18 +341,32 @@ def test_le_journal_compte_l_appel_par_un_ancien_nom():
 def test_les_anciens_noms_du_connecteur_api_ont_leur_propre_date_de_revue():
     assert all(deprecations.date_de_revue(a) == deprecations.REVUE_CONNECTEUR_API
                for a in deprecations.OUTILS_CONNECTEUR_API)
-    assert deprecations.date_de_revue("oto_admin_doctrine") == deprecations.REVUE
+    assert all(deprecations.date_de_revue(a) == deprecations.REVUE
+               for a in deprecations.TOOLS
+               if a not in deprecations.OUTILS_CONNECTEUR_API)
 
 
 # ── 8. Une VALEUR dépréciée réécrite est comptée, sur les deux faces ─────────
+#
+# `VALEURS` est vide depuis le lot D (#526) ; le mécanisme reste, éprouvé sur une
+# valeur d'hier FICTIVE : il servira au prochain renommage de valeur.
+
+_VALEUR_D_HIER = "famille-d-hier"
+
+
+@pytest.fixture()
+def valeur_d_hier(monkeypatch):
+    monkeypatch.setattr(deprecations, "VALEURS", {
+        "resource_type": ({_VALEUR_D_HIER: "procedure"}, deprecations.REVUE)})
+
 
 def _entree_d_hier():
     from oto_mcp.capabilities.resources import ResourceInput
-    return ResourceInput.model_validate({"op": "list", "resource_type": "doctrine"})
+    return ResourceInput.model_validate({"op": "list", "resource_type": _VALEUR_D_HIER})
 
 
-def test_face_mcp_la_valeur_d_hier_rejoint_args_deprecated_value():
-    """`resource_type=doctrine` réécrit en `procedure` : la ligne MCP porte
+def test_face_mcp_la_valeur_d_hier_rejoint_args_deprecated_value(valeur_d_hier):
+    """Une valeur d'hier réécrite en `procedure` : la ligne MCP porte
     `args.deprecated_value`, par le relevé de l'appel (`apply_call_trace`)."""
     from oto_mcp.calllog import apply_call_trace
     trace: dict = {}
@@ -364,10 +378,11 @@ def test_face_mcp_la_valeur_d_hier_rejoint_args_deprecated_value():
     assert inp.resource_type == "procedure"
     row = apply_call_trace({"tool": "oto_resource", "args": {"op": "list"}}, trace,
                            server._TRACED_ARGS)
-    assert row["args"] == {"op": "list", "deprecated_value": "resource_type=doctrine"}
+    assert row["args"] == {"op": "list",
+                           "deprecated_value": f"resource_type={_VALEUR_D_HIER}"}
 
 
-def test_face_rest_la_valeur_d_hier_rejoint_la_ligne_de_route(monkeypatch):
+def test_face_rest_la_valeur_d_hier_rejoint_la_ligne_de_route(monkeypatch, valeur_d_hier):
     """Même compteur sur la face REST : la ligne de `RestCallLogger` le porte."""
     import dataclasses
 
@@ -404,10 +419,10 @@ def test_face_rest_la_valeur_d_hier_rejoint_la_ligne_de_route(monkeypatch):
                                        [cap])
     client = TestClient(Starlette(routes=routes,
                                   middleware=[Middleware(ar.RestCallLogger)]))
-    r = client.post("/api/resources", json={"op": "list", "resource_type": "doctrine"})
+    r = client.post("/api/resources", json={"op": "list", "resource_type": _VALEUR_D_HIER})
     assert r.status_code == 200, r.text
     (ligne,) = lignes
-    assert ligne["args"]["deprecated_value"] == "resource_type=doctrine"
+    assert ligne["args"]["deprecated_value"] == f"resource_type={_VALEUR_D_HIER}"
     # Hors réécriture, rien.
     lignes.clear()
     client.post("/api/resources", json={"op": "list", "resource_type": "procedure"})

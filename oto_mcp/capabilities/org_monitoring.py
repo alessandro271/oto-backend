@@ -32,7 +32,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from .. import db, deprecations
+from .. import db
 from . import audit_log, monitoring
 from ._authz import COMMERCE_SERVICE, ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._lecture_bornee import bornee
@@ -314,9 +314,6 @@ class RunRow(BaseModel):
     """Un déroulé. `slug` est un alias de compat = `guide` s'il y en a un, sinon
     `label` — pas un troisième identifiant.
 
-    ⚠️ `guide` est servi aussi sous son nom d'hier, `doctrine`, retiré avec un
-    préavis (#519) — cf. `docs/alias-deprecies.md`.
-
     ⚠️ `finished_at`/`outcome` à `null` = le déroulé n'a **pas été fermé** (`run_finish`
     jamais appelé, ou sa ligne purgée par la rétention). Ce n'est pas « en cours » au
     sens d'un processus vivant : personne ne le clôturera.
@@ -327,7 +324,6 @@ class RunRow(BaseModel):
     slug: Optional[str] = None
     label: Optional[str] = None
     guide: Optional[str] = None
-    doctrine: Optional[str] = None        # ALIAS déprécié (retiré avec un préavis)
     sub: Optional[str] = None
     email: Optional[str] = None
     name: Optional[str] = None
@@ -598,6 +594,22 @@ def _adoption(ctx: ResolvedCtx, inp: OrgDaysInput) -> dict:
     return db.org_adoption(inp.org_id, active_window_days=inp.days)
 
 
+def _run_servi(r: dict) -> dict:
+    """Une ligne de run sous les noms SERVIS. Ses colonnes portent le nom de la clé du
+    journal d'avant #519 (`db.usage._ARG_PROCEDURE` : une valeur en base se migre, elle
+    ne se renomme pas) ; le contrat sert `guide` et `guide_version`.
+
+    ⚠️ `doctrine_version` reste servie À CÔTÉ de `guide_version`, même valeur : un client
+    la lit encore. C'est la seule clé d'hier gardée au lot D (#526) ; elle part au lot
+    suivant, une fois ce client passé à `guide_version`. Elle n'est pas déclarée dans
+    `RunRow` : `/openapi.json` ne promet que le nom d'aujourd'hui."""
+    hier = db.usage._ARG_PROCEDURE
+    hier_version = f"{hier}_version"
+    servi = {k: v for k, v in r.items() if k not in (hier, hier_version)}
+    return {**servi, "guide": r.get(hier), "guide_version": r.get(hier_version),
+            hier_version: r.get(hier_version)}
+
+
 def _runs(ctx: ResolvedCtx, inp: OrgRunsInput) -> dict:
     """Une page de runs de l'org. `sub`, `days` et `cursor` bornent les OUVERTURES
     examinées ; `errors` ne garde, parmi elles, que les runs clos en échec — cf.
@@ -606,7 +618,7 @@ def _runs(ctx: ResolvedCtx, inp: OrgRunsInput) -> dict:
         inp.limit, org_id=inp.org_id, sub=monitoring._resolve_sub(inp.sub),
         since_days=inp.days, before=_decode_cursor(inp.cursor, "runs", inp.org_id),
         issues=db.ISSUES_EN_ECHEC if inp.errors else None)
-    return {"runs": deprecations.lignes_avec_les_deux_noms(page["runs"]),
+    return {"runs": [_run_servi(r) for r in page["runs"]],
             "scanned": page["scanned"],
             "next_cursor": _encode_cursor("runs", inp.org_id, page["next"])}
 

@@ -190,7 +190,7 @@ def test_le_modele_ne_valide_pas_la_surface_reellement_servie():
     du payload RÉELLEMENT servi, quoi que fasse le modèle sur une instanciation
     hypothétique."""
     ligne = dict(public_catalog()[0], state="active", recommended=False,
-                 guide_ref_count=0, doctrine_ref_count=0, option_ok=True,
+                 guide_ref_count=0, option_ok=True,
                  champ_jamais_declare="témoin")
     reconstruit = MyConnectorRow(**ligne).model_dump()
     assert "champ_jamais_declare" not in reconstruit, \

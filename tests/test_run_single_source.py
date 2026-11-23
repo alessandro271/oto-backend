@@ -163,7 +163,7 @@ def test_lactivite_dun_tableau_sert_le_journal(divergent):
     _fact(divergent, "r1", "data_write", {"ns_id": 160, "id": "row-1"}, ago=6.0)
     (entry,) = usage.datastore_activity(160, "leads-clients")
     assert entry["outcome"] == "failed" and entry["run_label"] == "prospection été"
-    assert entry["doctrine"] == "prospection-ete"
+    assert entry["guide"] == "prospection-ete" and "doctrine" not in entry
 
 
 def test_lactivite_dune_ligne_sert_le_journal(divergent):
