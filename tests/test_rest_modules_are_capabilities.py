@@ -286,11 +286,11 @@ _KNOWN: dict[str, str] = {
     # LLM) — mais une capacité peut être REST-only (`mcp=None`), c'était donc bien de la
     # dette et pas une nature. Le pendant AGENT du même geste existe et c'est
     # `me.connector_connect` (`POST /api/me/connectors/{name}/connect`).
-    # --- NATURE — ALIAS DÉPRÉCIÉS, retrait le 30/11/2026 (#519, retrait suivi en
-    # #526). Ces chemins ne portent AUCUN métier : ils répondent 308 vers le chemin
-    # d'aujourd'hui, et s'en vont à une date écrite (`oto_mcp/deprecations.REST`).
-    # Ce n'est donc pas de la dette — il n'y a rien à migrer, il y a une date à
-    # tenir. Ils quittent cette liste au lot D, avec le module qui les déclare.
+    # --- NATURE — ALIAS DÉPRÉCIÉS (#519, retrait suivi en #526). Ces chemins ne
+    # portent AUCUN métier : ils répondent 308 vers le chemin d'aujourd'hui, et s'en
+    # iront quand leur usage compté sera nul (`oto_mcp/deprecations.REST`). Ce n'est
+    # donc pas de la dette — il n'y a rien à migrer, il y a un compteur à lire. Ils
+    # quittent cette liste au lot D, avec le module qui les déclare.
     # Montés EN DERNIER dans `make_routes` : un alias ne capture que ce que rien
     # d'autre ne sert.
     "/api/me/doctrines/library": NATURE,

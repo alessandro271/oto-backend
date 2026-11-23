@@ -171,6 +171,7 @@ _READ_OPS = frozenset({
     "validate",  # juger un manifeste d'app sans rien écrire (`me.app`)
     "read_file",  # un agent lit un fichier de l'app, sans rien écrire (`me.app`)
     "revision",  # une version entière d'une app, pour la lire (`me.app`)
+    "plan", "status",  # ce qu'un effacement d'org ferait, et où il en est (`org.erasure`)
 })
 
 
@@ -766,9 +767,23 @@ class RestCallLogger:
                     # La forme, jamais le nom : la route réduite peut porter le nom (un
                     # segment non numérique reste tel quel), `args` n'en reçoit aucun.
                     masques = {**(masques or {}), "ref_kind": forme_ref["ref_kind"]}
+                if forme_ref.get(session_org.CLE_VALEUR_DEPRECIEE):
+                    # Une valeur dépréciée réécrite (`deprecations.valeur_canonique`) :
+                    # le compteur qui décide de son retrait, même clé qu'en MCP.
+                    masques = {**(masques or {}), session_org.CLE_VALEUR_DEPRECIEE:
+                               forme_ref[session_org.CLE_VALEUR_DEPRECIEE]}
+                outil = f"{method} {route}"
+                alias = scope.get(api_base.CLE_ALIAS_DEPRECIE)
+                if alias:
+                    # Une 308 d'un ancien chemin (`alias_routes`) : nommée par le chemin
+                    # d'aujourd'hui, l'ancien GABARIT en `deprecated_name` — jamais la
+                    # route réelle, qui peut porter un identifiant ou un nom de tableau.
+                    outil = alias["tool"]
+                    masques = {**(masques or {}),
+                               "deprecated_name": alias["deprecated_name"]}
                 row = {
                     "kind": "rest",
-                    "tool": f"{method} {route}",
+                    "tool": outil,
                     # Le masque ne va JAMAIS dans `tool` (une empreinte par jeton ferait
                     # exploser la cardinalité du `GROUP BY tool` du monitoring) : il va
                     # dans `args`, où il répond à « le même jeton a-t-il été rejoué ? ».

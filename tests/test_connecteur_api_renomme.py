@@ -42,7 +42,8 @@ def test_l_annonce_est_servie_un_mois_et_dit_que_l_ancien_nom_repond():
     annonce = deprecations.annonce_connecteur_api_du_jour(jour)
     assert all(f"`{a}` → `{n}`" in annonce for a, n in ANCIENS.items())
     assert "still answer" in annonce
-    assert deprecations.RETRAIT_CONNECTEUR_API.isoformat() in annonce
+    assert "prior notice" in annonce
+    assert deprecations.REVUE_CONNECTEUR_API.isoformat() not in annonce
     fin = deprecations.ANNONCE_CONNECTEUR_API_JUSQU_AU
     assert fin == datetime.date(2026, 12, 12)
     assert deprecations.annonce_connecteur_api_du_jour(fin) is not None

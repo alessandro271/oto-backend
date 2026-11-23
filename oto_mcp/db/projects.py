@@ -30,6 +30,7 @@ from .datastore import (
     set_datastore_schema,
 )
 from .datastore_ns import resolve_datastore_ids_by_name
+from .index_concurrent import IndexConcurrent
 from .users import upsert_user
 
 
@@ -551,7 +552,7 @@ def _apply_tableau_names(links: list[dict], name_by_id: dict[int, str]) -> None:
     lecteurs. Mesuré au moment du correctif : 322 liens dans 112 projets.
 
     `datastore` est la clé neuve, `namespace` reste jusqu'à la date de retrait commune
-    (`deprecations.RETRAIT_DATASTORE`) — même échéance que les alias REST et que la clé
+    (`deprecations.REVUE_DATASTORE`, date de revue) — même échéance que les alias REST et que la clé
     doublée des réponses du datastore, pour qu'un seul geste les retire tous."""
     for l in links:
         if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit():
@@ -1077,6 +1078,96 @@ def list_docs_for_project(project_id: int) -> list[dict]:
         return [_page(r) for r in rows]
 
 
+# --- Les sources brutes, à part des pages de travail ---------------------------
+# `kind='source'` = ce qui est VERSÉ dans un projet (transcription, import), en continu
+# et en nombre ; `doc` et `note` = les pages de travail. Un projet peut porter des
+# dizaines de milliers de sources pour une centaine de pages : la liste par défaut, la
+# recherche par défaut (`db/search.py`) et leurs index les traitent à part. Les deux
+# prédicats sont la source unique de leurs index partiels : une requête qui les écrit
+# autrement perd l'index.
+KIND_SOURCE = "source"
+PAGES_DE_TRAVAIL = "kind <> 'source'"
+SOURCES_VIVANTES = "kind = 'source' AND archived_at IS NULL"
+
+#: La révision qui pose les index partiels par genre (ceux-ci et ceux de `db/search.py`).
+REVISION_DOCS_PAR_GENRE = "20261120_2240_docs_par_genre"
+#: Seuil bas, comme les index des valeurs servies : au démarrage, la construction non
+#: concurrente bloquerait les écritures de `docs`, que les agents et les versements de
+#: sources écrivent en continu. Au-delà, la construction est le geste manuel CONCURRENTLY
+#: (`oto-mcp maintenance index-concurrents 20261120_2240_docs_par_genre`).
+DOCS_PAR_GENRE_MAX_LIGNES = 10_000
+
+#: Les pages de travail d'un projet, sans lire ses sources (liste par défaut, arbre).
+INDEX_TRAVAIL_PAR_PROJET = IndexConcurrent(
+    nom="idx_docs_travail_projet", table="docs",
+    forme=f"(project_id) WHERE {PAGES_DE_TRAVAIL}", revision=REVISION_DOCS_PAR_GENRE,
+    max_lignes=DOCS_PAR_GENRE_MAX_LIGNES)
+#: Les sources vivantes d'un projet, les plus récentes d'abord : la page de la liste
+#: paginée, son total et la présence que signale la recherche.
+INDEX_SOURCES_RECENTES = IndexConcurrent(
+    nom="idx_docs_sources_recentes", table="docs",
+    forme=f"(project_id, created_at DESC, id DESC) WHERE {SOURCES_VIVANTES}",
+    revision=REVISION_DOCS_PAR_GENRE, max_lignes=DOCS_PAR_GENRE_MAX_LIGNES)
+
+
+def list_working_docs_for_project(project_id: int) -> list[dict]:
+    """Les pages de TRAVAIL du projet (`doc`, `note`), et les sources qui en sont les
+    ANCÊTRES : une page de travail rangée sous une source garde son chemin dans l'arbre,
+    au lieu de disparaître avec son parent. Même ordre que `list_docs_for_project`."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "WITH RECURSIVE gardees AS ("
+            f"  SELECT id, parent_id FROM docs WHERE project_id = %s AND {PAGES_DE_TRAVAIL} "
+            "  UNION ALL "
+            "  SELECT d.id, d.parent_id FROM docs d JOIN gardees g ON d.id = g.parent_id"
+            # Une remontée par page de travail, bornée par `CYCLE` comme toute récursion
+            # sur l'arbre : un parent en boucle ne la fait pas tourner sans fin.
+            ") CYCLE id SET boucle USING chemin "
+            f"SELECT {_DOC_COLS} FROM docs WHERE id IN (SELECT id FROM gardees) "
+            "ORDER BY parent_id NULLS FIRST, position NULLS LAST, title", (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_live_sources(project_id: int) -> int:
+    """Le nombre de sources vivantes (non archivées) du projet — par l'index partiel."""
+    with _connect() as conn:
+        return int(conn.execute(
+            f"SELECT count(*) AS n FROM docs WHERE project_id = %s AND {SOURCES_VIVANTES}",
+            (project_id,)).fetchone()["n"])
+
+
+def list_sources_page(project_id: int, *, limit: int,
+                      after: Optional[tuple[datetime, int]] = None,
+                      since: Optional[datetime] = None, until: Optional[datetime] = None,
+                      include_archived: bool = False) -> tuple[list[dict], int]:
+    """Une page des sources du projet, les plus récentes d'abord (`created_at`, puis
+    `id`), et leur TOTAL sur la période. `after` = la clé `(created_at, id)` de la
+    dernière ligne de la page précédente ; `since` inclus, `until` exclu. Rend au plus
+    `limit + 1` lignes : la ligne de trop dit qu'une page suit."""
+    genre = "kind = 'source'" if include_archived else SOURCES_VIVANTES
+    where, params = [f"project_id = %s AND {genre}"], [project_id]
+    if since is not None:
+        where.append("created_at >= %s")
+        params.append(since)
+    if until is not None:
+        where.append("created_at < %s")
+        params.append(until)
+    filtre = " AND ".join(where)
+    page_where, page_params = filtre, list(params)
+    if after is not None:
+        page_where += " AND (created_at, id) < (%s, %s)"
+        page_params += [after[0], after[1]]
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_DOC_COLS} FROM docs WHERE {page_where} "
+            "ORDER BY created_at DESC, id DESC LIMIT %s", (*page_params, limit + 1),
+        ).fetchall()
+        total = conn.execute(f"SELECT count(*) AS n FROM docs WHERE {filtre}",
+                             tuple(params)).fetchone()["n"]
+        return [dict(r) for r in rows], int(total)
+
+
 # Repli d'accents FR SANS extension PG (unaccent non installable sur la base managée) :
 # `translate()` est built-in + IMMUTABLE et couvre le jeu FR usuel. Rend la recherche
 # Documents insensible aux accents (« decideur » trouve « décideur »), sans DDL.
@@ -1396,50 +1487,72 @@ def doc_backlinks(doc_id: int) -> list[dict]:
 
 # --- Recherche sémantique : outbox d'embeddings (lot 3) ----------------------
 
-def list_dirty_docs(limit: int = 32) -> list[dict]:
-    """Pages à (ré)indexer (`embed_dirty`) — le worker les draine. Le TEXTE embarqué
-    = titre + corps (la même matière que le FTS)."""
+# Le texte indexé d'une page — titre + corps, la même matière que le FTS. Une seule
+# écriture : la liste le lit, `finir_doc` en compare l'empreinte.
+_DOC_EMBED_TEXT = "coalesce(title,'') || E'\\n' || coalesce(body_md,'')"
+
+
+def list_dirty_docs(limit: int = 32, *, stable_s: int = 0) -> list[dict]:
+    """Pages à (ré)indexer (`embed_dirty`), inchangées depuis `stable_s` secondes, hors
+    de celles qu'un autre processus a réservées (`embed_file`) — le worker les draine."""
+    from . import embed_file
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT id, coalesce(title,'') || E'\n' || coalesce(body_md,'') AS text "
-            "FROM docs WHERE embed_dirty ORDER BY id LIMIT %s", (limit,)).fetchall()
+            f"SELECT id, {_DOC_EMBED_TEXT} AS text FROM docs "
+            f"WHERE embed_dirty AND {embed_file.hors_bail_sql('doc', 'docs.id')} "
+            "AND updated_at <= NOW() - make_interval(secs => %s) "
+            "ORDER BY id LIMIT %s", (stable_s, limit)).fetchall()
         return [dict(r) for r in rows]
 
 
-def upsert_doc_embedding(doc_id: int, content_sha: str, embedding_literal: str,
-                         model: str) -> None:
-    """Pose/rafraîchit l'embedding d'une page ET lève son drapeau dirty — en UNE
-    transaction (le worker ne perd pas une écriture concurrente : si le doc a été
-    re-touché entretemps il reste dirty via le WHERE ci-dessous)."""
+def doc_morceaux_stockes(doc_id: int) -> dict[int, dict]:
+    """Les vecteurs posés d'une page, par rang de morceau : `{rang: {sha, embedding}}`
+    (le rang 0 dans `doc_embeddings`, les suivants dans `doc_chunk_embeddings`).
+    `sha` est l'empreinte du TEXTE du morceau ; `embedding` le littéral halfvec."""
     with _connect() as conn:
-        conn.execute(
-            "INSERT INTO doc_embeddings (doc_id, content_sha, embedding, model) "
-            "VALUES (%s, %s, %s::halfvec, %s) "
-            "ON CONFLICT (doc_id) DO UPDATE SET content_sha = EXCLUDED.content_sha, "
-            "embedding = EXCLUDED.embedding, model = EXCLUDED.model, updated_at = NOW()",
-            (doc_id, content_sha, embedding_literal, model))
-        conn.execute("UPDATE docs SET embed_dirty = FALSE WHERE id = %s", (doc_id,))
+        rows = conn.execute(
+            "SELECT 0 AS rang, content_sha AS sha, embedding::text AS embedding "
+            "FROM doc_embeddings WHERE doc_id = %s "
+            "UNION ALL SELECT chunk_index, content_sha, embedding::text "
+            "FROM doc_chunk_embeddings WHERE doc_id = %s",
+            (doc_id, doc_id)).fetchall()
+    return {int(r["rang"]): {"sha": r["sha"], "embedding": r["embedding"]} for r in rows}
 
 
-def replace_doc_chunk_embeddings(doc_id: int, content_sha: str,
-                                 chunks: list, model: str) -> None:
-    """Remplace TOUS les chunks de débordement (index ≥ 1) d'une page longue (#6 C).
-    `chunks` = list[(chunk_index:int, embedding_literal:str)]. Liste vide = la page est
-    (re)devenue courte → on efface ses chunks. Transaction unique."""
+def poser_morceau_doc(doc_id: int, rang: int, sha: str, embedding_literal: str,
+                      model: str) -> None:
+    """Pose le vecteur du morceau `rang` d'une page (empreinte `sha` de son texte).
+    Ne touche pas au drapeau d'indexation : la page reste à finir (`finir_doc`)."""
     with _connect() as conn:
-        conn.execute("DELETE FROM doc_chunk_embeddings WHERE doc_id = %s", (doc_id,))
-        for idx, lit in chunks:
+        if rang == 0:
             conn.execute(
-                "INSERT INTO doc_chunk_embeddings (doc_id, chunk_index, content_sha, embedding, model) "
-                "VALUES (%s, %s, %s, %s::halfvec, %s)",
-                (doc_id, idx, content_sha, lit, model))
+                "INSERT INTO doc_embeddings (doc_id, content_sha, embedding, model) "
+                "VALUES (%s, %s, %s::halfvec, %s) "
+                "ON CONFLICT (doc_id) DO UPDATE SET content_sha = EXCLUDED.content_sha, "
+                "embedding = EXCLUDED.embedding, model = EXCLUDED.model, updated_at = NOW()",
+                (doc_id, sha, embedding_literal, model))
+            return
+        conn.execute(
+            "INSERT INTO doc_chunk_embeddings (doc_id, chunk_index, content_sha, embedding, model) "
+            "VALUES (%s, %s, %s, %s::halfvec, %s) "
+            "ON CONFLICT (doc_id, chunk_index) DO UPDATE SET content_sha = EXCLUDED.content_sha, "
+            "embedding = EXCLUDED.embedding, model = EXCLUDED.model, updated_at = NOW()",
+            (doc_id, rang, sha, embedding_literal, model))
 
 
-def get_doc_embedding_sha(doc_id: int) -> Optional[str]:
+def finir_doc(doc_id: int, morceaux: int, texte_sha: str) -> None:
+    """Clôt l'indexation d'une page de `morceaux` morceaux, en UNE transaction : retire
+    les vecteurs de rang au-delà, puis baisse le drapeau SI le texte est encore celui
+    qui a été indexé (empreinte `texte_sha`, SHA-256 hex du texte) — une page réécrite
+    pendant l'indexation reste à indexer."""
     with _connect() as conn:
-        row = conn.execute("SELECT content_sha FROM doc_embeddings WHERE doc_id = %s",
-                           (doc_id,)).fetchone()
-        return row["content_sha"] if row else None
+        if morceaux == 0:
+            conn.execute("DELETE FROM doc_embeddings WHERE doc_id = %s", (doc_id,))
+        conn.execute("DELETE FROM doc_chunk_embeddings WHERE doc_id = %s AND chunk_index >= %s",
+                     (doc_id, max(morceaux, 1)))
+        conn.execute(
+            "UPDATE docs SET embed_dirty = FALSE WHERE id = %s AND encode(sha256(convert_to("
+            f"{_DOC_EMBED_TEXT}, 'UTF8')), 'hex') = %s", (doc_id, texte_sha))
 
 
 def clear_embed_dirty(doc_id: int) -> None:

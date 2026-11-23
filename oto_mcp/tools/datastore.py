@@ -181,7 +181,7 @@ def _project_hint(datastore: str) -> Optional[str]:
         # as it prescribed: by an alias and a date, not by a text
         # replacement. `db.list_project_links` now sets `datastore` AND `namespace`
         # on every `tableau` link; `/api/me/projects` therefore serves both to the three
-        # fronts, and the duplicate drops at `RETRAIT_DATASTORE` (08/11/2026) along with the 24
+        # fronts, and the duplicate drops with prior notice (review date `REVUE_DATASTORE`) along with the 24
         # REST paths and the doubled key of the datastore responses.
         #
         # We read the NEW key. ⚠️ Reading the one that will disappear was the real trap:

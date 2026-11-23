@@ -230,6 +230,10 @@ EXEMPTIONS = {
         "reprise des automatisations d'avant #1067 qui ne gardent qu'un nom : refusée si "
         "l'ancienne règle et celle de la déclaration divergent, fixée au premier "
         "armement ou travail — à retirer quand plus aucune ne garde un nom",
+    ("oto_mcp/deprecations.py", "traduire_tableau"):
+        "le tampon de compatibilité, allumé par instance (`OTO_MCP_COMPAT_TABLEAU_PAR_NOM`) : "
+        "le nom TAPÉ par l'appelant, résolu dans SA portée active comme avant #1786, "
+        "au bord, avant le métier — à retirer avec l'entrée, au compteur zéro",
 }
 
 #: Les modules qui lisent un NŒUD. Aucune de leurs fonctions ne mêle le titre d'un
