@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from .. import credentials_store, db, providers, tenancy, tenant_vault
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN, TENANT_ADMIN_OF
 from ._refus_de_pose import REFUS_DE_VERIFICATION, refus_de_pose
+from ._session_exigee import exiger_session
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -130,6 +131,7 @@ def _set_key(ctx: ResolvedCtx, inp: TenantKeySetInput) -> dict:
 
 
 def _clear_key(ctx: ResolvedCtx, inp: TenantKeyClearInput) -> dict:
+    exiger_session("Retirer une clé de tenant")  # `_session_exigee`
     slug = _known(inp.slug)
     account = (inp.account or "").strip()
     deleted = tenant_vault.delete_tenant_secret(slug, inp.provider, account=account)
@@ -153,12 +155,15 @@ CAPABILITIES += [
                      "closer key). Single-key connectors: `api_key`; multi-field: "
                      "`fields`; remote bridges: `base_url`."),
         errors=REFUS_DE_VERIFICATION,
-        rest=RestBinding("PUT", "/api/admin/tenants/{slug}/keys/{provider}"),
+        # Poser ou retirer une clé : session seule (`_session_exigee`).
+        rest=RestBinding("PUT", "/api/admin/tenants/{slug}/keys/{provider}",
+                         allow_api_token=False),
     ),
     Capability(
         key="admin.tenant_key_clear", handler=_clear_key, Input=TenantKeyClearInput,
         Output=TenantKeyCleared, authz=TENANT_ADMIN_OF("slug", platform=SUPER_ADMIN),
         description="Remove a tenant's shared connector key.",
-        rest=RestBinding("DELETE", "/api/admin/tenants/{slug}/keys/{provider}"),
+        rest=RestBinding("DELETE", "/api/admin/tenants/{slug}/keys/{provider}",
+                         allow_api_token=False),
     ),
 ]

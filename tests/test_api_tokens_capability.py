@@ -40,7 +40,9 @@ _PORTEE = {"namespaces": {"12": "read"}}
 
 _SANS_JETON = ("me.token.list", "me.token.create", "me.token.delete",
                "platform.token.list", "platform.token.create", "platform.token.delete")
-_AVEC_JETON = ("platform.key.list", "platform.key.create", "platform.key.delete")
+# La lecture des clés plateforme reste ouverte au jeton. Les poser et les retirer est
+# réservé à une session depuis #1913 (`tests/test_session_exigee.py`).
+_AVEC_JETON = ("platform.key.list",)
 
 
 @pytest.mark.parametrize("cle", _SANS_JETON)
@@ -61,8 +63,8 @@ def test_les_six_routes_de_jetons_refusent_un_porteur_de_jeton(cle):
 
 @pytest.mark.parametrize("cle", _AVEC_JETON)
 def test_les_cles_plateforme_n_heritent_pas_de_la_garde(cle):
-    """Le cran est posé route par route, pas en bloc : les clés plateforme n'ont aucune
-    raison de refuser un jeton, et l'adaptateur ne doit donc RIEN passer pour elles."""
+    """Le cran est posé route par route, pas en bloc : la liste des clés plateforme
+    n'hérite pas de la garde des jetons, l'adaptateur ne lui passe donc RIEN."""
     assert _jouer_et_capturer_auth(cle) == {}
 
 

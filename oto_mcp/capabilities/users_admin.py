@@ -372,6 +372,7 @@ def _parse_expiry(inp: "OptionInput", eid: str) -> object:
 
 
 def _set_option(ctx: ResolvedCtx, inp: OptionInput) -> dict:
+    exiger_session("Poser ou retirer une option")  # `_session_exigee`
     if catalogue.est_du_catalogue(inp.option):
         # Un droit du catalogue (`unipile`, `platform_unmetered`…) est un droit déclaré,
         # qu'oto-commerce pose seul (#1097) : un don d'option ne l'ouvrirait plus.
@@ -618,6 +619,7 @@ CAPABILITIES += [
             "seul le service de facturation (oto-commerce) pose."),
                 quota_d_octroi.declaration()),
         mcp="oto_admin_set_option",
-        rest=RestBinding("POST", "/api/admin/option-comps", {}),
+        # Session interactive seule (`_session_exigee`).
+        rest=RestBinding("POST", "/api/admin/option-comps", {}, allow_api_token=False),
     ),
 ]

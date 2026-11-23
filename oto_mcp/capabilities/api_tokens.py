@@ -669,11 +669,12 @@ CAPABILITIES += [
         authz=SUPER_ADMIN, Output=PlatformKeyCreated, description=_D_K_CREATE,
         errors=REFUS_DE_VERIFICATION,
         mcp=None,   # `api_key` est un secret brut : jamais un argument d'outil
-        rest=RestBinding("POST", _KEYS),
+        # Poser ou retirer une clé plateforme : session seule (`_session_exigee`).
+        rest=RestBinding("POST", _KEYS, allow_api_token=False),
     ),
     Capability(
         key="platform.key.delete", handler=_keys_delete, Input=PlatformKeyDeleteInput,
         authz=SUPER_ADMIN, Output=PlatformKeyDeleted, description=_D_K_DELETE, mcp=None,
-        rest=RestBinding("DELETE", _KEYS + "/{provider}/{label}"),
+        rest=RestBinding("DELETE", _KEYS + "/{provider}/{label}", allow_api_token=False),
     ),
 ]

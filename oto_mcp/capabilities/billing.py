@@ -33,6 +33,7 @@ from .. import billing, billing_consent
 from . import _facturation_externe as facturation_externe
 from ..mollie_client import MollieError
 from ._authz import ORG_ADMIN, ORG_MEMBER, SUB_ONLY, SUPER_ADMIN
+from ._session_exigee import exiger_session
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -646,15 +647,20 @@ def _resume(ctx: ResolvedCtx, inp: NoInput) -> dict:
     raise facturation_externe.refus("Reprendre un abonnement résilié")
 
 
+# Plan et contrat d'une org : session seule (`_session_exigee`), sur les deux faces —
+# même si le cœur les refuse aujourd'hui en 409 `billing_moved`.
 def _admin_set_plan(ctx: ResolvedCtx, inp: AdminPlanInput) -> dict:
+    exiger_session("Offrir ou retirer un plan")
     raise facturation_externe.refus("Offrir un plan" if inp.plan else "Retirer un plan offert")
 
 
 def _admin_set_contract(ctx: ResolvedCtx, inp: AdminContractInput) -> dict:
+    exiger_session("Déclarer un contrat")
     raise facturation_externe.refus("Déclarer un contrat")
 
 
 def _admin_cancel_contract(ctx: ResolvedCtx, inp: AdminContractCancelInput) -> dict:
+    exiger_session("Résilier un contrat")
     raise facturation_externe.refus("Résilier un contrat")
 
 
@@ -758,7 +764,8 @@ _BILLING_CAPS = [
                     "happens there.",
         errors=(facturation_externe.declaration(),),
         mcp="oto_admin_set_plan",
-        rest=RestBinding("POST", "/api/admin/orgs/{org_id}/plan", {"org_id": "org_id"}),
+        rest=RestBinding("POST", "/api/admin/orgs/{org_id}/plan", {"org_id": "org_id"},
+                         allow_api_token=False),
     ),
     Capability(
         key="billing.admin_set_contract", handler=_admin_set_contract,
@@ -770,7 +777,7 @@ _BILLING_CAPS = [
         errors=(facturation_externe.declaration(),),
         mcp="oto_admin_set_contract",
         rest=RestBinding("PUT", "/api/admin/orgs/{org_id}/contract",
-                         {"org_id": "org_id"}),
+                         {"org_id": "org_id"}, allow_api_token=False),
     ),
     Capability(
         key="billing.admin_cancel_contract", handler=_admin_cancel_contract,
@@ -781,7 +788,7 @@ _BILLING_CAPS = [
         errors=(facturation_externe.declaration(),),
         mcp="oto_admin_cancel_contract",
         rest=RestBinding("POST", "/api/admin/orgs/{org_id}/contract/cancel",
-                         {"org_id": "org_id"}),
+                         {"org_id": "org_id"}, allow_api_token=False),
     ),
 ]
 
