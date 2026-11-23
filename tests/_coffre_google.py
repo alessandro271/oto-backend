@@ -37,7 +37,8 @@ class Coffre:
             "meta": {"is_default": defaut, "scopes": scopes, "client_id": client_id}}
         if access_token:
             expire = datetime.fromisoformat(expires_at).timestamp() if expires_at else 0
-            G._garder(ligne, secret, scopes, access_token, expire)
+            # Gardé sous la borne que `credentials_for` envoie (`_declared_scopes`).
+            G._garder(ligne, secret, G._declared_scopes(scopes), access_token, expire)
 
     def oublier(self, account, entite=None):
         """Le processus ne détient plus de jeton pour la ligne : le prochain appel
@@ -45,14 +46,16 @@ class Coffre:
         from oto_mcp.auth import google as G
         ligne = (*(entite or self.membre), account)
         l = self.lignes[ligne]
-        G._JETONS.pop(G._cle(ligne, l["secret"], l["meta"].get("scopes")), None)
+        G._JETONS.pop(G._cle(ligne, l["secret"],
+                             G._declared_scopes(l["meta"].get("scopes"))), None)
 
     def jeton(self, account, entite=None):
         """Le jeton d'accès que le processus détient pour la ligne (ou `None`)."""
         from oto_mcp.auth import google as G
         ligne = (*(entite or self.membre), account)
         l = self.lignes[ligne]
-        return G._jeton_garde(ligne, l["secret"], l["meta"].get("scopes"))
+        return G._jeton_garde(ligne, l["secret"],
+                              G._declared_scopes(l["meta"].get("scopes")))
 
     def meta(self, account, entite=None):
         return self.lignes[(*(entite or self.membre), account)]["meta"]
