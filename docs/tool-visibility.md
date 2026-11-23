@@ -276,7 +276,7 @@ unique — un nom ne porte pas un droit. Trois crans ordonnés : `None` (l'accè
 CIBLE que le handshake ne connaît pas — une org, une équipe, une ressource), `operator`
 (`PLATFORM_ADMIN`), `super` (`SUPER_ADMIN`). Le plancher d'un combinateur `ADMIN_BY_OP`/
 `BY_OP` = **le plus BAS de ses branches** : l'outil sert au moins une fois, ses autres ops
-continuent de répondre 403 à l'appel. `oto_admin_org_member` et `oto_admin_doctrine` sont
+continuent de répondre 403 à l'appel. `oto_admin_org_member` et `oto_admin_guide` sont
 donc visibles de tous ; les douze autres restent au palier plateforme.
 
 ⚠️ Le défaut est `None`, soit **fail-open côté visibilité** — une règle future qui oublie

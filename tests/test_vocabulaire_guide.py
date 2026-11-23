@@ -61,8 +61,9 @@ MOT = re.compile("doctrine", re.I)
 #
 # Total : 267 (fin du lot A) → 266 (B1) → 262 (B2) → 226 (B3) → 217 (B4) → 162 (B5)
 # → 164 (#659, 2026-09-01) → 145 (otomata-tech/oto#65, 2026-09-23)
-# → 139 (2026-10-12, la lecture `recent_runs` sert `guide`).
-# Le compte descend à chaque PR, jamais l'inverse. Zéro au lot D (#526).
+# → 139 (2026-10-12, la lecture `recent_runs` sert `guide`)
+# → 84 (2026-11-23, lot D : outil, chemins REST, clés de réponse doublées et valeur
+#   `resource_type` d'hier RETIRÉS). Le compte descend à chaque PR, jamais l'inverse.
 #
 # ⚠️ **La seule remontée, et pourquoi elle n'est pas une dérive** : #659 a DÉCLARÉ le
 # contrat de `POST /api/resources`, ce qui écrit une seconde fois — dans un modèle
@@ -74,9 +75,9 @@ MOT = re.compile("doctrine", re.I)
 # ⚠️ **Le lot B est fini : ce qui reste ne relève plus du vocabulaire.** Trois
 # familles, et une seule d'entre elles se lit encore comme un « mot à changer » :
 #
-#   1. **Des alias SERVIS, datés** — clés de réponse, paramètres d'entrée, codes
-#      d'erreur. Ils s'en vont le 30/11/2026 avec le reste, en retirant les appels à
-#      `deprecations.avec_les_deux_noms` (lot D, #526).
+#   1. **Des alias SERVIS** — paramètres d'entrée, code d'erreur hérité, schéma
+#      OpenAPI d'hier. (Les clés de réponse doublées sont parties au lot D, le
+#      23/11/2026.)
 #   2. **Des DONNÉES déjà écrites en base** — colonne `runs.doctrine`, valeur
 #      `missing_doctrine` d'un CHECK, kind d'ownership `doctrine` dans
 #      `resource_grants.resource_type`, clé `doctrine_version` des `props` d'un nœud,
@@ -92,27 +93,19 @@ MOT = re.compile("doctrine", re.I)
 # (Il y en avait trois : `seed_talent_doctrines.py` est parti le 23/09/2026 avec les
 # guides qu'il publiait — otomata-tech/oto#240.)
 PLAFONDS: dict[str, int] = {
-    # — Clé de réponse `doctrine`, servie à côté de `guide`.
-    "oto_mcp/capabilities/agent_context.py": 3,
-    "oto_mcp/capabilities/org_monitoring.py": 2,
+    # — Kind d'ownership `doctrine` (VALEUR en base) et clé `runs.doctrine` lue.
     "oto_mcp/capabilities/projects.py": 2,
-    # — Clé de réponse `doctrine_ref_count`, servie à côté de `guide_ref_count`.
-    "oto_mcp/capabilities/connectors/selection.py": 2,
     # — Champ `run_doctrine` d'un `Output` qui NE CORRESPOND PAS au payload servi
     #   (il porte `doctrine`/`guide`) : divergence antérieure à #519, laissée telle
     #   quelle pour ne pas mêler une correction de contrat à un lot de vocabulaire.
-    "oto_mcp/capabilities/datastore/activity.py": 3,
-    # — Clés de réponse `doctrine`/`doctrine_version`, servies à côté des `guide*`.
-    #   (Les trois descriptions servies qui disaient « base doctrine » sont passées à
-    #   « base guide (readme) » le 23/09/2026, oto#65.)
-    "oto_mcp/capabilities/groups/guide.py": 5,
-    # — Clé de réponse `doctrines`, servie à côté de `guides`.
-    "oto_mcp/capabilities/guide_library.py": 2,
-    # — Clés de réponse `doctrine`/`doctrines`/`doctrine_id`/`group_doctrine` servies
-    #   à côté des `guide*` ; paramètre `doctrine_id` toujours accepté ; code d'erreur
-    #   d'hier ; kind d'ownership `doctrine` (VALEUR en base, lot D).
-    "oto_mcp/capabilities/orgs/instructions.py": 11,
+    "oto_mcp/capabilities/datastore/activity.py": 1,
+    # — Paramètre `doctrine_id` toujours accepté ; code d'erreur d'hier ; kind
+    #   d'ownership `doctrine` (VALEUR en base).
+    "oto_mcp/capabilities/orgs/instructions.py": 5,
     "oto_mcp/capabilities/procedure_console.py": 3,
+    # — Le même paramètre d'entrée `doctrine_id`, refusé sous délégation comme
+    #   `guide_id` (il passait jusqu'ici par la table `deprecations.CLES`, retirée).
+    "oto_mcp/capabilities/_procedure_du_travail.py": 1,
     # (`capabilities/resources*.py` sont sortis le 23/09/2026 — otomata-tech/oto#65,
     #  arbitrage d'Alexis : « doctrine est l'ancien terme, ne doit plus apparaître ».
     #  La famille publique s'appelle `procedure` ; sa valeur STOCKÉE est nommée une
@@ -143,7 +136,7 @@ PLAFONDS: dict[str, int] = {
     "oto_mcp/ownership.py": 1,
     # — Colonne `runs.doctrine`, clé `doctrine_version` des args journalisés, alias
     #   SQL `AS doctrine`/`AS doctrines` (donc clés de réponse).
-    "oto_mcp/db/usage.py": 25,
+    "oto_mcp/db/usage.py": 24,
     "oto_mcp/project_audit.py": 2,
     # — L'inventaire des colonnes porteuses d'un `sub`, vérifié CONTRE LE DDL : une
     #   vue n'y apparaît pas, donc cette entrée reste sur la TABLE (sinon le
@@ -152,15 +145,11 @@ PLAFONDS: dict[str, int] = {
     # — LA table des noms SERVIS dépréciés (lot B, retrait daté au lot D #526).
     #   Le seul fichier où le mot est une DONNÉE et non un usage : il y entre au
     #   moment où une surface est renommée, et le fichier entier disparaît au retrait.
-    #   ⚠️ **Remonté de 30 à 32 le 23/09/2026, et c'est l'inverse d'une dérive** : la
-    #   valeur `resource_type` d'hier (oto#65) entre dans la table des VALEURS
-    #   renommées (+1) avec le nom de l'écran qui l'envoie encore (+1). Ailleurs, le
-    #   même lot retire 18 occurrences ; le total baisse de 161 à 145.
-    "oto_mcp/deprecations.py": 32,
-    # — Le paramètre `doctrine` de `run_start` (accepté à côté de `guide`), ses clés
-    #   de réponse, et l'arg tracé `doctrine_version` (écrit dans `tool_calls.args`).
-    "oto_mcp/guide_run.py": 1,
-    "oto_mcp/tools/guide_run.py": 6,
+    #   Lot D (23/11/2026) : n'y restent que le code d'erreur et le schéma d'hier.
+    "oto_mcp/deprecations.py": 5,
+    # — Le paramètre `doctrine` de `run_start` (accepté à côté de `guide`) et l'arg
+    #   tracé `doctrine_version` (écrit dans `tool_calls.args`).
+    "oto_mcp/tools/guide_run.py": 4,
     "oto_mcp/server.py": 3,
 }
 
