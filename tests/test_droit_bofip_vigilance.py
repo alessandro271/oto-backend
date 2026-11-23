@@ -1,4 +1,4 @@
-"""`doctrine` (BOFiP) et `compliance(op="screen_asset_freeze")` (gels d'avoirs) passent
+"""`bofip` (BOFiP) et `compliance(op="screen_asset_freeze")` (gels d'avoirs) passent
 par le service FOD sans rien calculer : la route appelée, le nom dans le corps, une
 référence inconnue nommée, un registre non concluant qui n'est jamais « aucun gel »."""
 import asyncio
@@ -6,7 +6,7 @@ import asyncio
 import httpx
 import pytest
 
-import oto_mcp.fod.doctrine  # noqa: F401 — cibles du monkeypatch (import à l'appel)
+import oto_mcp.fod.bofip  # noqa: F401 — cibles du monkeypatch (import à l'appel)
 import oto_mcp.fod.vigilance  # noqa: F401
 from oto_mcp.mcp_errors import McpError
 
@@ -27,8 +27,8 @@ def test_bofip_recherche_et_lecture_par_les_routes_fod(monkeypatch):
         vus.append((path, params))
         return None if path.endswith("INCONNU") else {"identifiant_juridique": "x"}
 
-    monkeypatch.setattr("oto_mcp.fod.doctrine._get", get)
-    t = _tool("doctrine")
+    monkeypatch.setattr("oto_mcp.fod.bofip._get", get)
+    t = _tool("bofip")
     t(op="search", query="pacte Dutreil")
     t(op="get", identifiant="BOI-ENR-DMTG-20-30-20-20", max_chars=0)
     assert vus == [("/api/doctrine/bofip", {"query": "pacte Dutreil", "limit": 6}),
@@ -75,9 +75,9 @@ def test_chaque_op_exige_ses_champs():
 def test_les_defauts_resserrent_et_full_rend_le_brut(monkeypatch):
     pub = {"identifiant_juridique": "BOI-X", "titre": "t", "serie": "ENR", "type": "Contenu",
            "debut_de_validite": "2024-01-01", "permalien": "p", "extrait": "e"}
-    monkeypatch.setattr("oto_mcp.fod.doctrine._get",
+    monkeypatch.setattr("oto_mcp.fod.bofip._get",
                         lambda path, params=None: {"total_count": 1, "publications": [pub]})
-    t = _tool("doctrine")
+    t = _tool("bofip")
     assert t(op="search", query="pacte Dutreil")["publications"] == [
         {k: pub[k] for k in ("identifiant_juridique", "titre", "debut_de_validite", "permalien", "extrait")}]
     assert t(op="search", query="pacte Dutreil", full=True)["publications"] == [pub]

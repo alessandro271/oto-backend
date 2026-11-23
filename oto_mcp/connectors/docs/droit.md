@@ -18,12 +18,12 @@ screen any party to an act against the french register of asset freezes (dg tré
 - a match on a common name is not a confirmed freeze: compare first names and date of birth
 - an error saying the register cannot be relied on is never "no match": do not clear the name, retry later
 
-## usage — tax doctrine (bofip)
+## usage — tax commentaries (bofip)
 
-the dgfip's reading of tax law, commentaries in force, with the official bofip.impots.gouv.fr permalink. doctrine is not the law: cite both.
-- `doctrine(op="search")(query="pacte Dutreil transmission")` — 2 to 5 french keywords, all required
-- `doctrine(op="get")(identifiant="BOI-ENR-DMTG-20-30-20-20")` — full commentary (`max_chars=0` for the whole text)
-- typical workflow: `doctrine(op="search")` → read the commentary → cite the article it applies with `loi_article(code="CGI", …)`
+the dgfip's reading of tax law, commentaries in force, with the official bofip.impots.gouv.fr permalink. the administration's reading is not the law: cite both.
+- `bofip(op="search")(query="pacte Dutreil transmission")` — 2 to 5 french keywords, all required
+- `bofip(op="get")(identifiant="BOI-ENR-DMTG-20-30-20-20")` — full commentary (`max_chars=0` for the whole text)
+- typical workflow: `bofip(op="search")` → read the commentary → cite the article it applies with `loi_article(code="CGI", …)`
 
 ## usage — consolidated codes (legi)
 

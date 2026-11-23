@@ -7,7 +7,7 @@ connector card (`droit` in the registry, `providers/droit.py`):
 - `juris_*` — case law (DILA Cass/CE collections + live CEDH/CJUE/Judilibre);
 - `loi_*`   — versioned consolidated codes (LEGI, text in force at a given date);
 - `ccn_*`   — sector-level collective agreements (KALI/DILA);
-- `doctrine` — the tax administration's doctrine (BOFiP-Impôts, DGFiP);
+- `bofip` — the tax administration's commentaries (BOFiP-Impôts, DGFiP);
 - `compliance` — checks before an act (mutual termination, asset freezes).
 
 All these sources are served by the **FOD service** (`fod/juris`/`fod/loi`/`fod/ccn`
@@ -263,12 +263,12 @@ def register(mcp: FastMCP) -> None:
                    "categorie": categorie, "anciennete_cadre_mois": anciennete_cadre_mois}
         return fod_rupture.controler({k: v for k, v in dossier.items() if v is not None})
 
-    # --- Tax doctrine (BOFiP-Impôts, via FOD service) ---
+    # --- Tax commentaries (BOFiP-Impôts, via FOD service) ---
     # The DGFiP's reading of tax law, commentaries in force. Its own namespace
-    # (`doctrine`): doctrine is not the law (loi_*) nor case law (juris_*).
+    # (`bofip`): the administration's reading is not the law (loi_*) nor case law (juris_*).
 
     @mcp.tool(annotations=LECTURE)
-    def doctrine(
+    def bofip(
         op: Literal["search", "get"] = "search",
         query: Optional[str] = None,
         limit: int = 6,
@@ -276,10 +276,10 @@ def register(mcp: FastMCP) -> None:
         max_chars: int = 12_000,
         full: bool = False,
     ) -> dict:
-        """The French tax administration's official doctrine (BOFiP-Impôts,
+        """The French tax administration's official commentaries (BOFiP-Impôts,
         DGFiP), commentaries in force — search them, or read one in full.
 
-        Doctrine is the administration's reading of the law, not the law
+        BOFiP is the administration's reading of the law, not the law
         itself: cite it with the `source.mention` it carries, and the law with
         loi_article.
 
@@ -310,17 +310,17 @@ def register(mcp: FastMCP) -> None:
                 0 returns it whole).
             full: op="search" — return each publication as FOD serves it.
         """
-        from ..fod import doctrine as fod_doctrine
+        from ..fod import bofip as fod_bofip
 
         if op == "search":
-            res = fod_doctrine.bofip_rechercher(_need(query, "query", op), limit=limit)
+            res = fod_bofip.bofip_rechercher(_need(query, "query", op), limit=limit)
             return res if full else _slim_bofip(res)
         if op == "get":
             ident = _need(identifiant, "identifiant", op)
-            pub = fod_doctrine.bofip_lire(ident, max_chars=max_chars)
+            pub = fod_bofip.bofip_lire(ident, max_chars=max_chars)
             if pub is None:
                 raise _bad(f"No BOFiP publication in force with reference {ident!r}: "
-                           "take it from a doctrine(op=\"search\") result.")
+                           "take it from a bofip(op=\"search\") result.")
             return pub
         raise _bad("op must be 'search' or 'get'")
 

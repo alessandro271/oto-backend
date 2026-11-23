@@ -113,6 +113,7 @@ bigquery_results	-	9f93d3ab8acfb3ff
 bigquery_table	-	b7a9e68a9929d448
 bls_oews_wages	-	5e88d795efc66ed0
 bodacc_notice	count get search	434f1a2c7ef469e2
+bofip	get search	a8b61935d56d5c16
 boondmanager_create	-	6f9b2acda1995826
 boondmanager_dictionary	-	172ca019cbaa44ea
 boondmanager_get	-	80195bdc3cb39bd0
@@ -204,7 +205,6 @@ data_share	-	1b3219a98c95204e
 data_update_where	-	720d8bde36782b8e
 data_url	-	4459136daa442990
 data_write	-	7b5b41b867b744ad
-doctrine	get search	a8b61935d56d5c16
 drive_access	-	4bba7137749a5e35
 drive_file	create_folder delete download export list metadata update upload	79d525f5f3d575b0
 dropcontact_credits	-	99334726611ccf58
