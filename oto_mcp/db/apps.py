@@ -13,8 +13,8 @@ d'écraser l'édition d'un autre.
 **Chaque mise à jour écrit d'abord l'état précédent dans `app_revisions`**, sous le
 verrou de la ligne : de quoi restaurer, et de quoi dire qui a changé quoi. **Seules
 les `MAX_REVISIONS` plus récentes sont gardées**, purgées dans la même transaction :
-un HTML pèse jusqu'à 512 Ko, et un agent qui réécrit son app en boucle remplirait la
-base sans borne. **Une version PUBLIÉE (`published_at`) échappe à cette purge** : elle
+un HTML pèse jusqu'à 1 000 000 de caractères, et un agent qui réécrit son app en
+boucle remplirait la base sans borne. **Une version PUBLIÉE (`published_at`) échappe à cette purge** : elle
 a sa propre borne, `MAX_PUBLISHED` — publier est un geste, pas une sauvegarde
 (`db/app_versions.py`, brouillon et publication).
 """
@@ -95,7 +95,8 @@ def get(app_id: int) -> Optional[dict]:
 def get_for_call(app_id: int) -> Optional[dict]:
     """L'app SANS son HTML — ce qu'un appel d'app ouverte relit à chaque fois
     (`capabilities/apps_appel.py`) : le manifeste, le projet, l'auteur. Le HTML
-    (jusqu'à 512 Ko) n'est servi qu'à l'ouverture (`op=get`)."""
+    (jusqu'à 1 000 000 de caractères, `MAX_HTML`) n'est servi qu'à l'ouverture
+    (`op=get`)."""
     with _connect() as conn:
         return conn.execute(
             f"SELECT {_CARTE}, manifest FROM apps WHERE id = %s", (app_id,)).fetchone()

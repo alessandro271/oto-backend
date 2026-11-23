@@ -31,6 +31,8 @@ from starlette.routing import Route
 logger = logging.getLogger(__name__)
 
 from .. import client_trace, deprecations, geste
+from ..datastore.errors import (CODE_TABLEAU_PAR_NOM, est_un_nom_de_tableau,
+                               refus_tableau_par_nom)
 from ..json_body import InvalidJsonBody, read_json_body
 from ._authz import accepts_service, refus_hors_vue
 from ._types import AuthzDenied, Capability, EventStream, NotModified, RawCtx
@@ -158,6 +160,25 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
         for ph, value in request.path_params.items():
             field = (binding.path_map or {}).get(ph, ph)
             data[field] = value
+        # Le tampon de compatibilité (`deprecations`) : une ancienne forme d'argument
+        # allumée sur l'instance — un tableau désigné par son NOM, dans le chemin ou un
+        # champ déclaré du corps — est traduite ICI, avant le handler, par la même
+        # fonction que la face MCP (`middleware/compat`).
+        surface = cap.mcp or cap.key
+        if deprecations.a_traduire(surface, data):
+            from starlette.concurrency import run_in_threadpool
+            try:
+                await run_in_threadpool(deprecations.traduire_arguments, surface, data, sub)
+            except deprecations.TableauIntrouvable as e:
+                return json_error(request, 404, "datastore_not_found", str(e))
+        # Un tableau désigné par son NOM dans le chemin est refusé (08/11/2026), avant
+        # tout handler : le même code et la même phrase sur toutes les routes
+        # `/api/datastores/{datastore}/…`, aucun repli.
+        adresse = (data.get((binding.path_map or {}).get("datastore", "datastore"))
+                   if "datastore" in request.path_params else None)
+        if est_un_nom_de_tableau(adresse):
+            return json_error(request, 400, CODE_TABLEAU_PAR_NOM,
+                              refus_tableau_par_nom(adresse))
         # REFUSER un champ inconnu, jamais l'IGNORER.
         #
         # Pydantic ignore par défaut les clés qu'il ne connaît pas (`extra="ignore"`).
@@ -319,15 +340,7 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
                                             "X-Accel-Buffering": "no"})
         if isinstance(result, dict) and result and all(v is None for v in result.values()):
             request.scope[CLE_VIDE] = True
-        reponse = json_response(request, result, status=binding.status)
-        # Un tableau adressé par son NOM dans le chemin : servi, et daté. La face MCP
-        # dit la même chose dans la réponse (`session_org.noter_avis`).
-        adresse = str(request.path_params.get("datastore") or "")
-        if adresse and not adresse.isdigit():
-            reponse.headers["Deprecation"] = "true"
-            # La forme de l'en-tête ne bouge pas avec celle du texte servi (ISO).
-            reponse.headers["Sunset"] = deprecations.RETRAIT_NOM_DE_TABLEAU.strftime("%d/%m/%Y")
-        return reponse
+        return json_response(request, result, status=binding.status)
     return _handler
 
 

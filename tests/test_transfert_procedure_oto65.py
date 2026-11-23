@@ -144,17 +144,18 @@ def test_op_list_sert_les_procedures_sous_leur_nom(monde):
     assert {r["resource_type"] for r in out["resources"]} == {"procedure"}
 
 
-# ── 2. L'alias daté : servi, sous le nom d'aujourd'hui, avec son avis ────────
+# ── 2. L'alias : servi, sous le nom d'aujourd'hui, avec son avis sans date ────
 
 @pytest.mark.parametrize("key", ["resources.govern", "resources.govern.v2"])
-def test_l_ancien_nom_est_servi_avec_un_avis_date(monde, key):
+def test_l_ancien_nom_est_servi_avec_un_avis_sans_date(monde, key):
     proc, _ = _procedure_chargee(monde, "alias-" + key.replace(".", "-"), versions=1)
     out = _appel(key, "u-admin", op="get", resource_type=ANCIEN,
                  resource_id=str(proc["id"]))
     assert out["resource_type"] == "procedure", "la réponse ne sert que le nom d'aujourd'hui"
     avis = out["deprecation_warning"]
     assert "resource_type=procedure" in avis
-    assert deprecations.RETRAIT_PROCEDURE.strftime("%d/%m/%Y") in avis
+    assert "retirée avec un préavis" in avis
+    assert deprecations.REVUE_PROCEDURE.strftime("%d/%m/%Y") not in avis
 
 
 def test_l_alias_couvre_aussi_le_transfert(monde):
@@ -168,8 +169,8 @@ def test_l_alias_couvre_aussi_le_transfert(monde):
     assert org_store.get_instruction_by_id(proc["id"])["owner_id"] == str(monde["b"])
 
 
-def test_la_date_de_retrait_tient_le_preavis_contractuel():
-    assert deprecations.RETRAIT_PROCEDURE == deprecations._plus_de_mois(
+def test_la_date_de_revue_suit_le_preavis_contractuel():
+    assert deprecations.REVUE_PROCEDURE == deprecations._plus_de_mois(
         deprecations.ANNONCE_PROCEDURE, deprecations.PREAVIS_MOIS)
 
 
