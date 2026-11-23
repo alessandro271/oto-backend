@@ -24,13 +24,20 @@ from ..auth.hooks import current_user_sub_from_token
 from ..mcp_errors import McpError
 
 
-async def traduire(name: str, args: dict, sub: Optional[str]) -> None:
+def _traduire(name: str, args: dict, sub: Optional[str]) -> None:
+    """Hors de la boucle : l'identité de l'appel (qui peut lire la base) et la
+    traduction. `sub` absent = l'appelant du jeton courant."""
+    deprecations.traduire_arguments(
+        name, args, sub if sub is not None else current_user_sub_from_token())
+
+
+async def traduire(name: str, args: dict, sub: Optional[str] = None) -> None:
     """Traduit `args` pour l'outil `name` (hors de la boucle s'il y a à faire) ; un nom
     de tableau qui ne désigne rien est refusé comme introuvable, sans appeler l'outil."""
     if not deprecations.a_traduire(name, args):
         return
     try:
-        await run_in_threadpool(deprecations.traduire_arguments, name, args, sub)
+        await run_in_threadpool(_traduire, name, args, sub)
     except deprecations.TableauIntrouvable as e:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e),
                                  data={"oto": {"code": "datastore_not_found",
@@ -44,5 +51,5 @@ class CompatMiddleware(Middleware):
         name = getattr(context.message, "name", "") or ""
         args = getattr(context.message, "arguments", None)
         if isinstance(args, dict):
-            await traduire(name, args, current_user_sub_from_token())
+            await traduire(name, args)
         return await call_next(context)
