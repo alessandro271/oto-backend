@@ -176,7 +176,7 @@ def _require_admin(sub: str, rc) -> None:
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool(name="api", annotations=LECTURE)
-    def api(op: Literal["list", "setup_link"] = "list",
+    def api(op: Literal["list", "setup_link", "mcp_tools"] = "list",
              label: Optional[str] = None, base_url: Optional[str] = None,
              auth_mode: Optional[str] = None, header_name: Optional[str] = None,
              query_param: Optional[str] = None,
@@ -195,9 +195,13 @@ def register(mcp: FastMCP) -> None:
           instructions}`. Send the url to the person who holds the key; they paste the
           key in the form, never in the chat — this tool takes no secret. If a key was
           already pasted in a chat, tell them to revoke it and create a new one.
+        - `mcp_tools`: on a custom connector whose protocol is `mcp` (its base URL is a
+          remote MCP server), the remote tools open to agents — name, description,
+          input schema. Call one with `api_act(op="mcp_call", operation=<name>,
+          args={…})`. `_account` when you reach several custom connectors.
 
         Args:
-            op: list (default) | setup_link.
+            op: list (default) | setup_link | mcp_tools.
             label: setup_link — name of the tool to connect (e.g. "Acme Payroll").
             base_url: setup_link — API root to pre-fill (e.g. https://api.acme.test/v1),
                 no query.
@@ -225,6 +229,9 @@ def register(mcp: FastMCP) -> None:
                 out["url_missing"] = links.raison_sans_lien("connectors", sub=sub, org=org)
             return out
         refuse_foreign("api", op, setup, ())
+        if op == "mcp_tools":
+            from .api_calls import mcp_tools
+            return mcp_tools()
         if session_org.current_call_account() is None:
             conns = _org_connectors(sub)
             if conns:

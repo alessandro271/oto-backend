@@ -80,6 +80,14 @@ CONNECTOR = _c(
                              "private network) is refused until it has been "
                              "declared as a named exception by the platform "
                              "operator — the refusal says how"),
+        # `mcp` (23/11/2026): the base URL is a remote MCP server (Streamable HTTP), its
+        # tools reached by name (`connectors/api_mcp.py`) — never mounted in the catalogue.
+        CredentialField("protocol", "Protocol", secret=False, required=False,
+                        choices=("http", "mcp"),
+                        help="`http` (default): a REST API, called by path or by saved "
+                             "action. `mcp`: the base URL is an MCP server (Streamable "
+                             "HTTP); agents list its tools (`api(op=\"mcp_tools\")`) and "
+                             "call them (`api_act(op=\"mcp_call\")`), same auth"),
         CredentialField("auth_mode", "Auth mode", secret=False,
                         choices=AUTH_MODES,
                         help="what the API expects to authenticate you — it decides the "

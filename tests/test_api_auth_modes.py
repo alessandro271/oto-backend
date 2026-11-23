@@ -73,12 +73,12 @@ def test_aucun_champ_declare_nest_superflu(mode):
 
 def test_bearer_ne_montre_pas_les_champs_doauth2_et_de_basic():
     names = [f.name for f in CONNECTOR.fields_for({"auth_mode": "bearer"})]
-    assert names == ["base_url", "auth_mode", "label", "doc_path", "token"]
+    assert names == ["base_url", "protocol", "auth_mode", "label", "doc_path", "token"]
 
 
 def test_session_demande_identifiant_mot_de_passe_et_etapes():
     by_name = {f.name: f for f in CONNECTOR.fields_for({"auth_mode": "session"})}
-    assert list(by_name) == ["base_url", "auth_mode", "label", "doc_path", "username",
+    assert list(by_name) == ["base_url", "protocol", "auth_mode", "label", "doc_path", "username",
                              "password", "session"]
     assert by_name["password"].secret is True
     assert by_name["session"].secret is False
@@ -87,7 +87,7 @@ def test_session_demande_identifiant_mot_de_passe_et_etapes():
 def test_visitor_ne_demande_que_les_etapes():
     """Un site sans compte : ni identifiant ni mot de passe, seulement la page d'entrée."""
     by_name = {f.name: f for f in CONNECTOR.fields_for({"auth_mode": "visitor"})}
-    assert list(by_name) == ["base_url", "auth_mode", "label", "doc_path", "session"]
+    assert list(by_name) == ["base_url", "protocol", "auth_mode", "label", "doc_path", "session"]
     assert by_name["session"].required is True and by_name["session"].secret is False
 
 
@@ -118,7 +118,7 @@ def test_les_etapes_de_session_gardent_leurs_espaces():
 
 def test_none_ne_demande_aucun_secret():
     names = [f.name for f in CONNECTOR.fields_for({"auth_mode": "none"})]
-    assert names == ["base_url", "auth_mode", "label", "doc_path"]
+    assert names == ["base_url", "protocol", "auth_mode", "label", "doc_path"]
 
 
 def test_doc_path_est_optionnel_et_pertinent_quel_que_soit_le_mode():
@@ -196,7 +196,7 @@ def test_oauth2_user_ne_demande_que_la_connexion_de_l_app_et_le_jeton_du_membre(
     """Une connexion par personne : l'app porte où se connecter (jamais un secret), le
     membre ne porte que son jeton de renouvellement, posé par le flux « Connecter »."""
     by_name = {f.name: f for f in CONNECTOR.fields_for({"auth_mode": "oauth2_user"})}
-    assert list(by_name) == ["base_url", "auth_mode", "label", "doc_path", "token_url",
+    assert list(by_name) == ["base_url", "protocol", "auth_mode", "label", "doc_path", "token_url",
                              "scope", "authorize_url", "oauth_client_id", "resource",
                              "refresh_token"]
     assert [n for n, f in by_name.items() if f.secret] == ["refresh_token"]

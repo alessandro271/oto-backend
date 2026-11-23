@@ -804,6 +804,26 @@ client `client_credentials`. Le mode `oauth2_user` donne à chaque membre la sie
 Pas de clé d'équipe ni d'org dans ce mode côté produit : l'intérêt est l'identité de la
 personne. Un agent hébergé appelle sous l'identité de son propriétaire, donc avec SA clé.
 
+### Un serveur MCP comme Custom API : `protocol: mcp` (23/11/2026)
+
+Une carte (ou une application) de Custom API peut désigner un SERVEUR MCP distant
+(Streamable HTTP) au lieu d'une API REST : champ `protocol` = `mcp`, `base_url` =
+l'adresse du serveur (`connectors/api_mcp.py`). Ce n'est **pas** la fédération retirée
+(ADR 0069) : rien n'est monté au catalogue, aucun outil distant ne devient un outil
+d'oto. Deux verbes l'atteignent, par la carte :
+
+- `api(op="mcp_tools")` — les outils distants (nom, description, schéma d'entrée) ;
+- `api_act(op="mcp_call", operation=<outil>, args={…})` — un appel, effet `detruire`
+  (les annotations d'un serveur tiers ne sont que sa parole).
+
+L'auth est celle de la carte (tout mode sauf `session` et `visitor`), connexion par
+membre `oauth2_user` comprise — un jeton refusé (401) est oublié et l'appel rejoué une
+fois. Une session courte par verbe (`initialize`, `notifications/initialized`, la
+requête, `DELETE`), réponse JSON ou SSE, corps borné, **aucune redirection suivie**,
+`base_url` et `token_url` sous la garde d'egress. La définition porte une liste blanche
+`mcp_tools` (noms ; vide = tous) que l'admin pose : un outil hors liste est refusé avant
+tout envoi, et n'apparaît pas à la liste.
+
 ### Le renommage `http` → `api` (12/11/2026)
 
 Décision du propriétaire du produit : le connecteur s'appelle `api`, ses outils `api`, `api_act`, `api_get`,

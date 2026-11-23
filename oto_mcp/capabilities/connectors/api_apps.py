@@ -43,7 +43,8 @@ from ..registry import CAPABILITIES
 _ID = {"id": "org_id"}
 _PATH = "/api/orgs/{id}/connectors/api/apps"
 _ONE = _PATH + "/{account}"
-_DEF_KEYS = ("label", "description", "logo_domain", "headers", "variables", "operations")
+_DEF_KEYS = ("label", "description", "logo_domain", "headers", "variables", "operations",
+             "mcp_tools")
 
 
 class ApiApp(BaseModel):
@@ -113,6 +114,8 @@ class _DefinitionParts(BaseModel):
     variables: Optional[dict] = None
     operations: Optional[list[Any]] = Field(default=None, description=(
         "When given, REPLACES the action list."))
+    mcp_tools: Optional[list[str]] = Field(default=None, description=(
+        "Protocol `mcp`: the remote tools open to agents (names); [] = all."))
 
 
 class CreateInput(_DefinitionParts):

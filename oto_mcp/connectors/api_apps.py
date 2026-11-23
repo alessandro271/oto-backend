@@ -48,7 +48,7 @@ CONNECTOR = store.CONNECTOR
 #: authentifier, jamais un secret.
 CONNECTION_FIELDS = ("base_url", "auth_mode", "header_name", "query_param", "doc_path",
                      "token_url", "scope", "session", "authorize_url", "oauth_client_id",
-                     "resource")
+                     "resource", "protocol")
 #: Ce qu'une clé apporte : ses secrets, et l'identifiant qui va avec (le login d'un
 #: couple basic, le client d'un oauth2 client-credentials). En `oauth2_user`, le jeton de
 #: renouvellement du MEMBRE, posé par le flux « Connecter » (`auth/api_oauth.py`).
@@ -288,7 +288,8 @@ def definition(app: dict) -> dict:
     return {"label": _label(app), "description": d.get("description"),
             "logo_domain": d.get("logo_domain"), "headers": d.get("headers") or {},
             "variables": d.get("variables") or {},
-            "operations": ops if isinstance(ops, list) else []}
+            "operations": ops if isinstance(ops, list) else [],
+            "mcp_tools": d.get("mcp_tools") or []}
 
 
 def _label(app: dict) -> str:
