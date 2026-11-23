@@ -125,6 +125,51 @@ def test_seules_les_dernieres_revisions_sont_gardees(projet, monkeypatch):
     assert [db.apps.revision(app["id"], r["id"])["html"] for r in gardees] == ["4", "3", "2"]
 
 
+def _htmls(app_id: int) -> list[str]:
+    return [db.apps.revision(app_id, r["id"])["html"][:2]
+            for r in db.apps.revisions(app_id, limit=500)]
+
+
+def test_le_budget_en_octets_retire_les_plus_anciennes(projet, monkeypatch):
+    """Au-delà de `BUDGET_REVISIONS` octets de HTML, les révisions les plus anciennes
+    tombent, même sous le compte : une app qui grandit ne pèse pas 250 copies."""
+    monkeypatch.setattr(db.apps, "BUDGET_REVISIONS", 1000)
+    monkeypatch.setattr(db.apps, "PLANCHER_ORDINAIRES", 1)
+    app = db.apps.create(("user", MOI), None, project_id=projet, title="B", manifest={},
+                         html="00" + "x" * 298, thumbnail=None, by=MOI)
+    for i in range(1, 7):
+        db.apps.update(app["id"], by=MOI, html=f"{i:02d}" + "x" * 298)
+    # 300 octets chacune : trois tiennent dans 1000 (900), la quatrième passerait.
+    assert _htmls(app["id"]) == ["05", "04", "03"]
+
+
+def test_le_budget_garde_les_planchers_et_compte_les_publiees(projet, monkeypatch):
+    """Les publiées entrent dans le budget (une app à brouillon n'écrit qu'elles), mais
+    les plus récentes de chaque sorte restent, quel que soit leur poids."""
+    monkeypatch.setattr(db.apps, "BUDGET_REVISIONS", 1)
+    monkeypatch.setattr(db.apps, "PLANCHER_ORDINAIRES", 1)
+    monkeypatch.setattr(db.apps, "PLANCHER_PUBLIEES", 2)
+    app = db.apps.create(("user", MOI), None, project_id=projet, title="P", manifest={},
+                         html="S0", thumbnail=None, by=MOI)
+    for n in ("P1", "P2", "P3", "P4"):
+        db.apps.update(app["id"], by=MOI, html=n, published=True, note=n)
+    for n in ("O1", "O2"):
+        db.apps.update(app["id"], by=MOI, html=n)
+    # Révisions : S0 (ordinaire), P1..P4 (publiées), O1 (ordinaire). Budget nul :
+    # restent la dernière ordinaire et les deux dernières publiées.
+    assert _htmls(app["id"]) == ["O1", "P4", "P3"]
+    publiees = [r["published_at"] is not None for r in db.apps.revisions(app["id"], limit=10)]
+    assert publiees == [False, True, True]
+
+
+def test_sous_le_budget_rien_ne_change(projet):
+    app = db.apps.create(("user", MOI), None, project_id=projet, title="U", manifest={},
+                         html="u0", thumbnail=None, by=MOI)
+    for i in range(1, 5):
+        db.apps.update(app["id"], by=MOI, html=f"u{i}")
+    assert _htmls(app["id"]) == ["u3", "u2", "u1", "u0"]
+
+
 def test_proprietaire_partages_et_rangement(projet):
     """Une app à elle : listée par son propriétaire, partagée avec la meilleure
     permission, rangée dans un projet sans que cela donne quoi que ce soit."""

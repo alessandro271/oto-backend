@@ -14,9 +14,18 @@ d'écraser l'édition d'un autre.
 verrou de la ligne : de quoi restaurer, et de quoi dire qui a changé quoi. **Seules
 les `MAX_REVISIONS` plus récentes sont gardées**, purgées dans la même transaction :
 un HTML pèse jusqu'à 1 000 000 de caractères, et un agent qui réécrit son app en
-boucle remplirait la base sans borne. **Une version PUBLIÉE (`published_at`) échappe à cette purge** : elle
-a sa propre borne, `MAX_PUBLISHED` — publier est un geste, pas une sauvegarde
-(`db/app_versions.py`, brouillon et publication).
+boucle remplirait la base sans borne. **Une version PUBLIÉE (`published_at`) échappe à
+cette purge** : elle a sa propre borne, `MAX_PUBLISHED` — publier est un geste, pas une
+sauvegarde (`db/app_versions.py`, brouillon et publication).
+
+**Puis un budget en octets, par app** (`BUDGET_REVISIONS`, HTML brut, versions
+publiées COMPRISES) : compter les versions ne borne pas le poids d'une app qui grandit
+(250 copies d'un million de caractères). Au-delà du budget, les plus anciennes tombent,
+ordinaires comme publiées — sauf les `PLANCHER_ORDINAIRES` et `PLANCHER_PUBLIEES` plus
+récentes de chaque sorte, gardées quel que soit leur poids. Une app à brouillon n'écrit
+de révision qu'en publiant : sans ce plancher-là, son historique serait tout entier
+hors budget ou tout entier gardé. La taille se lit par `octet_length`, qui ne
+décompresse pas le HTML stocké (mesuré : 3 blocs lus contre 1 753 pour `length`).
 """
 from __future__ import annotations
 
@@ -40,6 +49,11 @@ _TOUT = _CARTE + ", manifest, html, " + _VERSION
 # Les révisions ORDINAIRES gardées par app ; les versions publiées, à part.
 MAX_REVISIONS = 50
 MAX_PUBLISHED = 200
+# Le poids des révisions d'une app (HTML brut, toutes sortes), au plus ; et ce que le
+# budget ne touche jamais : les plus récentes de chaque sorte.
+BUDGET_REVISIONS = 100 * 1024 * 1024
+PLANCHER_ORDINAIRES = 10
+PLANCHER_PUBLIEES = 20
 
 
 class AppConflict(Exception):
@@ -313,6 +327,7 @@ def ecrire_sous_verrou(conn, prior: dict, *, by: str, title: Optional[str] = Non
             f"AND published_at {publiees} ORDER BY id DESC LIMIT %s)",
             (app_id, app_id, garde),
         )
+    _purger_au_budget(conn, app_id)
     sets, params = ["updated_at = NOW()", "updated_by = %s", *extra_sets], [by]
     if title is not None:
         sets.append("title = %s")
@@ -335,6 +350,26 @@ def ecrire_sous_verrou(conn, prior: dict, *, by: str, title: Optional[str] = Non
         f"UPDATE apps SET {', '.join(sets)} WHERE id = %s RETURNING {_TOUT}",
         (*params, app_id),
     ).fetchone()
+
+
+# Le poids cumulé du plus récent au plus ancien, et le rang de chaque révision dans sa
+# sorte : tombe ce qui dépasse le budget hors des planchers. `octet_length` : la taille
+# brute sans décompresser (un `length` lirait chaque HTML stocké).
+_AU_DELA_DU_BUDGET = (
+    "SELECT id FROM (SELECT id, published_at IS NULL AS ordinaire, "
+    "SUM(octet_length(html)) OVER (ORDER BY id DESC ROWS UNBOUNDED PRECEDING) AS cumul, "
+    "ROW_NUMBER() OVER (PARTITION BY published_at IS NULL ORDER BY id DESC) AS rang "
+    "FROM app_revisions WHERE app_id = %s) r "
+    "WHERE cumul > %s AND rang > CASE WHEN ordinaire THEN %s ELSE %s END")
+
+
+def _purger_au_budget(conn, app_id: int) -> int:
+    """Retire les révisions de `app_id` au-delà de `BUDGET_REVISIONS`, les plus anciennes
+    d'abord, planchers gardés. Dans la transaction de l'appelant ; rend le nombre retiré."""
+    return conn.execute(
+        f"DELETE FROM app_revisions WHERE id IN ({_AU_DELA_DU_BUDGET})",
+        (app_id, BUDGET_REVISIONS, PLANCHER_ORDINAIRES, PLANCHER_PUBLIEES),
+    ).rowcount
 
 
 def set_archived(app_id: int, archived: bool) -> Optional[dict]:

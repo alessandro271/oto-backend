@@ -412,7 +412,15 @@ pages. `update` et `patch` acceptent `expected_rev` et refusent en 409 `conflict
 Chaque mise à jour écrit d'abord l'état précédent dans `app_revisions` ; seules les
 50 plus récentes révisions ORDINAIRES sont gardées (`db.apps.MAX_REVISIONS`, purge dans la
 même transaction) — une version PUBLIÉE (`published_at`, voir plus bas) a sa propre borne,
-`db.apps.MAX_PUBLISHED` (200), et la purge des ordinaires ne la touche jamais. `restore`
+`db.apps.MAX_PUBLISHED` (200), et la purge des ordinaires ne la touche jamais. **Puis un
+budget en octets par app** (`db.apps.BUDGET_REVISIONS`, 100 Mo de HTML brut, versions
+publiées COMPRISES) : au-delà, les plus anciennes tombent, de toute sorte, sauf les 10
+ordinaires et les 20 publiées les plus récentes (`PLANCHER_ORDINAIRES`,
+`PLANCHER_PUBLIEES`), gardées quel que soit leur poids. Compter ne bornait pas le poids
+d'une app qui grandit (250 copies d'un million de caractères) ; une app à brouillon
+n'écrit de révision qu'en publiant, d'où le plancher des publiées. La purge est
+rétroactive : la première écriture d'une app au-delà du budget en retire l'excédent.
+La taille se lit par `octet_length`, sans décompresser le HTML stocké. `restore`
 remet une révision (en écrivant à son tour l'état courant), après avoir REJUGÉ son
 manifeste : celui qui restaure en devient l'auteur, et l'état restauré est une version
 publiée (un retour en arrière délibéré, avec sa `note`). `restore to_draft=true` la met
