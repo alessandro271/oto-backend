@@ -85,12 +85,16 @@ def test_le_retour_est_declare_pour_la_carte_api():
 # --- doubles for the token server and the vault ----------------------------------
 
 class _Rep:
-    def __init__(self, status, body):
+    def __init__(self, status, body, *, brut: bytes | None = None):
         self.status_code, self._body = status, body
-        self.text = json.dumps(body)
+        self._brut = brut if brut is not None else json.dumps(body).encode()
 
-    def json(self):
-        return self._body
+    def iter_content(self, taille):
+        for i in range(0, len(self._brut), taille):
+            yield self._brut[i:i + taille]
+
+    def close(self):
+        pass
 
 
 class _Coffre:
@@ -134,7 +138,9 @@ def _poste(monkeypatch, *reponses):
     envois = []
     file = list(reponses)
 
-    def post(url, data=None, timeout=None, headers=None):
+    def post(url, data=None, timeout=None, headers=None, **kw):
+        # The token URL is the final address: never a redirect followed.
+        assert kw.get("allow_redirects") is False
         envois.append((url, dict(data)))
         return file.pop(0)
     monkeypatch.setattr(api_oauth.requests, "post", post)
@@ -186,6 +192,34 @@ def test_une_app_remplacee_pendant_la_connexion_refuse(monkeypatch, coffre):
     assert e.value.code == "api_app_removed"
 
 
+def test_le_jeton_s_echange_sans_suivre_de_redirection(monkeypatch, coffre):
+    monkeypatch.setattr("oto_mcp.db.api_apps.vivante", lambda org, account: APP)
+    envois = _poste(monkeypatch, _Rep(302, {}))
+    with pytest.raises(oauth_flow.OAuthExchangeRefused) as e:
+        api_oauth.exchange_and_persist(_etat(), "c")
+    assert "redirect" in str(e.value) and len(envois) == 1 and not coffre.rows
+
+
+def test_une_reponse_de_jeton_trop_longue_n_est_pas_lue(monkeypatch, coffre):
+    monkeypatch.setattr("oto_mcp.db.api_apps.vivante", lambda org, account: APP)
+    trop = b'{"access_token": "' + b"a" * (api_oauth._MAX_TOKEN_BODY + 1) + b'"}'
+    _poste(monkeypatch, _Rep(200, None, brut=trop))
+    with pytest.raises(oauth_flow.OAuthExchangeRefused) as e:
+        api_oauth.exchange_and_persist(_etat(), "c")
+    assert "KB" in str(e.value) and not coffre.rows
+
+
+def test_un_serveur_injoignable_est_un_refus_nomme(monkeypatch, coffre):
+    champs = _pose(coffre)
+
+    def post(*a, **k):
+        raise api_oauth.requests.ConnectionError("x")
+    monkeypatch.setattr(api_oauth.requests, "post", post)
+    with pytest.raises(api_oauth.ApiOAuthRefused) as e:
+        api_oauth.access_token_for(LIGNE, champs)
+    assert e.value.code == "api_oauth_renewal_refused" and not coffre.marques
+
+
 # --- renewal -----------------------------------------------------------------------
 
 LIGNE = ("member", "42:sub-1", "crm")
@@ -235,7 +269,7 @@ def test_un_jeton_change_pendant_le_refus_est_une_reconnexion_rejouee(monkeypatc
     reponses = [_Rep(400, {"error": "invalid_grant"}),
                 _Rep(200, {"access_token": "at3", "expires_in": 3600})]
 
-    def post(url, data=None, timeout=None, headers=None):
+    def post(url, data=None, timeout=None, headers=None, **kw):
         rep = reponses.pop(0)
         if rep.status_code == 400:      # the person reconnected meanwhile
             _pose(coffre, rt="rt-neuf")

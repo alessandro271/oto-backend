@@ -33,6 +33,7 @@ hash of the row and its refresh token.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -55,6 +56,8 @@ MODE = "oauth2_user"
 _AUD = "custom_api"
 CALLBACK_PATH = "/api/custom-api/oauth/callback"
 _TIMEOUT = 20
+#: The largest token answer read — a few tokens and their lifetimes, never more.
+_MAX_TOKEN_BODY = 64 * 1024
 
 # {opaque key: (access_token, epoch expiry)} — never in the database.
 _JETONS: dict[str, tuple[str, float]] = {}
@@ -199,16 +202,39 @@ def _verrou_ligne(ligne: tuple) -> Iterator[object]:
         yield conn
 
 
+def _corps_borne(r: requests.Response, host: str) -> bytes:
+    corps = bytearray()
+    for chunk in r.iter_content(65536):
+        corps += chunk
+        if len(corps) > _MAX_TOKEN_BODY:
+            raise oauth_flow.OAuthExchangeRefused(
+                f"The sign-in server ({host}) answered more than "
+                f"{_MAX_TOKEN_BODY // 1024} KB: nothing was read.")
+    return bytes(corps)
+
+
 def _token_request(token_url: str, data: dict) -> dict:
     """POST form to the token endpoint; refusals built by us (never `raise_for_status`,
-    whose message carries the URL)."""
+    whose message carries the URL). The token URL is the final address: a redirect is
+    refused, never followed, and the answer read is bounded."""
     from .. import egress
     egress.check_url(token_url, connector=CONNECTOR, field="token_url")
-    r = requests.post(token_url, data=data, timeout=_TIMEOUT,
-                      headers={"Accept": "application/json"})
     host = urlsplit(token_url).hostname or "?"
     try:
-        body = r.json()
+        r = requests.post(token_url, data=data, timeout=_TIMEOUT, allow_redirects=False,
+                          stream=True, headers={"Accept": "application/json"})
+    except requests.RequestException as e:
+        raise oauth_flow.OAuthExchangeRefused(
+            f"The sign-in server ({host}) could not be reached ({type(e).__name__}).")
+    if 300 <= r.status_code < 400:
+        r.close()
+        raise oauth_flow.OAuthExchangeRefused(
+            f"The sign-in server ({host}) answered the token request with a redirect "
+            f"(HTTP {r.status_code}): the app's token URL must be the endpoint's final "
+            "address.")
+    texte = _corps_borne(r, host).decode("utf-8", errors="replace")
+    try:
+        body = json.loads(texte)
     except ValueError:
         raise oauth_flow.OAuthExchangeRefused(
             f"Unreadable answer from the sign-in server ({host}, HTTP {r.status_code}).")
@@ -217,7 +243,7 @@ def _token_request(token_url: str, data: dict) -> dict:
             body.get("error") or f"HTTP {r.status_code}", body.get("error_description"))
             if v) if isinstance(body, dict) else f"HTTP {r.status_code}"
         e = oauth_flow.OAuthExchangeRefused(f"The sign-in server ({host}) refused: {detail}.")
-        e.status_code, e.body_text = r.status_code, r.text  # type: ignore[attr-defined]
+        e.status_code, e.body_text = r.status_code, texte  # type: ignore[attr-defined]
         raise e
     if not isinstance(body, dict) or not body.get("access_token"):
         raise oauth_flow.OAuthExchangeRefused(
