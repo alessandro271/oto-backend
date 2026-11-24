@@ -118,7 +118,7 @@ async def test_le_run_enregistre_la_version_de_la_procedure(monkeypatch, run_sta
     # Dans la ligne de journal (via le relevé) …
     assert trace["doctrine_version"] == 7 and trace["guide_scope"] == "org"
     # … et rendue à l'agent, qui sait donc ce qu'il déroule.
-    assert out["doctrine"] == "prospection" and out["doctrine_version"] == 7
+    assert out["guide"] == "prospection" and out["guide_version"] == 7
 
 
 @pytest.mark.asyncio
@@ -142,7 +142,7 @@ async def test_lorg_prime_sur_lequipe(monkeypatch, run_start_fn):
 async def test_un_run_ad_hoc_ne_prétend_à_aucune_version(monkeypatch, run_start_fn):
     lus = _wire(monkeypatch, org_procedures={"prospection": {"version": 7}})
     out, trace = await _start(run_start_fn, label="un truc vite fait")
-    assert out["doctrine_version"] is None and "doctrine_version" not in trace
+    assert out["guide_version"] is None and "doctrine_version" not in trace
     assert "guide_scope" not in trace
     assert lus["org"], "l'org du run n'a pas été lue : l'absence ne prouve rien"
     assert lus["procedures"] == [], "un run ad hoc ne cherche aucune procédure"
@@ -154,7 +154,7 @@ async def test_un_slug_inconnu_ouvre_le_run_sans_version(monkeypatch, run_start_
     frappe) : pas de version, mais le run s'ouvre — l'empreinte n'est pas un gate."""
     lus = _wire(monkeypatch)
     out, trace = await _start(run_start_fn, label="?", doctrine="ce-slug-nexiste-pas")
-    assert out["run_id"] and out["doctrine_version"] is None
+    assert out["run_id"] and out["guide_version"] is None
     assert "doctrine_version" not in trace
     # Le slug a été CHERCHÉ dans l'org du run, et rien n'y répondait.
     assert ("org", 35, "ce-slug-nexiste-pas") in lus["procedures"]
@@ -174,7 +174,7 @@ async def test_une_lecture_de_version_en_panne_nempeche_pas_le_run(monkeypatch,
     _wire(monkeypatch)
     monkeypatch.setattr(org_store, "get_instruction", _boom)
     out, trace = await _start(run_start_fn, label="prospection", doctrine="prospection")
-    assert out["run_id"] and out["doctrine_version"] is None
+    assert out["run_id"] and out["guide_version"] is None
     # Seul le slug passé est relevé (#1340) : aucune moitié d'empreinte inventée.
     assert trace == {usage._ARG_PROCEDURE: "prospection"}
     # La panne avalée est CELLE-CI : une autre (base absente plus haut) donnerait le

@@ -570,6 +570,8 @@ DELETE /api/google/oauth -> _handler
 OPTIONS /api/google/oauth -> options_handler
 POST /api/google/oauth/default -> _handler
 OPTIONS /api/google/oauth/default -> options_handler
+POST /api/google/oauth/complete -> _handler
+OPTIONS /api/google/oauth/complete -> options_handler
 GET,HEAD /api/me/connectors/{name}/oauth-status -> _handler
 OPTIONS /api/me/connectors/{name}/oauth-status -> options_handler
 DELETE /api/me/connectors/{name}/oauth -> _handler
@@ -1093,15 +1095,3 @@ PUT /api/orgs/{id}/connectors/http/definition -> alias_deprecie
 OPTIONS /api/orgs/{id}/connectors/http/definition -> options_handler
 POST /api/orgs/{id}/connectors/http/operations/import -> alias_deprecie
 OPTIONS /api/orgs/{id}/connectors/http/operations/import -> options_handler
-GET,HEAD /api/me/doctrines/library -> alias_deprecie
-OPTIONS /api/me/doctrines/library -> options_handler
-GET,HEAD /api/me/doctrines/library/{slug} -> alias_deprecie
-OPTIONS /api/me/doctrines/library/{slug} -> options_handler
-DELETE /api/me/doctrines/library/{id} -> alias_deprecie
-OPTIONS /api/me/doctrines/library/{id} -> options_handler
-POST /api/me/doctrines/publish -> alias_deprecie
-OPTIONS /api/me/doctrines/publish -> options_handler
-POST /api/me/doctrines/fork -> alias_deprecie
-OPTIONS /api/me/doctrines/fork -> options_handler
-GET,HEAD /api/me/doctrines/{doctrine_id} -> alias_deprecie
-OPTIONS /api/me/doctrines/{doctrine_id} -> options_handler

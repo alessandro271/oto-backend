@@ -77,8 +77,8 @@ def test_session_bundle_reads_readmes_from_the_guide_surface(monkeypatch):
         doctrine_id = None
 
     out = anyio.run(OI._get_guide, ResolvedCtx(sub="u1", org_id=42), _In())
-    assert out["doctrine"] == "README ORG"
-    assert out["group_doctrine"] == "README ÉQUIPE"
+    assert out["guide"] == "README ORG"
+    assert out["group_guide"] == "README ÉQUIPE"
 
 
 def _async_return(value):

@@ -533,8 +533,7 @@ def _handwritten(routes: Iterable, defs: Optional[dict] = None, *,
     # qui apparie par chemin, lisait alors la souche à la place de l'opération et
     # concluait que six opérations avaient perdu leurs paramètres. Elles ne les
     # avaient pas perdus : c'est le document qui décrivait mal la redirection.
-    alias = ({a.ancien for a in deprecations.REST}
-             | {a.ancien for a in deprecations.alias_rest_derives()})
+    alias = {a.ancien for a in deprecations.alias_rest_derives()}
     for route in routes or ():
         path = getattr(route, "path", None)
         methods = getattr(route, "methods", None)
@@ -571,23 +570,21 @@ def _handwritten(routes: Iterable, defs: Optional[dict] = None, *,
 def _alias_deprecies() -> dict:
     """Les anciens chemins, décrits comme ce qu'ils sont : **dépréciés, sans date**.
 
-    Ils sont DÉCLARÉS (`deprecations.REST`), pas relevés dans la table vivante :
-    un intégrateur qui lit ce document doit y voir la dépréciation même quand le
-    document est bâti sans table de routes.
+    Ils sont DÉRIVÉS des capacités (`deprecations.alias_rest_derives`), pas relevés
+    dans la table vivante : un intégrateur qui lit ce document doit y voir la
+    dépréciation même quand le document est bâti sans table de routes.
 
-    Deux choses que l'entrée porte et qu'un `deprecated: true` seul ne dirait pas :
-    le chemin de REMPLACEMENT (sinon « déprécié » n'est qu'un reproche) et
-    l'`operationId` HISTORIQUE — le nom de méthode qu'un client généré s'est donné,
-    qu'on ne fait pas changer pour rien. Aucune date de retrait (ni dans le texte, ni
+    Ce que l'entrée porte et qu'un `deprecated: true` seul ne dirait pas : le chemin
+    de REMPLACEMENT (sinon « déprécié » n'est qu'un reproche). Son `operationId` est
+    dérivé de son chemin — celui de la capacité reste au nouveau chemin. Aucune date de retrait (ni dans le texte, ni
     en en-tête `Sunset`) : le retrait sera daté par la PR qui le fera, avec un préavis
     (décision du 23/11/2026).
     """
     out: dict = {}
-    for alias in tuple(deprecations.REST) + tuple(deprecations.alias_rest_derives()):
+    for alias in deprecations.alias_rest_derives():
         item = out.setdefault(_openapi_path(alias.ancien), {})
         item[alias.verbe.lower()] = {
-            "operationId": alias.operation_id or _handwritten_operation_id(
-                alias.verbe, alias.ancien),
+            "operationId": _handwritten_operation_id(alias.verbe, alias.ancien),
             "summary": f"Déprécié : utilisez {alias.nouveau} "
                        f"(l'ancien chemin sera retiré avec un préavis)",
             "description": (

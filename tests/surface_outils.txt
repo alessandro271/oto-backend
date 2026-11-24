@@ -853,8 +853,9 @@ sharepoint_excel	range sheets	2d4b796ea392726d
 sharepoint_excel_act	update_range	08c0f66dd71cbce2
 sharepoint_file	create_folder download get list search upload	71548fca01d9a9ca
 sharepoint_site	drives get search	1023081e240273ee
+sheets_chart	add delete list	6ca56b12e3448086
 sheets_create	-	9724ca91b2f76777
-sheets_spreadsheet	add_sheet clear column_width copy_sheet delete_rows delete_sheet dropdown format freeze metadata number_format read rename_sheet write	325b688f67023b90
+sheets_spreadsheet	add_sheet auto_fit clear clear_conditional_formats clear_filter column_width conditional_format copy_sheet delete_columns delete_rows delete_sheet dropdown fill filter find_replace format freeze hide insert_columns insert_rows merge metadata number_format read rename_sheet show sort unmerge write	15d5aec486a1ec5d
 signwell_account	api_application delete_api_application me	f7727344dada1c3e
 signwell_act	remind_document send_document	f1560a9ec238aa32
 signwell_bulk_send	create csv_template documents get list validate_csv	2d07b6263fb76db8
