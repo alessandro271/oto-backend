@@ -71,8 +71,12 @@ class CompteEnPause(RuntimeError):
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None,
-                locale: Optional[str] = None) -> None:
+                locale: Optional[str] = None, *, email_verified: bool = False) -> None:
     """Create the user row if missing, refresh email/name if known.
+
+    `email_verified` : le claim OIDC du jeton qui présente `email` (vrai SEULEMENT si
+    le jeton le dit). Il ouvre, à la naissance du compte, l'acceptation automatique des
+    invitations et partages en attente pour cette adresse — fermée sans lui.
 
     ⚠️ **N'écrit que si une colonne posée CHANGE.** Appelée à chaque requête REST
     authentifiée et à chaque message MCP : l'ancien `INSERT … ON CONFLICT DO UPDATE`
@@ -206,11 +210,17 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
     # et B9 de `docs/silences-2026-08-27.md`) — un compte naissait alors à moitié, et
     # tout ce qui en dépendait échouait plus tard, ailleurs, sans cause remontable.
     manques: list = []
-    if row and row.get("inserted") and email:
+    if row and row.get("inserted") and email and not email_verified:
+        # Une adresse que le jeton ne dit pas vérifiée ne désigne pas une invitation :
+        # rien n'est accepté d'office, tout reste en attente (lien du mail, réclamation).
+        logger.info("upsert_user: adresse non vérifiée par le jeton (sub=%s) — aucune "
+                    "invitation ni aucun partage accepté d'office", sub)
+    if row and row.get("inserted") and email and email_verified:
         # Réconciliation invitation↔signup : un invité d'org qui s'inscrit (par
         # n'importe quel chemin, pas seulement le lien /invite) voit son invitation
-        # d'org en attente honorée par l'email vérifié → il rejoint directement
-        # l'org au lieu de rester avec une invitation orpheline. Synchrone (une
+        # d'org en attente honorée par l'email VÉRIFIÉ (claim du jeton) → il rejoint
+        # directement l'org au lieu de rester avec une invitation orpheline — si elle
+        # relève de son tenant (`org_store.tenant_de_l_invitation`). Synchrone (une
         # fois, au 1er insert).
         try:
             from .. import org_store

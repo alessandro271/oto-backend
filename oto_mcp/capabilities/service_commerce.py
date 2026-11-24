@@ -27,18 +27,13 @@ from .. import db, entitlements_catalogue as catalogue, group_store, org_store
 from ..db import entitlements as db_entitlements
 from ._authz import COMMERCE_SERVICE
 from ._lecture_bornee import bornee
+from ._org_du_service import ORG_INCONNUE as _ORG_INCONNUE, org_ou_404 as _org_ou_404
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding, cap_limit
 from .registry import CAPABILITIES
 
 _ID = {"id": "org_id"}
 
-_ORG_INCONNUE = DeclaredError(404, "unknown_org", "l'org n'existe pas ou est archivée")
 _COMPTE_INCONNU = DeclaredError(404, "unknown_user", "aucun compte ne porte ce sub")
-
-
-def _org_ou_404(org_id: int) -> None:
-    if not org_store.get_org(org_id) or org_store.is_archived_org(org_id):
-        raise AuthzDenied(404, "unknown_org", f"Org #{org_id} inconnue ou archivée.")
 
 
 def _compte_ou_404(sub: str) -> None:

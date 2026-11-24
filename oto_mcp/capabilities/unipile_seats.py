@@ -35,7 +35,8 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from .. import access, db
-from ._authz import SUPER_ADMIN
+from ._authz import SERVICE_OU, SUPER_ADMIN
+from ..auth.service_identity import COMMERCE
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -339,7 +340,7 @@ async def _release_seat(ctx: ResolvedCtx, inp: SeatReleaseInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="admin.unipile_seats", handler=_list_seats, Input=SeatsListInput,
-        authz=SUPER_ADMIN, Output=SeatsView,
+        authz=SERVICE_OU(COMMERCE, SUPER_ADMIN), Output=SeatsView,
         description=(
             "[super admin] Seats living on the shared unipile platform key, reconciled "
             "with their oto bindings. `state`: bound (in service) | disconnected (owner "
@@ -355,7 +356,7 @@ CAPABILITIES += [
     ),
     Capability(
         key="admin.unipile_seat_release", handler=_release_seat, Input=SeatReleaseInput,
-        authz=SUPER_ADMIN, Output=SeatReleased,
+        authz=SERVICE_OU(COMMERCE, SUPER_ADMIN), Output=SeatReleased,
         description=(
             "[super admin] Frees a seat: deletes the account on unipile, so it stops "
             "billing. IRREVERSIBLE (the hosted session is destroyed; reconnecting yields "

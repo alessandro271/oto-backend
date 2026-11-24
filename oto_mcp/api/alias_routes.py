@@ -1,9 +1,9 @@
-"""Les anciens chemins REST, montés en **308** vers ceux d'aujourd'hui (#519).
+"""Les anciens chemins REST, montés en **308** vers ceux d'aujourd'hui.
 
 Un chemin servi ne se renomme pas : il se DOUBLE. Le nouveau chemin est la vraie
 route (dérivée d'une capacité, décrite dans `/openapi.json`, avec son autz) ;
 l'ancien est monté ici, ne fait rien d'autre que rediriger, et **reste servi tant que
-son usage compté n'est pas nul** (décision du 23/11/2026, retrait suivi en #526) :
+son usage compté n'est pas nul** (décision du 23/11/2026) :
 chaque redirection laisse une ligne dans `tool_calls`, et la 308 porte
 `Deprecation: true` sans `Sunset` — aucune date de retrait n'est servie.
 
@@ -67,10 +67,10 @@ def _redirection(alias: deprecations.AliasRest):
 
 
 def make_routes(options_handler) -> list:
-    """Une route de redirection (+ son préflight) par alias déclaré.
+    """Une route de redirection (+ son préflight) par alias dérivé.
 
-    L'ORDRE suit `deprecations.REST`, qui le documente : un chemin littéral doit
-    précéder un chemin à placeholder qui l'engloberait.
+    L'ORDRE suit `deprecations.alias_rest_derives`, qui le tient : un chemin littéral
+    doit précéder un chemin à placeholder qui l'engloberait.
     """
     routes: list = []
     # ⚠️ Les alias des renommages `namespace` → `datastore` et `http` → `api` sont
@@ -78,7 +78,7 @@ def make_routes(options_handler) -> list:
     # viennent EN PREMIER dans cette boucle mais restent, comme tout ce module, montés
     # en dernier par `routes.make_routes` : un alias ne peut donc éclipser aucune vraie
     # route.
-    for alias in tuple(deprecations.alias_rest_derives()) + tuple(deprecations.REST):
+    for alias in deprecations.alias_rest_derives():
         routes.append(Route(alias.ancien, _redirection(alias), methods=[alias.verbe]))
         routes.append(Route(alias.ancien, options_handler, methods=["OPTIONS"]))
     return routes

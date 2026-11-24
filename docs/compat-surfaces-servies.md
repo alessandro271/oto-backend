@@ -135,8 +135,8 @@ requête de l'entrée sur sa base (lecture seule, `statement_timeout`).
 
 Les renommages tenus par `deprecations.py` hors réglage d'instance — les anciens noms
 d'outils (`TOOLS`, dont `http*` → `api*`), les anciens chemins REST montés en 308
-(`REST` et `alias_rest_derives`), les valeurs réécrites (`VALEURS`, aujourd'hui
-`resource_type=doctrine` → `procedure`) — suivent la même règle (décision du
+(`alias_rest_derives`), les valeurs réécrites (`VALEURS`, vide depuis le retrait du
+lot D) — suivent la même règle (décision du
 23/11/2026) :
 
 - **Aucune date de retrait servie.** Chaque avis dit « déprécié, utilise X ; l'ancien
@@ -160,9 +160,12 @@ d'outils (`TOOLS`, dont `http*` → `api*`), les anciens chemins REST montés en
    GROUP BY 1, 2, 3, 4, 5, 6, 7
    ORDER BY appels DESC;
   ```
-- **Dates de revue** : `REVUE` (30/11/2026), `REVUE_PROCEDURE` (23/11/2026),
-  `REVUE_CONNECTEUR_API` (31/01/2027), `REVUE_DATASTORE` — sans effet sur ce qui est
-  servi.
+- **Dates de revue** : `REVUE` (30/11/2026), `REVUE_CONNECTEUR_API` (31/01/2027),
+  `REVUE_DATASTORE` — sans effet sur ce qui est servi.
 - **Retrait** : une PR séparée, ouverte quand le compteur est vide. Elle pose alors une
   date ferme, **au moins deux mois après le premier avis daté qu'elle servira** (art.
-  8.2 du contrat de service, `PREAVIS_MOIS`).
+  8.2 du contrat de service, `PREAVIS_MOIS`). Exception : le lot D du renommage
+  « guide » (ancien outil, six chemins REST, clés de réponse doublées, valeur
+  `resource_type` d'hier) est retiré le 23/11/2026 sans nouvelle date, les mesures étant
+  à zéro sur toutes les instances — l'avis déjà servi valait préavis (décision du
+  23/11/2026).

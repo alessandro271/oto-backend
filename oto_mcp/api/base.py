@@ -497,12 +497,14 @@ async def _authenticate(
     # LECTURE quand rien ne change (cf. son docstring), une écriture sinon.
     # locale (#701) : signal déduit de l'en-tête, jamais un choix — `upsert_user`
     # ne le pose que si la ligne n'en porte encore aucun (COALESCE côté SQL).
+    email_verifie = _email_verifie_des_claims(access_token.claims)
     try:
         await run_in_threadpool(
             lambda: db.upsert_user(
                 sub, email=access_token.claims.get("email"),
                 name=access_token.claims.get("name"),
-                locale=_locale_from_accept_language(request.headers.get("accept-language"))))
+                locale=_locale_from_accept_language(request.headers.get("accept-language")),
+                email_verified=email_verifie is True))
     except (db.CompteEnPause, db.TenantDesactive) as refus:
         # L'ANCIEN identifiant d'un compte mis en pause. Il n'a pas de ligne à lui
         # (la fusion l'a supprimée), donc la garde ci-dessus ne l'a pas vu : c'est
@@ -512,7 +514,6 @@ async def _authenticate(
         # la NAISSANCE d'un compte d'un tenant désactivé (#1165) — la garde ci-dessus la
         # précède déjà sur ce chemin ; celle-ci tient si un appelant l'omet.
         return None, _json_error(request, 403, refus.code, str(refus))
-    email_verifie = _email_verifie_des_claims(access_token.claims)
     _EMAIL_VERIFIE.set((sub, email_verifie))
     _memoriser_porteur(request, cle, sub, email_verified=email_verifie)
     servi = _maybe_view_as(sub, apply_view_as)
