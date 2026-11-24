@@ -40,7 +40,9 @@ from starlette.requests import Request
 # de code : tout point de la plage D800–DFFF qui reste est une moitié seule. Jugé sur
 # le corps DÉCODÉ, jamais sur les octets : `json.loads` accepte aussi un corps UTF-16/32
 # (l'échappement y est entrelacé de NUL) et un substitut UTF-8 brut, sans `\u`.
-_TEXTE_IMPOSSIBLE = re.compile("[\x00\ud800-\udfff]")
+# Échappements du MOTEUR regex (chaîne brute), pas de Python : aucun littéral du paquet
+# ne produit un substitut isolé (`tests/test_pas_de_surrogate_isole.py`).
+_TEXTE_IMPOSSIBLE = re.compile(r"[\x00\ud800-\udfff]")
 
 
 class InvalidJsonBody(Exception):
