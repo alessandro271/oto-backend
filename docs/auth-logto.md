@@ -188,7 +188,8 @@ Logto et, pour un mot de passe changé :
 
 **Ce qui déclenche** : `PostResetPassword` (« mot de passe oublié ») et
 `User.Data.Updated` émis par `PATCH /users/:userId/password` (le corps porte `method`
-et `matchedRoute`). Tout autre événement signé rend `200 {ignored: true}`.
+et `matchedRoute`). Tout autre événement signé rend `200 {ignored: true}`, sauf un
+changement de double authentification (§ suivante).
 ⚠️ **Le changement par l'Account API (`POST /api/my-account/password`) n'est PAS
 reconnu** : Logto 1.44 l'annonce par un `User.Data.Updated` qui ne porte que
 l'entité utilisateur, sans route ni champ « mot de passe » — trait pour trait la
@@ -202,6 +203,7 @@ est refusée `503 logto_webhook_not_configured`. La signature n'a pas d'horodata
 le `createdAt` signé doit tomber à moins d'une heure (`400 stale_event`).
 Réponses : `401 invalid_signature`, `400 invalid_event`, `502 logto_sessions_not_closed`
 (jetons coupés, Logto pas entièrement fermé ; Logto retente, le geste est idempotent),
+`502 logto_mfa_not_read` (facteurs de double authentification non lus, rien de fermé),
 `500 logto_webhook_failed`. Classe `webhook` de la limite de débit.
 
 **Brancher une instance** : console Logto → Webhooks → endpoint
@@ -210,6 +212,39 @@ Réponses : `401 invalid_signature`, `400 invalid_event`, `502 logto_sessions_no
 `OTO_LOGTO_WEBHOOK_SIGNING_KEY`. Le credential M2M doit porter le rôle de Management API
 (scope `all`). Seul l'annuaire PRIMAIRE est couvert : un tenant à annuaire propre
 n'envoie pas ses webhooks ici.
+
+## Double authentification changée — toutes les sessions fermées (24/11/2026)
+
+Après tout changement de double authentification — facteur ajouté, retiré, remplacé,
+codes de secours régénérés, remise à zéro par un opérateur —, toutes les sessions et
+tous les jetons du compte sont fermés, la session qui a fait le geste comprise : la
+même fermeture que pour un mot de passe changé (jetons `oto_`, puis sessions et
+autorisations Logto). Le compte se reconnecte avec ses facteurs du moment.
+
+**Le constat** (`auth/revocation_2fa.py`). Logto n'a aucun événement propre à la double
+authentification : un geste de l'Account API sur un facteur s'annonce par un
+`User.Data.Updated` sans route ni champ. À chaque `User.Data.Updated` qui ne dit pas un
+mot de passe, le webhook lit donc les facteurs du compte
+(`GET /api/users/{id}/mfa-verifications`, une requête bornée à 10 s) et les réduit à une
+empreinte : le SHA-256 des couples `(id, type)` triés — les ids changent à l'ajout, au
+remplacement et à la régénération ; les codes restants, la date de dernier usage et le
+nom d'une clé n'y entrent pas. L'empreinte est comparée à la dernière posée (table
+`empreintes_2fa`, une ligne par compte) :
+
+- différente, y compris d'aucun facteur à un premier facteur → fermeture
+  (`200 {reason: "mfa_changed", …}`) ;
+- aucune posée (premier passage du compte) → posée sans fermer, sauf si un facteur a
+  été créé moins d'une heure avant la livraison ;
+- identique → `200 {ignored: true}`.
+
+L'empreinte neuve n'est posée qu'après une fermeture réussie : un `502` laisse l'écart,
+que la relivraison retrouve. Facteurs illisibles → `502 logto_mfa_not_read`, rien n'est
+fermé ni posé.
+
+**La remise à zéro par un opérateur** (`POST /api/admin/users/{sub}/reset-mfa`) passe
+par la Management API, qui n'émet aucun webhook : elle ferme elle-même (trace
+`revoked_by` = l'opérateur) et pose l'empreinte d'aucun facteur. Fermeture Logto en
+échec → `502 logto_sessions_not_closed`, à rejouer (le geste est idempotent).
 
 ## Identité de service — un client machine, pas un compte (#1068, 24/09/2026)
 

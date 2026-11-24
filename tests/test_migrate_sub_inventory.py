@@ -200,6 +200,11 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
         # lien le rend inutilisable (`confirm_sub` ne correspond plus) : on redemande.
         ("org_erasures", "requested_by"), ("org_erasures", "confirm_sub"),
         ("org_erasures", "cancelled_by"),
+        # L'empreinte des facteurs de double authentification (`auth/revocation_2fa.py`)
+        # est celle du compte Logto que nomme le sub : le compte survivant d'une fusion a
+        # ses propres facteurs et sa propre empreinte. Repointer l'ancienne la ferait
+        # prendre pour un changement à la livraison suivante.
+        ("empreintes_2fa", "sub"),
     }
     couvertes = (set(_SUB_COLUMNS)
                  | {(t, c) for t, c, _ in _PK_SUB_TABLES}

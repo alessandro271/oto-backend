@@ -1,5 +1,6 @@
 """Un mot de passe changé ferme tout ce qu'il ouvrait : les jetons `oto_` du compte, ses
-sessions Logto et leurs autorisations.
+sessions Logto et leurs autorisations. Un changement de double authentification ferme
+la même chose (`revocation_2fa.py`) : ce module reçoit les deux.
 
 ## Le trou que ce module ferme
 
@@ -22,8 +23,9 @@ reconnaissable** : Logto 1.44 l'annonce par un `User.Data.Updated` qui ne porte 
 l'entité utilisateur — sans route, sans méthode, sans champ « mot de passe » —, soit
 exactement la livraison d'un changement d'email, de profil ou de double
 authentification. Révoquer sur chacune couperait les jetons à chaque retouche de
-profil ; on ne le fait pas, et cette livraison est ignorée comme les autres
-(`docs/auth-logto.md` §Mot de passe changé).
+profil ; on ne le fait pas (`docs/auth-logto.md` §Mot de passe changé). Tout
+`User.Data.Updated` qui ne dit pas un mot de passe passe en revanche par le constat de
+double authentification (`revocation_2fa.constater`), qui lit l'état des facteurs.
 
 ## La signature
 
@@ -46,7 +48,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from .. import db
-from . import annuaire
+from . import annuaire, revocation_2fa
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +98,7 @@ def verifier(brut: bytes, signature: Optional[str], cle: Optional[str]) -> None:
         raise Refus(401, "invalid_signature", "Bad logto-signature-sha-256.")
 
 
-def _frais(evt: dict, maintenant: float) -> None:
+def _frais(evt: dict, maintenant: float) -> float:
     brut = evt.get("createdAt")
     try:
         cree = datetime.fromisoformat(str(brut).replace("Z", "+00:00")).timestamp()
@@ -105,6 +107,7 @@ def _frais(evt: dict, maintenant: float) -> None:
     if abs(maintenant - cree) > FRAICHEUR_S:
         raise Refus(400, "stale_event",
                     f"Delivery created more than {FRAICHEUR_S} s away from now.")
+    return cree
 
 
 def compte_vise(evt: dict) -> Optional[str]:
@@ -121,7 +124,7 @@ def compte_vise(evt: dict) -> Optional[str]:
     return None
 
 
-def revoquer_jetons(sub: str, motif: str) -> int:
+def revoquer_jetons(sub: str, motif: str, par: str = REVOQUE_PAR) -> int:
     """Révoque tous les jetons `oto_` encore actifs de `sub` (natures
     `NATURES_REVOQUEES`) par le geste unique `db.revoke_api_token` — la trace (qui,
     quand, pourquoi) est celle de toute révocation. Les enfants d'un émetteur passent
@@ -130,27 +133,46 @@ def revoquer_jetons(sub: str, motif: str) -> int:
     jetons = sorted(db.list_api_tokens(sub, kinds=NATURES_REVOQUEES),
                     key=lambda j: j.get("parent_id") is None)
     return sum(1 for j in jetons
-               if db.revoke_api_token(sub, j["id"], revoked_by=REVOQUE_PAR, reason=motif))
+               if db.revoke_api_token(sub, j["id"], revoked_by=par, reason=motif))
+
+
+def fermer_tout(sub: str, motif: str, par: str = REVOQUE_PAR) -> dict:
+    """Coupe les jetons `oto_` de `sub`, PUIS ferme ses sessions et autorisations Logto
+    (si Logto tombe, les jetons sont déjà coupés). Rend ce qui a été fermé. Lève
+    `annuaire.FermetureInachevee` — tout est idempotent, à refaire."""
+    jetons = revoquer_jetons(sub, motif, par)
+    logger.info("%s : %d jeton(s) oto_ révoqué(s) pour %s", motif, jetons, sub)
+    logto = annuaire.fermer_sessions(sub)
+    logger.info("%s : %d session(s), %d autorisation(s) fermée(s) pour %s",
+                motif, logto["sessions"], logto["grants"], sub)
+    return {"revoked_tokens": jetons, "closed_sessions": logto["sessions"],
+            "revoked_grants": logto["grants"]}
 
 
 def traiter(brut: bytes, evt: Any, signature: Optional[str],
             maintenant: Optional[float] = None) -> dict:
     """Une livraison Logto, de la signature à la fermeture. Rend le compte rendu servi
-    (200). Lève `Refus` (livraison refusée) ou `annuaire.FermetureInachevee` (jetons
-    coupés, Logto pas entièrement fermé : à refaire — tout est idempotent)."""
+    (200). Lève `Refus` (livraison refusée), `annuaire.LectureInachevee` (facteurs de
+    double authentification non lus : rien n'est fermé ni posé, à refaire) ou
+    `annuaire.FermetureInachevee` (jetons coupés, Logto pas entièrement fermé : à
+    refaire — tout est idempotent)."""
     verifier(brut, signature, cle_de_signature())
     if not isinstance(evt, dict):
         raise Refus(400, "invalid_event", "The body is not a JSON object.")
-    _frais(evt, time.time() if maintenant is None else maintenant)
+    cree = _frais(evt, time.time() if maintenant is None else maintenant)
+    event = evt.get("event")
     sub = compte_vise(evt)
+    if sub is not None:
+        return {"ignored": False, "event": event, "reason": "password_changed",
+                **fermer_tout(sub, f"mot de passe changé ({event})")}
+    sub = revocation_2fa.compte_vise(evt)
     if sub is None:
-        return {"ignored": True, "event": evt.get("event")}
-    motif = f"mot de passe changé ({evt.get('event')})"
-    jetons = revoquer_jetons(sub, motif)
-    logger.info("webhook Logto %s : %d jeton(s) oto_ révoqué(s) pour %s",
-                evt.get("event"), jetons, sub)
-    logto = annuaire.fermer_sessions(sub)
-    logger.info("webhook Logto %s : %d session(s), %d autorisation(s) fermée(s) pour %s",
-                evt.get("event"), logto["sessions"], logto["grants"], sub)
-    return {"ignored": False, "event": evt.get("event"), "revoked_tokens": jetons,
-            "closed_sessions": logto["sessions"], "revoked_grants": logto["grants"]}
+        return {"ignored": True, "event": event}
+    changement, empreinte = revocation_2fa.constater(sub, cree)
+    if not changement:
+        revocation_2fa.poser(sub, empreinte)
+        return {"ignored": True, "event": event}
+    rendu = fermer_tout(sub, f"double authentification changée ({event})")
+    # Après la fermeture seulement : en échec, l'écart reste et la relivraison le retrouve.
+    revocation_2fa.poser(sub, empreinte)
+    return {"ignored": False, "event": event, "reason": "mfa_changed", **rendu}
