@@ -43,7 +43,7 @@ PYV=$(python3 "$PLANCHER_PY" plancher "$PYPROJECT_DU_TAG") \
   || { echo "déploiement : REFUS — plancher Python illisible dans le pyproject du tag (motif ci-dessus)" >&2; exit 1; }
 PY_VISEE=${PYTHON_CHOISI:-$PYV}
 if [ "$ACTION" = deployer ] && [ -n "$PYTHON_CHOISI" ]; then
-  python3 "$PLANCHER_PY" satisfait "$PYPROJECT_DU_TAG" "$PYTHON_CHOISI"
+  python3 "$PLANCHER_PY" admet "$PYPROJECT_DU_TAG" "$PYTHON_CHOISI"
   case $? in
     0) ;;
     1) echo "déploiement : REFUS — l'instance choisit Python ${PYTHON_CHOISI} (« python » de la déclaration), que le requires-python de ${TAG} n'admet pas : rien n'est touché" >&2
@@ -96,8 +96,9 @@ bg_garde_avant_retour() {
 # --- L'amorce, elle, ne fait que dire l'écart : elle tourne aussi quand la couleur inactive
 # --- est le retour arrière. La règle (docs/instance-cible.md, § Changer de Python) : le
 # --- venv est recréé si sa version ne satisfait pas le `requires-python` du tag, ou si elle
-# --- diffère du choix de l'instance (`python` de la déclaration) ; la version visée est ce
-# --- choix, à défaut le plancher. Sinon : rien. Recréé à l'identique de sa naissance
+# --- diffère du choix de l'instance (`python` de la déclaration) — au niveau de détail du
+# --- choix : au patch près si le choix porte un patch (`3.12.8`), à MAJEUR.MINEUR sinon ;
+# --- la version visée est ce choix, à défaut le plancher. Sinon : rien. Recréé à l'identique de sa naissance
 # --- (amorcer.sh), sur l'interpréteur géré par uv que l'amorce vient de poser, jamais le
 # --- Python du système ; `uv sync --frozen` le remplit ensuite. Refus, sans rien toucher,
 # --- si la couleur sert ou pourrait servir : son unité tourne, ou le pointeur est
@@ -105,7 +106,7 @@ bg_garde_avant_retour() {
 # --- réussisse (`bg_apres_installation`) : en cas d'échec, la couleur redevient ce
 # --- qu'elle était — code et venv ensemble —, donc un retour arrière valable.
 bg_avant_installation() {
-  local couleur=$1 arbre=$2 version mm actif code majeur mineur
+  local couleur=$1 arbre=$2 version mm actif code majeur mineur compare
   AVANT_PLANCHER_ARBRE="" AVANT_PLANCHER_TETE="" AVANT_PLANCHER_VERSION=""
   if [ -x "$arbre/.venv/bin/python" ]; then
     version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null) \
@@ -120,7 +121,10 @@ bg_avant_installation() {
       IFS=. read -r majeur mineur _ <<< "$version"; mm="${majeur}.${mineur}"
       python3 "$PLANCHER_PY" satisfait "$PYPROJECT_DU_TAG" "$version"; code=$?
       [ "$code" -le 1 ] || return 1
-      if [ "$code" = 0 ] && { [ -z "$PYTHON_CHOISI" ] || [ "$mm" = "$PYTHON_CHOISI" ]; }; then
+      # Le choix se compare à son niveau de détail : la version complète s'il porte un patch.
+      compare=$mm
+      case "$PYTHON_CHOISI" in *.*.*) compare=$version ;; esac
+      if [ "$code" = 0 ] && { [ -z "$PYTHON_CHOISI" ] || [ "$compare" = "$PYTHON_CHOISI" ]; }; then
         return 0
       fi ;;
   esac
@@ -152,7 +156,21 @@ bg_avant_installation() {
     echo "déploiement : REFUS — venv Python ${PY_VISEE} non créé dans ${arbre} (l'ancien est remis)" >&2
     return 1
   fi
-  bg_log "venv ${mm} → ${PY_VISEE} recréé dans ${arbre} (l'ancien est gardé jusqu'à la fin de l'installation)"
+  # Le venv neuf doit RENDRE la version visée — lue par son interpréteur, jamais par le
+  # chemin ni par pyvenv.cfg (uv y inscrit le lien de version mineure, `cpython-3.12-…`,
+  # qu'une pose d'un autre patch déplace) : au patch près si la visée en porte un.
+  local rendu rendu_mm
+  rendu=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null) \
+    || rendu="illisible"
+  IFS=. read -r majeur mineur _ <<< "$rendu"; rendu_mm="${majeur}.${mineur}"
+  case "$PY_VISEE" in *.*.*) [ "$rendu" = "$PY_VISEE" ] ;; *) [ "$rendu_mm" = "$PY_VISEE" ] ;; esac || {
+    rm -rf "$arbre/.venv"
+    [ ! -e "$arbre/.venv.avant-plancher" ] || mv "$arbre/.venv.avant-plancher" "$arbre/.venv"
+    AVANT_PLANCHER_ARBRE=""
+    echo "déploiement : REFUS — le venv recréé dans ${arbre} rend Python ${rendu}, pas ${PY_VISEE} (interpréteur géré absent ou lien de version mineure déplacé sous ${PYTHONS}) : l'ancien est remis" >&2
+    return 1
+  }
+  bg_log "venv ${compare:-$mm} → ${PY_VISEE} recréé dans ${arbre} (l'ancien est gardé jusqu'à la fin de l'installation)"
 }
 
 # --- après `bg_install` de la couleur dont le venv vient d'être recréé : succès, l'ancien

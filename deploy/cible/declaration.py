@@ -8,7 +8,7 @@ workflow de la cible le transmet à chaque déploiement ; ce module est le seul 
     {
       "instance": "<nom court>",                    # ^[a-z][a-z0-9]{1,15}$
       "secrets": {"region": "<région>", "projet": "<projet Scaleway de la cible>"},
-      "python": "<MAJEUR.MINEUR>",                  # FACULTATIF : l'interpréteur des venvs
+      "python": "<MAJEUR.MINEUR[.PATCH]>",          # FACULTATIF : l'interpréteur des venvs
       "roles": {
         "preprod" | "prod": {
           "ports": {"blue": <port>, "green": <port>},
@@ -23,7 +23,9 @@ workflow de la cible le transmet à chaque déploiement ; ce module est le seul 
 
 `python` choisit l'interpréteur des venvs de l'instance (sinon : le plancher du
 `requires-python` du tag) ; il doit satisfaire ce `requires-python`, ce que le déploiement
-vérifie avant toute action (deploy/cible/deployer.sh, docs/instance-cible.md).
+vérifie avant toute action (deploy/cible/deployer.sh, docs/instance-cible.md). Avec un
+patch (`3.12.8`), l'interpréteur est figé à cette version exacte ; sans (`3.12`), toute
+3.12.x convient.
 
 TOUT le reste se DÉRIVE du nom d'instance et du rôle — utilisateur de service, arbres,
 unités, amont Caddy, verrou, vidange — pour qu'aucun chemin écrit par root ne vienne
@@ -63,7 +65,7 @@ PROJET = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 PORTEES_PAR_L_UNITE = frozenset({"HOST", "PORT", "MCP_TRANSPORT"})
 CLES = {"instance", "secrets", "roles"}
 CLES_FACULTATIVES = {"python"}
-PYTHON = re.compile(r"^[0-9]+\.[0-9]+$")
+PYTHON = re.compile(r"^[0-9]+\.[0-9]+(?:\.[0-9]+)?$")
 CLES_SECRETS = {"region", "projet"}
 CLES_ROLE = {"ports", "hote_public", "ask", "drain_max", "secrets_optionnels", "env"}
 # La santé du bleu/vert : le chemin que la bibliothèque DU TAG interroge, en local sur
@@ -170,7 +172,7 @@ def valider(doc) -> dict:
     if _cles(ecarts, "declaration", doc, CLES, CLES_FACULTATIVES):
         i = doc.get("instance")
         if "python" in doc and not (isinstance(doc["python"], str) and PYTHON.match(doc["python"])):
-            ecarts.append(f"python : MAJEUR.MINEUR attendu (reçu {doc['python']!r})")
+            ecarts.append(f"python : MAJEUR.MINEUR ou MAJEUR.MINEUR.PATCH attendu (reçu {doc['python']!r})")
         if "instance" in doc and not (isinstance(i, str) and INSTANCE.match(i)):
             ecarts.append(f"instance : {INSTANCE.pattern} attendu (reçu {i!r})")
         s = doc.get("secrets")
