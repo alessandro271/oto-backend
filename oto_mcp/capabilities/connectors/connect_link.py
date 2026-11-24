@@ -22,7 +22,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from ... import access, db, providers, roles
+from ... import access, credentials_store, db, providers, roles
 from ...connectors import activation_gate, connect_link
 from ...connectors import readiness as connector_readiness
 from .._authz import ORG_MEMBER
@@ -85,7 +85,9 @@ def _equipe(ctx: ResolvedCtx, equipe: str) -> int:
 def _owner(win, sub: str) -> dict:
     """Who the serving account belongs to — a NAME, never a person's identifier."""
     if win.mode == "user":
-        titulaire = str(win.entity_id or "").partition(":")[2]
+        # A personal account is a `member` row `{org}:{sub}`; any other row has no holder.
+        titulaire = (str(win.entity_id or "").partition(":")[2]
+                     if win.entity_type == credentials_store.MEMBER else "")
         yours = titulaire == sub
         nom = ((db.get_user(titulaire) or {}).get("name") or "").strip()
         if "@" in nom:          # a name that is an address: never served (contract)
@@ -106,25 +108,22 @@ def _compte_qui_sert(sub: str, connector: str, org, group) -> dict:
     secret is read). Its id is the INSTANCE's (`inst:<id>`), a resource, never a person's
     identifier; a personal account without an instance row falls back to its ref only
     when it is the caller's own."""
-    from ...access import cascade, chain_shadow
+    from ...access import chain_shadow
     from ... import instance_refs
+    from .instances import instance_ref_of_vault_row
     win = next(chain_shadow.resolution_rungs(sub, connector, org=org, group=group,
-                                             probe=cascade.PRESENCE_PROBE, want="auto"),
+                                             probe=access.PRESENCE_PROBE, want="auto"),
                None)
     if win is None:
         raise RuntimeError(f"`{connector}` is ready but no account resolves for it")
     porteur = providers.credential_provider(connector)
     owner = _owner(win, sub)
-    inst = (db.instance_id_for_vault_row(win.entity_type or "", win.entity_id or "",
-                                         porteur, win.account or "")
-            if win.entity_type else None)
-    if inst is not None:
-        ident = instance_refs.make_instance_ref(inst)
-    elif win.mode != "user" or owner.get("yours"):
+    ident = (instance_ref_of_vault_row(win.entity_type, win.entity_id or "", porteur,
+                                       win.account or "")
+             if win.entity_type else None)
+    if not ident and (win.mode != "user" or owner.get("yours")):
         ident = instance_refs.ref_for_credential(win.entity_type or "", win.entity_id or "",
                                                  porteur, win.account or "")
-    else:
-        ident = None
     if not ident:
         raise RuntimeError(f"the account serving `{connector}` has no designatable id")
     con = providers.REGISTRY.get(connector)

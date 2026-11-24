@@ -263,7 +263,7 @@ def test_capacite_compte_deja_servi(contexte, monkeypatch):
 
 def test_proprietaire_nomme_jamais_identifie(monkeypatch):
     monkeypatch.setattr(CAP.db, "get_user", lambda sub: {"name": "Grace"})
-    win = SimpleNamespace(mode="user", entity_id="7:autre-sub", account="")
+    win = SimpleNamespace(mode="user", entity_type="member", entity_id="7:autre-sub", account="")
     owner = CAP._owner(win, "u1")
     assert owner == {"kind": "user", "name": "Grace", "yours": False}
     assert "autre-sub" not in str(owner)
@@ -271,7 +271,7 @@ def test_proprietaire_nomme_jamais_identifie(monkeypatch):
 
 def test_un_nom_qui_est_une_adresse_n_est_pas_servi(monkeypatch):
     monkeypatch.setattr(CAP.db, "get_user", lambda sub: {"name": "grace@exemple.test"})
-    win = SimpleNamespace(mode="user", entity_id="7:autre-sub", account="")
+    win = SimpleNamespace(mode="user", entity_type="member", entity_id="7:autre-sub", account="")
     assert CAP._owner(win, "u1")["name"] == "a member of your org"
 
 
