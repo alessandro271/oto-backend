@@ -30,13 +30,18 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Iterable, Mapping, NoReturn, Optional
+from urllib.parse import urlencode
 
 import requests
 from .. import config
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_STATE_TTL = 600   # 10 min — le temps de lire un écran de consentement
 
@@ -123,9 +128,8 @@ def consume_state(audience: str, data: dict) -> bool:
     `jti` est présenté, False ensuite (et sans `jti`). Synchrone (SQL) — l'appelant
     l'exécute hors boucle.
 
-    Opt-in, pour le flux qui pose un credential reçu EN QUERY au retour (WordPress) :
-    la `success_url` qui porte le state traverse le site, ses extensions et ses
-    journaux, et rejouée dans les 10 min du TTL elle écraserait le credential."""
+    Tout retour qui range un credential consomme son state à la complétion
+    (`complete`) : une connexion ne se termine qu'une fois."""
     from .. import db
     jti = data.get("jti") if isinstance(data, dict) else None
     if not isinstance(jti, str) or not jti:
@@ -229,6 +233,13 @@ def return_url(app: Optional[str], suffix: str, *, org: Optional[int] = None) ->
 # administrateur), `admin_approved` / `admin_refused` (réponse d'un administrateur au
 # lien d'approbation, `auth/microsoft.admin_consent_url`).
 #
+# Et pour TOUS les retours qui rangent un credential (Google le 22/11/2026, les autres
+# avec oto-backend#1908) : `confirm` — rien n'est encore rangé ; le code et le state sont
+# dans le FRAGMENT de l'URL, et le front termine avec son jeton
+# (`POST /api/me/connectors/{carte}/complete`, ou `POST /api/google/oauth/complete`
+# pour une carte Google), qui vérifie que le state est le sien. Cf. « retour d'un
+# consentement » plus bas.
+#
 # Trois échecs, trois causes, trois mots (oto-app#11) — jamais l'un pour l'autre :
 # - `denied` : le fournisseur a refusé l'autorisation (`error=access_denied`, ou
 #   l'équivalent documenté du fournisseur) — rien n'a été échangé ni rangé ;
@@ -279,6 +290,226 @@ def avec_connect(url: str, etat: str) -> str:
     déjà une query string."""
     sep = "&" if "?" in url else "?"
     return f"{url}{sep}connect={etat}"
+
+
+# --- retour d'un consentement : le callback remet, le front termine -----------
+#
+# Règle commune à tous les retours qui rangent un credential (oto-backend#1908) : une
+# connexion n'aboutit que pour la personne qui l'a démarrée, et une seule fois.
+#
+# - Le CALLBACK (`callback_endpoint`) est appelé par le navigateur, sans identité : il
+#   lit le state pour savoir où renvoyer, n'échange rien et ne range rien. Il renvoie
+#   le front sur `?connector=<carte>&connect=confirm`, le code et le state dans le
+#   FRAGMENT (`#code=…&state=…`) : un fragment ne part vers aucun serveur et n'entre
+#   dans aucun Referer.
+# - Le FRONT termine avec le jeton de la personne connectée (`complete`) : le state se
+#   lit, son `sub` doit être celui du porteur, il se consomme une fois, PUIS le
+#   connecteur échange et range (`OAuthReturn.finish`).
+#
+# Un fournisseur = une déclaration (`declare_return`, appelée depuis son module
+# `auth/<x>.py`) ; un seul fabricant de callback, un seul cœur de complétion. Ce qui
+# reste au connecteur : lire son state, et son geste de fin (droits, app, échange,
+# rangement).
+
+
+@dataclass(frozen=True)
+class ReturnState:
+    """Ce que le cœur lit d'un state valide, quel que soit le connecteur. `data` = la
+    forme propre au connecteur, rendue telle quelle à son `finish`."""
+    sub: str
+    org: int
+    app: str            # front de retour, déjà passé par `resolve_return_app`
+    connector: str      # la carte qui a demandé la connexion
+    jti: str
+    data: Any
+
+
+class CompletionRefused(Exception):
+    """Refus NOMMÉ d'une complétion : `status` HTTP, `code` stable, message sûr à
+    afficher, `details` structurés éventuels. La capacité le rend tel quel."""
+
+    def __init__(self, status: int, code: str, message: str,
+                 details: Optional[dict] = None):
+        super().__init__(message)
+        self.status, self.code, self.message, self.details = status, code, message, details
+
+
+def not_allowed(message: str) -> NoReturn:
+    """Lève 403 `not_allowed` : la personne n'a plus le droit d'écrire au niveau demandé
+    au départ (rôle perdu, org quittée, connecteur coupé entre le clic et le retour)."""
+    raise CompletionRefused(403, "not_allowed", message)
+
+
+@dataclass(frozen=True)
+class OAuthReturn:
+    """Le retour d'un fournisseur, déclaré une fois.
+
+    - `read(state)` → `ReturnState` ou None : signature, audience, TTL, `jti` et
+      invariants propres au connecteur ;
+    - `finish(data, code)` → `{"account": str|None, "scope": str, "warning"?, "details"?}` :
+      synchrone (SQL + HTTP), revérifie les droits, échange et range. Un refus nommé
+      lève `CompletionRefused` ; toute autre exception devient 502 `exchange_failed` ;
+    - `cards()` : les cartes que ce retour sert (le `{name}` de la route de complétion) ;
+    - `refusal(query)` : l'état d'un retour arrivé sans code (défaut `etat_sans_code`) ;
+    - `code(query)` : ce que le callback remet comme `code` (défaut : le `code` reçu) ;
+    - `side_return(query)` : un retour qui ne range rien et se tranche au callback
+      (l'approbation d'un administrateur Microsoft) — l'URL de retour, ou None.
+      Synchrone (il peut consommer un state)."""
+    audience: str
+    callback_path: str
+    label: str
+    default_card: str
+    read: Callable[[Optional[str]], Optional[ReturnState]]
+    finish: Callable[[Any, str], dict]
+    cards: Callable[[], Iterable[str]]
+    refusal: Optional[Callable[[Mapping], str]] = None
+    code: Optional[Callable[[Mapping, ReturnState], Optional[str]]] = None
+    side_return: Optional[Callable[[Mapping], Optional[str]]] = None
+
+
+_RETURNS: dict[str, OAuthReturn] = {}
+
+
+def declare_return(retour: OAuthReturn) -> None:
+    """Un fournisseur déclare son retour depuis son module. Une audience = un retour."""
+    _RETURNS[retour.audience] = retour
+
+
+def load_returns() -> dict[str, OAuthReturn]:
+    """Les retours déclarés, une fois chargés les modules qui les déclarent — quel que
+    soit l'ordre d'import du processus (serveur, test, script)."""
+    from . import (google, hubspot, instagram_meta, jefacture,  # noqa: F401
+                   linkedin_ads, meta_ads, microsoft, salesforce, slack,
+                   ubersuggest, wordpress, zoho)
+    return dict(_RETURNS)
+
+
+def return_for_card(card: str) -> Optional[OAuthReturn]:
+    """Le retour qui sert cette carte, ou None."""
+    for r in load_returns().values():
+        if card in tuple(r.cards()):
+            return r
+    return None
+
+
+def callback_url(retour: OAuthReturn, query: Mapping) -> str:
+    """Où le callback renvoie le navigateur. Synchrone (un `side_return` peut lire la
+    base) : l'appelant l'exécute hors boucle."""
+    if retour.side_return is not None:
+        ailleurs = retour.side_return(query)
+        if ailleurs is not None:
+            return ailleurs
+    state = query.get("state")
+    rs = retour.read(state)
+    if rs is None:
+        logger.info("%s: retour de consentement sans state lisible", retour.audience)
+        return connector_return_url("", retour.default_card, "error")
+    code = (retour.code(query, rs) if retour.code is not None else query.get("code"))
+    if query.get("error") or not code:
+        etat = (retour.refusal(query) if retour.refusal is not None
+                else etat_sans_code(query.get("error")))
+        logger.info("%s: consentement non abouti (sub=%s, carte=%s, etat=%s)",
+                    retour.audience, rs.sub, rs.connector, etat)
+        return connector_return_url(rs.app, rs.connector, etat, org=rs.org)
+    remise = urlencode({"code": code, "state": state})
+    return f"{connector_return_url(rs.app, rs.connector, 'confirm', org=rs.org)}#{remise}"
+
+
+def complete(retour: OAuthReturn, sub: Optional[str], code: str, state: str, *,
+             card: Optional[str] = None) -> dict:
+    """Termine une connexion pour le PORTEUR (`sub`). Synchrone (SQL + HTTP).
+
+    L'ordre est le contrat :
+    1. le state se lit (`invalid_state`) ; `card`, quand elle est donnée, doit être
+       celle que le state porte ;
+    2. son `sub` doit être celui du porteur, comparé en temps constant
+       (`state_not_yours`) — rien n'est consommé ni échangé ;
+    3. il se consomme (usage unique, `state_used`) AVANT l'échange ;
+    4. seulement alors le connecteur échange et range (`finish`).
+
+    Le code et le state ne sont jamais journalisés."""
+    label = retour.label
+    rs = retour.read(state)
+    if rs is None or (card is not None and rs.connector != card):
+        raise CompletionRefused(
+            400, "invalid_state",
+            f"This {label} connection link is invalid or has expired. "
+            "Start the connection again.")
+    if not hmac.compare_digest(rs.sub.encode(), (sub or "").encode()):
+        logger.warning("%s: complétion refusée, state d'une autre personne (porteur=%s)",
+                       retour.audience, sub)
+        raise CompletionRefused(
+            403, "state_not_yours",
+            f"This {label} connection was started by another account. "
+            "Start it again from your own session.")
+    if not consume_state(retour.audience, {"jti": rs.jti}):
+        raise CompletionRefused(
+            409, "state_used",
+            f"This {label} connection link has already been used. "
+            "Start the connection again.")
+    try:
+        fin = retour.finish(rs.data, code) or {}
+    except CompletionRefused:
+        raise
+    except Exception as e:  # noqa: BLE001 — le diagnostic au journal, un refus nommé à l'appelant
+        if isinstance(e, OAuthExchangeRefused):
+            # Un refus du serveur d'autorisation (code expiré, app mal réglée) : une
+            # condition d'entrée, journalisée sans trace.
+            logger.info("%s: échange refusé (sub=%s org=%s carte=%s) : %s",
+                        retour.audience, rs.sub, rs.org, rs.connector, e)
+        else:
+            logger.exception("%s: complétion en échec (sub=%s org=%s carte=%s)",
+                             retour.audience, rs.sub, rs.org, rs.connector)
+        raise CompletionRefused(
+            502, "exchange_failed",
+            f"{label} did not complete the connection. Start it again.")
+    out = {"ok": True, "connector": rs.connector, "account": fin.get("account"),
+           "scope": fin.get("scope") or "member"}
+    for cle in ("warning", "details"):
+        if fin.get(cle):
+            out[cle] = fin[cle]
+    return out
+
+
+# --- un credential remis sans code : scellé, lié à son state --------------------
+#
+# Un fournisseur qui renvoie le credential LUI-MÊME au callback (WordPress : son mot de
+# passe d'application, en query) n'a pas de code à remettre au front. Le callback le
+# scelle dans un `code` opaque : AES-GCM sous une clé dérivée du secret de state, lié à
+# l'audience et au `jti` de son state (AAD), et borné à la durée de vie du state. Le
+# front ne lit rien de ce code ; il le poste tel quel, et seul ce serveur l'ouvre.
+
+def _cle_de_scelle() -> bytes:
+    return hmac.new(_secret(), b"oto-oauth-code-seal", hashlib.sha256).digest()
+
+
+def _aad_de_scelle(audience: str, jti: str) -> str:
+    return f"oauth-code:{audience}:{jti}"
+
+
+def seal_code(audience: str, jti: str, payload: dict, *,
+              ttl: int = DEFAULT_STATE_TTL) -> str:
+    """`payload` scellé pour ce state seulement, valable `ttl` secondes."""
+    from .. import crypto
+    corps = json.dumps({"p": payload, "exp": int(time.time()) + ttl},
+                       separators=(",", ":")).encode()
+    return _b64url(crypto.seal(_cle_de_scelle(), corps, _aad_de_scelle(audience, jti)))
+
+
+def unseal_code(audience: str, jti: str, code: str) -> Optional[dict]:
+    """Le `payload` d'un code scellé pour CE state et non expiré, sinon None."""
+    from .. import crypto
+    try:
+        corps = crypto.unseal(_cle_de_scelle(), _b64url_decode(code),
+                              _aad_de_scelle(audience, jti))
+        data = json.loads(corps)
+    # noqa: SILENT — fail-closed : un code qui ne s'ouvre pas est refusé, sans détail
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(data, dict) or int(data.get("exp", 0)) < int(time.time()):
+        return None
+    p = data.get("p")
+    return p if isinstance(p, dict) else None
 
 
 # --- échange du code -----------------------------------------------------------

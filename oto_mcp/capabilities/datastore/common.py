@@ -119,7 +119,7 @@ def govern_ns(sub: Optional[str], datastore: str) -> int:
 # aboutit.
 #
 # ⚠️ **Et on n'accepte pas `namespace` comme alias.** Les alias de ce renommage sont
-# des redirections ANNONCÉES (308 + en-tête `Sunset` au 08/11/2026), jamais des
+# des redirections ANNONCÉES (308 + en-tête `Deprecation`), jamais des
 # acceptations muettes : un paramètre repris en silence laisserait les textes non
 # migrés le rester, sans que personne l'apprenne — et masquer un problème au lieu de
 # lever est précisément ce qu'on ne fait pas ici.

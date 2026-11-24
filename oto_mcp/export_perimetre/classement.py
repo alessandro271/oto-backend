@@ -312,6 +312,11 @@ CLASSEMENT: dict[str, Table] = {
                            "voyage à part, par tranches (`JOURNAL`)"),
     "journal_archives": instance("registre des mois archivés au froid : les archives "
                                  "mêlent tous les propriétaires, hors base"),
+    "embed_sources": instance("file d'indexation sémantique de l'instance : réservations "
+                              "et échecs, recalculés par la cible à sa propre indexation"),
+    "embed_consommation": instance("tokens d'embedding facturés à l'instance, par jour"),
+    "journal_archive_passages": instance("passages de l'archive du journal de "
+                                         "l'instance : son exploitation, sans propriétaire"),
     # Les totaux par jour (#1147) sont DÉRIVÉS du journal : la cible les recalcule du
     # sien (`scripts/rattraper_journal_jour.py`) une fois le journal versé — ses lecteurs
     # refusent d'ici là une fenêtre qui couvre un journal non consolidé.
@@ -332,6 +337,8 @@ CLASSEMENT: dict[str, Table] = {
     "credit_holds": instance("réservations en vol du budget d'unités de l'instance"),
     "credit_movements": instance("mouvements du budget d'unités de l'instance, relus par "
                                  "son commerce"),
+    "subscription_states": exclue(ParOrg(), "état d'abonnement poussé par le commerce, qui "
+                                  "le tient : il le repousse à l'instance cible"),
     "spend_blocks": exclue(ParOrg(), "blocages du jour poussés par le commerce : il les "
                            "repousse à sa prochaine évaluation, et chacun finit à minuit UTC"),
     "limite_refus_jour": instance("palmarès des refus des limiteurs de l'instance "
@@ -371,6 +378,11 @@ CLASSEMENT: dict[str, Table] = {
                                       "légaux"),
     "outreach_sends": exclue(ParSub(), "nos relances de plateforme"),
     "outreach_optouts": exclue(ParSub(), "nos relances de plateforme"),
+    "empreintes_2fa": exclue(ParSub(), "empreinte des facteurs de double authentification "
+                             "d'un compte de NOTRE annuaire : la cible a le sien, et la "
+                             "pose à la première livraison de son webhook"),
+    "org_erasures": exclue(ParOrg(), "la preuve de NOS effacements d'org (RGPD art. 5 "
+                           "§2) : elle reste chez l'instance qui a effacé"),
     # Le budget d'unités (`docs/credits-au-moment-de-l-appel.md`) est VERSÉ par le
     # commerce de l'instance, qui le relit par son curseur : la cible reçoit le sien de
     # son propre commerce (un solde d'ouverture), jamais une copie de celui-ci.

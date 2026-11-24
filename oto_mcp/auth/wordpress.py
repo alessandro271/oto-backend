@@ -8,7 +8,8 @@ but the same shape of gesture: a button, a consent, a return. No
 plugin to install, no password to copy.
 
 This module carries the start (`start`) and the end (`finish`); the HTTP callback
-lives in `api/wordpress.py`. The credential stored is EXACTLY the form's
+lives in `api/oauth_returns.py`, and the front completes the connection with its own
+token (`auth/flow.py`, the received credential sealed into an opaque `code`). The credential stored is EXACTLY the form's
 (same three fields, same validation, same account guard), under the
 account named by the site's host — one account = one site.
 
@@ -17,7 +18,7 @@ Guards specific to this flow:
   sub, the org, the tier, the REQUESTED site and the return front. WordPress
   keeps the parameters of `success_url` (`add_query_arg`), so the state comes back
   as is.
-- **single-use state** (`jti`, `oauth_flow.consume_state`): the
+- **single-use state** (`jti`, consumed when the front completes): the
   `success_url` travels through the site, its plugins and its logs; replayed with
   another identifier of the same host, it would overwrite the credential.
 - **rights re-checked on return** (`still_allowed`): the state lives 10 min, an
@@ -281,3 +282,55 @@ def finish(parsed: dict, site_url: str, user_login: str, password: str) -> str:
     credentials_store.set_credential(etype, eid, "wordpress", secret, set_by=sub,
                                      account=account, meta=meta)
     return account
+
+
+# --- the return: the callback hands over, the front completes (`auth/flow.py`) ------
+#
+# WordPress returns the credential ITSELF (`site_url`, `user_login`, `password` in the
+# query of `success_url`), with no code to exchange. The callback seals it into an
+# opaque `code` (`oauth_flow.seal_code`): bound to this state's `jti`, valid as long as
+# the state. The front posts it like any other code; only this server opens it.
+
+def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
+    d = read_state(state)
+    if d is None:
+        return None
+    return oauth_flow.ReturnState(d["sub"], d["org"],
+                                  oauth_flow.resolve_return_app(d["app"]), "wordpress",
+                                  d["jti"], d)
+
+
+def _refusal(query) -> str:
+    return "denied" if query.get("success") == "false" else "error"
+
+
+def _sealed_code(query, rs: oauth_flow.ReturnState) -> Optional[str]:
+    if query.get("success") == "false" or not query.get("password"):
+        return None
+    return oauth_flow.seal_code(AUD, rs.jti, {
+        "site_url": query.get("site_url") or "", "user_login": query.get("user_login") or "",
+        "password": query.get("password") or ""})
+
+
+def _finish_return(d: dict, code: str) -> dict:
+    """The sealed credential, opened for THIS state only; the right to write at the
+    state's tier re-read on return; then verification and storage (`finish`)."""
+    recu = oauth_flow.unseal_code(AUD, d["jti"], code)
+    if recu is None:
+        raise oauth_flow.CompletionRefused(
+            400, "invalid_state",
+            "This WordPress connection link is invalid or has expired. "
+            "Start the connection again.")
+    if not still_allowed(d):
+        oauth_flow.not_allowed(
+            "You no longer have the right to connect a WordPress site at this level.")
+    account = finish(d, recu.get("site_url") or "", recu.get("user_login") or "",
+                     recu.get("password") or "")
+    return {"account": account, "scope": d["scope"]}
+
+
+RETURN = oauth_flow.OAuthReturn(
+    audience=AUD, callback_path=CALLBACK_PATH, label="WordPress", default_card="wordpress",
+    read=_return_state, finish=_finish_return, cards=lambda: ("wordpress",),
+    refusal=_refusal, code=_sealed_code)
+oauth_flow.declare_return(RETURN)

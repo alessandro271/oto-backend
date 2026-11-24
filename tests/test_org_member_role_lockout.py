@@ -67,7 +67,8 @@ def test_demoting_an_admin_among_several_is_allowed(monkeypatch, write_role):
     """La garde ne mord que sur le DERNIER : sinon on ne pourrait plus rétrograder du tout."""
     written = _patch(monkeypatch, role="org_admin", admins=2)
     out = write_role(7, "boss", "org_member")
-    assert out == {"ok": True, "org_id": 7, "sub": "boss", "role": "org_member"}
+    assert {k: out[k] for k in ("ok", "org_id", "sub", "role")} == {
+        "ok": True, "org_id": 7, "sub": "boss", "role": "org_member"}
     assert written == [(7, "boss", "org_member")]
 
 
@@ -93,13 +94,15 @@ def test_writing_a_plain_member_is_untouched(monkeypatch, write_role):
 
 # ── Les deux divergences LÉGITIMES entre les deux routes ─────────────────────
 
-def test_add_accepts_a_non_member(monkeypatch):
-    """`add` sur un non-membre est son objet même (pas de 404) — et la garde ne s'y
-    déclenche pas : on ne rétrograde personne en ajoutant quelqu'un."""
+def test_add_never_writes_a_non_member(monkeypatch):
+    """`add` sur un non-membre n'écrit aucune appartenance : on y entre par une
+    invitation (`tests/test_ajout_membre_par_invitation.py`). Désigné par un sub, sans
+    adresse à inviter, il est refusé."""
     written = _patch(monkeypatch, role=None, admins=1)
-    out = om._add_member(_ctx(), om.AddMemberInput(org_id=7, target="newbie", role="org_member"))
-    assert out["sub"] == "newbie"
-    assert written == [(7, "newbie", "org_member")]
+    with pytest.raises(AuthzDenied) as e:
+        om._add_member(_ctx(), om.AddMemberInput(org_id=7, target="newbie", role="org_member"))
+    assert e.value.code == "invite_by_email"
+    assert written == []
 
 
 def test_set_role_refuses_a_non_member(monkeypatch):
@@ -115,7 +118,7 @@ def test_add_resolves_an_email_before_guarding(monkeypatch):
     """`add` accepte un email : la garde doit voir le sub RÉSOLU, pas la chaîne saisie —
     sinon elle interroge le rôle d'une cible qui n'existe pas et laisse tout passer."""
     written = _patch(monkeypatch, role="org_admin", admins=1)
-    monkeypatch.setattr(om.db, "get_users_by_email", lambda e: [{"sub": "boss"}])
+    monkeypatch.setattr(om.org_store, "membres_par_email", lambda oid, e: ["boss"])
     with pytest.raises(AuthzDenied) as e:
         om._add_member(_ctx(), om.AddMemberInput(org_id=7, target="boss@x.tld", role="org_member"))
     assert e.value.code == "last_org_admin"

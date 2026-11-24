@@ -239,16 +239,17 @@ def test_l_ancienne_route_redirige_en_308_vers_la_nouvelle(client_rest, verbe, s
     assert r.status_code == 308, (verbe, suffixe, r.status_code)
     assert r.headers["location"] == f"/api/orgs/{ORG}/connectors/api/{suffixe}?account=paie"
     assert r.headers["deprecation"] == "true"
-    assert r.headers["sunset"] == deprecations.RETRAIT_CONNECTEUR_API.strftime("%d/%m/%Y")
+    assert "sunset" not in r.headers, "aucune date de retrait servie (décision du 23/11/2026)"
 
 
-def test_le_contrat_publie_l_ancienne_route_depreciee_et_datee():
+def test_le_contrat_publie_l_ancienne_route_depreciee_sans_date():
     from oto_mcp import deprecations, openapi
     doc = openapi.build()
-    date = deprecations.RETRAIT_CONNECTEUR_API.strftime("%d/%m/%Y")
+    date = deprecations.REVUE_CONNECTEUR_API.strftime("%d/%m/%Y")
     for verbe, suffixe in _ANCIENNES:
         op = doc["paths"][f"/api/orgs/{{id}}/connectors/http/{suffixe}"][verbe.lower()]
         assert op["deprecated"] is True and "308" in op["responses"], (suffixe, verbe)
-        assert f"/connectors/api/{suffixe}" in op["summary"] and date in op["summary"]
+        assert f"/connectors/api/{suffixe}" in op["summary"] and date not in op["summary"]
+        assert "Sunset" not in op["responses"]["308"]["headers"]
         assert "200" in doc["paths"][f"/api/orgs/{{id}}/connectors/api/{suffixe}"][
             verbe.lower()]["responses"]

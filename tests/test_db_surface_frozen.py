@@ -19,6 +19,10 @@ Retraits faits à ce titre :
 - `CONVERT_GUIDES_TO_NODES_SQL` et `GUIDES_TEXT`, le 23/09/2026 (otomata-tech/oto#239),
   avec la table `guides` : la recopie jouée à chaque démarrage et le texte indexé de
   ses deux index de recherche. Leurs seuls appelants partaient dans le même commit.
+- `get_doc_embedding_sha`, `upsert_doc_embedding` et `replace_doc_chunk_embeddings`, le
+  23/11/2026 : l'indexation d'une page passe à l'empreinte par morceau
+  (`doc_morceaux_stockes`, `poser_morceau_doc`, `finir_doc`). Leur seul appelant,
+  `embed_worker`, changeait dans le même commit.
 """
 from __future__ import annotations
 
@@ -72,7 +76,7 @@ _SURFACE = """
     get_account_profile get_all_connector_schemas get_aux_embedding_sha
     get_billing_payment_by_ref get_connector_schema get_datastore
     get_datastore_by_id get_doc_by_id get_doc_by_public_token
-    get_doc_embedding_sha get_extracted_text
+     get_extracted_text
     get_google_oauth get_guide_db get_init_guide_db get_legal_acceptances
     get_member_api_key get_operated_account get_org_subscription
     get_org_unipile_limit get_platform_instruction get_project_by_id
@@ -115,7 +119,7 @@ _SURFACE = """
     remove_group_disabled_tool remove_org_disabled_tool remove_project_link
     remove_user_disabled_tool remove_user_enabled_tool
     rename_datastore_by_id reparent_datastore
-    reparent_project replace_doc_chunk_embeddings resolve_datastore_ns
+    reparent_project  resolve_datastore_ns
     resolve_sub resolve_unipile_pending
     resource_ids_with_edges rest_call_stats
     retry_billing_at revoke_api_token revoke_edges revoke_resource_grant
@@ -140,7 +144,7 @@ _SURFACE = """
     unipile_account_owners update_account_profile update_billing_payment
     update_doc update_project
     update_project_link_ref upload_tokens upsert_aux_embedding
-    upsert_connector_schema upsert_doc_embedding upsert_org_subscription
+    upsert_connector_schema  upsert_org_subscription
     upsert_row_embedding upsert_user usage users verify_api_token visibility
 """.split()
 

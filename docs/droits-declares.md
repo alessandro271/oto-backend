@@ -240,7 +240,18 @@ identité de service (`docs/auth-logto.md` §Identité de service). REST seule, 
 | `PUT /api/service/users/{sub}/entitlements/{right_key}/{source}` | `grant` sur la personne partout, `granted_by = service:<client_id>` ; rend la ligne |
 | `DELETE /api/service/users/{sub}/entitlements/{right_key}/{source}` | `revoke` de la personne partout seule |
 | `GET /api/service/users/{sub}/entitlements/{right_key}/effective?org_id=N` | la **valeur effective** (#1096) : ce que lisent les points d'usage pour la personne dans l'org, et d'où elle vient (ci-dessous). Lecture seule |
+| `GET /api/service/orgs/{id}/usage/tools` | le relevé facturable sommé par outil, comme `GET /api/orgs/{id}/usage/tools` aux membres |
+| `GET /api/service/orgs/{id}/usage/connections` | les connexions de messagerie de l'org, comme `GET /api/orgs/{id}/usage/connections` |
+| `GET /api/service/orgs/{id}/monitoring/runs` | une page de runs de l'org, comme `GET /api/orgs/{id}/monitoring/runs` à un org_admin (mêmes filtres, même curseur) |
+| `POST /api/service/orgs/{id}/connectors/{name}/bulk-select` | ajoute un connecteur au kit de l'org, comme `POST /api/orgs/{id}/connectors/{name}/bulk-select` |
+| `PUT /api/service/orgs/{id}/connectors/{name}/activation` | force un connecteur ON/OFF pour l'org (`{"enabled": bool}`), comme `PUT /api/orgs/{id}/connectors/{name}/activation` ; `set_by = service:<client_id>` |
 | `GET /api/service/billing/export` | **temporaire** (#1085) : l'état de facturation du cœur (factures et PDF compris), pour sa reprise par le commerce ; part avec le retrait |
+
+Les cinq routes-sœurs ci-dessus (usage par outil, connexions, runs, ajout au kit,
+activation) prennent le **même handler**, la même entrée et la même sortie que la route
+d'org correspondante, dont la règle de compte ne change pas (le jeton `oto_` y passe comme
+avant). Elles vérifient d'abord l'org (`404 unknown_org`, inconnue ou archivée) : le
+service n'a pas d'appartenance qui la prouve. Banc : `tests/test_service_usage_runs_activation.py`.
 
 Sous `/orgs/{id}/`, `sub` (corps ou requête) vise une personne, qui doit être membre ;
 omis, le droit vaut pour l'org. Sous `/users/{sub}/`, le droit vaut pour la personne
@@ -390,6 +401,24 @@ Le commerce la pousse pour chaque org (`service.org.trial`, `orgs.trial_ends_at`
 elle est servie dans la fiche d'org ; le cœur n'agit pas dessus. Ce que le commerce
 accorde pendant un essai, et ce qu'il fait à sa fin, relèvent du commerce. L'étiquette
 de source `trial` reste acceptée par l'API de service.
+
+**L'état d'abonnement.** Même canal : le commerce pousse, à chaque changement de statut
+ou de blocage, l'état de l'abonnement d'une org (`service.org.subscription_state`,
+`PUT /api/service/orgs/{id}/subscription-state`, table `subscription_states`) : `status`
+(`none` = aucun abonnement au commerce), `block_code` + `block_since` (l'échéance qu'il ne
+peut pas débiter ; l'abonnement reste `active` pendant ce temps), fin de période, grâce,
+résiliation, et `emitted_at`, l'instant où il a lu l'état — un envoi plus ancien que
+celui déjà reçu est refusé (`409 stale_subscription_state`). La fiche d'admin d'org
+(`oto_admin_org op=get`, bloc `billing`, `source: commerce`) le sert, et ne lit plus la
+table de facturation du cœur, figée depuis la bascule : `state: pushed` et l'état reçu ;
+`state: missing` + `code: subscription_state_missing` tant que rien n'a été poussé pour
+l'org — la fiche reste servie entière (des services la lisent), l'absence est nommée,
+rien n'est deviné. La route de service est toujours montée ; seule l'identité de service
+du commerce l'ouvre. Tout lecteur passe
+par `db.etat_abonnement.lire_etat(conn, org_id)`, qui LÈVE `EtatJamaisPousse` faute
+d'état (à l'appelant de dire ce que vaut l'absence),
+et `preleve_encore(etat)` pour « le commerce prélève encore ». La fiche d'un membre
+(`org.get`) lit encore l'ancien bloc.
 
 ## Ce qu'on ne fait pas
 

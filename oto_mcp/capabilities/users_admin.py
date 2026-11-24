@@ -23,7 +23,8 @@ from . import _facturation_externe as facturation_externe
 from . import _quota_d_octroi as quota_d_octroi
 from . import _identite
 from . import droits_admin
-from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
+from ._authz import PLATFORM_ADMIN, SERVICE_OU, SUPER_ADMIN
+from ..auth.service_identity import COMMERCE
 from ._session_exigee import exiger_session
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -229,8 +230,18 @@ def _reset_mfa(ctx: ResolvedCtx, inp: ResetMfaInput) -> dict:
     target = _resolve_target(inp.target)
     if not db.get_user(target):
         raise AuthzDenied(404, "unknown_user", f"Compte {target!r} inconnu.")
-    from ..auth.annuaire import reset_user_mfa
-    removed = reset_user_mfa(target)
+    from ..auth import annuaire, revocation_2fa, revocation_mot_de_passe
+    removed = annuaire.reset_user_mfa(target)
+    # La Management API n'émet aucun webhook sur un facteur retiré : la fermeture qui suit
+    # tout changement de double authentification est faite ici, session comprise.
+    try:
+        revocation_mot_de_passe.fermer_tout(
+            target, "double authentification remise à zéro", par=ctx.sub or "admin")
+    except annuaire.FermetureInachevee as e:
+        raise AuthzDenied(502, "logto_sessions_not_closed",
+                          "Second factors were removed and API tokens revoked; closing "
+                          "the Logto sessions failed. Retry the reset.") from e
+    revocation_2fa.poser_aucun_facteur(target)
     return {"ok": True, "sub": target, "removed": removed}
 
 
@@ -514,7 +525,8 @@ CAPABILITIES += [
         description="[super admin] Reset a user's MFA — remove ALL their second-factor "
                     "enrollments (authenticator app, backup codes, passkey). Account-recovery "
                     "gesture: use when they've lost their authenticator AND their backup codes, "
-                    "with no other way in. Their org's mandatory-MFA policy (if any) still "
+                    "with no other way in. All their sessions and API tokens are closed: "
+                    "they sign in again. Their org's mandatory-MFA policy (if any) still "
                     "applies — they'll be prompted to enroll a fresh factor on next sign-in. "
                     "target = email or sub. Never reveals any factor value, only the types removed.",
         rest=RestBinding("POST", "/api/admin/users/{sub}/reset-mfa", _SUB,
@@ -537,7 +549,7 @@ CAPABILITIES += [
     ),
     Capability(
         key="platform.org.grant_key", handler=_grant_org_key, Input=OrgGrantKeyInput,
-        authz=SUPER_ADMIN,
+        authz=SERVICE_OU(COMMERCE, SUPER_ADMIN),
         description="[super admin] Share a connector's platform key with a WHOLE org — every member "
                     "resolves it (metered per-member). Optional per-day quota. "
                     + quota_d_octroi.AIDE,
@@ -546,7 +558,7 @@ CAPABILITIES += [
     ),
     Capability(
         key="platform.org.revoke_key", handler=_revoke_org_key, Input=OrgRevokeKeyInput,
-        authz=SUPER_ADMIN,
+        authz=SERVICE_OU(COMMERCE, SUPER_ADMIN),
         description="[super admin] Revoke an org's share of a connector's platform key.",
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}/grants/{provider}", _ID),
     ),
@@ -572,7 +584,8 @@ CAPABILITIES += [
     ),
     Capability(
         key="platform.org.unipile_limit_get", handler=_get_unipile_limit,
-        Input=OrgUnipileLimitInput, Output=OrgUnipileLimitView, authz=PLATFORM_ADMIN,
+        Input=OrgUnipileLimitInput, Output=OrgUnipileLimitView,
+        authz=SERVICE_OU(COMMERCE, PLATFORM_ADMIN),
         description="[platform admin] An org's cap on hosted messaging accounts (Unipile "
                     "platform-key seats): `limit` = the org's own cap (null = none, the org "
                     "follows `default_limit`, the platform default from the environment), "
@@ -584,7 +597,8 @@ CAPABILITIES += [
     ),
     Capability(
         key="platform.org.unipile_limit_set", handler=_set_unipile_limit,
-        Input=OrgUnipileLimitSetInput, Output=OrgUnipileLimitView, authz=SUPER_ADMIN,
+        Input=OrgUnipileLimitSetInput, Output=OrgUnipileLimitView,
+        authz=SERVICE_OU(COMMERCE, SUPER_ADMIN),
         description="[super admin] Set an org's cap on hosted messaging accounts. Body "
                     "`{\"limit\": int | null}` (required): an integer >= 0 (0 = no cap), or "
                     "null to drop the org's own cap and fall back to the platform default. "

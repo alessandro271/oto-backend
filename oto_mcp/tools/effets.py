@@ -969,9 +969,11 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # conflict='replace' overwrites an existing file or folder
     "sharepoint_file": {"lire": "list get search download", "detruire": "upload create_folder"},
     "sharepoint_site": {"lire": "search get drives"},
+    "sheets_chart": {"lire": "list", "ecrire": "add", "detruire": "delete"},
     "sheets_create": "ecrire",
-    # writing cells is a write (decided), even over existing values; clear empties a range
-    "sheets_spreadsheet": {"lire": "metadata read", "ecrire": "write add_sheet rename_sheet number_format copy_sheet format column_width freeze dropdown", "detruire": "clear delete_sheet delete_rows"},
+    # writing cells is a write (decided), even over existing values; clear empties a range;
+    # merge keeps the top-left value only, the other cells' values are erased
+    "sheets_spreadsheet": {"lire": "metadata read", "ecrire": "write fill add_sheet rename_sheet insert_rows insert_columns hide show number_format copy_sheet format column_width auto_fit freeze dropdown unmerge conditional_format clear_conditional_formats sort filter clear_filter find_replace", "detruire": "clear delete_sheet delete_rows delete_columns merge"},
     "signwell_account": {"lire": "me api_application", "detruire": "delete_api_application"},
     "signwell_act": {"envoyer": "send_document remind_document"},
     # create sends one signature request per CSV row: a mass send with no countable list
@@ -1208,7 +1210,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_admin_key_grant": {"lire": "list", "envoyer": "grant", "detruire": "revoke"},
     "oto_admin_legal_proof": "lire",
     "oto_admin_model_spend": "lire",
-    "oto_admin_monitoring": {"lire": "summary rest rest_calls connectors transport funnel calls call runs run gaps tool_quality agents_en_echec connecteurs_orphelins"},
+    "oto_admin_monitoring": {"lire": "summary rest rest_calls connectors transport funnel calls call runs run gaps tool_quality agents_en_echec connecteurs_orphelins journal_archive"},
     "oto_admin_org": {"lire": "list get entitlements", "ecrire": "create", "detruire": "archive"},
     "oto_admin_org_member": {"lire": "list connectors events", "envoyer": "add", "detruire": "remove set_role"},
     "oto_admin_platform_balances": "lire",
@@ -1657,7 +1659,7 @@ PAS_UN_LOT: dict[str, str] = {
     "sharepoint_excel_act": "values",
     "sheets_create": "sheets",
     # a grid of cells written in place, not a batch of records
-    "sheets_spreadsheet": "options values",
+    "sheets_spreadsheet": "options values sort_by",
     "signwell_document": "files fields",
     "signwell_template": "template_ids files placeholders template_fields fields",
     "slack_act": "channels",

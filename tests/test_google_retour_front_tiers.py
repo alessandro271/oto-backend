@@ -16,7 +16,6 @@ de l'exécution.
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import urllib.parse
 
@@ -24,9 +23,7 @@ import urllib.parse
 # l'import, comme les autres bancs qui touchent aux states OAuth.
 
 import pytest
-from starlette.requests import Request
 
-from oto_mcp.api import datastore as datastore_routes
 from oto_mcp.auth import flow as oauth_flow
 from oto_mcp.auth import google as google_oauth
 
@@ -53,37 +50,22 @@ def _front_tiers_fictif(monkeypatch):
                         ("https://app.acme.test", "/org/{org}/connectors"))
 
 
-def _requete(query: str) -> Request:
-    async def _receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    return Request({"type": "http", "method": "GET",
-                    "path": "/api/google/oauth/callback", "headers": [],
-                    "query_string": query.encode(), "path_params": {}},
-                   receive=_receive)
+def _rappel(query: str) -> str:
+    """L'URL où le VRAI callback renvoie le navigateur."""
+    from _retour_oauth import rappel
+    return rappel("/api/google/oauth/callback", dict(urllib.parse.parse_qsl(query)))
 
 
-def _callback():
-    def _json_response(_r, payload, status=200):
-        return {"status": status, "body": payload}
-
-    def _json_error(_r, status, code, message=None):
-        return {"status": status, "error": code}
-
-    async def _options(_r):
-        return None
-
-    routes = datastore_routes.make_routes(
-        None, None, _json_response, _json_error, lambda o: {}, _options)
-    return next(r.endpoint for r in routes
-                if r.path == "/api/google/oauth/callback")
+def _lu(state):
+    d = google_oauth.read_state(state)
+    return None if d is None else (d["sub"], d["org"], d["app"], d["connector"])
 
 
 # --- le state porte le front, et seulement s'il est connu -------------------
 
 def test_le_state_porte_le_front_demandeur():
     etat = google_oauth.make_state("sub-1", 42, "acme")
-    assert google_oauth.verify_state(etat)[:4] == ("sub-1", 42, "acme", "google")
+    assert _lu(etat)[:4] == ("sub-1", 42, "acme", "google")
 
 
 def test_un_front_inconnu_est_reduit_a_rien():
@@ -91,12 +73,13 @@ def test_un_front_inconnu_est_reduit_a_rien():
     liste fermée : signer une base arbitraire, ce serait signer une redirection
     ouverte."""
     etat = google_oauth.make_state("sub-1", 42, "https://attaquant.invalid")
-    assert google_oauth.verify_state(etat)[:4] == ("sub-1", 42, "", "google")
+    assert _lu(etat)[:4] == ("sub-1", 42, "", "google")
 
 
-def test_un_state_emis_avant_ce_lot_reste_valide():
-    """Ils vivent quelques minutes : il y en a en vol au déploiement. Les casser
-    renverrait une erreur à quelqu'un qui vient d'autoriser correctement."""
+def test_un_state_emis_avant_le_jti_est_refuse():
+    """Changé VOLONTAIREMENT le 22/11/2026 : un state d'avant
+    — sans audience ni `jti` — ne peut pas être à usage unique, donc il est refusé.
+    Il vit dix minutes au plus : un consentement en vol au déploiement se relance."""
     import base64
     import hashlib
     import hmac
@@ -105,9 +88,9 @@ def test_un_state_emis_avant_ce_lot_reste_valide():
 
     charge = json.dumps({"sub": "sub-1", "org": 42, "ts": int(time.time())},
                         separators=(",", ":")).encode()
-    sig = hmac.new(google_oauth._state_secret(), charge, hashlib.sha256).digest()
+    sig = hmac.new(b"test-secret", charge, hashlib.sha256).digest()
     b64 = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")  # noqa: E731
-    assert google_oauth.verify_state(f"{b64(charge)}.{b64(sig)}")[:4] == ("sub-1", 42, "", "google")
+    assert _lu(f"{b64(charge)}.{b64(sig)}") is None
 
 
 def test_le_flux_transmet_la_cle_cachee_du_front(monkeypatch):
@@ -140,29 +123,32 @@ def test_l_url_de_consentement_filtre_le_front_avant_de_signer(monkeypatch):
 
     url = google_oauth.build_auth_url("sub-1", "https://attaquant.invalid")
     etat = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["state"][0]
-    assert google_oauth.verify_state(etat)[2] == "", (
+    assert _lu(etat)[2] == "", (
         "une valeur hors de la liste fermée ne doit jamais entrer dans le state")
 
     url_ok = google_oauth.build_auth_url("sub-1", "acme")
     etat_ok = urllib.parse.parse_qs(urllib.parse.urlsplit(url_ok).query)["state"][0]
-    assert google_oauth.verify_state(etat_ok)[2] == "acme"
+    assert _lu(etat_ok)[2] == "acme"
 
 
 # --- le retour, sur le vrai handler ----------------------------------------
 
 @pytest.fixture
 def _echange_ok(monkeypatch):
-    monkeypatch.setattr(google_oauth, "exchange_code",
-                        lambda code, sub: {"access_token": "t"})
-    monkeypatch.setattr(google_oauth, "persist_token", lambda *a, **k: None)
+    """Le callback n'échange ni ne range RIEN : s'il y touchait, ces
+    bancs rougiraient ici plutôt que de passer sur un faux succès."""
+    def _jamais(*a, **k):
+        raise AssertionError("le callback ne doit ni échanger ni ranger")
+    monkeypatch.setattr(google_oauth, "exchange_code", _jamais)
+    monkeypatch.setattr(google_oauth, "persist_token", _jamais)
 
 
 def test_le_callback_ramene_au_front_tiers(_echange_ok):
     etat = google_oauth.make_state("sub-1", 42, "acme")
-    reponse = asyncio.run(_callback()(_requete(f"code=c&state={etat}")))
-    url = reponse.headers["location"]
+    url = _rappel(f"code=c&state={etat}")
     assert url.startswith("https://app.acme.test/"), url
-    assert "connect=connected" in url, "la convention de retour de #670 doit tenir"
+    # Le callback ne range plus rien : `confirm`, le front termine.
+    assert "connect=confirm" in url, "la convention de retour de #670 doit tenir"
 
 
 def test_le_callback_sans_front_declare_ramene_sur_une_route_QUI_EXISTE(_echange_ok):
@@ -175,23 +161,20 @@ def test_le_callback_sans_front_declare_ramene_sur_une_route_QUI_EXISTE(_echange
     l'autorisation avait bien eu lieu. Le test d'avant figeait ce chemin mort —
     un banc peut protéger une erreur aussi bien qu'une garantie."""
     etat = google_oauth.make_state("sub-1", 42)
-    url = asyncio.run(_callback()(_requete(f"code=c&state={etat}"))).headers["location"]
+    url = _rappel(f"code=c&state={etat}")
     chemin = urllib.parse.urlsplit(url).path
     assert chemin == "/connectors", chemin
     assert "console" not in url and "acme" not in url
-    assert "connect=connected" in url
+    assert "connect=confirm" in url
 
 
 def test_un_echec_ramene_AUSSI_au_front_tiers(monkeypatch):
     """Le piège du retour OAuth : on soigne le succès et on oublie l'échec, donc
     la personne est renvoyée chez nous au pire moment — quand elle doit
-    recommencer."""
-    def _boom(code, sub):
-        raise RuntimeError("Google a refusé")
-
-    monkeypatch.setattr(google_oauth, "exchange_code", _boom)
+    recommencer. Depuis le 22/11/2026 l'échange vit dans la complétion : l'échec du
+    callback, c'est un retour sans code (une erreur du fournisseur)."""
     etat = google_oauth.make_state("sub-1", 42, "acme")
-    url = asyncio.run(_callback()(_requete(f"code=c&state={etat}"))).headers["location"]
+    url = _rappel(f"error=server_error&state={etat}")
     assert url.startswith("https://app.acme.test/"), url
     assert "connect=error" in url
 
@@ -205,8 +188,7 @@ def test_un_refus_chez_google_ramene_AUSSI_au_front_tiers_en_denied(monkeypatch)
 
     monkeypatch.setattr(google_oauth, "exchange_code", _jamais)
     etat = google_oauth.make_state("sub-1", 42, "acme")
-    url = asyncio.run(_callback()(_requete(
-        f"error=access_denied&state={etat}"))).headers["location"]
+    url = _rappel(f"error=access_denied&state={etat}")
     assert url.startswith("https://app.acme.test/"), url
     assert "connect=denied" in url
 
@@ -215,7 +197,7 @@ def test_un_state_illisible_ne_peut_que_retomber_sur_le_defaut():
     """Limite ASSUMÉE, écrite ici pour qu'on ne la prenne pas pour un oubli : si
     le state ne se relit pas, on ignore d'où vient la personne. Il n'existe aucun
     autre porteur — le callback vient de Google, sans en-tête ni session."""
-    url = asyncio.run(_callback()(_requete("code=c&state=nimportequoi"))).headers["location"]
+    url = _rappel("code=c&state=nimportequoi")
     assert urllib.parse.urlsplit(url).path == "/connectors"
     assert "connect=error" in url
 
@@ -224,9 +206,7 @@ def test_les_deux_fronts_ne_partagent_que_le_suffixe(_echange_ok):
     """La convention de #670 est le SUFFIXE ; la base et le chemin viennent du
     front. Vérifier les deux ensemble évite de croire qu'un seul suffit."""
     q = urllib.parse.urlsplit
-    tiers = asyncio.run(_callback()(_requete(
-        f"code=c&state={google_oauth.make_state('s', 42, 'acme')}"))).headers["location"]
-    nous = asyncio.run(_callback()(_requete(
-        f"code=c&state={google_oauth.make_state('s', 42)}"))).headers["location"]
+    tiers = _rappel(f"code=c&state={google_oauth.make_state('s', 42, 'acme')}")
+    nous = _rappel(f"code=c&state={google_oauth.make_state('s', 42)}")
     assert q(tiers).netloc != q(nous).netloc, "la base doit suivre le front"
-    assert "connect=connected" in tiers and "connect=connected" in nous
+    assert "connect=confirm" in tiers and "connect=confirm" in nous

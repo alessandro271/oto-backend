@@ -14,8 +14,8 @@ sous eux, jamais au-dessus. `api.routes` **ré-exporte** ces noms — `api.route
 et `api.routes._cors_headers` restent valides pour les appelants (et les tests)
 d'avant la découpe.
 
-Les dix modules de routes ANTÉRIEURS à la découpe (`api/datastore.py`,
-`api/sirene.py`, …) reçoivent encore ces mêmes fonctions en PARAMÈTRES de
+Les modules de routes ANTÉRIEURS à la découpe (`api/sirene.py`,
+`api/accords.py`, …) reçoivent encore ces mêmes fonctions en PARAMÈTRES de
 leur `make_routes` — c'est leur patron historique, né du même besoin d'éviter le
 cycle. Il n'a pas été touché : les convertir serait un second lot, sans effet sur
 ce qui est servi.
@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextvars
 import functools
 import logging
+import re
 from typing import Awaitable, Callable, Optional
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -32,13 +33,17 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from .. import config, db
+from .. import config, db, deprecations
 from ..auth import platform_worker, service_identity, token_scopes
 from ..datastore.errors import (CODE_TABLEAU_PAR_NOM, est_un_nom_de_tableau,
                                refus_tableau_par_nom)
 from .. import verrou_org
 from ..tenant_migration import alias_drain_armed
 from .. import garde_identite
+
+#: Le tableau d'une route `/api/datastores/{tableau}/…` : là où le tampon de
+#: compatibilité (`deprecations`) remet le numéro à la place d'un nom traduit.
+_PREFIXE_TABLEAU = re.compile(r"^(/api/datastores/)[^/]+")
 
 # Signature de `_authenticate`, telle que la consomment les modules de routes.
 AuthFn = Callable[..., Awaitable["tuple[str | None, JSONResponse | None]"]]
@@ -135,6 +140,12 @@ def _maybe_view_as(real_sub: str, apply_view_as: bool) -> str:
 # va chercher qui a fait quoi. L'authentification, elle, résout le porteur pour
 # de vrai ; il suffisait de ne pas jeter ce qu'elle avait déjà en main.
 CLE_PRINCIPAL = "oto_principal"
+
+# Clé de la redirection d'un ancien chemin REST (`api.alias_routes`), déposée dans le
+# `scope` ASGI par la 308 et relue par le journal des routes (`routes.RestCallLogger`) :
+# `{"tool": "<VERBE> <chemin d'aujourd'hui>", "deprecated_name": "<ancien gabarit>"}`.
+# Même motif que `CLE_PRINCIPAL` : publié dans le scope, relu au `finally`, zéro requête.
+CLE_ALIAS_DEPRECIE = "oto_alias_deprecie"
 
 
 def _publier_principal(request: Request, sub: str, *,
@@ -351,12 +362,25 @@ async def _authenticate(
         # Un NOM de tableau dans le chemin est refusé (08/11/2026) — avec le même code
         # et la même phrase que la route elle-même, plutôt qu'un « hors portée » qui
         # enverrait chercher dans le jeton. Rien n'est résolu sous ce nom.
+        #
+        # Tampon de compatibilité allumé sur l'instance (`deprecations`) : le nom est
+        # traduit pour le porteur, et la portée juge le NUMÉRO qu'il désigne — la même
+        # traduction que la route elle-même (`capabilities/_rest_adapter`).
         adresse = token_scopes.tableau_du_chemin(request.method, request.url.path)
+        chemin = request.url.path
         if scopes and est_un_nom_de_tableau(adresse):
-            token_scopes.set_current(None)
-            return None, _json_error(request, 400, CODE_TABLEAU_PAR_NOM,
-                                     refus_tableau_par_nom(adresse))
-        if not token_scopes.authorize(scopes, request.method, request.url.path):
+            if not deprecations.compat_tableau_par_nom_allume():
+                token_scopes.set_current(None)
+                return None, _json_error(request, 400, CODE_TABLEAU_PAR_NOM,
+                                         refus_tableau_par_nom(adresse))
+            ns_id = await run_in_threadpool(deprecations.traduire_tableau, adresse,
+                                            row["sub"])
+            if ns_id is None:
+                token_scopes.set_current(None)
+                return None, _json_error(request, 404, "datastore_not_found",
+                                         f"datastore `{adresse}` unknown")
+            chemin = _PREFIXE_TABLEAU.sub(rf"\g<1>{ns_id}", chemin, count=1)
+        if not token_scopes.authorize(scopes, request.method, chemin):
             granted = []
             if token_scopes.namespaces(scopes):
                 granted.append(f"les tableaux {sorted(token_scopes.namespaces(scopes))}")
@@ -368,7 +392,7 @@ async def _authenticate(
             # cassé. Un refus qui nomme comme autorisé ce qu'il refuse est pire
             # que pas de détail du tout.
             cause, quoi = token_scopes.motif_du_refus(
-                scopes, request.method, request.url.path)
+                scopes, request.method, chemin)
             ouvre = f"Ce jeton ouvre {' et '.join(granted) or 'rien'}."
             if cause == "geste":
                 # La liste RESTE — elle coûte une session de debug à l'intégrateur
@@ -473,12 +497,14 @@ async def _authenticate(
     # LECTURE quand rien ne change (cf. son docstring), une écriture sinon.
     # locale (#701) : signal déduit de l'en-tête, jamais un choix — `upsert_user`
     # ne le pose que si la ligne n'en porte encore aucun (COALESCE côté SQL).
+    email_verifie = _email_verifie_des_claims(access_token.claims)
     try:
         await run_in_threadpool(
             lambda: db.upsert_user(
                 sub, email=access_token.claims.get("email"),
                 name=access_token.claims.get("name"),
-                locale=_locale_from_accept_language(request.headers.get("accept-language"))))
+                locale=_locale_from_accept_language(request.headers.get("accept-language")),
+                email_verified=email_verifie is True))
     except (db.CompteEnPause, db.TenantDesactive) as refus:
         # L'ANCIEN identifiant d'un compte mis en pause. Il n'a pas de ligne à lui
         # (la fusion l'a supprimée), donc la garde ci-dessus ne l'a pas vu : c'est
@@ -488,7 +514,6 @@ async def _authenticate(
         # la NAISSANCE d'un compte d'un tenant désactivé (#1165) — la garde ci-dessus la
         # précède déjà sur ce chemin ; celle-ci tient si un appelant l'omet.
         return None, _json_error(request, 403, refus.code, str(refus))
-    email_verifie = _email_verifie_des_claims(access_token.claims)
     _EMAIL_VERIFIE.set((sub, email_verifie))
     _memoriser_porteur(request, cle, sub, email_verified=email_verifie)
     servi = _maybe_view_as(sub, apply_view_as)

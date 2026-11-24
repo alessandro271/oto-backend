@@ -123,3 +123,4 @@ jobs:
             coverage.json
             couverture.txt
           if-no-files-found: warn
+          retention-days: 7

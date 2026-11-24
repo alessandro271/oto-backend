@@ -1,27 +1,17 @@
-"""Une clé de réponse renommée est servie sous SES DEUX noms (#519, lot B3).
+"""Le renommage « guide » côté réponses : ce qui reste servi, ce qui est parti (#519).
 
-Renommer une clé de réponse sec est la panne la plus chère de tout ce chantier, et
-la plus silencieuse : le client lit `null` là où il attendait une valeur — pas
-d'erreur, pas de log, rien qui s'allume. Il affiche un readme vide, ou range une
-liste vide dans son cache. On l'apprend par un utilisateur, des jours plus tard.
+Les clés de réponse doublées (`doctrine`, `doctrines`, `doctrine_id`, …) sont RETIRÉES
+avec le lot D (#526, 23/11/2026) : une réponse ne sert plus que le nom d'aujourd'hui.
+Ces tests gardent :
 
-Alors chaque clé est servie deux fois pendant le préavis, et ces tests gardent :
-
-1. **Les deux noms portent la MÊME valeur.** Deux valeurs qui divergent seraient
-   pires qu'une clé manquante — un client migré et un client resté en arrière
-   liraient deux vérités.
-2. **Le doublage est ADDITIF.** Aucune clé d'hier ne disparaît, sur aucune forme de
-   réponse. C'est ce que le lot promet, et la seule chose qu'un consommateur peut
-   vérifier de l'extérieur.
-3. **L'ancien nom est encore accepté EN ENTRÉE** là où il en était un
-   (`doctrine_id`, le paramètre `doctrine` de `run_start`) — sinon la clé doublée
-   serait un piège : on lit `guide_id` dans la réponse, on le repasse, et ça casse.
-4. **Le helper ne touche que ce qu'on lui donne**, et jamais la donnée de
-   l'utilisateur. Un passage automatique sur toute réponse inventerait une colonne
-   dans le tableau de quelqu'un.
-5. **Le code d'erreur d'hier survit dans `details.legacy_code`** — un code ne se
+1. **Aucune clé d'hier n'est servie** — ni dans les modèles de sortie, ni dans le
+   bundle d'une session sans org.
+2. **L'ancien nom est encore accepté EN ENTRÉE** là où il en était un
+   (`doctrine_id`, le paramètre `doctrine` de `run_start`) : ce n'était pas une clé
+   de réponse.
+3. **Le code d'erreur d'hier survit dans `details.legacy_code`** — un code ne se
    double pas, il n'y a qu'un champ `error`.
-6. **Le nom de schéma d'hier résout encore** : un `$ref` cassé ne fait pas rater un
+4. **Le nom de schéma d'hier résout encore** : un `$ref` cassé ne fait pas rater un
    modèle, il fait rater la génération ENTIÈRE du client.
 """
 from __future__ import annotations
@@ -31,44 +21,6 @@ from _mcp_app import static_mcp as _test_mcp
 import pytest
 
 from oto_mcp import deprecations, openapi
-
-
-# ── 1 & 2. Les deux noms, la même valeur ────────────────────────────────────
-
-def test_le_helper_sert_les_deux_noms_quel_que_soit_celui_ecrit():
-    """Bidirectionnel à dessein : un handler neuf écrit le nom d'aujourd'hui, une
-    ligne SQL porte encore celui d'hier (la COLONNE ne se renomme qu'au lot B4)."""
-    marqueur = object()
-    for ancienne, actuelle in deprecations.CLES.items():
-        depuis_neuf = deprecations.avec_les_deux_noms({actuelle: marqueur})
-        assert depuis_neuf[ancienne] is depuis_neuf[actuelle] is marqueur, ancienne
-        depuis_vieux = deprecations.avec_les_deux_noms({ancienne: marqueur})
-        assert depuis_vieux[ancienne] is depuis_vieux[actuelle] is marqueur, ancienne
-
-
-def test_le_producteur_garde_le_dernier_mot():
-    """Une clé déjà posée n'est jamais écrasée — sinon le helper pourrait effacer
-    une valeur que le handler avait voulue différente."""
-    out = deprecations.avec_les_deux_noms({"guide": "neuf", "doctrine": "vieux"})
-    assert out == {"guide": "neuf", "doctrine": "vieux"}
-
-
-def test_le_helper_ne_touche_pas_ce_quon_ne_lui_donne_pas():
-    """La garde qui protège la donnée de l'utilisateur : le helper ne descend PAS
-    dans les valeurs. Une ligne de tableau dont une colonne s'appelle « doctrine »
-    ne doit pas gagner une colonne fantôme parce qu'elle voyage dans une réponse."""
-    ligne = {"colonnes": {"doctrine": "texte du client"}, "guide": "x"}
-    out = deprecations.avec_les_deux_noms(ligne)
-    assert out["colonnes"] == {"doctrine": "texte du client"}
-    assert "guide" not in out["colonnes"]
-
-
-def test_aucune_cle_dhier_ne_disparait_dune_reponse():
-    """Le contrat visible de l'extérieur : additif, jamais un renommage sec."""
-    payload = {actuelle: i for i, actuelle in enumerate(deprecations.CLES.values())}
-    out = deprecations.avec_les_deux_noms(payload)
-    manquantes = sorted(a for a in deprecations.CLES if a not in out)
-    assert not manquantes, f"clés d'hier perdues : {manquantes}"
 
 
 # ── 3. L'ancien nom est encore accepté en ENTRÉE ────────────────────────────
@@ -101,48 +53,49 @@ async def test_run_start_accepte_les_deux_noms_de_parametre():
     assert "guide" not in requis and "doctrine" not in requis
 
 
-# ── 4. Ce que le SERVEUR sert vraiment ──────────────────────────────────────
+# ── 4. Ce que le SERVEUR sert vraiment : le seul nom d'aujourd'hui ──────────
 
-def test_les_modeles_de_sortie_declarent_les_deux_noms():
-    """Un `Output` DÉCRIT la réponse : s'il ne déclare que le nom d'aujourd'hui,
-    `/openapi.json` promet une forme que le serveur n'envoie pas (et l'inverse)."""
-    from oto_mcp.capabilities import org_monitoring, guide_library
+_ANCIENNES = ("doctrine_id", "doctrine_version", "doctrine_ref_count", "doctrines",
+              "group_doctrine", "doctrine")
+
+
+def test_les_modeles_de_sortie_ne_declarent_plus_les_noms_d_hier():
+    """Lot D (#526) : un `Output` qui déclarerait encore une clé d'hier promettrait
+    dans `/openapi.json` une forme que le serveur n'envoie plus."""
+    from oto_mcp.capabilities import agent_context, guide_library, org_monitoring
     from oto_mcp.capabilities.connectors import selection
+    from oto_mcp.capabilities.datastore import activity
     from oto_mcp.capabilities.groups import guide as groupe_guide
     from oto_mcp.capabilities.orgs import instructions as oi
 
-    paires = [
-        (oi.GuideView, ("guide_id", "doctrine_id")),
-        (oi.GuideView, ("guide", "doctrine")),
-        (oi.GuideView, ("group_guide", "group_doctrine")),
-        (oi.GuideView, ("guides", "doctrines")),
-        (oi.InstructionsBundle, ("guide", "doctrine")),
-        (groupe_guide.GroupInstructionsBundle, ("guide", "doctrine")),
-        (groupe_guide.GroupInstructionsBundle, ("guide_version", "doctrine_version")),
-        (guide_library.LibraryList, ("guides", "doctrines")),
-        (selection.MyConnectorRow, ("guide_ref_count", "doctrine_ref_count")),
-        (org_monitoring.RunRow, ("guide", "doctrine")),
-    ]
-    for modele, (actuelle, ancienne) in paires:
-        champs = modele.model_fields
-        assert actuelle in champs, f"{modele.__name__} ne déclare pas `{actuelle}`"
-        assert ancienne in champs, (
-            f"{modele.__name__} a perdu `{ancienne}` avant sa date de retrait")
+    modeles = (oi.GuideView, oi.InstructionsBundle, groupe_guide.GroupInstructionsBundle,
+               guide_library.LibraryList, selection.MyConnectorRow, org_monitoring.RunRow,
+               agent_context.AgentContextView)
+    for modele in modeles:
+        restees = sorted(set(modele.model_fields) & set(_ANCIENNES))
+        assert not restees, f"{modele.__name__} sert encore {restees}"
+    assert "guide" in activity.ActivityEntry.model_fields
+    assert "doctrine" not in activity.ActivityEntry.model_fields
 
 
-def test_le_bundle_vide_dune_org_absente_porte_les_deux_noms():
-    """Le chemin le plus lu du domaine — un début de session sans org — et le seul
-    qui répond 200 avec tout à vide. S'il perdait une clé, personne ne verrait
-    d'erreur : le client afficherait « pas de readme »."""
+def test_le_bundle_vide_dune_org_absente_ne_sert_que_les_noms_d_aujourd_hui():
     import asyncio
     from oto_mcp.capabilities._types import ResolvedCtx
     from oto_mcp.capabilities.orgs import instructions as oi
     out = asyncio.run(oi._get_guide(ResolvedCtx(sub="u1", org_id=None),
                                     oi.GuideGetInput()))
-    for actuelle, ancienne in (("guide", "doctrine"), ("guides", "doctrines"),
-                               ("group_guide", "group_doctrine")):
-        assert actuelle in out and ancienne in out
-        assert out[actuelle] == out[ancienne]
+    assert {"guide", "guides", "group_guide"} <= set(out)
+    assert not set(out) & set(_ANCIENNES)
+
+
+def test_une_ligne_de_run_est_servie_sous_guide():
+    """Les colonnes du journal gardent leur nom d'avant #519 : la lentille des runs
+    les sert sous `guide` / `guide_version`. Seule exception gardée au lot D :
+    `doctrine_version`, encore lue par un client, servie à côté avec la même valeur."""
+    from oto_mcp.capabilities import org_monitoring as om
+    ligne = {"run_id": "r1", "label": "x", "doctrine": "relance", "doctrine_version": 3}
+    assert om._run_servi(ligne) == {"run_id": "r1", "label": "x", "guide": "relance",
+                                    "guide_version": 3, "doctrine_version": 3}
 
 
 # ── 5. Le code d'erreur d'hier ──────────────────────────────────────────────
@@ -169,7 +122,8 @@ def test_les_noms_de_schema_dhier_resolvent():
             f"`{ancien}` ne résout plus : un $ref cassé fait rater la génération "
             "ENTIÈRE d'un client, pas seulement le modèle visé.")
         assert schemas[ancien]["deprecated"] is True
-        assert deprecations.date_de_retrait() in schemas[ancien]["description"]
+        assert deprecations.PREAVIS_DE_RETRAIT in schemas[ancien]["description"]
+        assert deprecations.REVUE.strftime("%d/%m/%Y") not in schemas[ancien]["description"]
 
 
 def test_la_table_des_schemas_ne_porte_que_de_vrais_composants():

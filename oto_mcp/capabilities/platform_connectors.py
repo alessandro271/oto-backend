@@ -40,7 +40,8 @@ from .. import (access, credentials_store, db, entitlements_catalogue as catalog
 from . import _facturation_externe as facturation_externe
 from . import _quota_d_octroi as quota_d_octroi
 from ..connectors import activation as connector_activation
-from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
+from ._authz import PLATFORM_ADMIN, SERVICE_OU, SUPER_ADMIN
+from ..auth.service_identity import COMMERCE
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -446,7 +447,8 @@ CAPABILITIES += [
     ),
     Capability(
         key="platform.connector.access_list", handler=_platform_access,
-        Input=PlatformAccessInput, authz=PLATFORM_ADMIN, Output=PlatformAccessView,
+        Input=PlatformAccessInput, authz=SERVICE_OU(COMMERCE, PLATFORM_ADMIN),
+        Output=PlatformAccessView,
         description=_DOC_ACCESS,
         mcp=None,
         rest=RestBinding("GET", _ACCESS),

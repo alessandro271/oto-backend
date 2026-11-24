@@ -6,7 +6,8 @@ of `instagram_meta`'s:
 1. "Connect" on the card → `_start_flow` returns the dialog URL, with a signed
    `state` carrying the identity;
 2. Meta brings the browser back to `/api/meta_ads/oauth/callback`
-   (`api/meta_ads.py`); the code becomes a token there;
+   (`api/oauth_returns.py`); the callback hands the code to the front, which
+   completes with its own token (`auth/flow.py`); the code then becomes a token;
 3. the token goes to the vault, MEMBER tier.
 
 **No renewal.** On standard access the configuration issues a USER token (~60 days):
@@ -110,18 +111,23 @@ def _ctx_org(sub: str) -> int:
 
 
 def make_state(sub: str, org_id: int, return_app: str = "") -> str:
-    return oauth_flow.sign_state(_AUD, {"sub": sub, "org": org_id, "app": return_app})
+    return oauth_flow.sign_state(_AUD, {"sub": sub, "org": org_id, "app": return_app,
+                                        "jti": oauth_flow.new_jti()})
 
 
-def verify_state(state: str) -> Optional[tuple[str, int, str]]:
-    """`(sub, org_id, return_app)` if the state is valid and issued FOR this flow."""
+def verify_state(state: Optional[str]) -> Optional[dict]:
+    """`{sub, org, app, jti}` if the state is valid, not expired, issued FOR this flow and
+    single-use (`jti`); `None` otherwise. `app` missing or of the wrong type ⇒ `""`:
+    losing the targeted return is no reason to lose the connection."""
     data = oauth_flow.read_state(_AUD, state)
     if not data:
         return None
-    sub, org, return_app = data.get("sub"), data.get("org"), data.get("app")
-    if not isinstance(sub, str) or not isinstance(org, int):
+    sub, org, return_app, jti = data.get("sub"), data.get("org"), data.get("app"), data.get("jti")
+    if (not isinstance(sub, str) or not isinstance(org, int)
+            or not isinstance(jti, str) or not jti):
         return None
-    return sub, org, return_app if isinstance(return_app, str) else ""
+    return {"sub": sub, "org": org, "jti": jti, "app": oauth_flow.resolve_return_app(
+        return_app if isinstance(return_app, str) else "")}
 
 
 # --- flow start --------------------------------------------------------------
@@ -279,3 +285,26 @@ def avertir_au_demarrage() -> None:
             "meta_ads: connector mounted but NOT configured — %s missing. "
             "The \"Connect\" button will refuse, saying so. Set with: %s",
             ", ".join(manquantes), _COMMANDE)
+
+
+# --- the return: the callback hands over, the front completes (`auth/flow.py`) ------
+
+def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
+    d = verify_state(state)
+    if d is None:
+        return None
+    return oauth_flow.ReturnState(d["sub"], d["org"], d["app"], CONNECTOR, d["jti"], d)
+
+
+def _finish_return(d: dict, code: str) -> dict:
+    """The code against a grant, then the vault. The `code` and the token never enter a
+    log line."""
+    grant = _coeur().connect(app(), code, oauth_flow.redirect_uri(_CALLBACK_PATH))
+    fin = persist_grant(d["sub"], d["org"], grant)
+    return {"account": (fin or {}).get("name"), "scope": "member"}
+
+
+RETURN = oauth_flow.OAuthReturn(
+    audience=_AUD, callback_path=_CALLBACK_PATH, label="Meta Ads", default_card=CONNECTOR,
+    read=_return_state, finish=_finish_return, cards=lambda: (CONNECTOR,))
+oauth_flow.declare_return(RETURN)

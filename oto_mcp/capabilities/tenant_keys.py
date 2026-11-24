@@ -22,7 +22,8 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from .. import credentials_store, db, providers, tenancy, tenant_vault
-from ._authz import PLATFORM_ADMIN, SUPER_ADMIN, TENANT_ADMIN_OF
+from ._authz import PLATFORM_ADMIN, SERVICE_OU, SUPER_ADMIN, TENANT_ADMIN_OF
+from ..auth.service_identity import COMMERCE
 from ._refus_de_pose import REFUS_DE_VERIFICATION, refus_de_pose
 from ._session_exigee import exiger_session
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -142,7 +143,8 @@ def _clear_key(ctx: ResolvedCtx, inp: TenantKeyClearInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="admin.tenant_keys", handler=_list_keys, Input=TenantKeysInput,
-        Output=TenantKeys, authz=TENANT_ADMIN_OF("slug", platform=PLATFORM_ADMIN),
+        Output=TenantKeys,
+        authz=SERVICE_OU(COMMERCE, TENANT_ADMIN_OF("slug", platform=PLATFORM_ADMIN)),
         description="Connector keys posed on a tenant (never the secret).",
         rest=RestBinding("GET", "/api/admin/tenants/{slug}/keys"),
     ),

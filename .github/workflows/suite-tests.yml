@@ -248,7 +248,7 @@ jobs:
         with:
           name: junit-shard-${{ matrix.part }}
           path: ${{ runner.temp }}/junit-shard-${{ matrix.part }}
-          retention-days: 14
+          retention-days: 1
           overwrite: true
       - name: Publier les fichiers et la collecte de cette part
         if: always()
@@ -256,7 +256,7 @@ jobs:
         with:
           name: suite-part-${{ matrix.part }}
           path: ${{ runner.temp }}/suite-part-${{ matrix.part }}
-          retention-days: 14
+          retention-days: 1
           # Une relance du job republie sous le même nom.
           overwrite: true
 
@@ -305,7 +305,7 @@ jobs:
         with:
           name: suite-reference
           path: ${{ runner.temp }}/suite-reference
-          retention-days: 14
+          retention-days: 1
           overwrite: true
 
   # L'AGRÉGATEUR. Il ne rejoue rien : il juge que rien n'a été perdu, puis il rend le
@@ -350,7 +350,7 @@ jobs:
         with:
           name: junit-suite
           path: ${{ runner.temp }}/junit-suite
-          retention-days: 14
+          retention-days: 1
           overwrite: true
       - name: Somme des collectés par part = collecte de référence
         if: always() && needs.plan.result == 'success'
@@ -372,7 +372,7 @@ jobs:
         with:
           name: suite-durees
           path: ${{ runner.temp }}/suite-durees
-          retention-days: 30
+          retention-days: 7
           overwrite: true
       - name: Toutes les parts ont conclu « success »
         if: always()

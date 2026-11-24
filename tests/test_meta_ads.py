@@ -146,7 +146,8 @@ def test_state_ne_vaut_que_pour_ce_flux(env):
     from oto_mcp.auth import flow as oauth_flow
 
     etat = env.auth.make_state(SUB, ORG, "")
-    assert env.auth.verify_state(etat) == (SUB, ORG, "")
+    lu = env.auth.verify_state(etat)
+    assert (lu["sub"], lu["org"], lu["app"]) == (SUB, ORG, "") and lu["jti"]
     assert env.auth.verify_state(oauth_flow.sign_state(
         "instagram_meta", {"sub": SUB, "org": ORG})) is None
 
@@ -167,7 +168,8 @@ def test_le_dialogue_part_avec_l_application_de_l_instance(env):
     env.auth.build_auth_url(SUB, "")
     _app, retour, etat = env.coeur.authorize_url.call_args.args
     assert retour == "https://mcp.exemple.test/api/meta_ads/oauth/callback"
-    assert env.auth.verify_state(etat) == (SUB, ORG, "")
+    lu = env.auth.verify_state(etat)
+    assert (lu["sub"], lu["org"], lu["app"]) == (SUB, ORG, "") and lu["jti"]
     env.coeur.MetaAdsApp.assert_called_with(**_COORDONNEES)
 
 
@@ -430,17 +432,11 @@ def test_l_appel_d_insights_tient_dans_son_budget(env, monkeypatch):
 
 # ── Retour de consentement : le refus de Meta (oto-app#11) ──────────────────
 
-def _callback(query: dict):
-    from urllib.parse import urlencode
+def _callback(query: dict) -> str:
+    """L'URL où le vrai callback renvoie le navigateur."""
+    from _retour_oauth import rappel
 
-    from starlette.requests import Request
-
-    from oto_mcp.api import meta_ads as api_meta
-
-    route = api_meta.make_routes(None, None, None, None, None)[0]
-    req = Request({"type": "http", "method": "GET", "path": route.path,
-                   "query_string": urlencode(query).encode(), "headers": []})
-    return asyncio.run(route.endpoint(req))
+    return rappel("/api/meta_ads/oauth/callback", query)
 
 
 @pytest.mark.parametrize("error_reason", ["user_denied", None])
@@ -452,19 +448,19 @@ def test_un_refus_chez_meta_revient_en_denied_jamais_forbidden(env, error_reason
     query = {"error": "access_denied", "state": env.auth.make_state(SUB, ORG, "")}
     if error_reason:
         query["error_reason"] = error_reason
-    resp = _callback(query)
-    assert resp.headers["location"].endswith(f"?connector={CONNECTEUR}&connect=denied")
+    url = _callback(query)
+    assert url.endswith(f"?connector={CONNECTEUR}&connect=denied")
     env.coeur.connect.assert_not_called()
     assert not env.coffre.lignes
 
 
 @pytest.mark.parametrize("query", [{"error": "server_error"}, {}])
 def test_une_autre_erreur_de_meta_ou_un_code_absent_reste_une_panne(env, query):
-    resp = _callback({**query, "state": env.auth.make_state(SUB, ORG, "")})
-    assert resp.headers["location"].endswith(f"?connector={CONNECTEUR}&connect=error")
+    url = _callback({**query, "state": env.auth.make_state(SUB, ORG, "")})
+    assert url.endswith(f"?connector={CONNECTEUR}&connect=error")
     env.coeur.connect.assert_not_called()
 
 
 def test_un_refus_au_state_illisible_reste_une_panne(env):
-    resp = _callback({"error": "access_denied", "state": "faux"})
-    assert resp.headers["location"].endswith("connect=error")
+    url = _callback({"error": "access_denied", "state": "faux"})
+    assert url.endswith("connect=error")

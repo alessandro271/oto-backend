@@ -249,7 +249,9 @@ def ensure_api_resource(indicator: str, *, name: str | None = None) -> None:
 # Un mot de passe changé ne ferme RIEN chez Logto : ni les sessions de son annuaire, ni
 # les autorisations (grants) qui portent les jetons de rafraîchissement des clients
 # OAuth — un client MCP autorisé depuis une session volée se rafraîchit donc
-# indéfiniment. Appelé par la réception du webhook Logto (`auth/revocation_mot_de_passe`).
+# indéfiniment. Appelé par la réception du webhook Logto (`auth/revocation_mot_de_passe`),
+# pour un mot de passe changé comme pour un changement de double authentification, et par
+# la remise à zéro de la double authentification (`capabilities/users_admin`).
 
 #: Ce qu'une requête de management attend au plus, et ce que la fermeture entière
 #: attend au plus : une borne posée à SON niveau, pas seulement au plus profond — une
@@ -326,3 +328,90 @@ def fermer_sessions(sub: str) -> dict:
                    if _appel("DELETE", f"{compte}/grants/{quote(gid, safe='')}")
                    is not None)
     return {"sessions": fermees, "grants": revoques}
+
+
+class LectureInachevee(RuntimeError):
+    """Logto n'a pas rendu ce qu'on lui demandait. Levée telle quelle, jamais avalée :
+    l'appelant dit « à refaire » (le webhook rend 502, Logto relivre)."""
+
+
+def facteurs_2fa(sub: str) -> list[dict]:
+    """Les facteurs de double authentification de `sub` (annuaire primaire), tels que
+    les rend la Management API (`GET /api/users/{id}/mfa-verifications` :
+    `{id, type, createdAt, …}` par facteur). Un appel, borné à `_DELAI_REQUETE_S`.
+    Lève `LectureInachevee` si Logto refuse ou ne répond pas."""
+    import requests
+    from urllib.parse import quote
+
+    from ..tenancy import require_primary_tenant
+    require_primary_tenant(sub, "lecture des facteurs de double authentification")
+    try:
+        tok = _mgmt_token()
+        r = requests.get(
+            f"{_logto_base()}/api/users/{quote(sub, safe='')}/mfa-verifications",
+            headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
+            timeout=_DELAI_REQUETE_S)
+    except (RuntimeError, requests.RequestException) as e:
+        raise LectureInachevee(
+            f"facteurs de double authentification de {sub} : {e}") from e
+    if r.status_code >= 400:
+        raise LectureInachevee(
+            f"facteurs de double authentification de {sub} : GET → {r.status_code}")
+    facteurs = r.json()
+    if not isinstance(facteurs, list):
+        raise LectureInachevee(
+            f"facteurs de double authentification de {sub} : réponse inattendue")
+    return facteurs
+
+
+class SuppressionInachevee(RuntimeError):
+    """Logto n'a pas supprimé le compte. Levée telle quelle, jamais avalée : l'effacement
+    d'org qui l'appelle reste à refaire (`docs/effacement-d-org.md`)."""
+
+
+def supprimer_compte(sub: str) -> bool:
+    """Supprime le compte `sub` de NOTRE annuaire (Management API `DELETE /api/users/{id}`).
+    Rend True s'il a été supprimé, False s'il n'existait déjà plus (404 : l'état voulu
+    est atteint). Lève `SuppressionInachevee` sur tout autre refus.
+
+    Le seul appelant est l'effacement d'une org, pour les comptes dont c'était la SEULE
+    org (décision du 12/11/2026) : un geste irréversible, posé après la confirmation du
+    titulaire et le délai de grâce — jamais un raccourci de « mise en pause »
+    (`docs/comptes-en-pause.md`)."""
+    import requests
+    from urllib.parse import quote
+
+    from ..tenancy import require_primary_tenant
+    require_primary_tenant(sub, "suppression d'un compte Logto")
+    try:
+        tok = _mgmt_token()
+        r = requests.delete(f"{_logto_base()}/api/users/{quote(sub, safe='')}",
+                            headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
+                            timeout=_DELAI_REQUETE_S)
+    except (RuntimeError, requests.RequestException) as e:
+        raise SuppressionInachevee(f"suppression du compte {sub} : {e}") from e
+    if r.status_code == 404:
+        return False
+    if r.status_code >= 400:
+        raise SuppressionInachevee(f"suppression du compte {sub} : DELETE → {r.status_code}")
+    return True
+
+
+def supprimer_organisation(logto_org_id: str) -> bool:
+    """Supprime l'organisation Logto miroir d'une org (`mfa_mirror`). False = déjà
+    partie (404). Lève `SuppressionInachevee` sur tout autre refus."""
+    import requests
+    from urllib.parse import quote
+    try:
+        tok = _mgmt_token()
+        r = requests.delete(f"{_logto_base()}/api/organizations/{quote(logto_org_id, safe='')}",
+                            headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
+                            timeout=_DELAI_REQUETE_S)
+    except (RuntimeError, requests.RequestException) as e:
+        raise SuppressionInachevee(f"suppression de l'organisation {logto_org_id} : {e}") from e
+    if r.status_code == 404:
+        return False
+    if r.status_code >= 400:
+        raise SuppressionInachevee(
+            f"suppression de l'organisation {logto_org_id} : DELETE → {r.status_code}")
+    return True

@@ -103,35 +103,36 @@ def make_state(sub: str, org_id: int, scope: str, verifier: str,
     correctly degrades an empty string to the historical oto-dashboard
     default. Already resolved/validated by the caller (`build_auth_url`) via
     `oauth_flow.resolve_return_app` — this module does not revalidate."""
-    payload = {"sub": sub, "org": org_id, "scope": scope, "v": verifier, "app": return_app}
+    payload = {"sub": sub, "org": org_id, "scope": scope, "v": verifier, "app": return_app,
+               "jti": oauth_flow.new_jti()}
     if group_id is not None:
         payload["group"] = group_id
     return oauth_flow.sign_state(_AUD, payload)
 
 
-def verify_state(state: str) -> Optional[tuple[str, int, str, str, Optional[int], str]]:
-    """(sub, org_id, scope, verifier, group_id, return_app) if the state is valid,
-    unexpired and issued FOR this flow; None otherwise. `group_id` is only set in
+def verify_state(state: Optional[str]) -> Optional[dict]:
+    """`{sub, org, scope, verifier, group, app, jti}` if the state is valid, unexpired,
+    issued FOR this flow and single-use (`jti`); None otherwise. `group` is only set in
     `group` scope — and a `scope="group"` payload without `group` is refused (we do not
     guess the team to write a secret to).
 
-    `return_app` missing (state signed BEFORE this field, still alive in the 10-minute
-    window of a deploy) or of the wrong type ⇒ `""`, not a refusal of the whole
-    state — losing the targeted return is no reason to lose the connection."""
+    `app` of the wrong type ⇒ `""`: losing the targeted return is no reason to lose
+    the connection."""
     data = oauth_flow.read_state(_AUD, state)
     if not data:
         return None
-    sub, org, scope, verifier, group, return_app = (
+    sub, org, scope, verifier, group, return_app, jti = (
         data.get("sub"), data.get("org"), data.get("scope"),
-        data.get("v"), data.get("group"), data.get("app"))
+        data.get("v"), data.get("group"), data.get("app"), data.get("jti"))
     if (not isinstance(sub, str) or not isinstance(org, int)
-            or scope not in ("member", "org", "group") or not isinstance(verifier, str)):
+            or scope not in ("member", "org", "group") or not isinstance(verifier, str)
+            or not isinstance(jti, str) or not jti):
         return None
     if scope == "group" and not isinstance(group, int):
         return None
-    if not isinstance(return_app, str):
-        return_app = ""
-    return sub, org, scope, verifier, group, return_app
+    return {"sub": sub, "org": org, "scope": scope, "verifier": verifier,
+            "group": group if scope == "group" else None,
+            "app": return_app if isinstance(return_app, str) else "", "jti": jti}
 
 
 def _read_fields(entity_type: str, entity_id: str) -> Optional[dict]:
@@ -358,3 +359,44 @@ def persist_token(sub: str, org_id: int, scope: str, token_response: dict,
     # probe (`oto_instance op=verify`), which runs in an authenticated context
     # and, for its part, persists the renewed token.
     return {"verified": None, "verify_error": None}
+
+
+# --- the return: the callback hands over, the front completes (`auth/flow.py`) ------
+
+def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
+    d = verify_state(state)
+    if d is None:
+        return None
+    return oauth_flow.ReturnState(d["sub"], d["org"], oauth_flow.resolve_return_app(d["app"]),
+                                  "salesforce", d["jti"], d)
+
+
+def _finish_return(d: dict, code: str) -> dict:
+    """RE-GUARD of the right to write at the requested scope (checked at start too, but
+    the state lives 10 min: a role can be lost between the click and the return, ADR
+    0038), then the exchange with the customer's Connected App (fields already saved at
+    that scope, PKCE verifier from the state), then the refresh token stored."""
+    from .. import roles
+
+    sub, org_id, scope, group_id = d["sub"], d["org"], d["scope"], d["group"]
+    if scope == "org" and not roles.is_org_admin(sub, org_id):
+        oauth_flow.not_allowed(
+            "Only an org admin can connect Salesforce for the whole org.")
+    if scope == "group" and not roles.can_admin_group(sub, group_id):
+        oauth_flow.not_allowed(
+            "Only a team lead can connect Salesforce for the team.")
+    fields = read_saved_fields(sub, org_id, scope, group_id)
+    if not fields:
+        raise RuntimeError("Credential not found on return from Salesforce.")
+    tokens = exchange_code(code, client_id=fields["client_id"],
+                           client_secret=fields["client_secret"],
+                           login_url=fields["login_url"], verifier=d["verifier"])
+    persist_token(sub, org_id, scope, tokens, group_id)
+    return {"account": None, "scope": scope}
+
+
+RETURN = oauth_flow.OAuthReturn(
+    audience=_AUD, callback_path=_CALLBACK_PATH, label="Salesforce",
+    default_card="salesforce", read=_return_state, finish=_finish_return,
+    cards=lambda: ("salesforce",))
+oauth_flow.declare_return(RETURN)

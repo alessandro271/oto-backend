@@ -136,9 +136,10 @@ def honorer(inv: dict, sub: str) -> Optional[dict]:
 
 
 def honorer_au_signup(sub: str, email: str) -> list[dict]:
-    """À la première inscription, par l'adresse VÉRIFIÉE (signup email + code) :
-    honore TOUS les partages en attente adressés à cette adresse — un par objet, et
-    une personne peut en avoir reçu plusieurs avant de créer son compte."""
+    """À la première inscription, par l'adresse VÉRIFIÉE selon le jeton (l'appelant,
+    `upsert_user`, n'appelle pas sinon) : honore TOUS les partages en attente adressés
+    à cette adresse et relevant du tenant du compte — un par objet, et une personne
+    peut en avoir reçu plusieurs avant de créer son compte."""
     email = _norm(email)
     if "@" not in email:
         return []
@@ -147,4 +148,6 @@ def honorer_au_signup(sub: str, email: str) -> list[dict]:
             f"SELECT id, invited_by, {_COLONNES} FROM org_invitations "
             f"WHERE resource_kind IS NOT NULL AND lower(email) = %s AND {_PENDING} "
             f"ORDER BY created_at", (email,)).fetchall()
-    return [r for r in (honorer(dict(row), sub) for row in rows) if r]
+    from . import db  # la façade (le nom n'est pas lié à l'import)
+    return [r for r in (honorer(dict(row), sub) for row in rows
+                        if db.invitation_du_tenant_de(dict(row), sub)) if r]
