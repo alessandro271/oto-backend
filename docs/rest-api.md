@@ -1130,6 +1130,11 @@ et que le corps illisible : refuser plutôt qu'ignorer. `filters` de
 erreur de forme, pas deux filtres. Une clé inconnue répétée reste `unknown_fields`.
 Garde : `tests/test_rest_query_repeated_param.py`.
 
+**Un octet NUL (`%00`) dans une clé ou une valeur de query string est REFUSÉ — `400
+invalid_query`, qui nomme la clé** — avant tout handler : aucune colonne texte de
+PostgreSQL ne le porte, le pilote levait en pleine lecture (un 500 sur n'importe quel
+filtre). Garde : `tests/test_query_valeurs_illisibles.py`.
+
 **Garde au seam** : `tests/test_rest_query_list_fields.py` balaye le registre, exige une
 **valeur d'exemple valide** par champ liste (`EXEMPLES`) et exerce le vrai handler avec
 cette URL. Un champ liste neuf sans exemple fait rouge — c'est cette ligne qui oblige à

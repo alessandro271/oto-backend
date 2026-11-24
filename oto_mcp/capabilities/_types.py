@@ -321,6 +321,20 @@ def cap_limit(value, maximum: int, *, default: Optional[int] = None) -> int:
     return max(1, min(value, maximum))
 
 
+def vide_en_absent(value):
+    """Une valeur de query string VIDE (`?since=&until=`) est un paramètre ABSENT.
+
+    C'est ce qu'envoie un formulaire dont le champ n'est pas rempli, et ce que la face
+    REST recevait telle quelle : la chaîne vide partait au SQL en `''::timestamptz` et
+    la lecture tombait en 500 (oto-backend, durcissement CASA 6.2.1). Validateur
+    `mode="before"` des bornes horaires : il NORMALISE seulement — une valeur non vide
+    mais illisible est refusée nommée plus loin, par le store qui la lit
+    (`db.BorneIllisible`)."""
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
 def apply_flat_signature(fn: Callable, model: type[BaseModel]) -> Callable:
     """Expose les champs de `model` en paramètres KEYWORD_ONLY plats sur `fn`.
 
