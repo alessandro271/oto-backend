@@ -2,44 +2,40 @@
 PROUVÉE de l'appelant — utilisateur, équipe, org. La clé du tenant est une clé partagée du
 point de vue de l'org (payée par l'opérateur, refacturée sur le tenant primaire) : elle ne
 la sert pas, et l'ordre par défaut la range derrière les clés de l'appelant. Un mode
-illisible (`unknown`) n'est pas une preuve.
-
-L'étape de référence est le profil Pipecorn de `waterfall_person` : la révélation de
-téléphone Apollo, qui tenait ce rôle, part aussi sur la clé partagée depuis qu'Apollo
-déclare ce qu'elle coûte (`tools/apollo.py`)."""
+illisible (`unknown`) n'est pas une preuve."""
 import pytest
 
 from oto_mcp.waterfall import ordre, plan, telephone
 
 from _waterfall_faux import _made, _run, calls  # noqa: F401 — la fixture des fournisseurs
 
-PIPECORN = "pipecorn"
-PROFIL = "https://linkedin.com/in/jane"
+APOLLO = "apollo_reveal_phone"
 
 
 @pytest.mark.parametrize("mode", ["tenant", "platform", "open", "unknown"])
 def test_une_cle_qui_n_est_pas_celle_de_l_appelant_saute_l_etape(calls, mode):
-    calls["modes"] = {PIPECORN: mode}
-    out = _run("waterfall_person", linkedin_url=PROFIL, providers=["pipecorn"])
+    calls["modes"] = {APOLLO: mode}
+    out = _run("waterfall_phone", linkedin_url="https://linkedin.com/in/jane",
+               providers=["apollo"])
     assert out["attempts"][0]["status"] == "skipped"
     assert out["attempts"][0]["code"] == "own_key_required"
-    assert PIPECORN not in _made(calls)
+    assert APOLLO not in _made(calls)
 
 
 @pytest.mark.parametrize("mode", ["user", "group", "org"])
 def test_la_cle_de_l_appelant_sert_l_etape(calls, mode):
-    calls["modes"] = {PIPECORN: mode}
-    _run("waterfall_person", linkedin_url=PROFIL, providers=["pipecorn"])
-    assert _made(calls)[0] == PIPECORN
+    calls["modes"] = {APOLLO: mode}
+    _run("waterfall_phone", linkedin_url="https://linkedin.com/in/jane", providers=["apollo"])
+    assert _made(calls)[0] == APOLLO
 
 
 @pytest.mark.parametrize("mode, usable", [
     ("user", True), ("group", True), ("org", True),
     ("tenant", False), ("platform", False), ("unknown", False), ("forbidden", False)])
 def test_le_plan_dit_la_meme_chose_que_l_appel(monkeypatch, mode, usable):
-    monkeypatch.setattr(ordre, "_configured_steps", lambda ns: ["pipecorn"])
+    monkeypatch.setattr(ordre, "_configured_steps", lambda ns: ["apollo"])
     monkeypatch.setattr(ordre, "_key_modes", lambda sub, tools: {t: mode for t in tools})
-    (row,) = plan.plan("waterfall_person", "sub-test")["steps"]
+    (row,) = plan.plan("waterfall_phone", "sub-test")["steps"]
     assert row["own_key_only"] is True
     assert (row["key_mode"], row["usable"]) == (mode, usable)
 

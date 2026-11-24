@@ -364,7 +364,7 @@ def test_webhook_url_n_est_plus_au_schema_mais_reste_accepte(monkeypatch):
     client = MagicMock()
     client.match_person.return_value = {"person": {"id": "p1"}, "request_id": 11}
     client.bulk_match_people.return_value = {"matches": [{"id": "p1"}], "request_id": 12}
-    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: MagicMock(key="k"))
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: MagicMock(key="k", is_platform=False))
     monkeypatch.setattr(apollo_client, "ApolloClient", lambda **kw: client)
     monkeypatch.setattr(apollo_receiver, "commander",
                         lambda cle: ("j", "https://mcp.acme.test/api/receivers/apollo/phones/j"))
@@ -404,7 +404,7 @@ def test_la_commande_est_abandonnee_quand_apollo_ne_trouve_personne(monkeypatch)
     client = MagicMock()
     client.match_person.return_value = None
     gestes: list = []
-    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: MagicMock(key="k"))
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: MagicMock(key="k", is_platform=False))
     monkeypatch.setattr(apollo_client, "ApolloClient", lambda **kw: client)
     monkeypatch.setattr(apollo_receiver, "commander", lambda cle: ("j", "https://x.test/r/j"))
     monkeypatch.setattr(apollo_receiver, "abandonner", lambda j: gestes.append(("abandon", j)))

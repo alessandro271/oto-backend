@@ -64,7 +64,7 @@ def _lemlist_phone(res, inputs):
 
 
 #: Synchronous steps first, by provider cost and yield; the asynchronous ones last (a
-#: `pending` one stops the cascade): Apollo's reveal (own key, else the shared one), then the
+#: `pending` one stops the cascade): Apollo's reveal on the caller's own key, then the
 #: slow ones — FullEnrich, 30 s to 4 min, at the end. EXCEPT Pipecorn, which heads the
 #: table although it is asynchronous: one lookup runs its own cascade of providers and
 #: bills only a mobile found. It does not stop the cascade: not done within its 20 s,
@@ -103,10 +103,9 @@ PHONE_STEPS: tuple[Step, ...] = (
          explains="Forager's phone numbers, from a LinkedIn profile."),
     Step("apollo", "apollo_reveal_phone", _PERSON_IDS,
          _apollo_args, _apollo_reveal_phone,
-         "8 Apollo credits per number found, plus 1 for the match (asynchronous)",
-         collect=_APOLLO_REVEAL_COLLECT,
-         explains=("Apollo's phone reveal — your own Apollo key, else the shared one; "
-                   "asynchronous.")),
+         "~9 Apollo credits per reveal (own key only; asynchronous)",
+         collect=_APOLLO_REVEAL_COLLECT, own_key_only=True,
+         explains="Apollo's phone reveal — your own Apollo key only; asynchronous."),
     Step("lemlist", "lemlist_enrich", (("linkedin_url",), _NAMES_AND_DOMAIN),
          lambda i: _lemlist_args(i, find_phone=True),
          _lemlist_phone, "lemlist credits per phone found (own key only; asynchronous)",

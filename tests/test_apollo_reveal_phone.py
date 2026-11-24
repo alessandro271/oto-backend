@@ -6,10 +6,12 @@ Ce que ces tests figent :
 
 1. **Le reveal part sur la clé propre, SINON sur la clé plateforme** — depuis
    qu'Apollo DÉCLARE ce qu'il facture (`credits_consumed` de l'enveloppe livrée :
-   8 par numéro trouvé, 0 sinon, mesuré le 2026-11-22). Sur la clé commune, la
-   commande vérifie et débite le pire cas (9 unités) du quota, et seule l'org qui a
-   commandé peut sonder Apollo pour ce `request_id`. La relève trace le chiffre
-   déclaré (`quantity`) sous l'id de la commande — c'est elle que le facturant compte.
+   8 pour une personne dont le numéro est trouvé, 0 sinon, plus 1 pour le match ;
+   mesuré le 2026-11-22). Sur la clé commune, la commande vérifie et débite le pire
+   cas (9 unités) du quota, est refusée au-delà du plafond quotidien de l'org, et seule
+   l'org qui a commandé peut sonder Apollo pour ce `request_id`. La relève trace le
+   chiffre déclaré (`quantity`) sous l'id de la commande et marque la commande relevée ;
+   un coût non déclaré est un refus nommé, jamais un zéro.
 2. **`request_id` est servi en CHAÎNE.** C'est un entier signé 64 bits (~7,2e17),
    au-delà de la précision d'un nombre JavaScript : rendu en nombre il revient
    faux d'une unité ou deux, sans que rien ne le dise, et un id faux ne sonde
@@ -43,7 +45,8 @@ _DEFAUT = object()
 
 
 def _mount(monkeypatch, *, byo: bool = True, is_platform=None, quota=None,
-           match_return=_DEFAUT, poll_return=_DEFAUT, recu=None, connue=True):
+           match_return=_DEFAUT, poll_return=_DEFAUT, recu=None, connue=True,
+           du_jour=0):
     """Monte apollo.py sur un FastMCP nu. `byo=False` simule l'absence de
     credential propre (donc le palier plateforme) en faisant lever
     `resolve_credential` comme le fait la vraie résolution.
@@ -109,6 +112,10 @@ def _mount(monkeypatch, *, byo: bool = True, is_platform=None, quota=None,
                         lambda j: client.receveur.append(("abandon", j)))
     monkeypatch.setattr(apollo_receiver, "resultat_recu", lambda rid, cle: recu)
     monkeypatch.setattr(apollo_receiver, "commande_connue", lambda rid, cle: connue)
+    monkeypatch.setattr(apollo_receiver, "commandes_du_jour", lambda cle: du_jour)
+    client.releves = []
+    monkeypatch.setattr(apollo_receiver, "marquer_releve",
+                        lambda rid, cle: client.releves.append(str(rid)))
 
     m = FastMCP("t")
     apollo_tool.register(m)
@@ -221,13 +228,81 @@ def test_a_reveal_that_found_nothing_traces_zero(monkeypatch):
     assert client.trace["quantity"] == 0
 
 
-def test_a_cost_apollo_did_not_declare_is_never_guessed(monkeypatch):
+def test_on_the_platform_key_an_undeclared_cost_is_a_named_refusal(monkeypatch):
+    """Un coût illisible ne devient jamais zéro : la relève est REFUSÉE, nommément, et
+    la commande reste non relevée — le relevé serveur la facture au pire cas."""
+    from oto_mcp.mcp_errors import McpError
+
     corps = {"webhook_result": {"people": [
         {"id": "p1", "phone_numbers": [{"sanitized_number": "+33600000000"}]}]}}
     m, client, _ = _mount(monkeypatch, byo=False, recu=corps)
-    _tool(m, "apollo_reveal_phone_result")(request_id="42")
+    with pytest.raises(McpError) as e:
+        _tool(m, "apollo_reveal_phone_result")(request_id="42")
+    assert e.value.error.data["code"] == "apollo_cost_undeclared"
+    assert client.releves == [], "non relevée : le relevé serveur la facturera"
+    assert client.trace == {"quantity": 0}
+
+
+def test_on_your_own_key_an_undeclared_cost_is_served_unbilled(monkeypatch):
+    corps = {"webhook_result": {"people": [
+        {"id": "p1", "phone_numbers": [{"sanitized_number": "+33600000000"}]}]}}
+    m, client, _ = _mount(monkeypatch, byo=True, recu=corps)
+    out = _tool(m, "apollo_reveal_phone_result")(request_id="42")
+    assert out["done"] is True
     assert "quantity" not in client.trace
     assert client.trace["apollo_reveal_request_id"] == "42"
+
+
+def test_a_platform_read_with_its_cost_marks_the_order_settled(monkeypatch):
+    corps = {"credits_consumed": 8, "webhook_result": {"people": [
+        {"id": "p1", "phone_numbers": [{"sanitized_number": "+33600000000"}]}]}}
+    m, client, _ = _mount(monkeypatch, byo=False, recu=corps)
+    _tool(m, "apollo_reveal_phone_result")(request_id="718432950164203900")
+    assert client.releves == ["718432950164203900"]
+
+
+def test_an_own_key_read_marks_nothing(monkeypatch):
+    corps = {"credits_consumed": 8, "webhook_result": {"people": []}}
+    m, client, _ = _mount(monkeypatch, byo=True, recu=corps)
+    _tool(m, "apollo_reveal_phone_result")(request_id="9")
+    assert client.releves == []
+
+
+def test_the_org_daily_cap_refuses_before_anything_is_ordered(monkeypatch):
+    from oto_mcp.mcp_errors import McpError
+
+    monkeypatch.setenv("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY", "5")
+    m, client, usage = _mount(monkeypatch, byo=False, du_jour=5)
+    with pytest.raises(McpError) as e:
+        _tool(m, "apollo_reveal_phone")(person_id="p1")
+    assert e.value.error.data == {"code": "apollo_phone_daily_cap", "used": 5,
+                                  "limit": 5, "retryable": False}
+    assert not client.match_person.called and client.receveur == []
+    assert usage == []
+
+
+def test_under_the_cap_the_order_goes(monkeypatch):
+    monkeypatch.setenv("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY", "5")
+    m, client, _ = _mount(monkeypatch, byo=False, du_jour=4)
+    _tool(m, "apollo_reveal_phone")(person_id="p1")
+    assert client.match_person.called
+
+
+def test_your_own_key_has_no_org_cap(monkeypatch):
+    monkeypatch.setenv("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY", "0")
+    m, client, _ = _mount(monkeypatch, byo=True, du_jour=999)
+    _tool(m, "apollo_reveal_phone")(person_id="p1")
+    assert client.match_person.called
+
+
+def test_an_unreadable_cap_falls_back_to_the_default(monkeypatch):
+    from oto_mcp.mcp_errors import McpError
+
+    monkeypatch.setenv("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY", "beaucoup")
+    m, client, _ = _mount(monkeypatch, byo=False, du_jour=100)
+    with pytest.raises(McpError) as e:
+        _tool(m, "apollo_reveal_phone")(person_id="p1")
+    assert e.value.error.data["limit"] == 100
 
 
 def test_a_pending_check_traces_a_zero_not_an_absence(monkeypatch):

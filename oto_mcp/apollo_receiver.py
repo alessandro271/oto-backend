@@ -255,3 +255,20 @@ def ecrire_numeros(result: dict, *, datastore: Any, row_id: Optional[str],
     if lot is not None:
         out["errors"] += [{"row_id": i, "code": "row_not_found"} for i in lot.absentes]
     return out
+
+
+def commandes_du_jour(cle: ResolvedCredential) -> int:
+    """Les commandes passées aujourd'hui (UTC) dans la portée de `cle` — sur la clé
+    plateforme, celles de l'org de l'appelant : le plafond par org de
+    `apollo_reveal_phone` en lit le compte."""
+    return db_apollo.commandes_du_jour(portee(cle))
+
+
+def marquer_releve(request_id: str, cle: ResolvedCredential) -> None:
+    """La relève a tracé le coût de cette commande (clé plateforme) : le relevé serveur
+    (`apollo_releve.py`) ne la facturera pas. Ne lève pas : la relève est servie, et le
+    facturant ne garde qu'une ligne par commande si le relevé la retrace."""
+    try:
+        db_apollo.marquer_releve(portee(cle), str(request_id))
+    except Exception:  # noqa: BLE001 — journalisé ; le facturant dédoublonne
+        logger.warning("receveur apollo : relève non marquée", exc_info=True)
