@@ -36,6 +36,7 @@ from .. import db
 from . import audit_log, monitoring
 from ._authz import COMMERCE_SERVICE, ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._lecture_bornee import bornee
+from ._org_du_service import ORG_INCONNUE, org_ou_404
 from ._types import (cap_limit, AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
 from .registry import CAPABILITIES
@@ -1235,6 +1236,26 @@ def _view_as_writes(ctx: ResolvedCtx, inp: OrgViewAsWritesInput) -> dict:
                        for r in rows]}
 
 
+# ── la face du SERVICE commerce ─────────────────────────────────────────────
+# Les mêmes lentilles que celles servies aux comptes, sous `/api/service/` : même
+# handler, même sortie. Le service n'a pas d'org, aucune appartenance ne prouve que
+# l'org existe : elle est vérifiée ici (`org_ou_404`), avant la lecture.
+
+def _billable_tools_service(ctx: ResolvedCtx, inp: OrgBillableToolsInput) -> dict:
+    org_ou_404(inp.org_id)
+    return _billable_tools(ctx, inp)
+
+
+def _connections_service(ctx: ResolvedCtx, inp: OrgConnectionsInput) -> dict:
+    org_ou_404(inp.org_id)
+    return _connections(ctx, inp)
+
+
+def _runs_service(ctx: ResolvedCtx, inp: OrgRunsInput) -> dict:
+    org_ou_404(inp.org_id)
+    return _runs(ctx, inp)
+
+
 _ADMIN_OF = ORG_ADMIN_OF("org_id")
 
 CAPABILITIES += [
@@ -1270,6 +1291,12 @@ CAPABILITIES += [
                Input=OrgBillableToolsInput, authz=_MEMBER_OF, mcp=None,
                Output=OrgBillableTools, errors=(_REFUS_FENETRE,),
                rest=RestBinding("GET", "/api/orgs/{id}/usage/tools", _ID)),
+    Capability(key="service.org.usage.tools", handler=bornee(_billable_tools_service),
+               Input=OrgBillableToolsInput, authz=COMMERCE_SERVICE, mcp=None,
+               Output=OrgBillableTools, errors=(ORG_INCONNUE, _REFUS_FENETRE),
+               description="[service commerce] The billable calls of an org summed per "
+                           "tool, as `org.usage.tools` serves them to members.",
+               rest=RestBinding("GET", "/api/service/orgs/{id}/usage/tools", _ID)),
     # Même lentille membre, pour les connexions de messagerie d'une org (voir le bloc
     # au-dessus de `OrgConnectionRow`). `mcp=None` : un tuyau de relevé, pas un outil
     # d'agent.
@@ -1277,6 +1304,12 @@ CAPABILITIES += [
                Input=OrgConnectionsInput, authz=_MEMBER_OF, mcp=None,
                Output=OrgConnections,
                rest=RestBinding("GET", "/api/orgs/{id}/usage/connections", _ID)),
+    Capability(key="service.org.usage.connections", handler=_connections_service,
+               Input=OrgConnectionsInput, authz=COMMERCE_SERVICE, mcp=None,
+               Output=OrgConnections, errors=(ORG_INCONNUE,),
+               description="[service commerce] The messaging connections of an org, as "
+                           "`org.usage.connections` serves them to members.",
+               rest=RestBinding("GET", "/api/service/orgs/{id}/usage/connections", _ID)),
     Capability(key="org.usage.tokens", handler=bornee(_tokens), Input=OrgTokensInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgTokens,
                rest=RestBinding("GET", "/api/orgs/{id}/usage/tokens", _ID)),
@@ -1306,6 +1339,13 @@ CAPABILITIES += [
     Capability(key="org.monitoring.runs", handler=bornee(_runs), Input=OrgRunsInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgRuns, errors=(_REFUS_CURSEUR,),
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/runs", _ID)),
+    Capability(key="service.org.monitoring.runs", handler=bornee(_runs_service),
+               Input=OrgRunsInput, authz=COMMERCE_SERVICE, mcp=None, Output=OrgRuns,
+               errors=(ORG_INCONNUE, _REFUS_CURSEUR),
+               description="[service commerce] A page of the org's runs, as "
+                           "`org.monitoring.runs` serves it to an org admin. Same filters, "
+                           "page and cursor contract.",
+               rest=RestBinding("GET", "/api/service/orgs/{id}/monitoring/runs", _ID)),
     Capability(key="org.monitoring.run", handler=_run, Input=OrgRunInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgRun,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/runs/{run_id}", _ID)),
