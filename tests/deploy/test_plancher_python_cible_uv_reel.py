@@ -5,12 +5,15 @@ géré du rôle (`/opt/<i>/python`), jamais un Python du système, et `uv sync` 
 plancher égal, `uv sync` ne recrée rien.
 
 Le passage 3.10 → 3.12 est rejoué en 3.11 → 3.12 sur deux interpréteurs gérés par uv déjà
-présents sur la machine (aucun téléchargement : sans eux, le module est ignoré). Le tag est
+présents sur la machine (aucun téléchargement : sans eux, le module est ignoré — sauf sous
+`OTO_BANC_UV_REEL_EXIGE=1`, où leur absence est un échec : le job CI
+`plancher-python-uv-reel` les pose et l'exige). Le tag est
 un projet minimal sans dépendance, pour que `uv sync` reste hors réseau ; le reste de la
 chaîne est celui de `_banc_cible.py` (root simulé, racine jetable).
 """
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -18,7 +21,7 @@ import subprocess
 
 import pytest
 
-from _banc_cible import Banc
+from _banc_cible import DECLARATION, Banc
 
 UV = shutil.which("uv")  # un chemin, pas un travail
 ANCIEN, NOUVEAU = "3.11", "3.12"
@@ -37,7 +40,10 @@ def _gere(version: str) -> bool:
 def uv_reel():
     """Sondé au test, jamais à l'import (un import définit, il ne travaille pas)."""
     if not (_gere(ANCIEN) and _gere(NOUVEAU)):
-        pytest.skip(f"uv et ses interpréteurs gérés {ANCIEN} et {NOUVEAU} requis (aucun téléchargement)")
+        motif = f"uv et ses interpréteurs gérés {ANCIEN} et {NOUVEAU} requis (aucun téléchargement)"
+        if os.environ.get("OTO_BANC_UV_REEL_EXIGE") == "1":
+            pytest.fail(motif)
+        pytest.skip(motif)
 
 
 def _plancher(banc: Banc, version: str) -> None:
@@ -66,10 +72,10 @@ def banc(tmp_path, uv_reel):
     return banc
 
 
-def _monter(banc: Banc, tag: str) -> subprocess.CompletedProcess:
+def _monter(banc: Banc, tag: str, **options) -> subprocess.CompletedProcess:
     banc.trace.write_text("")
     fini = banc.lancer("deployer.sh", "deployer", "prod", tag, UV_PYTHON_DOWNLOADS="never",
-                       HOME=str(banc.racine))
+                       HOME=str(banc.racine), **options)
     assert fini.returncode == 0, fini.stdout + fini.stderr
     return fini
 
@@ -136,3 +142,26 @@ def test_plancher_qui_monte_sur_le_vrai_uv(banc):
     # et celle d'après migre enfin la verte
     _monter(banc, "v2.2.0")
     assert _version(banc, "green") == NOUVEAU and _home(banc, "green").is_relative_to(pythons)
+
+
+def test_choix_de_l_instance_sur_le_vrai_uv(banc, tmp_path):
+    """Plancher 3.11, l'instance choisit 3.12 : la couleur installée passe en 3.12 sur
+    l'interpréteur géré du rôle, et `uv sync --frozen` le garde (3.12 satisfait `>=3.11`) ;
+    la montée suivante, au même choix, ne recrée rien."""
+    pythons = (banc.racine / "opt/exemple/python").resolve()
+    _monter(banc, "v1.0.0")
+    _monter(banc, "v1.1.0")
+    doc = json.loads(DECLARATION.read_text())
+    doc["python"] = NOUVEAU
+    declaration = tmp_path / "declaration_python.json"
+    declaration.write_text(json.dumps(doc))
+    fini = _monter(banc, "v2.0.0", declaration=declaration)
+    assert f"venv {ANCIEN} → {NOUVEAU} recréé" in fini.stdout
+    assert _version(banc, "green") == NOUVEAU and _home(banc, "green").is_relative_to(pythons)
+    assert _version(banc, "blue") == ANCIEN                 # en service pendant la montée
+    (_venv(banc, "green") / "temoin").write_text("green")
+    _monter(banc, "v2.1.0", declaration=declaration)       # la bleue
+    assert _version(banc, "blue") == NOUVEAU
+    _monter(banc, "v2.2.0", declaration=declaration)       # la verte, déjà au choix : rien
+    assert (_venv(banc, "green") / "temoin").exists()
+    assert not [c for c in banc.commandes() if c.startswith("uv venv")]
