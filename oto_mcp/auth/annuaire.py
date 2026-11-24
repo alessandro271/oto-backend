@@ -239,7 +239,9 @@ def ensure_api_resource(indicator: str, *, name: str | None = None) -> None:
 # Un mot de passe changé ne ferme RIEN chez Logto : ni les sessions de son annuaire, ni
 # les autorisations (grants) qui portent les jetons de rafraîchissement des clients
 # OAuth — un client MCP autorisé depuis une session volée se rafraîchit donc
-# indéfiniment. Appelé par la réception du webhook Logto (`auth/revocation_mot_de_passe`).
+# indéfiniment. Appelé par la réception du webhook Logto (`auth/revocation_mot_de_passe`),
+# pour un mot de passe changé comme pour un changement de double authentification, et par
+# la remise à zéro de la double authentification (`capabilities/users_admin`).
 
 #: Ce qu'une requête de management attend au plus, et ce que la fermeture entière
 #: attend au plus : une borne posée à SON niveau, pas seulement au plus profond — une
@@ -316,6 +318,40 @@ def fermer_sessions(sub: str) -> dict:
                    if _appel("DELETE", f"{compte}/grants/{quote(gid, safe='')}")
                    is not None)
     return {"sessions": fermees, "grants": revoques}
+
+
+class LectureInachevee(RuntimeError):
+    """Logto n'a pas rendu ce qu'on lui demandait. Levée telle quelle, jamais avalée :
+    l'appelant dit « à refaire » (le webhook rend 502, Logto relivre)."""
+
+
+def facteurs_2fa(sub: str) -> list[dict]:
+    """Les facteurs de double authentification de `sub` (annuaire primaire), tels que
+    les rend la Management API (`GET /api/users/{id}/mfa-verifications` :
+    `{id, type, createdAt, …}` par facteur). Un appel, borné à `_DELAI_REQUETE_S`.
+    Lève `LectureInachevee` si Logto refuse ou ne répond pas."""
+    import requests
+    from urllib.parse import quote
+
+    from ..tenancy import require_primary_tenant
+    require_primary_tenant(sub, "lecture des facteurs de double authentification")
+    try:
+        tok = _mgmt_token()
+        r = requests.get(
+            f"{_logto_base()}/api/users/{quote(sub, safe='')}/mfa-verifications",
+            headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
+            timeout=_DELAI_REQUETE_S)
+    except (RuntimeError, requests.RequestException) as e:
+        raise LectureInachevee(
+            f"facteurs de double authentification de {sub} : {e}") from e
+    if r.status_code >= 400:
+        raise LectureInachevee(
+            f"facteurs de double authentification de {sub} : GET → {r.status_code}")
+    facteurs = r.json()
+    if not isinstance(facteurs, list):
+        raise LectureInachevee(
+            f"facteurs de double authentification de {sub} : réponse inattendue")
+    return facteurs
 
 
 class SuppressionInachevee(RuntimeError):

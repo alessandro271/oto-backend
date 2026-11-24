@@ -378,6 +378,9 @@ CLASSEMENT: dict[str, Table] = {
                                       "légaux"),
     "outreach_sends": exclue(ParSub(), "nos relances de plateforme"),
     "outreach_optouts": exclue(ParSub(), "nos relances de plateforme"),
+    "empreintes_2fa": exclue(ParSub(), "empreinte des facteurs de double authentification "
+                             "d'un compte de NOTRE annuaire : la cible a le sien, et la "
+                             "pose à la première livraison de son webhook"),
     "org_erasures": exclue(ParOrg(), "la preuve de NOS effacements d'org (RGPD art. 5 "
                            "§2) : elle reste chez l'instance qui a effacé"),
     # Le budget d'unités (`docs/credits-au-moment-de-l-appel.md`) est VERSÉ par le
