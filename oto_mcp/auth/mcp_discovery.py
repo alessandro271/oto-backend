@@ -19,7 +19,11 @@ gives the server's URL and nothing else. At the first "Connect" of a member:
    member after the first connects without discovery, and with the same client.
 
 Every request goes out under the egress guard, without following a redirect; every
-document read is bounded and must be JSON.
+document read is bounded and must be JSON. The server's address (typed by the admin) and
+the well-known paths on its host follow the platform's egress policy; an address the
+remote server ANNOUNCES (its metadata, its sign-in server, its registration endpoint)
+gets no declared exception: an exception covers what an operator chose, never what a
+third party points to.
 """
 from __future__ import annotations
 
@@ -49,30 +53,47 @@ class DiscoveryRefused(RuntimeError):
         self.code, self.message = code, message
 
 
-def _https(url: str, what: str) -> str:
+def _https(url: str, what: str, *, annonce: bool = True) -> str:
+    """`url` if https and allowed by the egress guard. `annonce` = the remote server
+    named it: no declared egress exception applies (`egress.check_url`)."""
     p = urlsplit(url or "")
     if p.scheme != "https" or not p.hostname or p.username or p.password:
         raise DiscoveryRefused("mcp_discovery_failed",
                                f"The {what} the MCP server announced is not an https "
                                "address: nothing was followed.")
-    egress.check_url(url, connector="api", field=what.replace(" ", "_"))
+    egress.check_url(url, connector="api", field=what.replace(" ", "_"),
+                     exceptions_declarees=not annonce)
     return url
 
 
-def _get_json(url: str, what: str) -> Optional[dict]:
-    _https(url, what)
+def _lire_borne(r: requests.Response) -> Optional[bytes]:
+    """The body, or None past `_MAX` bytes (or when the transfer breaks)."""
+    corps = bytearray()
+    try:
+        for chunk in r.iter_content(65536):
+            corps += chunk
+            if len(corps) > _MAX:
+                return None
+    except requests.RequestException:
+        return None
+    finally:
+        r.close()
+    return bytes(corps)
+
+
+def _get_json(url: str, what: str, *, annonce: bool = True) -> Optional[dict]:
+    _https(url, what, annonce=annonce)
     try:
         r = requests.get(url, timeout=_TIMEOUT, allow_redirects=False,
                          headers={"Accept": "application/json"}, stream=True)
     except requests.RequestException:
         return None
     if r.status_code != 200:
+        r.close()
         return None
-    corps = bytearray()
-    for chunk in r.iter_content(65536):
-        corps += chunk
-        if len(corps) > _MAX:
-            return None
+    corps = _lire_borne(r)
+    if corps is None:
+        return None
     try:
         v = json.loads(corps)
     except ValueError:
@@ -91,11 +112,13 @@ def _well_known(base: str, name: str) -> list[str]:
     return out
 
 
-def _resource_metadata_url(mcp_url: str) -> list[str]:
-    """Where the server says its metadata lives (the 401's header), then RFC 9728's."""
-    urls: list[str] = []
+def _resource_metadata_url(mcp_url: str) -> list[tuple[str, bool]]:
+    """Where the server says its metadata lives (the 401's header: announced), then RFC
+    9728's well-known paths on the server's own host. Only the status and the headers
+    of the `initialize` are read, never its body."""
+    urls: list[tuple[str, bool]] = []
     try:
-        r = requests.post(mcp_url, timeout=_TIMEOUT, allow_redirects=False,
+        r = requests.post(mcp_url, timeout=_TIMEOUT, allow_redirects=False, stream=True,
                           headers={"Content-Type": "application/json",
                                    "Accept": "application/json, text/event-stream"},
                           data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -103,26 +126,27 @@ def _resource_metadata_url(mcp_url: str) -> list[str]:
                                                       "capabilities": {},
                                                       "clientInfo": {"name": "oto-custom-api",
                                                                      "version": "1"}}}))
+        r.close()
         if r.status_code == 401:
             m = _RM.search(r.headers.get("WWW-Authenticate") or "")
             if m:
-                urls.append(m.group(1))
+                urls.append((m.group(1), True))
         elif r.status_code < 300:
             raise DiscoveryRefused("mcp_no_auth_needed",
                                    "This MCP server answered without asking for a "
                                    "sign-in: set the app's mode to `none`.")
     except requests.RequestException:
         raise DiscoveryRefused("mcp_unreachable", "The MCP server could not be reached.")
-    return urls + _well_known(mcp_url, "oauth-protected-resource")
+    return urls + [(u, False) for u in _well_known(mcp_url, "oauth-protected-resource")]
 
 
 def discover(mcp_url: str) -> dict:
     """`{resource, issuer, authorize_url, token_url, scope, registration_endpoint, cimd}`
     of an MCP server, or `DiscoveryRefused` naming the step that failed."""
-    _https(mcp_url, "base url")
+    _https(mcp_url, "base url", annonce=False)
     prm = None
-    for u in _resource_metadata_url(mcp_url):
-        prm = _get_json(u, "resource metadata")
+    for u, annonce in _resource_metadata_url(mcp_url):
+        prm = _get_json(u, "resource metadata", annonce=annonce)
         if prm and prm.get("authorization_servers"):
             break
     if not prm or not prm.get("authorization_servers"):
@@ -192,14 +216,19 @@ def client_document() -> dict:
 def _register(endpoint: str) -> str:
     from . import api_oauth
     _https(endpoint, "registration endpoint")
+    body: object = {}
     try:
-        r = requests.post(endpoint, timeout=_TIMEOUT, allow_redirects=False,
+        r = requests.post(endpoint, timeout=_TIMEOUT, allow_redirects=False, stream=True,
                           json={"client_name": CLIENT_NAME,
                                 "redirect_uris": [api_oauth.redirect()],
                                 "grant_types": ["authorization_code", "refresh_token"],
                                 "response_types": ["code"],
                                 "token_endpoint_auth_method": "none"})
-        body = r.json() if r.status_code in (200, 201) else {}
+        if r.status_code in (200, 201):
+            corps = _lire_borne(r)
+            body = json.loads(corps) if corps else {}
+        else:
+            r.close()
     except (requests.RequestException, ValueError):
         body = {}
     cid = body.get("client_id") if isinstance(body, dict) else None

@@ -32,7 +32,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ... import credentials_store, roles
+from ... import credentials_store, egress, roles
+from ...auth import mcp_discovery
 from ...connectors import api_apps as apps
 from ...connectors import api_operations as ops_store
 from ...db import api_apps as store
@@ -262,7 +263,6 @@ def _patch(ctx: ResolvedCtx, inp: PatchInput) -> dict:
     if given is not None and _rediscover(old, given):
         # Another MCP server: its sign-in is found again at the next Connect, never
         # carried over from the old one (unless the admin sends new values).
-        from ...auth import mcp_discovery
         for k in mcp_discovery.FILLED:
             if k not in given or given.get(k) == old.get(k):
                 given[k] = ""
@@ -313,11 +313,12 @@ def _connect(ctx: ResolvedCtx, inp: ConnectInput) -> dict:
     conn = app.get("connection") or {}
     if conn.get("protocol") == "mcp" and conn.get("auth_mode") == "oauth2_user":
         # Like Claude: the MCP server says where to sign in (`auth/mcp_discovery.py`).
-        from ...auth import mcp_discovery
         try:
             app = mcp_discovery.complete_app(app, ctx.sub)
         except mcp_discovery.DiscoveryRefused as e:
-            raise AuthzDenied(409, "mcp_discovery_failed", e.message)
+            raise AuthzDenied(409, e.code, e.message)
+        except egress.EgressRefused as e:
+            raise AuthzDenied(400, "egress_refused", str(e))
     try:
         url = api_oauth.authorize_url(app, ctx.sub, inp.app or "")
     except api_oauth.ApiOAuthRefused as e:
@@ -393,9 +394,22 @@ CAPABILITIES += [
                                      "the app's sign-in coordinates are incomplete"),
                        DeclaredError(403, "personal_key_forbidden",
                                      "the org forbids personal keys for the Custom API"),
+                       DeclaredError(400, "egress_refused",
+                                     "protocol mcp: an address met while discovering the "
+                                     "server's sign-in is refused by the egress policy"),
                        DeclaredError(409, "mcp_discovery_failed",
                                      "protocol mcp: the server's sign-in could not be "
-                                     "discovered, or it accepts no client oto can be")),
+                                     "discovered (no usable metadata, no PKCE S256)"),
+                       DeclaredError(409, "mcp_unreachable",
+                                     "protocol mcp: the server could not be reached"),
+                       DeclaredError(409, "mcp_no_auth_needed",
+                                     "protocol mcp: the server asks for no sign-in"),
+                       DeclaredError(409, "mcp_registration_refused",
+                                     "protocol mcp: the sign-in server refused to "
+                                     "register oto as a client"),
+                       DeclaredError(409, "mcp_client_required",
+                                     "protocol mcp: the sign-in server accepts no client "
+                                     "oto can be: an org admin sets the client ID")),
                # A sub-action of the app resource, like `/import`: the path names the
                # app, not a connector flow (the exemption is in
                # `tests/connectors/test_connector_flow.py`). The common

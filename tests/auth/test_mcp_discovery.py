@@ -21,12 +21,19 @@ ASM = {"issuer": "https://auth.example.test/oidc",
 
 
 class _Rep:
-    def __init__(self, status=200, body=None, headers=None):
+    def __init__(self, status=200, body=None, headers=None, raw=None):
         self.status_code, self.headers = status, headers or {}
-        self._raw = json.dumps(body).encode() if body is not None else b""
+        self._raw = raw if raw is not None else (
+            json.dumps(body).encode() if body is not None else b"")
+        self.lu = False
 
     def iter_content(self, n):
-        yield self._raw
+        self.lu = True
+        for i in range(0, len(self._raw), n):
+            yield self._raw[i:i + n]
+
+    def close(self):
+        pass
 
     def json(self):
         return json.loads(self._raw)
@@ -153,7 +160,7 @@ def test_une_app_mcp_peut_naitre_avec_sa_seule_adresse(monkeypatch):
 
 def test_une_ressource_d_un_autre_serveur_est_refusee(web):
     web.pages["https://mcp.example.test/.well-known/oauth-protected-resource/mcp"] = \
-        _Rep(body={**PRM, "resource": "https://mcp.victime.test/mcp"})
+        _Rep(body={**PRM, "resource": "https://mcp.autre-serveur.test/mcp"})
     with pytest.raises(d.DiscoveryRefused) as e:
         d.discover(MCP)
     assert "another resource" in e.value.message
@@ -161,7 +168,7 @@ def test_une_ressource_d_un_autre_serveur_est_refusee(web):
 
 def test_des_metadonnees_d_un_autre_emetteur_sont_ignorees(web):
     web.pages["https://auth.example.test/.well-known/oauth-authorization-server/oidc"] = \
-        _Rep(body={**ASM, "issuer": "https://auth.victime.test/oidc"})
+        _Rep(body={**ASM, "issuer": "https://auth.autre-serveur.test/oidc"})
     with pytest.raises(d.DiscoveryRefused) as e:
         d.discover(MCP)
     assert e.value.code == "mcp_discovery_failed"
@@ -196,3 +203,56 @@ def test_un_serveur_mcp_qui_republie_son_fournisseur_d_identite_est_admis(web):
         _Rep(body={**ASM, "client_id_metadata_document_supported": None})
     m = d.discover(MCP)
     assert m["token_url"] == "https://auth.example.test/oidc/token" and m["cimd"] is False
+
+
+def test_seules_les_adresses_saisies_par_l_admin_gardent_les_exceptions_d_egress(
+        web, monkeypatch):
+    vus = []
+    monkeypatch.setattr("oto_mcp.egress.check_url",
+                        lambda url, **k: vus.append((url, k["exceptions_declarees"])))
+    d.discover(MCP)
+    politique = dict(vus)
+    assert politique[MCP] is True                      # typed by the admin
+    # Announced by the remote server: its metadata, its sign-in server's endpoints.
+    assert politique["https://mcp.example.test/.well-known/oauth-protected-resource/mcp"] \
+        is False
+    assert politique["https://auth.example.test/oidc/token"] is False
+    assert politique["https://auth.example.test/oidc/auth"] is False
+
+
+def test_un_chemin_connu_sur_l_hote_saisi_garde_les_exceptions(web, monkeypatch):
+    vus = []
+    monkeypatch.setattr("oto_mcp.egress.check_url",
+                        lambda url, **k: vus.append((url, k["exceptions_declarees"])))
+    monkeypatch.setattr(d.requests, "post", lambda url, **k: _Rep(401))
+    d.discover(MCP)
+    assert ("https://mcp.example.test/.well-known/oauth-protected-resource/mcp",
+            True) in vus
+
+
+def test_le_corps_de_l_initialize_n_est_jamais_lu(web, monkeypatch):
+    rep = _Rep(401, raw=b"x" * (d._MAX * 4), headers={
+        "WWW-Authenticate": 'Bearer resource_metadata="https://mcp.example.test/'
+                            '.well-known/oauth-protected-resource/mcp"'})
+    monkeypatch.setattr(d.requests, "post", lambda url, **k: rep)
+    assert d.discover(MCP)["resource"] == MCP and not rep.lu
+
+
+def test_une_inscription_trop_longue_n_est_pas_lue(web):
+    web.pages["POST https://auth.example.test/oauth/register"] = _Rep(
+        201, raw=b'{"client_id": "' + b"a" * d._MAX + b'"}')
+    with pytest.raises(d.DiscoveryRefused) as e:
+        d.client_id_for({"cimd": False,
+                         "registration_endpoint": "https://auth.example.test/oauth/register"})
+    assert e.value.code == "mcp_registration_refused"
+
+
+def test_un_refus_d_egress_pendant_la_decouverte_remonte(web, monkeypatch):
+    from oto_mcp import egress
+
+    def check(url, **k):
+        if "auth.example.test" in url:
+            raise egress.EgressRefused("connecteur `api` : destination interne refusée.")
+    monkeypatch.setattr("oto_mcp.egress.check_url", check)
+    with pytest.raises(egress.EgressRefused):
+        d.discover(MCP)
