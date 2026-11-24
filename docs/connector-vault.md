@@ -788,7 +788,7 @@ client `client_credentials`. Le mode `oauth2_user` donne à chaque membre la sie
   l'autorisation, à l'échange et au renouvellement : sans lui, un serveur OpenID qui émet
   ses jetons par ressource rend un jeton opaque que l'API refuse). `offline_access` dans
   les scopes fait envoyer `prompt=consent` (sans lui, pas de refresh token) ;
-- **« Connecter »** = `POST /api/orgs/{id}/connectors/api/apps/{account}/connect`
+- **« Connecter »** = `POST /api/orgs/{id}/custom-api-apps/{account}/connect`
   (membre de l'org ; refusé si l'org interdit la clé perso du Custom API). Le retour suit
   la règle commune (`auth/flow.py`) : callback `/api/custom-api/oauth/callback`, carte
   `api`, complétion par le front avec le jeton de la personne ;
