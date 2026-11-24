@@ -185,3 +185,14 @@ def test_le_document_client_est_servi_sans_authentification(web, monkeypatch):
     r = TestClient(app).get(d.CLIENT_DOCUMENT_PATH)
     assert r.status_code == 200
     assert r.json()["client_id"] == d.client_document_url()
+
+
+def test_un_serveur_mcp_qui_republie_son_fournisseur_d_identite_est_admis(web):
+    """Le serveur se nomme lui-même serveur d'autorisation et republie les métadonnées
+    de son Logto : l'émetteur diffère, l'hôte est le sien — admis."""
+    web.pages["https://mcp.example.test/.well-known/oauth-protected-resource/mcp"] = \
+        _Rep(body={**PRM, "authorization_servers": ["https://mcp.example.test"]})
+    web.pages["https://mcp.example.test/.well-known/oauth-authorization-server"] = \
+        _Rep(body={**ASM, "client_id_metadata_document_supported": None})
+    m = d.discover(MCP)
+    assert m["token_url"] == "https://auth.example.test/oidc/token" and m["cimd"] is False

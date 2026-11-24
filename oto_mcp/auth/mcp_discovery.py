@@ -142,8 +142,13 @@ def discover(mcp_url: str) -> dict:
               f"{issuer}/.well-known/openid-configuration",
               *_well_known(issuer, "openid-configuration")]:
         asm = _get_json(u, "authorization server metadata")
-        # RFC 8414 §3.3: the metadata must name the issuer it was looked up for.
-        if asm and str(asm.get("issuer") or "").rstrip("/") != issuer:
+        # RFC 8414 §3.3: the metadata must name the issuer it was looked up for. One
+        # tolerance: an MCP server that names ITSELF as authorization server and
+        # republishes its identity provider's metadata (a common front for a hosted
+        # Logto / Auth0) — the server already vouches for its own sign-in. The resource
+        # check above is what keeps another server's tokens out of reach.
+        if asm and str(asm.get("issuer") or "").rstrip("/") != issuer and not (
+                urlsplit(issuer).hostname == urlsplit(mcp_url).hostname):
             asm = None
             continue
         if asm and asm.get("authorization_endpoint") and asm.get("token_endpoint"):
