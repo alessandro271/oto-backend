@@ -310,3 +310,68 @@ def test_sans_ligne_le_mode_refuse():
     from oto_mcp.tools import api as api_tool
     with pytest.raises(ValueError):
         api_tool.client_for({**APP["connection"], "refresh_token": "rt"}, row=None)
+
+
+# --- the whole return: callback, then the front completes (card `api`) ------------
+
+@pytest.fixture
+def retour(monkeypatch, coffre):
+    """The member is still allowed on return; the app is the one of the state."""
+    monkeypatch.setattr("oto_mcp.db.api_apps.vivante", lambda org, account: APP)
+    permis = {"ok": True}
+    monkeypatch.setattr("oto_mcp.roles.is_org_member", lambda sub, org: permis["ok"])
+    monkeypatch.setattr("oto_mcp.connectors.cle_perso.interdite", lambda org, c: False)
+    monkeypatch.setattr("oto_mcp.connectors.activation.cran_qui_coupe", lambda *a: None)
+    return permis
+
+
+def _s256(verifier: str) -> str:
+    import base64
+    import hashlib
+    return base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+
+def test_du_callback_a_la_completion_la_cle_du_membre_est_rangee_une_fois(
+        monkeypatch, coffre, retour):
+    from _retour_oauth import terminer
+    envois = _poste(monkeypatch, _Rep(200, {"access_token": "at", "refresh_token": "rt",
+                                            "expires_in": 3600}))
+    p = _params(api_oauth.authorize_url(APP, "sub-1"))
+    issue, out = terminer(api_oauth.CALLBACK_PATH, {"code": "le-code", "state": p["state"]})
+    assert issue == "connected", out
+    assert (out["connector"], out["account"], out["scope"]) == ("api", "crm", "member")
+    (_, data), = envois
+    assert data["code"] == "le-code"
+    assert _s256(data["code_verifier"]) == p["code_challenge"]
+    assert ("member", "42:sub-1", "crm") in coffre.rows
+    # Used once: the same link does not complete twice.
+    issue, _ = terminer(api_oauth.CALLBACK_PATH, {"code": "le-code", "state": p["state"]})
+    assert issue == "state_used" and len(envois) == 1
+
+
+def test_la_completion_n_aboutit_que_pour_qui_a_lance_la_connexion(
+        monkeypatch, coffre, retour):
+    from _retour_oauth import terminer
+    envois = _poste(monkeypatch)
+    state = _params(api_oauth.authorize_url(APP, "sub-1"))["state"]
+    issue, _ = terminer(api_oauth.CALLBACK_PATH, {"code": "c", "state": state},
+                        sub="sub-2")
+    assert issue == "state_not_yours" and not envois and not coffre.rows
+
+
+def test_un_membre_sorti_de_l_org_ne_termine_pas(monkeypatch, coffre, retour):
+    from _retour_oauth import terminer
+    envois = _poste(monkeypatch)
+    retour["ok"] = False
+    state = _params(api_oauth.authorize_url(APP, "sub-1"))["state"]
+    issue, _ = terminer(api_oauth.CALLBACK_PATH, {"code": "c", "state": state})
+    assert issue == "not_allowed" and not envois and not coffre.rows
+
+
+def test_un_refus_au_retour_ne_range_rien(monkeypatch, coffre, retour):
+    from _retour_oauth import terminer
+    state = _params(api_oauth.authorize_url(APP, "sub-1"))["state"]
+    issue, _ = terminer(api_oauth.CALLBACK_PATH, {"error": "access_denied",
+                                                  "state": state})
+    assert issue == "denied" and not coffre.rows

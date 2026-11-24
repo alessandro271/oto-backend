@@ -495,3 +495,98 @@ def test_le_jeton_de_renouvellement_ne_se_pose_qu_au_palier_membre(rest, monde):
     assert (r.status_code, r.json()["error"]) == (400, "refresh_token_member_only")
     r = _cle_perso(rest, monde, VENTE, "crm_sso_cles", {"refresh_token": "rt-vente"})
     assert r.status_code == 200, r.text
+
+
+def _connecter(rest, monde, account: str, sub: str = VENTE):
+    return rest.post(f"{_apps(monde)}/{account}/connect", json={},
+                     headers=_h(sub, monde["org"]))
+
+
+@pytest.fixture
+def etat_secret(monkeypatch):
+    monkeypatch.setenv("OTO_MCP_OAUTH_STATE_SECRET", "test-secret")
+
+
+def test_connecter_rend_la_page_de_connexion_de_l_api_au_membre(rest, monde, etat_secret):
+    from urllib.parse import parse_qs, urlsplit
+    from oto_mcp.auth import api_oauth
+    _creer_sso(rest, monde, "crm_sso")
+    r = _connecter(rest, monde, "crm_sso")
+    assert r.status_code == 200, r.text
+    url = r.json()["auth_url"]
+    assert url.startswith(SSO["authorize_url"] + "?")
+    q = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
+    assert q["client_id"] == "client-public" and q["code_challenge_method"] == "S256"
+    d = api_oauth.verify_state(q["state"])
+    assert (d["sub"], d["org"], d["account"]) == (VENTE, monde["org"], "crm_sso")
+    assert r.json()["redirect_uri"] == api_oauth.redirect()
+
+
+def test_connecter_est_reserve_aux_membres_de_l_org(rest, monde, etat_secret):
+    from oto_mcp import db
+    db.upsert_user("usr_app_dehors", email="usr_app_dehors@t.invalid", name="dehors")
+    _creer_sso(rest, monde, "crm_sso_membres")
+    assert _connecter(rest, monde, "crm_sso_membres", sub="usr_app_dehors").status_code \
+        == 403
+
+
+def test_connecter_refuse_par_son_nom(rest, monde, etat_secret):
+    r = _connecter(rest, monde, "inexistante")
+    assert (r.status_code, r.json()["error"]) == (404, "api_app_not_found")
+    assert _creer(rest, monde, "crm_cle_fixe").status_code == 200
+    r = _connecter(rest, monde, "crm_cle_fixe")
+    assert (r.status_code, r.json()["error"]) == (409, "api_app_not_oauth_user")
+
+
+def test_connecter_respecte_l_interdiction_de_la_cle_perso(rest, monde, etat_secret):
+    from oto_mcp.connectors import cle_perso
+    _creer_sso(rest, monde, "crm_sso_interdit")
+    cle_perso.poser(monde["org"], "api", True, ADMIN)
+    try:
+        r = _connecter(rest, monde, "crm_sso_interdit")
+        assert (r.status_code, r.json()["error"]) == (403, "personal_key_forbidden")
+    finally:
+        cle_perso.poser(monde["org"], "api", False, ADMIN)
+
+
+class _Reponse:
+    def __init__(self, status: int, headers: dict | None = None):
+        self.status_code, self.headers = status, headers or {}
+
+    def iter_content(self, n):
+        return iter(())
+
+    def close(self):
+        pass
+
+
+MCP_SSO = {"base_url": "https://crm2.example.test/mcp", "protocol": "mcp",
+           "auth_mode": "oauth2_user"}
+
+
+def test_connecter_un_serveur_mcp_qui_annonce_une_adresse_interne_est_refuse(
+        rest, monde, etat_secret, monkeypatch, dns_simule):
+    from oto_mcp.auth import mcp_discovery
+    dns_simule.update({"interne.example.test": {"10.0.0.5"}})
+    _creer_sso(rest, monde, "mcp_interne", MCP_SSO)
+    monkeypatch.setattr(mcp_discovery.requests, "post", lambda *a, **k: _Reponse(
+        401, {"WWW-Authenticate": 'Bearer resource_metadata="https://interne.example.test'
+                                  '/.well-known/oauth-protected-resource"'}))
+
+    def lire(*a, **k):
+        raise AssertionError("an address refused by the egress policy is never read")
+    monkeypatch.setattr(mcp_discovery.requests, "get", lire)
+    r = _connecter(rest, monde, "mcp_interne")
+    assert (r.status_code, r.json()["error"]) == (400, "egress_refused"), r.text
+
+
+def test_connecter_un_serveur_mcp_injoignable_le_dit(rest, monde, etat_secret,
+                                                     monkeypatch):
+    from oto_mcp.auth import mcp_discovery
+    _creer_sso(rest, monde, "mcp_muet", MCP_SSO)
+
+    def post(*a, **k):
+        raise mcp_discovery.requests.ConnectionError("x")
+    monkeypatch.setattr(mcp_discovery.requests, "post", post)
+    r = _connecter(rest, monde, "mcp_muet")
+    assert (r.status_code, r.json()["error"]) == (409, "mcp_unreachable"), r.text
