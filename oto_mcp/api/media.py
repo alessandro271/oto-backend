@@ -21,18 +21,20 @@ from starlette.responses import JSONResponse
 from .. import db, media_store, org_store
 from ..capabilities._types import ContratDeRoute, DeclaredError
 from .base import _authenticate, _json, _json_error
+from .uploads import CorpsRefuse, lire_multipart_borne
 
 
 async def _read_upload(request: Request):
-    """Parse un multipart, renvoie (data: bytes, err: JSONResponse|None)."""
+    """Parse un multipart, renvoie (data: bytes, err: JSONResponse|None). Le corps est
+    borné PENDANT la lecture à la borne d'image (`lire_multipart_borne`), jamais lu
+    en entier avant d'être compté."""
     try:
-        form = await request.form()
-    except Exception:
-        return None, _json_error(request, 400, "invalid_multipart")
-    upload = form.get("file")
-    if upload is None or not hasattr(upload, "read"):
-        return None, _json_error(request, 400, "missing_file")
-    return await upload.read(), None
+        _form, _upload, data = await lire_multipart_borne(request,
+                                                         media_store.max_image_bytes())
+    except CorpsRefuse as e:
+        return None, _json_error(request, e.status,
+                                 "image_too_large" if e.status == 413 else e.code)
+    return data, None
 
 
 async def avatar_save(request: Request, *, verifier: JWTVerifier) -> JSONResponse:

@@ -28,6 +28,7 @@ from starlette.responses import JSONResponse, Response
 from .. import access, db, doc_export, ownership
 from ..capabilities._types import ContratDeRoute
 from .base import _authenticate, _file, _json, _json_error
+from .uploads import CorpsRefuse, lire_multipart_borne
 
 
 def _project_org_context_error(request: Request, sub: str, pid: int):
@@ -65,14 +66,14 @@ async def project_files_upload(request: Request, *, verifier: JWTVerifier) -> JS
         return e
     if not ownership.can_access(sub, "project", str(pid), "write"):
         return _json_error(request, 403, "forbidden")
+    # Le corps est borné PENDANT la lecture (annonce `Content-Length`, puis flux) : un
+    # `request.form()` prenait tout le corps avant que `upload_object` ne compte.
     try:
-        form = await request.form()
-    except Exception:
-        return _json_error(request, 400, "invalid_multipart")
-    upload = form.get("file")
-    if upload is None or not hasattr(upload, "read"):
-        return _json_error(request, 400, "missing_file")
-    data = await upload.read()
+        form, upload, data = await lire_multipart_borne(request, upload_tokens.max_bytes())
+    except CorpsRefuse as e:
+        # Le code de dépassement reste celui que la route a toujours rendu.
+        return _json_error(request, e.status,
+                           "file_too_large" if e.status == 413 else e.code)
     filename = getattr(upload, "filename", None) or "file"
     # Le type SERVI, décidé sur le contenu : le déclaré du navigateur ne fait que
     # départager (#562).
