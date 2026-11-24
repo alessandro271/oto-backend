@@ -23,6 +23,7 @@ import asyncio
 from unittest.mock import patch
 
 import pytest
+import requests
 
 from oto_mcp import providers
 from oto_mcp.connectors import verify as connector_verify
@@ -86,6 +87,7 @@ class _Fake:
 
     def __init__(self, retour=None):
         self.calls = []
+        self.session = requests.Session()   # gardée par le backend (egress_transport)
         self._retour = retour if retour is not None else {"data": [], "page": {}}
 
     @staticmethod
