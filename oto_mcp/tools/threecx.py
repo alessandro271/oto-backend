@@ -29,7 +29,7 @@ from typing import Literal, Optional
 from fastmcp import FastMCP
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, egress, output_projection, transit
+from .. import access, egress, egress_transport, output_projection, transit
 from ..csv_formules import cellule
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
@@ -135,7 +135,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     egress.check_url(champs["base_url"], connector="threecx")
     today = date.today()
     try:
-        ThreeCXClient(**champs).list_calls(
+        egress_transport.pinned(ThreeCXClient(**champs), connector="threecx").list_calls(
             today.isoformat(), (today + timedelta(days=1)).isoformat(), top=1)
     except UpstreamHTTPError as e:
         if e.status_code in (401, 403):
@@ -153,7 +153,7 @@ def client():
     except ValueError as e:
         raise _bad(str(e))
     egress.check_url(champs["base_url"], connector="threecx")
-    return ThreeCXClient(**champs)
+    return egress_transport.pinned(ThreeCXClient(**champs), connector="threecx")
 
 
 def run(fn):

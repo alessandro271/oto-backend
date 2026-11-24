@@ -222,7 +222,7 @@ def test_une_redirection_vers_le_prive_est_refusee(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         lambda h, p: {"93.184.216.34"} if "example.com" in h
                         else {"169.254.169.254"})
-    monkeypatch.setattr(W.requests, "get", _faux_get)
+    monkeypatch.setattr(W.requests.Session, "get", lambda self, *a, **k: _faux_get(*a, **k))
     with pytest.raises(McpError) as e:
         W._fetch_http("https://example.com/page")
     assert "adresse interne" in str(e.value) and "lien-local" in str(e.value)
@@ -266,7 +266,7 @@ def test_le_cap_arrete_la_lecture_en_cours(monkeypatch):
             pass
 
     monkeypatch.setattr(W, "check_url_public", lambda u: None)
-    monkeypatch.setattr(W.requests, "get", lambda *a, **k: _Resp())
+    monkeypatch.setattr(W.requests.Session, "get", lambda self, *a, **k: _Resp())
     out = W._fetch_http("https://enorme.fr/")
     assert out["ok"] and len(out["html"]) <= W._MAX_FETCH_BYTES + 65536
     assert servis["n"] <= (W._MAX_FETCH_BYTES // 65536) + 1, \
@@ -435,7 +435,7 @@ def test_la_lecture_a_un_budget_et_dit_ce_qu_elle_a_tente(monkeypatch):
         horloge["t"] += 20.0        # chaque saut brûle 20 s
         return _FauxRedirect()
 
-    monkeypatch.setattr(W.requests, "get", _get)
+    monkeypatch.setattr(W.requests.Session, "get", lambda self, *a, **k: _get(*a, **k))
     monkeypatch.setattr(W, "check_url_public", lambda u: None)
 
     res = W._fetch_http("https://acme.fr/")

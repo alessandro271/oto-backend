@@ -47,7 +47,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, egress
+from .. import access, egress, egress_transport
 from ..connectors import verify as connector_verify
 
 
@@ -127,8 +127,10 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     from oto.tools.posthog.client import PostHogClient
     cfg = config or {}
     _check_host(cfg.get("host"))
-    client = PostHogClient(fields["api_key"], host=cfg.get("host") or None,
-                           project_id=cfg.get("project_id") or None)
+    client = egress_transport.pinned(
+        PostHogClient(fields["api_key"], host=cfg.get("host") or None,
+                      project_id=cfg.get("project_id") or None),
+        connector="posthog", field="host")
     client.current_user()
     project = client.resolve_project_id()
     try:
@@ -149,8 +151,10 @@ def register(mcp: FastMCP) -> None:
     def _client() -> PostHogClient:
         fields = access.resolve_credential_fields("posthog")
         _check_host(fields.get("host"))
-        return PostHogClient(fields["api_key"], host=fields.get("host") or None,
-                             project_id=fields.get("project_id") or None)
+        return egress_transport.pinned(
+            PostHogClient(fields["api_key"], host=fields.get("host") or None,
+                          project_id=fields.get("project_id") or None),
+            connector="posthog", field="host")
 
     def _run(fn):
         try:

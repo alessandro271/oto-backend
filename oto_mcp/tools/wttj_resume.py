@@ -207,7 +207,7 @@ def resume_text(url: str) -> dict:
 
     import requests
 
-    from .. import egress, file_extract
+    from .. import egress, egress_transport, file_extract
     from ..file_content import INLINE_TEXT_CAP
 
     if not isinstance(url, str) or not url.startswith("https://"):
@@ -218,7 +218,11 @@ def resume_text(url: str) -> dict:
     except egress.EgressRefused as e:
         raise ValueError(str(e)) from e
     try:
-        with requests.get(url, timeout=(10, 30), stream=True) as r:
+        # Pinned session (`egress_transport`): the guard holds at connection time,
+        # on the addresses actually joined — redirect hops included.
+        with egress_transport.session(connector="wttj", field="resume_url",
+                                      exceptions_declarees=False) as s, \
+                s.get(url, timeout=(10, 30), stream=True) as r:
             if r.status_code != 200:
                 raise ValueError(f"the resume could not be downloaded (HTTP "
                                  f"{r.status_code}) — try again: its address expires "
@@ -229,6 +233,8 @@ def resume_text(url: str) -> dict:
                 if len(data) > RESUME_MAX_BYTES:
                     raise ValueError("the resume is over 10 MB: not read.")
             mime = (r.headers.get("Content-Type") or "").split(";")[0].strip()
+    except egress.EgressRefused as e:
+        raise ValueError(str(e)) from e
     except requests.RequestException as e:
         raise ValueError(f"the resume could not be downloaded "
                          f"({type(e).__name__}).") from e
