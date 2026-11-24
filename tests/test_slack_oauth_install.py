@@ -5,10 +5,9 @@ sinon), state lié à son audience et à usage unique, droits re-vérifiés au r
 refus de Slack en HTTP 200 `ok:false` lu comme un REFUS d'échange (jamais une panne),
 et les jetons rangés dans le credential multi-champs EXISTANT — un compte par espace
 de travail, retrouvé par `meta.team_id`."""
-import asyncio
 import json
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -290,14 +289,10 @@ def test_remplacer_les_jetons_colles_d_une_autre_app_ne_les_melange_pas(env):
 # ── Retour de consentement ──────────────────────────────────────────────────
 
 def _callback(query: dict):
-    from starlette.requests import Request
+    """Le vrai callback, puis la complétion du front (`auth/flow.complete`)."""
+    from _retour_oauth import terminer
 
-    from oto_mcp.api import slack as api_slack
-
-    route = api_slack.make_routes(None, None, None, None, None)[0]
-    req = Request({"type": "http", "method": "GET", "path": route.path,
-                   "query_string": urlencode(query).encode(), "headers": []})
-    return asyncio.run(route.endpoint(req))
+    return terminer("/api/slack/oauth/callback", query)
 
 
 @pytest.fixture
@@ -307,21 +302,21 @@ def usage_unique(monkeypatch):
                         lambda aud, data: not (data["jti"] in vus or vus.add(data["jti"])))
 
 
-def test_retour_reussi_range_et_redirige_connected(env, usage_unique, monkeypatch):
+def test_retour_reussi_range_a_la_completion(env, usage_unique, monkeypatch):
     _repond(monkeypatch, 200, _grant())
     _out, q = _etat(env)
-    resp = _callback({"code": "c", "state": q["state"]})
-    assert resp.headers["location"].endswith("?connector=slack&connect=connected")
+    issue, out = _callback({"code": "c", "state": q["state"]})
+    assert (issue, out["connector"], out["account"]) == ("connected", "slack", "Acme")
     assert ("org", str(ORG), "Acme") in env.coffre.lignes
     # le même state rejoué ne range rien de plus
-    resp = _callback({"code": "c", "state": q["state"]})
-    assert resp.headers["location"].endswith("connect=error")
+    assert _callback({"code": "c", "state": q["state"]})[0] == "state_used"
 
 
 def test_refus_chez_slack_revient_en_denied(env, usage_unique):
     _out, q = _etat(env)
-    resp = _callback({"error": "access_denied", "state": q["state"]})
-    assert resp.headers["location"].endswith("?connector=slack&connect=denied")
+    issue, out = _callback({"error": "access_denied", "state": q["state"]})
+    assert issue == "denied"
+    assert out["location"].endswith("?connector=slack&connect=denied")
     assert not env.coffre.lignes
 
 
@@ -330,27 +325,23 @@ def test_un_admin_destitue_entre_temps_ne_range_rien(env, usage_unique, monkeypa
 
     _out, q = _etat(env)
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: False)
-    resp = _callback({"code": "c", "state": q["state"]})
-    assert resp.headers["location"].endswith("connect=forbidden")
+    assert _callback({"code": "c", "state": q["state"]})[0] == "not_allowed"
     assert not env.coffre.lignes
 
 
-def test_echange_refuse_revient_en_error_sans_ranger(env, usage_unique, monkeypatch):
+def test_echange_refuse_ne_range_rien(env, usage_unique, monkeypatch):
     _repond(monkeypatch, 200, {"ok": False, "error": "bad_redirect_uri"})
     _out, q = _etat(env)
-    resp = _callback({"code": "c", "state": q["state"]})
-    assert resp.headers["location"].endswith("connect=error")
+    assert _callback({"code": "c", "state": q["state"]})[0] == "exchange_failed"
     assert not env.coffre.lignes
 
 
-def test_rotation_activee_revient_en_error_sans_ranger(env, usage_unique, monkeypatch):
+def test_rotation_activee_ne_range_rien(env, usage_unique, monkeypatch):
     _repond(monkeypatch, 200, _grant(refresh_token="xoxe-1", expires_in=43200))
     _out, q = _etat(env)
-    resp = _callback({"code": "c", "state": q["state"]})
-    assert resp.headers["location"].endswith("connect=error")
+    assert _callback({"code": "c", "state": q["state"]})[0] == "exchange_failed"
     assert not env.coffre.lignes
 
 
 def test_state_illisible(env, usage_unique):
-    assert _callback({"code": "c", "state": "faux"}).headers["location"].endswith(
-        "connect=error")
+    assert _callback({"code": "c", "state": "faux"})[0] == "error"

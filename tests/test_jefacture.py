@@ -237,20 +237,16 @@ def test_le_dialogue_porte_le_client_de_l_application_et_le_retour(env):
 # ── Retour de connexion ─────────────────────────────────────────────────────
 
 def _callback(query: dict):
-    from starlette.requests import Request
+    """The real callback, then the front's completion (`auth/flow.complete`):
+    `(issue, detail)`."""
+    from _retour_oauth import terminer
 
-    from oto_mcp.api import jefacture as api_jf
-
-    route = api_jf.make_routes(None, None, None, None, None)[0]
-    qs = "&".join(f"{k}={v}" for k, v in query.items()).encode()
-    req = Request({"type": "http", "method": "GET", "path": route.path,
-                   "query_string": qs, "headers": []})
-    return asyncio.run(route.endpoint(req))
+    return terminer("/api/jefacture/oauth/callback", query)
 
 
 def test_retour_echange_puis_range_le_refresh_token_et_l_identite(env):
-    resp = _callback({"code": "le-code", "state": _etat(env)})
-    assert resp.status_code == 302 and "connected" in resp.headers["location"]
+    issue, _out = _callback({"code": "le-code", "state": _etat(env)})
+    assert issue == "connected"
     assert env.coeur.auth.exchange_code.call_args.args == (
         "id-de-l-application", "secret-de-l-application", "le-code", _RETOUR)
     env.coeur.JefactureClient.assert_called_with(access_token="AT1")
@@ -266,46 +262,46 @@ def test_retour_echange_puis_range_le_refresh_token_et_l_identite(env):
 
 def test_retour_sans_identite_ne_range_rien(env):
     env.coeur.JefactureClient.return_value.get_me.return_value = {"firstName": "P"}
-    resp = _callback({"code": "c", "state": _etat(env)})
-    assert "error" in resp.headers["location"]
+    issue, _out = _callback({"code": "c", "state": _etat(env)})
+    assert issue == "exchange_failed"
     assert not env.coffre.lignes
 
 
 def test_le_retour_ne_journalise_ni_le_code_ni_le_jeton(env, caplog):
     env.coeur.auth.exchange_code.side_effect = RuntimeError("refus")
     with caplog.at_level("DEBUG"):
-        resp = _callback({"code": "code-tres-secret", "state": _etat(env)})
-    assert "error" in resp.headers["location"]
+        issue, _out = _callback({"code": "code-tres-secret", "state": _etat(env)})
+    assert issue == "exchange_failed"
     assert "code-tres-secret" not in caplog.text
 
 
 def test_un_state_rejoue_est_refuse(env):
     etat = _etat(env)
-    assert "connected" in _callback({"code": "c1", "state": etat}).headers["location"]
-    assert "error" in _callback({"code": "c2", "state": etat}).headers["location"]
+    assert _callback({"code": "c1", "state": etat})[0] == "connected"
+    assert _callback({"code": "c2", "state": etat})[0] == "state_used"
     assert env.coeur.auth.exchange_code.call_count == 1
 
 
 def test_droits_retires_entre_le_depart_et_le_retour(env):
     etat = _etat(env)
     env.membres.clear()
-    assert "forbidden" in _callback({"code": "c", "state": etat}).headers["location"]
+    assert _callback({"code": "c", "state": etat})[0] == "not_allowed"
     etat = _etat(env)
     env.membres.add((SUB, ORG))
     env.coupes.add((CONNECTEUR, ORG))
-    assert "forbidden" in _callback({"code": "c", "state": etat}).headers["location"]
+    assert _callback({"code": "c", "state": etat})[0] == "not_allowed"
     env.coeur.auth.exchange_code.assert_not_called()
 
 
 def test_retour_refuse_par_la_personne(env):
-    resp = _callback({"error": "access_denied", "state": _etat(env)})
-    assert "denied" in resp.headers["location"]
+    issue, _out = _callback({"error": "access_denied", "state": _etat(env)})
+    assert issue == "denied"
     env.coeur.auth.exchange_code.assert_not_called()
 
 
 def test_retour_sans_state_lisible(env):
-    resp = _callback({"code": "x", "state": "faux.state"})
-    assert "error" in resp.headers["location"]
+    issue, _out = _callback({"code": "x", "state": "faux.state"})
+    assert issue == "error"
     env.coeur.auth.exchange_code.assert_not_called()
 
 

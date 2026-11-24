@@ -49,7 +49,8 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 | `POST /api/me/projects/{id}/transcriptions/upload` (audio à transcrire) | `api/transcription.py` | **multipart** → hors du moule (classé `NATURE`) ; la forme par référence est une capacité |
 | `/api/upload/{token}` (PUT/POST/GET) | `api/uploads.py` | **pas de JWT** : le jeton de l'URL fait foi |
 | `POST /api/logto/webhook` | `api/logto_webhook.py` | **pas de JWT** : HMAC-SHA256 du corps brut (`logto-signature-sha-256`, clé `OTO_LOGTO_WEBHOOK_SIGNING_KEY`) ; un mot de passe changé révoque les jetons `oto_` et ferme les sessions Logto (classé `NATURE`, `docs/auth-logto.md` §Mot de passe changé) |
-| SIRENE (`api/sirene.py`), accords (`api/accords.py`), webhook Mollie (`api/billing.py`), **callbacks OAuth** zoho/google/salesforce (`api/{zoho,datastore,salesforce}.py`) | `api/<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres. ⚠️ `api/atlassian.py` et `api/folk.py` ont porté les deux callbacks fédérés jusqu'au **2026-09-09** : partis avec la fédération MCP (**ADR 0069**). ⚠️ **Le datastore n'y est plus** depuis le 2026-08-12 (#302) : ses 24 chemins sont des capacités (bloc ci-dessous) ; `api/datastore.py` est un nom vestige qui ne porte QUE le callback Google |
+| SIRENE (`api/sirene.py`), accords (`api/accords.py`), webhook Mollie (`api/billing.py`) | `api/<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres. ⚠️ `api/atlassian.py` et `api/folk.py` ont porté les deux callbacks fédérés jusqu'au **2026-09-09** : partis avec la fédération MCP (**ADR 0069**). ⚠️ **Le datastore n'y est plus** depuis le 2026-08-12 (#302) : ses 24 chemins sont des capacités (bloc ci-dessous) |
+| **callbacks OAuth** des connecteurs (`…/oauth/callback`, `/api/wordpress/connect/callback`) | `api/oauth_returns.py` | une route par fournisseur, un seul code (`auth/flow.py::callback_url`), déclarée par chaque `auth/<x>.py` (`oauth_flow.declare_return`) depuis oto-backend#1908 ; les modules `api/{datastore,zoho,salesforce,microsoft,hubspot,meta_ads,instagram_meta,ubersuggest,jefacture,linkedin_ads,wordpress}.py` ont disparu avec |
 
 - `GET /api/me` + `GET /api/me/calls` + `GET /api/me/activity-summary` — **le compte**,
   capacités `me.{get,calls,activity_summary}` depuis le 2026-08-27
@@ -315,6 +316,26 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   termine par `POST /api/google/oauth/complete` avec son jeton — le `sub` du state
   doit être celui du porteur, le state ne sert qu'une fois. Un front qui ne lit pas
   `confirm` ne connecte plus Google : les fronts passent AVANT le tag backend.
+  ⚠️ **Tous les connecteurs suivent la même règle depuis oto-backend#1908** : Zoho,
+  Salesforce, Microsoft, HubSpot, Meta Ads, Instagram, Ubersuggest, jefacture.com,
+  LinkedIn Ads, Slack, WordPress. Le callback renvoie
+  `?connector=<carte>&connect=confirm#code=…&state=…` ; le front termine par
+  `POST /api/me/connectors/{name}/complete` `{code, state}` (capacité
+  `me.connector_complete`, `{name}` = la carte lue dans `connector=`), avec son jeton.
+  200 `{ok, connector, account, scope, warning?, details?}` ; refus 400
+  `invalid_state` (state illisible, expiré, d'un autre flux ou d'une autre carte), 403
+  `state_not_yours`, 403 `not_allowed` (plus le droit d'écrire au niveau demandé au
+  départ — l'ancien `connect=forbidden`), 403 `admin_required` (Microsoft : l'organisation
+  exige l'approbation d'un administrateur), 404 `unknown_connector`, 409 `state_used`,
+  409 `org_mismatch` (Zoho : `details.consented_org`), 502 `exchange_failed`. Le
+  callback ne sert plus que `confirm`, `error` (state illisible), `denied` (refus du
+  fournisseur) et, chez Microsoft, `admin_required` ; `connected`, `forbidden` et
+  `zoho_org_mismatch` deviennent des réponses de la complétion. WordPress n'a pas de
+  code : le callback scelle le credential reçu dans un `code` opaque, lié au state et
+  valable dix minutes. L'approbation d'un administrateur Microsoft reste tranchée au
+  callback (`admin_approved` / `admin_refused`, rien n'est rangé), son lien ne sert
+  qu'une fois. Une carte Google peut aussi terminer par la route générique ;
+  `POST /api/google/oauth/complete` reste servi tel quel.
   ⚠️ **Un échec, un mot** (oto-app#11) : `denied` = le fournisseur a refusé
   l'autorisation (`error=access_denied`, ou son équivalent documenté — `success=false`
   chez WordPress), tranché une fois par `auth.flow.etat_sans_code` ; `forbidden` = c'est

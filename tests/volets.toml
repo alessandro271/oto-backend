@@ -275,6 +275,8 @@ chemins = [
   "oto_mcp/api/erreur_interne.py",
   "oto_mcp/api/hooks.py",
   "oto_mcp/api/logto_webhook.py",
+  # Les retours de consentement de tous les connecteurs OAuth (#1908).
+  "oto_mcp/api/oauth_returns.py",
   "oto_mcp/api/projects.py",
   "oto_mcp/api/public.py",
   "oto_mcp/api/receveurs.py",

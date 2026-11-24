@@ -58,6 +58,14 @@ def _wire_resolution(monkeypatch, *, org_of_key: int, current: int):
     monkeypatch.setattr(access.org_store, "get_org_secret", lambda oid, prov, account="": None)
     monkeypatch.setattr(access.db, "insert_tool_call", lambda payload: None)
 
+def _lu(state):
+    """Le state Google lu (`read_state`), en tuple (sub, org, app, carte, scope, équipe)."""
+    from oto_mcp.auth import google as _g
+    d = _g.read_state(state)
+    return None if d is None else (d["sub"], d["org"], d["app"], d["connector"],
+                                   d["scope"], d["group"])
+
+
 
 def test_resolve_member_key_in_its_org(monkeypatch):
     _wire_resolution(monkeypatch, org_of_key=1, current=1)
@@ -207,14 +215,14 @@ def test_google_state_carries_org(monkeypatch):
     # Le troisième membre est le front de retour (oto-backend#877) : vide quand la
     # demande vient du dashboard d'oto. Ce test-ci porte sur l'ORG, qui doit
     # continuer de voyager à l'identique.
-    assert google_oauth.verify_state(state)[:4] == ("u1", 42, "", "google")
+    assert _lu(state)[:4] == ("u1", 42, "", "google")
     # un state sans org (format pré-B3) est refusé, pas interprété org-agnostique
     import base64, hashlib, hmac as hm, json as js
     payload = js.dumps({"sub": "u1", "ts": 10**10}, separators=(",", ":")).encode()
     sig = hm.new(b"test-secret", payload, hashlib.sha256).digest()
     legacy = (base64.urlsafe_b64encode(payload).rstrip(b"=").decode() + "." +
               base64.urlsafe_b64encode(sig).rstrip(b"=").decode())
-    assert google_oauth.verify_state(legacy) is None
+    assert _lu(legacy) is None
 
 
 def test_google_db_scoped_by_member_entity(monkeypatch):

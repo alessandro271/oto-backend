@@ -26,8 +26,6 @@ second chemin par fournisseur recréerait le doublon que ce chantier supprime.
 """
 from __future__ import annotations
 
-import hmac
-import logging
 from typing import Optional
 
 from pydantic import BaseModel
@@ -35,9 +33,8 @@ from pydantic import BaseModel
 from .. import access, db
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .connectors import complete as connector_complete
 from .registry import CAPABILITIES
-
-logger = logging.getLogger(__name__)
 
 
 # --- Entrées ----------------------------------------------------------------
@@ -151,51 +148,13 @@ def _google_start(ctx: ResolvedCtx, inp: OAuthStartInput) -> dict:
 
 
 def _google_complete(ctx: ResolvedCtx, inp: GoogleCompleteInput) -> dict:
-    """Termine un consentement Google — le geste que le callback faisait seul.
-
-    L'ORDRE est le contrat :
-    1. le state se lit (signature en temps constant, audience `google`, 10 min, `jti`) ;
-    2. son `sub` doit être CELUI DU PORTEUR : le state lie le consentement à la personne
-       qui l'a démarré, le jeton lie la requête à la personne qui le termine — un state
-       de A présenté par B est refusé, et rien n'est consommé ni échangé ;
-    3. il se consomme (usage unique) AVANT l'échange : deux complétions concurrentes du
-       même retour n'échangent pas deux fois, un rejeu est refusé ;
-    4. seulement alors le code s'échange (avec l'app et le rappel exact qui ont demandé
-       le consentement, `app_for(sub)` — tenant compris) et le jeton se range, pour
-       l'org et la carte que le state porte.
-
-    Le code et le state ne sont jamais journalisés."""
+    """Termine un consentement Google — la complétion commune à tous les retours
+    (`auth/flow.py::complete`, cf. `capabilities/connectors/complete.py`), sous le chemin
+    et la forme de réponse de Google. L'ordre : state lu, `sub` du porteur, state
+    consommé, puis échange et rangement pour l'org et la carte que le state porte."""
     from ..auth import google as google_oauth
-    data = google_oauth.read_state(inp.state)
-    if data is None:
-        raise AuthzDenied(400, "invalid_state",
-                          "This Google connection link is invalid or has expired. "
-                          "Start the connection again.")
-    if not hmac.compare_digest(data["sub"].encode(), (ctx.sub or "").encode()):
-        logger.warning("google oauth complete: state d'une autre personne refusé "
-                       "(porteur=%s)", ctx.sub)
-        raise AuthzDenied(403, "state_not_yours",
-                          "This Google connection was started by another account. "
-                          "Start it again from your own session.")
-    if not google_oauth.consume_state(data):
-        raise AuthzDenied(409, "state_used",
-                          "This Google connection link has already been used. "
-                          "Start the connection again.")
-    sub, org_id, scope, connector = data["sub"], data["org"], data["scope"], data["connector"]
-    try:
-        tokens = google_oauth.exchange_code(inp.code, sub)
-        if scope == "member":
-            email = google_oauth.persist_token(sub, org_id, tokens)
-        else:
-            email = google_oauth.persist_token(sub, org_id, tokens, scope=scope,
-                                               group_id=data["group"], connector=connector)
-    except Exception:
-        # Le diagnostic va au journal (jamais le code) ; l'appelant reçoit un refus
-        # nommé, et sait que recommencer la connexion est la seule suite.
-        logger.exception("google oauth complete en échec (sub=%s org=%s)", sub, org_id)
-        raise AuthzDenied(502, "exchange_failed",
-                          "Google did not complete the connection. Start it again.")
-    return {"ok": True, "connector": connector, "account": email, "scope": scope}
+    return connector_complete.complete_for(google_oauth.RETURN, ctx.sub, inp.code,
+                                           inp.state)
 
 
 def _google_status(ctx: ResolvedCtx, inp: OAuthStatusInput) -> dict:
