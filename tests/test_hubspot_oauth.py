@@ -12,14 +12,13 @@ introspects instead of calling the pasted-key endpoints.
 """
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import logging
 import threading
 import pathlib
 import types
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -281,14 +280,10 @@ def test_le_flux_est_declare_avec_sa_promesse(env):
 # ── Return ──────────────────────────────────────────────────────────────────
 
 def _callback(query: dict):
-    from starlette.requests import Request
+    """The real callback, then the front's completion (`auth/flow.complete`)."""
+    from _retour_oauth import terminer
 
-    from oto_mcp.api import hubspot as api_hubspot
-
-    route = api_hubspot.make_routes(None, None, None, None, None)[0]
-    req = Request({"type": "http", "method": "GET", "path": route.path,
-                   "query_string": urlencode(query).encode(), "headers": []})
-    return asyncio.run(route.endpoint(req))
+    return terminer("/api/hubspot/oauth/callback", query)
 
 
 def test_le_retour_perso_range_le_refresh_token_le_portail_et_le_owner(env, monkeypatch):
@@ -300,8 +295,8 @@ def test_le_retour_perso_range_le_refresh_token_le_portail_et_le_owner(env, monk
                                "expires_in": 1800}))
     env.reponses[env.hs.INTROSPECT_URL] = [_introspection()]
     state = env.hs.make_state(SUB, ORG, "member")
-    resp = _callback({"code": "c0de", "state": state})
-    assert resp.headers["location"].endswith("?connector=hubspot&connect=connected")
+    issue, out = _callback({"code": "c0de", "state": state})
+    assert (issue, out["connector"], out["scope"]) == ("connected", "hubspot", "member")
     ligne = env.coffre.lignes[("member", MEMBRE, "")]
     assert ligne["secret"] == "rt-1"
     assert ligne["meta"]["auth"] == "oauth" and ligne["meta"]["hub_id"] == 123
@@ -322,8 +317,8 @@ def test_le_retour_org_range_l_app_account_sans_owner(env, monkeypatch):
     monkeypatch.setattr(oauth_flow, "exchange_code", lambda url, **k: {
         "access_token": "at-1", "refresh_token": "rt-1", "expires_in": 1800})
     env.reponses[env.hs.INTROSPECT_URL] = [_introspection()]
-    resp = _callback({"code": "c0de", "state": env.hs.make_state(SUB, ORG, "org")})
-    assert resp.headers["location"].endswith("connect=connected")
+    issue, out = _callback({"code": "c0de", "state": env.hs.make_state(SUB, ORG, "org")})
+    assert (issue, out["scope"]) == ("connected", "org")
     (cle, ligne), = env.coffre.lignes.items()
     assert cle[0] == "org"
     assert ligne["meta"]["app"] == "account" and "owner_id" not in ligne["meta"]
@@ -332,21 +327,21 @@ def test_le_retour_org_range_l_app_account_sans_owner(env, monkeypatch):
 
 def test_un_state_rejoue_n_ecrit_rien(env, monkeypatch):
     monkeypatch.setattr("oto_mcp.auth.flow.consume_state", lambda aud, data: False)
-    resp = _callback({"code": "c0de", "state": env.hs.make_state(SUB, ORG, "member")})
-    assert resp.headers["location"].endswith("connect=error")
+    issue, _ = _callback({"code": "c0de", "state": env.hs.make_state(SUB, ORG, "member")})
+    assert issue == "state_used"
     assert not env.coffre.lignes
 
 
 def test_un_role_perdu_entre_le_clic_et_le_retour_n_ecrit_rien(env):
-    resp = _callback({"code": "c0de", "state": env.hs.make_state(SUB, ORG, "org")})
-    assert resp.headers["location"].endswith("connect=forbidden")
+    issue, _ = _callback({"code": "c0de", "state": env.hs.make_state(SUB, ORG, "org")})
+    assert issue == "not_allowed"
     assert not env.coffre.lignes
 
 
 def test_un_refus_chez_hubspot_revient_en_denied(env):
-    resp = _callback({"error": "access_denied",
-                      "state": env.hs.make_state(SUB, ORG, "member")})
-    assert resp.headers["location"].endswith("connect=denied")
+    issue, _ = _callback({"error": "access_denied",
+                          "state": env.hs.make_state(SUB, ORG, "member")})
+    assert issue == "denied"
 
 
 # ── The Bearer the tools use ───────────────────────────────────────────────
@@ -600,8 +595,8 @@ def test_un_owner_illisible_n_ecrit_rien(env, monkeypatch):
     monkeypatch.setattr(oauth_flow, "exchange_code", lambda url, **k: {
         "access_token": "at-1", "refresh_token": "rt-1", "expires_in": 1800})
     env.reponses[env.hs.INTROSPECT_URL] = [_introspection()]
-    resp = _callback({"code": "c0de", "state": env.hs.make_state(SUB, ORG, "member")})
-    assert resp.headers["location"].endswith("connect=error")
+    issue, _ = _callback({"code": "c0de", "state": env.hs.make_state(SUB, ORG, "member")})
+    assert issue == "exchange_failed"
     assert not env.coffre.lignes
 
 
@@ -625,19 +620,22 @@ def test_un_echange_refuse_par_hubspot_ne_part_pas_en_exception(env, monkeypatch
         raise oauth_flow.OAuthExchangeRefused("code expired")
 
     monkeypatch.setattr(oauth_flow, "exchange_code", refuse)
-    with caplog.at_level(logging.INFO, logger="oto_mcp.api.hubspot"):
-        resp = _callback({"code": "c0de", "state": env.hs.make_state(SUB, ORG, "member")})
-    assert resp.headers["location"].endswith("connect=error")
+    with caplog.at_level(logging.INFO, logger="oto_mcp.auth.flow"):
+        issue, _ = _callback({"code": "c0de", "state": env.hs.make_state(SUB, ORG, "member")})
+    assert issue == "exchange_failed"
     assert not [r for r in caplog.records if r.exc_info]
     assert not env.coffre.lignes
 
 
-def test_un_refus_rejoue_est_consomme_d_abord(env, monkeypatch):
-    """Single use FIRST: a replayed state answers `error`, even on a refusal."""
-    monkeypatch.setattr("oto_mcp.auth.flow.consume_state", lambda aud, data: False)
-    resp = _callback({"error": "access_denied",
-                      "state": env.hs.make_state(SUB, ORG, "member")})
-    assert resp.headers["location"].endswith("connect=error")
+def test_un_refus_ne_consomme_rien(env, monkeypatch):
+    """The callback reads the state, it never consumes it: a refusal at HubSpot comes
+    back `denied`, and nothing is written."""
+    vus = []
+    monkeypatch.setattr("oto_mcp.auth.flow.consume_state",
+                        lambda aud, data: vus.append(aud) or True)
+    issue, _ = _callback({"error": "access_denied",
+                          "state": env.hs.make_state(SUB, ORG, "member")})
+    assert issue == "denied" and vus == []
 
 
 def test_un_state_sans_jti_est_refuse(env):

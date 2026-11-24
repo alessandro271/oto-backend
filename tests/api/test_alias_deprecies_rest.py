@@ -1,9 +1,12 @@
-"""Un chemin REST renommé répond encore — en **308**, et il annonce sa date (#519).
+"""Un chemin REST renommé répond encore — en **308**, déprécié et sans date.
 
-Lot B2 de #519. Renommer un chemin, c'est casser tout appelant qui vit hors de ce
+Les alias sont DÉRIVÉS des routes montées (`deprecations.alias_rest_derives` : datastore,
+connecteur API). Ceux du lot B2 de #519 (`/api/me/doctrines/*`) sont RETIRÉS avec le
+lot D (#526, 23/11/2026) : leur garde est `tests/api/test_retrait_lot_d.py`. Renommer un chemin, c'est casser tout appelant qui vit hors de ce
 dépôt : le build de la vitrine, un `fetch` de navigateur, une intégration tierce, un
 `curl` dans un script. Alors l'ancien chemin reste monté, ne fait rien d'autre que
-rediriger, et s'en va à une date écrite (lot D, #526).
+rediriger, et s'en ira quand son usage compté sera nul (lot D, #526 ; décision
+du 23/11/2026) : chaque redirection laisse sa ligne dans `tool_calls`.
 
 Ce que ces tests gardent, dans l'ordre de ce qui coûterait le plus cher :
 
@@ -21,8 +24,11 @@ Ce que ces tests gardent, dans l'ordre de ce qui coûterait le plus cher :
    navigateur abandonne avant d'essayer.
 5. **Les alias sont montés EN DERNIER, et aucun n'éclipse une vraie route.** Un
    placeholder trop gourmand posé trop haut avalerait un chemin littéral servi.
-6. **Le document OpenAPI les dit dépréciés**, avec le chemin de remplacement et la
+6. **Le document OpenAPI les dit dépréciés**, avec le chemin de remplacement, sans
    date — et sans voler l'`operationId` d'une autre entrée.
+7. **Chaque redirection est comptée** au journal `tool_calls` (`kind='rest'`) : `tool`
+   = le chemin d'aujourd'hui, `args.deprecated_name` = l'ancien GABARIT, jamais le
+   chemin réel.
 """
 from __future__ import annotations
 
@@ -64,13 +70,17 @@ def _resout(table, methode: str, chemin: str):
 def _exemple(chemin: str) -> str:
     """Un chemin concret : chaque placeholder reçoit une valeur plausible."""
     return chemin.replace("{slug}", "un-slug").replace("{id}", "42") \
-                 .replace("{doctrine_id}", "42").replace("{guide_id}", "42") \
+                 .replace("{namespace}", "leads").replace("{datastore}", "leads") \
+                 .replace("{row_id}", "7").replace("{comment_id}", "9") \
                  .replace("{scope}", "org")
+
+
+_ALIAS = deprecations.alias_rest_derives()
 
 
 # ── 1 & 2. 308, méthode conservée, query string reportée ────────────────────
 
-@pytest.mark.parametrize("alias", deprecations.REST, ids=lambda a: f"{a.verbe} {a.ancien}")
+@pytest.mark.parametrize("alias", _ALIAS, ids=lambda a: f"{a.verbe} {a.ancien}")
 def test_lancien_chemin_redirige_en_308_vers_le_nouveau(client, alias):
     r = client.request(alias.verbe, _exemple(alias.ancien), follow_redirects=False)
     assert r.status_code == 308, (
@@ -80,22 +90,24 @@ def test_lancien_chemin_redirige_en_308_vers_le_nouveau(client, alias):
 
 
 def test_la_query_string_est_reportee(client):
-    """Un client qui appelle `…/library?limit=200` : la perdre rendrait 100
-    entrées au lieu de 200, sans le moindre code d'erreur."""
-    r = client.get("/api/me/doctrines/library?limit=200&q=x", follow_redirects=False)
-    assert r.headers["location"] == "/api/me/guide-library?limit=200&q=x"
+    """Un client qui appelle `…/rows?limit=200` : la perdre rendrait 100 lignes au
+    lieu de 200, sans le moindre code d'erreur."""
+    r = client.get("/api/datastore/namespaces/leads/rows?limit=200&q=x",
+                   follow_redirects=False)
+    assert r.headers["location"] == "/api/datastores/leads/rows?limit=200&q=x"
 
 
-def test_lavis_de_retrait_est_dans_les_en_tetes(client):
-    """Un intégrateur qui lit ses logs voit la date sans ouvrir la doc."""
-    r = client.get("/api/me/doctrines/library", follow_redirects=False)
+def test_lavis_de_depreciation_est_dans_les_en_tetes_sans_date(client):
+    """Un intégrateur qui lit ses logs voit la dépréciation sans ouvrir la doc — et
+    aucune date de retrait (décision du 23/11/2026)."""
+    r = client.get("/api/datastore/namespaces/leads/rows", follow_redirects=False)
     assert r.headers["deprecation"] == "true"
-    assert r.headers["sunset"] == deprecations.date_de_retrait()
+    assert "sunset" not in r.headers
 
 
 # ── 3. La cible existe et n'est pas, elle-même, un alias ────────────────────
 
-@pytest.mark.parametrize("alias", deprecations.REST, ids=lambda a: a.nouveau)
+@pytest.mark.parametrize("alias", _ALIAS, ids=lambda a: a.nouveau)
 def test_la_cible_de_lalias_est_une_route_servie(alias):
     table = _table()
     route, _ = _resout(table, alias.verbe, _exemple(alias.nouveau))
@@ -109,7 +121,7 @@ def test_la_cible_de_lalias_est_une_route_servie(alias):
 
 # ── 4. Le préflight n'est jamais redirigé ───────────────────────────────────
 
-@pytest.mark.parametrize("alias", deprecations.REST, ids=lambda a: a.ancien)
+@pytest.mark.parametrize("alias", _ALIAS, ids=lambda a: a.ancien)
 def test_le_preflight_nest_pas_redirige(alias):
     """Un `OPTIONS` qui répondrait 308 ferait abandonner le navigateur avant même
     d'essayer la requête réelle."""
@@ -120,7 +132,7 @@ def test_le_preflight_nest_pas_redirige(alias):
 
 def test_la_redirection_porte_les_en_tetes_cors(client):
     """Le navigateur vérifie CORS sur CHAQUE réponse d'une chaîne de redirections."""
-    r = client.get("/api/me/doctrines/library", follow_redirects=False,
+    r = client.get("/api/datastore/namespaces/leads/rows", follow_redirects=False,
                    headers={"origin": _ORIGINE})
     assert r.headers.get("access-control-allow-origin") == _ORIGINE
 
@@ -128,7 +140,7 @@ def test_la_redirection_porte_les_en_tetes_cors(client):
 def test_sans_origine_pas_den_tete_cors(client):
     """Inertie : un appel serveur-à-serveur reçoit
     exactement ce qu'il recevait — pas d'en-tête inventé."""
-    r = client.get("/api/me/doctrines/library", follow_redirects=False)
+    r = client.get("/api/datastore/namespaces/leads/rows", follow_redirects=False)
     assert "access-control-allow-origin" not in r.headers
 
 
@@ -151,36 +163,35 @@ def test_les_alias_sont_montes_en_dernier():
         "avaler un chemin littéral servi juste en dessous.")
 
 
-@pytest.mark.parametrize("alias", deprecations.REST, ids=lambda a: f"{a.verbe} {a.ancien}")
+@pytest.mark.parametrize("alias", _ALIAS, ids=lambda a: f"{a.verbe} {a.ancien}")
 def test_chaque_ancien_chemin_atteint_bien_son_alias(alias):
-    """Le cas qui mord : `…/doctrines/library` DOIT atteindre son alias, et non être
-    avalé par `…/doctrines/{doctrine_id}`, qui capture un segment. C'était le cas
-    AVANT ce lot — le chemin `/api/me/doctrines/library` était inatteignable (400
-    `invalid_input` sur un id qui vaut « library »). L'ordre de `deprecations.REST`
-    est ce qui le règle, et ce test est ce qui le garde."""
+    """Le cas qui mord : un chemin littéral DOIT atteindre son alias, et non être
+    avalé par un placeholder voisin qui capture un segment (`…/rows/batch` contre
+    `…/rows/{row_id}`)."""
     route, _ = _resout(_table(), alias.verbe, _exemple(alias.ancien))
     assert route is not None and route.path == alias.ancien, (
         f"{alias.verbe} {alias.ancien} est servi par `{route.path if route else None}` : "
         "un chemin littéral doit précéder le placeholder qui l'engloberait.")
 
 
-# ── 6. Le document le dit, avec le remplaçant et la date ────────────────────
+# ── 6. Le document le dit, avec le remplaçant et sans date ──────────────────
 
-@pytest.mark.parametrize("alias", deprecations.REST, ids=lambda a: a.ancien)
+@pytest.mark.parametrize("alias", _ALIAS, ids=lambda a: a.ancien)
 def test_lopenapi_marque_lancien_chemin_deprecie(alias):
     doc = openapi.build()
     op = doc["paths"][alias.ancien][alias.verbe.lower()]
     assert op["deprecated"] is True
     assert alias.nouveau in op["summary"], (
         "« déprécié » sans chemin de remplacement n'est qu'un reproche")
-    assert deprecations.date_de_retrait() in op["summary"]
+    assert "préavis" in op["summary"]
+    assert deprecations.REVUE.strftime("%d/%m/%Y") not in op["summary"] + op["description"]
     assert "308" in op["responses"]
+    assert "Sunset" not in op["responses"]["308"]["headers"]
 
 
 def test_les_nouveaux_chemins_sont_documentes():
     doc = openapi.build()
-    manquants = [a.nouveau for a in deprecations.REST
-                 if a.nouveau.startswith("/api/me/") and a.nouveau not in doc["paths"]]
+    manquants = [a.nouveau for a in _ALIAS if a.nouveau not in doc["paths"]]
     assert not manquants, f"chemins d'aujourd'hui absents du document : {manquants}"
 
 
@@ -191,24 +202,48 @@ def test_un_alias_ne_vole_pas_loperationid_dune_autre_entree():
     L'unicité sur TOUT le document est gardée par `tests/test_openapi.py` (#436) ;
     celle-ci nomme la règle propre aux alias quand elle est enfreinte."""
     doc = openapi.build()
-    anciens = {a.ancien for a in deprecations.REST}
+    anciens = {a.ancien for a in _ALIAS}
     ids_alias = {op["operationId"] for p, item in doc["paths"].items() if p in anciens
                  for op in item.values()}
     ids_autres = {op["operationId"] for p, item in doc["paths"].items()
                   if p not in anciens for op in item.values()}
     assert not (ids_alias & ids_autres), (
         f"{sorted(ids_alias & ids_autres)} : un alias déprécié porte l'operationId "
-        "d'une entrée vivante. L'id suit la CAPACITÉ — quand la clé n'a pas changé, "
-        "c'est le NOUVEAU chemin qui en hérite, et l'alias en reçoit un dérivé de son "
-        "chemin (cf. `deprecations.AliasRest.operation_id`).")
+        "d'une entrée vivante : l'alias reçoit un id dérivé de son chemin.")
 
 
-# ── 7. Les clés de capacité ont bien basculé ────────────────────────────────
+# ── 7. Chaque redirection laisse sa ligne au journal ────────────────────────
 
-def test_le_registre_ne_porte_plus_les_anciennes_cles():
-    from oto_mcp.capabilities import registry
-    cles = {c.key for c in registry.CAPABILITIES}
-    restantes = sorted(a for a in deprecations.CAPACITES if a in cles)
-    assert not restantes, f"clés de capacité non renommées : {restantes}"
-    manquantes = sorted(n for n in deprecations.CAPACITES.values() if n not in cles)
-    assert not manquantes, f"clés d'aujourd'hui absentes du registre : {manquantes}"
+def test_chaque_redirection_est_comptee_au_journal_sans_le_chemin_reel(monkeypatch):
+    """La mesure qui décide du retrait ne dépend plus des 7 jours du journal du
+    proxy : la 308 écrit sa ligne par le chemin habituel du journal des routes
+    (`RestCallLogger`, écriture asynchrone), sans authentifier ni requêter."""
+    from starlette.middleware import Middleware
+
+    from oto_mcp.api import alias_routes
+    from oto_mcp.api import base as api_base
+
+    lignes: list = []
+
+    def _emet(row):
+        lignes.append(dict(row))
+
+        async def _fait():
+            return None
+        return _fait()
+
+    monkeypatch.setattr(api_routes, "_emit_rest_event", _emet)
+    app = Starlette(routes=alias_routes.make_routes(api_base.options_handler),
+                    middleware=[Middleware(api_routes.RestCallLogger)])
+    alias = next(a for a in _ALIAS
+                 if a.verbe == "GET" and a.ancien.endswith("/rows/{row_id}"))
+    r = TestClient(app).request(alias.verbe, "/api/datastore/namespaces/leads/rows/957",
+                                headers={"X-Oto-Org": "12"}, follow_redirects=False)
+    assert r.status_code == 308
+    (ligne,) = lignes
+    assert ligne["kind"] == "rest"
+    assert ligne["tool"] == f"{alias.verbe} {alias.nouveau}"
+    assert ligne["args"]["deprecated_name"] == alias.ancien
+    assert "957" not in repr(ligne["tool"]) + repr(ligne["args"]), (
+        "le chemin réel peut porter un identifiant : seul le gabarit est écrit")
+    assert ligne["sub"] is None and ligne["org_id"] == 12, "ce qui est connu, sans plus"

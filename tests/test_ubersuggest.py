@@ -244,15 +244,11 @@ def test_le_dialogue_porte_le_defi_du_verificateur_et_le_client_signes(env):
 # ── Retour de connexion ─────────────────────────────────────────────────────
 
 def _callback(query: dict):
-    from starlette.requests import Request
+    """The real callback, then the front's completion (`auth/flow.complete`):
+    `(issue, detail)`."""
+    from _retour_oauth import terminer
 
-    from oto_mcp.api import ubersuggest as api_ub
-
-    route = api_ub.make_routes(None, None, None, None, None)[0]
-    qs = "&".join(f"{k}={v}" for k, v in query.items()).encode()
-    req = Request({"type": "http", "method": "GET", "path": route.path,
-                   "query_string": qs, "headers": []})
-    return asyncio.run(route.endpoint(req))
+    return terminer("/api/ubersuggest/oauth/callback", query)
 
 
 def test_retour_echange_avec_le_client_du_state_et_le_note_sur_la_ligne(env):
@@ -260,8 +256,8 @@ def test_retour_echange_avec_le_client_du_state_et_le_note_sur_la_ligne(env):
     changé entre-temps (deux premiers flux en course) — et la ligne le retient."""
     etat = _etat(env, cid="client-du-flux")
     env.reglages[("platform", "platform", CONNECTEUR, f"client_id@{_RETOUR}")] = "autre"
-    resp = _callback({"code": "le-code", "state": etat})
-    assert resp.status_code == 302 and "connected" in resp.headers["location"]
+    issue, _out = _callback({"code": "le-code", "state": etat})
+    assert issue == "connected"
     assert env.coeur.auth.exchange_code.call_args.args == (
         "client-du-flux", "le-code", _RETOUR, "verif")
     ligne = env.coffre.lignes[("member", MEMBRE, "")]
@@ -273,26 +269,26 @@ def test_retour_echange_avec_le_client_du_state_et_le_note_sur_la_ligne(env):
 
 def test_un_state_rejoue_est_refuse(env):
     etat = _etat(env)
-    assert "connected" in _callback({"code": "c1", "state": etat}).headers["location"]
-    resp = _callback({"code": "c2", "state": etat})
-    assert "error" in resp.headers["location"]
+    assert _callback({"code": "c1", "state": etat})[0] == "connected"
+    issue, _out = _callback({"code": "c2", "state": etat})
+    assert issue == "state_used"
     assert env.coeur.auth.exchange_code.call_count == 1
 
 
 def test_droits_retires_entre_le_depart_et_le_retour(env):
     etat = _etat(env)
     env.membres.clear()
-    assert "forbidden" in _callback({"code": "c", "state": etat}).headers["location"]
+    assert _callback({"code": "c", "state": etat})[0] == "not_allowed"
     etat = _etat(env)
     env.membres.add((SUB, ORG))
     env.coupes.add((CONNECTEUR, ORG))
-    assert "forbidden" in _callback({"code": "c", "state": etat}).headers["location"]
+    assert _callback({"code": "c", "state": etat})[0] == "not_allowed"
     env.coeur.auth.exchange_code.assert_not_called()
 
 
 def test_retour_refuse_par_la_personne(env):
-    resp = _callback({"error": "access_denied", "state": _etat(env)})
-    assert "denied" in resp.headers["location"]
+    issue, _out = _callback({"error": "access_denied", "state": _etat(env)})
+    assert issue == "denied"
     env.coeur.auth.exchange_code.assert_not_called()
 
 
@@ -305,8 +301,8 @@ def test_la_query_du_retour_ne_part_ni_au_journal_ni_a_sentry(env):
 
 
 def test_retour_sans_state_lisible(env):
-    resp = _callback({"code": "x", "state": "faux.state"})
-    assert "error" in resp.headers["location"]
+    issue, _out = _callback({"code": "x", "state": "faux.state"})
+    assert issue == "error"
     env.coeur.auth.exchange_code.assert_not_called()
 
 

@@ -47,7 +47,8 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
 
     **Deuxième traduction, même bord : les noms DÉPRÉCIÉS** (`deprecations.TOOLS`,
     #519). Un outil renommé est servi sous ses DEUX noms — le nouveau, et l'ancien
-    avec un avis de retrait daté en tête de sa description — et les deux s'appellent.
+    avec un avis de dépréciation, sans date, en tête de sa description — et les deux
+    s'appellent.
     La réponse d'un appel fait sous l'ancien nom porte le même avis en tête de son
     canal texte (`deprecations.avis_d_appel`), et le journal compte l'usage de l'alias
     (`session_org.nom_deprecie_de_l_appel`) sans changer le nom qu'il écrit.
@@ -90,7 +91,7 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
                 titre = f"{tool_alias.titre_pose(t)} (deprecated name: {ancien})"
                 out.append(t.model_copy(update={
                     "name": ancien,
-                    "description": (deprecations.avis(t.name, ancien)
+                    "description": (deprecations.avis(t.name)
                                     + (t.description or "")),
                     **tool_alias.champs_titre(t, titre),
                 }))

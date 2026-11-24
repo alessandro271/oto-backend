@@ -477,6 +477,24 @@ def nom_deprecie_de_l_appel() -> Optional[str]:
     return _NOM_DEPRECIE.get()
 
 
+# ── La valeur dépréciée que l'appel a envoyée (`deprecations.VALEURS`) ─────────
+# Même compteur que l'ancien nom ci-dessus, pour une VALEUR réécrite par
+# `deprecations.valeur_canonique` (une valeur d'hier de `resource_type`). La
+# réécriture a lieu DANS la validation de l'entrée, souvent en threadpool : un `.set()`
+# n'y remonterait pas. Elle s'écrit donc dans les holders MUTABLES déjà posés autour
+# de l'appel — le relevé MCP (`_CALL_TRACE`, versé par `calllog.apply_call_trace`) et
+# celui de la requête REST (`_REF_REST`, versé par `api.routes.RestCallLogger`) —, sous
+# la clé `deprecated_value` de `args`. No-op hors appel.
+CLE_VALEUR_DEPRECIEE = "deprecated_value"
+
+
+def noter_valeur_depreciee(champ_valeur: str) -> None:
+    """Note `"<champ>=<valeur reçue>"` pour le journal de l'appel ou de la requête."""
+    for holder in (_CALL_TRACE.get(), _REF_REST.get()):
+        if holder is not None and champ_valeur:
+            holder[CLE_VALEUR_DEPRECIEE] = champ_valeur
+
+
 # ── View-as USER (« voir en tant que », face REST, LECTURE SEULE) ────────────
 # Extension de la consultation à l'axe USER : un opérateur plateforme « voit en
 # tant que » un autre user dans le dashboard. Contextvar per-requête posé par

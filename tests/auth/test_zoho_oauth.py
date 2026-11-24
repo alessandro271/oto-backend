@@ -90,9 +90,10 @@ def test_we_call_an_api_that_actually_accepts_sub():
 
 def test_state_roundtrip():
     st = z.make_state("u1", 35, "zohodesk", DC, group_id=7, level="read")
-    assert z.verify_state(st) == {"sub": "u1", "org": 35, "group": 7,
-                                  "connector": "zohodesk", "data_center": DC,
-                                  "level": "read", "return_app": ""}
+    lu = z.verify_state(st)
+    assert lu.pop("jti"), "usage unique"
+    assert lu == {"sub": "u1", "org": 35, "group": 7, "connector": "zohodesk",
+                  "data_center": DC, "level": "read", "return_app": ""}
 
 
 def test_state_carries_the_front_that_asked():
@@ -102,13 +103,13 @@ def test_state_carries_the_front_that_asked():
     assert z.verify_state(st)["return_app"] == "acme"
 
 
-def test_state_signed_before_the_field_still_verifies():
-    """Tolérance aux states émis AVANT `return_app` et encore vivants dans la fenêtre
-    du TTL : on dégrade vers le défaut, on ne casse pas un consentement en cours."""
+def test_a_state_without_jti_is_refused():
+    """Usage unique : un state sans `jti` (émis avant la règle) est refusé, la
+    connexion se relance."""
     from oto_mcp.auth import flow as oauth_flow
     st = oauth_flow.sign_state(z._AUDIENCE, {"sub": "u1", "org": 35, "g": None,
-                                             "c": "zoho", "dc": DC, "l": "full"})
-    assert z.verify_state(st)["return_app"] == ""
+                                             "c": "zoho", "dc": DC, "l": "full", "a": ""})
+    assert z.verify_state(st) is None
 
 
 @pytest.mark.parametrize("manque", ["g", "l"])
@@ -876,17 +877,16 @@ _REEL = object()
 
 
 def _retour(monkeypatch, verdict, app=EQUIPE, connector="zoho"):
-    """La route de retour, avec un état signé et un échange stubé ; `verdict` = ce que
-    rend (ou lève) `check_org`, `_REEL` = le vrai `check_org` (HTTP Zoho stubé par
-    l'appelant). Rend (Location, persisté ?)."""
-    import asyncio
-    from starlette.requests import Request
-    from oto_mcp.api import zoho as route
+    """Le vrai callback puis la complétion du front, avec un état signé et un échange
+    stubé ; `verdict` = ce que rend (ou lève) `check_org`, `_REEL` = le vrai
+    `check_org` (HTTP Zoho stubé par l'appelant). Rend ((issue, détail), rangé ?)."""
+    from _retour_oauth import terminer
+    from oto_mcp import roles
     ecrit = []
     monkeypatch.setattr(z, "app_fields", lambda *a, **k: dict(app))
     monkeypatch.setattr(z, "exchange_code", lambda *a, **k: dict(TOKENS))
     monkeypatch.setattr(z, "persist", lambda *a, **k: ecrit.append(1))
-    monkeypatch.setattr(route.roles, "is_org_member", lambda sub, org: True)
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
 
     def _verdict(*a):
         if isinstance(verdict, Exception):
@@ -895,31 +895,22 @@ def _retour(monkeypatch, verdict, app=EQUIPE, connector="zoho"):
     if verdict is not _REEL:
         monkeypatch.setattr(z, "check_org", _verdict)
     etat = z.make_state("u1", 35, connector, "eu", group_id=4, level="read")
-    (cb,) = route.make_routes(None, None, None, None, None)
-    req = Request({"type": "http", "method": "GET", "path": cb.path, "headers": [],
-                   "query_string": f"code=c&state={etat}".encode()})
-    rep = asyncio.run(cb.endpoint(req))
-    return rep.headers["location"], bool(ecrit)
+    return terminer("/api/zoho/oauth/callback", {"code": "c", "state": etat}), bool(ecrit)
 
 
 def test_le_retour_d_une_autre_org_ne_range_rien_et_la_nomme(monkeypatch):
-    lieu, range_ = _retour(monkeypatch, z.ZohoOrgMismatch("Autre société"))
+    (issue, out), range_ = _retour(monkeypatch, z.ZohoOrgMismatch("Autre société"))
     assert not range_
-    assert "connect=zoho_org_mismatch" in lieu
-    assert "consented_org=Autre+soci%C3%A9t%C3%A9" in lieu
-    assert "consented_org_id" not in lieu, "le refus nomme, il ne montre pas d'identifiant"
+    assert issue == "org_mismatch"
+    assert out["details"] == {"consented_org": "Autre société"}, (
+        "le refus nomme, il ne montre pas d'identifiant")
 
 
 def test_le_retour_sans_org_attendue_range_et_previent(monkeypatch):
-    lieu, range_ = _retour(monkeypatch, z.OrgCheck(z.ORG_UNVERIFIED))
+    (issue, out), range_ = _retour(monkeypatch, z.OrgCheck(z.ORG_UNVERIFIED))
     assert range_
-    assert "connect=connected" in lieu and "warning=zoho_org_unverified" in lieu
-    assert "consented_org" not in lieu, "rien de lu : l'avertissement seul"
-
-
-def _requete(lieu: str) -> list:
-    from urllib.parse import parse_qsl, urlsplit
-    return parse_qsl(urlsplit(lieu).query, keep_blank_values=True)
+    assert issue == "connected" and out["warning"] == "zoho_org_unverified"
+    assert "details" not in out, "rien de lu : l'avertissement seul"
 
 
 def test_le_retour_sans_org_attendue_montre_l_org_consentie_du_crm(monkeypatch):
@@ -928,40 +919,38 @@ def test_le_retour_sans_org_attendue_montre_l_org_consentie_du_crm(monkeypatch):
     vu = _zoho_http(monkeypatch, {"org": [{"id": "5725767000000020005", "zgid": "808232144",
                                            "domain_name": "org808232144",
                                            "company_name": "Équipe Démo"}]})
-    lieu, range_ = _retour(monkeypatch, _REEL, app=SANS_ORG)
+    (issue, out), range_ = _retour(monkeypatch, _REEL, app=SANS_ORG)
     assert range_ and vu["revoke"] == []
-    q = _requete(lieu)
-    assert ("connect", "connected") in q and ("warning", "zoho_org_unverified") in q
-    assert [v for k, v in q if k == "consented_org"] == ["Équipe Démo"]
-    assert [v for k, v in q if k == "consented_org_id"] == ["808232144"]
+    assert issue == "connected" and out["warning"] == "zoho_org_unverified"
+    assert out["details"] == {"consented_org": ["Équipe Démo"],
+                              "consented_org_id": ["808232144"]}
 
 
 def test_le_retour_montre_chaque_org_de_desk_par_paires(monkeypatch):
     _zoho_http(monkeypatch, {"data": [{"id": 111, "companyName": "A"},
                                       {"id": 222, "companyName": "B"}]})
-    lieu, range_ = _retour(monkeypatch, _REEL, app=SANS_ORG, connector="zohodesk")
-    q = _requete(lieu)
-    assert range_ and ("warning", "zoho_org_unverified") in q
-    assert [v for k, v in q if k == "consented_org"] == ["A", "B"]
-    assert [v for k, v in q if k == "consented_org_id"] == ["111", "222"]
+    (issue, out), range_ = _retour(monkeypatch, _REEL, app=SANS_ORG, connector="zohodesk")
+    assert range_ and out["warning"] == "zoho_org_unverified"
+    assert out["connector"] == "zohodesk"
+    assert out["details"] == {"consented_org": ["A", "B"], "consented_org_id": ["111", "222"]}
 
 
 def test_le_retour_dont_la_lecture_echoue_range_avec_l_avertissement_seul(monkeypatch):
     vu = _zoho_http(monkeypatch, _Rep({}, 500))
-    lieu, range_ = _retour(monkeypatch, _REEL, app=SANS_ORG)
+    (issue, out), range_ = _retour(monkeypatch, _REEL, app=SANS_ORG)
     assert range_ and vu["revoke"] == []
-    assert "connect=connected" in lieu and "warning=zoho_org_unverified" in lieu
-    assert "consented_org" not in lieu
+    assert issue == "connected" and out["warning"] == "zoho_org_unverified"
+    assert "details" not in out
 
 
 def test_le_retour_verifie_ne_porte_aucun_avertissement(monkeypatch):
-    lieu, range_ = _retour(monkeypatch, z.OrgCheck())
-    assert range_ and "connect=connected" in lieu and "warning" not in lieu
+    (issue, out), range_ = _retour(monkeypatch, z.OrgCheck())
+    assert range_ and issue == "connected" and "warning" not in out
 
 
 def test_le_retour_illisible_ne_range_rien(monkeypatch):
-    lieu, range_ = _retour(monkeypatch, z.ZohoOrgUnverifiable("x"))
-    assert not range_ and "connect=error" in lieu
+    (issue, _out), range_ = _retour(monkeypatch, z.ZohoOrgUnverifiable("x"))
+    assert not range_ and issue == "exchange_failed"
 
 
 def test_le_depart_sans_app_rend_zoho_no_app(monkeypatch):

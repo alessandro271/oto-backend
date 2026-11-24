@@ -224,6 +224,37 @@ def SERVICE_ROLE(role: str):
 COMMERCE_SERVICE = SERVICE_ROLE("commerce")
 
 
+def SERVICE_OU(role: str, regle):
+    """Une identité de SERVICE portant `role`, OU la règle `regle` d'un compte — pour
+    ouvrir une route d'administration existante au service sans dupliquer sa capacité.
+
+    Le choix se fait sur le FAIT posé par l'authentification REST, jamais sur un essai
+    suivi d'un repli : une identité de service posée → `SERVICE_ROLE(role)` seule ; sinon
+    → `regle` seule, telle quelle. Le jeton `oto_` et la session suivent donc exactement
+    le chemin d'avant. Le service n'a pas de borne : il voit l'instance entière, comme
+    sur `/api/service/*` (`org_id=None`, la cible vient de l'input).
+
+    Le plancher plateforme est celui de `regle` : la visibilité de session d'un compte
+    ne change pas. `autz_branches` expose les deux branches à `accepts_service`, qui
+    ouvre alors l'authentification au service (`_rest_adapter`)."""
+    service = SERVICE_ROLE(role)
+
+    def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+        from ..auth import service_identity
+        if service_identity.current() is not None:
+            return service(raw, inp)
+        return regle(raw, inp)
+    rule.platform_floor = platform_floor(regle)
+    rule.autz_branches = (service, regle)
+    rule.service_role = role
+    return rule
+
+
+def est_service(ctx: ResolvedCtx) -> bool:
+    """Le contexte résolu est celui d'une identité de service (`SERVICE_ROLE`)."""
+    return bool(ctx.role and str(ctx.role).startswith("service:"))
+
+
 def accepts_service(rule) -> bool:
     """Au moins une branche de `rule` lit une identité de service (`BY_OP` expose
     ses branches ; `ADMIN_BY_OP` ne les expose pas et n'en accepte donc pas)."""

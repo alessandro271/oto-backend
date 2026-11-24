@@ -47,39 +47,52 @@ def _adresse_de_l_instance(monkeypatch):
 
 # --- state round-trip ---------------------------------------------------------
 
+def _lu(state):
+    """`verify_state` en tuple (sub, org, scope, verifier, group, app), son `jti` vérifié."""
+    d = salesforce_oauth.verify_state(state)
+    assert d is not None and d["jti"], "usage unique"
+    return d["sub"], d["org"], d["scope"], d["verifier"], d["group"], d["app"]
+
+
 def test_state_roundtrip_recovers_sub_org_scope_and_verifier():
     state = salesforce_oauth.make_state("sub-xyz", 42, "member", "verifier-abc")
-    got = salesforce_oauth.verify_state(state)
+    got = _lu(state)
     assert got == ("sub-xyz", 42, "member", "verifier-abc", None, "")
 
 
 def test_state_roundtrip_carries_org_scope():
     state = salesforce_oauth.make_state("sub-1", 7, "org", "v")
-    got = salesforce_oauth.verify_state(state)
+    got = _lu(state)
     assert got == ("sub-1", 7, "org", "v", None, "")
 
 
 def test_state_roundtrip_carries_group_scope_and_group_id():
     state = salesforce_oauth.make_state("sub-1", 7, "group", "v", group_id=99)
-    got = salesforce_oauth.verify_state(state)
+    got = _lu(state)
     assert got == ("sub-1", 7, "group", "v", 99, "")
 
 
 def test_state_roundtrip_carries_return_app():
     state = salesforce_oauth.make_state("sub-1", 7, "member", "v", return_app="acme")
-    got = salesforce_oauth.verify_state(state)
+    got = _lu(state)
     assert got == ("sub-1", 7, "member", "v", None, "acme")
 
 
 def test_state_missing_app_key_defaults_to_empty_string():
-    """État signé AVANT ce champ (déploiement à cheval sur la fenêtre de 10 min du
-    state) : `app` absent ne doit pas invalider tout le state, juste dégrader vers
-    la chaîne vide (⇒ retour oto-dashboard historique, pas une connexion perdue)."""
+    """`app` absent n'invalide pas tout le state : il dégrade vers la chaîne vide
+    (⇒ retour oto-dashboard)."""
     from oto_mcp.auth import flow as oauth_flow
-    forged = oauth_flow.sign_state("salesforce",
+    signe = oauth_flow.sign_state("salesforce", {"sub": "s", "org": 1, "scope": "member",
+                                                  "v": "x", "jti": "j"})
+    assert _lu(signe) == ("s", 1, "member", "x", None, "")
+
+
+def test_state_without_jti_is_refused():
+    """Usage unique : un state sans `jti` est refusé, la connexion se relance."""
+    from oto_mcp.auth import flow as oauth_flow
+    signe = oauth_flow.sign_state("salesforce",
                                    {"sub": "s", "org": 1, "scope": "member", "v": "x"})
-    got = salesforce_oauth.verify_state(forged)
-    assert got == ("s", 1, "member", "x", None, "")
+    assert salesforce_oauth.verify_state(signe) is None
 
 
 def test_group_scope_state_without_group_id_is_rejected():
@@ -171,7 +184,7 @@ def test_build_auth_url_embeds_known_return_app(monkeypatch):
     })
     url = salesforce_oauth.build_auth_url("sub-1", "member", return_app="acme")
     state = parse_qs(urlparse(url).query)["state"][0]
-    _, _, _, _, _, return_app = salesforce_oauth.verify_state(state)
+    _, _, _, _, _, return_app = _lu(state)
     assert return_app == "acme"
 
 
@@ -187,7 +200,7 @@ def test_build_auth_url_unknown_return_app_is_reduced_to_empty(monkeypatch):
     })
     url = salesforce_oauth.build_auth_url("sub-1", "member", return_app="https://evil.example.com")
     state = parse_qs(urlparse(url).query)["state"][0]
-    _, _, _, _, _, return_app = salesforce_oauth.verify_state(state)
+    _, _, _, _, _, return_app = _lu(state)
     assert return_app == ""
 
 

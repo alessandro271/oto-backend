@@ -751,3 +751,34 @@ def bearer(account: Optional[str] = None) -> str:
     _OWNER.set(str(owner) if owner else "")
     return access_token_for(rc)
 
+
+
+# --- the return: the callback hands over, the front completes (`auth/flow.py`) ------
+
+def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
+    d = read_state(state)
+    if d is None:
+        return None
+    return oauth_flow.ReturnState(d["sub"], d["org"],
+                                  oauth_flow.resolve_return_app(d["app"]), CONNECTOR,
+                                  d["jti"], d)
+
+
+def _finish_return(d: dict, code: str) -> dict:
+    """RE-GUARD of the right to write at this level (ADR 0038: the state lives 10 min, a
+    role can be lost between the click and the return), then the exchange with the
+    level's app and the storage. The `code` and the tokens never enter a log line."""
+    sub, org_id, scope, group_id = d["sub"], d["org"], d["scope"], d.get("group")
+    if not can_write(sub, org_id, scope, group_id):
+        oauth_flow.not_allowed(
+            "You no longer have the right to connect HubSpot at this level.")
+    result = persist(sub, org_id, scope, group_id, exchange_code(code, d["kind"]))
+    logger.info("hubspot: portal connected (hub_id=%s, scope=%s, app=%s, org=%s)",
+                result.get("hub_id"), scope, result.get("app"), org_id)
+    return {"account": None, "scope": scope}
+
+
+RETURN = oauth_flow.OAuthReturn(
+    audience=AUD, callback_path=CALLBACK_PATH, label="HubSpot", default_card=CONNECTOR,
+    read=_return_state, finish=_finish_return, cards=lambda: (CONNECTOR,))
+oauth_flow.declare_return(RETURN)
