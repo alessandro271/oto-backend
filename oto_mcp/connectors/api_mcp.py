@@ -15,8 +15,8 @@ One short session per verb: `initialize` → `notifications/initialized` → the
 `DELETE` of the session (best effort). Every request after the `initialize` carries the
 negotiated `MCP-Protocol-Version`, with or without a session id. The answer may be JSON
 or an SSE stream; only the JSON-RPC answer to OUR id is read. What the remote server
-writes (tool descriptions, text content, error messages) reaches the agent fenced as
-third-party data (`texte_tiers.cloture`). Every request goes out under the egress guard, with
+writes (tool descriptions, text content, structured content, error messages) reaches
+the agent fenced as third-party data (`texte_tiers.cloture`). Every request goes out under the egress guard, with
 no redirect followed (a redirect would carry the key to a host nobody chose), and the
 body read is bounded.
 """
@@ -284,6 +284,20 @@ def _contenu_cloture(bloc):
     return bloc
 
 
+def _structure_cloture(valeur) -> str:
+    """The remote tool's `structuredContent`, served as fenced third-party data: its
+    JSON, indented, inside the same named block as its text content. Any string in it
+    is the remote server's prose, so the object as a whole is fenced — the agent still
+    reads it as JSON, with no tag to strip and no key renamed."""
+    try:
+        texte = json.dumps(valeur, ensure_ascii=False, indent=1, sort_keys=False)
+    except (TypeError, ValueError):
+        texte = str(valeur)
+    return cloture("remote-mcp-structured", texte,
+                   origine="Structured content returned by the remote MCP server",
+                   lecture="data (JSON)")
+
+
 def list_tools(fields: dict, row, definition: dict) -> dict:
     ouverts = allowlist(definition)
 
@@ -322,6 +336,6 @@ def call_tool(fields: dict, row, definition: dict, name: Optional[str],
         out = {"tool": name, "is_error": bool(res.get("isError")),
                "content": [_contenu_cloture(b) for b in (res.get("content") or [])]}
         if "structuredContent" in res:
-            out["structured"] = res["structuredContent"]
+            out["structured"] = _structure_cloture(res["structuredContent"])
         return out
     return _une_fois(fields, row, run)

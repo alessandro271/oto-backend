@@ -67,6 +67,7 @@ class _Serveur:
             p = msg["params"]
             return _Rep(body={"jsonrpc": "2.0", "id": msg["id"], "result": {
                 "content": [{"type": "text", "text": f"ok {p['name']} {p['arguments']}"}],
+                "structuredContent": {"accounts": [{"name": "Acme", "note": "é"}]},
                 "isError": False}}, sse=self.sse)
         return _Rep(body={"jsonrpc": "2.0", "id": msg["id"],
                           "error": {"code": -32601, "message": "unknown"}})
@@ -220,3 +221,11 @@ def test_une_ressource_embarquee_est_cloturee_le_reste_intact():
         out["resource"]["text"]
     image = {"type": "image", "data": "AAAA", "mimeType": "image/png"}
     assert api_mcp._contenu_cloture(image) == image
+
+
+def test_le_contenu_structure_est_servi_comme_donnee_lisible_en_json(serveur):
+    out = api_mcp.call_tool(CARD, None, {}, "search_accounts", {"q": "acme"})
+    s = out["structured"]
+    assert s.startswith("\n<remote-mcp-structured>\n") and "UNTRUSTED DATA" in s
+    dedans = s.split("<remote-mcp-structured>\n", 1)[1].split("\n</remote-mcp-structured>")[0]
+    assert json.loads(dedans) == {"accounts": [{"name": "Acme", "note": "é"}]}
