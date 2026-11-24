@@ -215,10 +215,15 @@ qu'une couleur a changé de Python, une telle amorce bloque. Au jour d'un change
 `journal-archive.service`) appellent `<arbre>/.venv/bin/python` de l'arbre qu'ils nomment.
 L'amorce les rend sur la couleur **en service** après chaque bascule, et la montée ne recrée
 que le venv de la couleur **inactive** : en régime normal, ils ne touchent jamais le venv en
-cours de recréation. Mais ce rendu, posé après la bascule, n'est jamais un motif d'échec :
-s'il a manqué une fois, les unités peuvent nommer la couleur inactive. Avant une migration,
-vérifier que leurs `ExecStart` nomment la couleur en service (`systemctl cat`) ; sinon, ils
-échouent pendant la recréation et, si elle échoue, jusqu'à la restauration du venv d'avant.
+cours de recréation. Ces unités sont rendues et validées **avant** la bascule, pour la couleur
+qui va servir (montée comme retour) : un gabarit ou un timer qui ne se rend pas arrête le
+déploiement, rien n'a basculé. Leur pose, **après** la bascule (écriture, `daemon-reload`,
+activation des timers, relecture), fait échouer le déploiement si elle échoue : le service a
+basculé, et le message dit l'arbre que chaque unité vise encore et la commande qui les repose
+(`<arbre en service>/deploy/cible/amorcer.sh <déclaration> <rôle> maintenance`). Avant une
+migration, vérifier quand même que leurs `ExecStart` nomment la couleur en service
+(`systemctl cat`) ; sinon, ils échouent pendant la recréation et, si elle échoue, jusqu'à la
+restauration du venv d'avant.
 Migrer de préférence hors de leurs créneaux (`systemctl list-timers`), puis vérifier qu'ils
 passent sur le venv recréé (`systemctl start` de chaque service, puis son journal).
 

@@ -12,7 +12,9 @@
 #      (`migrer upgrade head`), puis relue ; tout autre écart refuse, en le nommant
 #      (docs/instance-cible.md, § Les migrations, jouées par la montée) ;
 #   4. elle démarre la couleur, bascule l'amont Caddy, vérifie le trafic public, vidange ;
-#   5. la maintenance du rôle suit l'arbre qui sert désormais.
+#   5. la maintenance du rôle suit l'arbre qui sert désormais : ses unités sont rendues et
+#      validées AVANT la bascule (un refus n'y bascule rien), posées APRÈS ; un échec de la
+#      pose fait échouer le déploiement, en nommant l'arbre que visent encore les unités.
 #
 # usage : deployer.sh <déclaration.json> deployer <rôle> <tag>
 #         deployer.sh <déclaration.json> retour   <rôle> <tag>   rebascule sur la couleur
@@ -193,15 +195,47 @@ export OTO_FUNCTIONS_ISOLATION=bwrap
 # shellcheck source=deploy/oto-mcp-bluegreen.sh
 . "$ICI/../oto-mcp-bluegreen.sh"
 
+# --- les unités de maintenance et d'archive du journal suivent la couleur qui va servir —
+# --- celle que la montée installe, ou celle que le retour rebascule : l'inactive, dans les
+# --- deux cas. Rendues et validées ICI, avant toute bascule ; un refus arrête tout.
+CIBLE=$(bg_other) || { echo "déploiement : REFUS — pointeur de couleur illisible ($BG_ACTIVE) : rien n'a basculé" >&2; exit 1; }
+if ! bash "$ICI/amorcer.sh" "$DECLARATION" "$ROLE" maintenance-verifier "$CIBLE"; then
+  echo "déploiement : REFUS — les unités de maintenance et d'archive du journal ne se rendent pas pour ${CIBLE} (motif ci-dessus) : rien n'a basculé, ${ROLE} reste servi par $(bg_active)" >&2
+  exit 1
+fi
+
 case "$ACTION" in
   deployer) bg_run "$TAG" ;;
   retour)   bg_run --rollback ;;
   *) echo "action inconnue « $ACTION »" >&2; exit 2 ;;
 esac
 
-# La maintenance est posée APRÈS la bascule, et n'est jamais un motif d'échec
-# du déploiement — une maintenance manquée se rattrape, un service arrêté non. Mais son
-# échec se DIT, en tête du journal du run.
+# --- l'arbre que nomme une unité posée (son WorkingDirectory), avec sa couleur.
+arbre_vise() {
+  local fichier=$1 arbre
+  [ -f "$fichier" ] || { echo "aucun (unité absente)"; return; }
+  arbre=$(sed -n 's/^WorkingDirectory=//p' "$fichier" | head -n 1)
+  case "$arbre" in
+    "${BG_TREE}-blue")  echo "$arbre (blue)" ;;
+    "${BG_TREE}-green") echo "$arbre (green)" ;;
+    *) echo "${arbre:-illisible}" ;;
+  esac
+}
+
+# La maintenance est posée APRÈS la bascule (montée comme retour). Ses unités ont été
+# validées avant ; si la pose échoue quand même (écriture, rechargement, timers), le service
+# a basculé mais ses unités peuvent nommer l'ancienne couleur — l'arbre que la montée
+# suivante réécrira : le déploiement ÉCHOUE, en disant ce qu'elles visent et comment corriger.
 if ! bash "$ICI/amorcer.sh" "$DECLARATION" "$ROLE" maintenance; then
-  echo "déploiement : ATTENTION — maintenance de ${UNITE} non posée (le service, lui, a basculé)" >&2
+  servie=$(bg_active) || servie="?"
+  {
+    echo "déploiement : ÉCHEC — ${ROLE} a basculé et est servi par ${servie} (${BG_TREE}-${servie}), mais ses unités de maintenance et d'archive du journal ne suivent pas (motif ci-dessus)."
+    for nom in maintenance journal-archive; do
+      echo "  ${UNITE}-${nom}.service vise : $(arbre_vise "/etc/systemd/system/${UNITE}-${nom}.service")"
+    done
+    echo "  Corriger la cause, puis reposer les unités, en root sur la machine :"
+    echo "    bash ${BG_TREE}-${servie}/deploy/cible/amorcer.sh <déclaration.json> ${ROLE} maintenance"
+    echo "  Contrôler : systemctl cat ${UNITE}-maintenance.service ${UNITE}-journal-archive.service | grep WorkingDirectory"
+  } >&2
+  exit 1
 fi
