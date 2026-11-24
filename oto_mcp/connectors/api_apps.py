@@ -47,10 +47,15 @@ CONNECTOR = store.CONNECTOR
 #: Ce que l'application fixe pour toutes ses clés : l'adresse et la façon de s'y
 #: authentifier, jamais un secret.
 CONNECTION_FIELDS = ("base_url", "auth_mode", "header_name", "query_param", "doc_path",
-                     "token_url", "scope", "session")
+                     "token_url", "scope", "session", "authorize_url", "oauth_client_id",
+                     "resource", "protocol")
 #: Ce qu'une clé apporte : ses secrets, et l'identifiant qui va avec (le login d'un
-#: couple basic, le client d'un oauth2 client-credentials).
-KEY_FIELDS = ("token", "username", "password", "client_id", "client_secret")
+#: couple basic, le client d'un oauth2 client-credentials). En `oauth2_user`, le jeton de
+#: renouvellement du MEMBRE, posé par le flux « Connecter » (`auth/api_oauth.py`).
+KEY_FIELDS = ("token", "username", "password", "client_id", "client_secret",
+              "refresh_token")
+#: Le mode où chaque membre se connecte lui-même au serveur d'autorisation de l'API.
+OAUTH_USER = "oauth2_user"
 _ACCOUNT_MAX = 80
 
 
@@ -94,12 +99,16 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
         raise AppRefused(400, "invalid_app_connection",
                          f"`auth_mode` must be one of {', '.join(api_card.AUTH_MODES)}.")
     champs = _champs()
+    # An MCP server in `oauth2_user` mode SAYS where to sign in: what discovery finds
+    # (`auth/mcp_discovery.py`) may be left empty here, filled at the first Connect.
+    decouvrable = (set(("authorize_url", "token_url", "oauth_client_id"))
+                   if mode == OAUTH_USER and out.get("protocol") == "mcp" else set())
     for name in CONNECTION_FIELDS:
         f = champs[name]
         relevant = not f.when or mode in f.when
         if not relevant:
             out.pop(name, None)
-        elif f.required and not out.get(name):
+        elif f.required and not out.get(name) and name not in decouvrable:
             raise AppRefused(400, "invalid_app_connection",
                              f"`{name}` is required in `{mode}` mode.")
     p = urlsplit(out["base_url"])
@@ -108,6 +117,21 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
         raise AppRefused(400, "invalid_app_connection",
                          "`base_url` is the API root (https://host/path): no user, no "
                          "`?query`, no `#`.")
+    if mode == OAUTH_USER:
+        for name in ("authorize_url", "token_url"):
+            if name in decouvrable and not out.get(name):
+                continue
+            q = urlsplit(out.get(name, ""))
+            if q.scheme != "https" or not q.hostname or q.username or q.password \
+                    or q.fragment:
+                raise AppRefused(400, "invalid_app_connection",
+                                 f"`{name}` must be an https address of the sign-in "
+                                 "server (no user, no `#`).")
+        if out.get("resource") and "://" not in out["resource"] \
+                and not out["resource"].startswith("urn:"):
+            raise AppRefused(400, "invalid_app_connection",
+                             "`resource` is an absolute URI (RFC 8707), e.g. "
+                             "https://api.example.com.")
     for name in ("base_url", "token_url"):
         if out.get(name):
             try:
@@ -232,7 +256,7 @@ def destination(conn: dict) -> tuple:
     sinon la clé posée pour l'une ne part pas vers l'autre."""
     mode = (conn.get("auth_mode") or "").strip()
     return (_origine(conn.get("base_url", "")), mode,
-            _origine(conn.get("token_url", "")) if mode == "oauth2" else "",
+            _origine(conn.get("token_url", "")) if mode in ("oauth2", OAUTH_USER) else "",
             (conn.get("session") or "") if mode in ("session", "visitor") else "")
 
 
@@ -270,7 +294,8 @@ def definition(app: dict) -> dict:
     return {"label": _label(app), "description": d.get("description"),
             "logo_domain": d.get("logo_domain"), "headers": d.get("headers") or {},
             "variables": d.get("variables") or {},
-            "operations": ops if isinstance(ops, list) else []}
+            "operations": ops if isinstance(ops, list) else [],
+            "mcp_tools": d.get("mcp_tools") or []}
 
 
 def _label(app: dict) -> str:

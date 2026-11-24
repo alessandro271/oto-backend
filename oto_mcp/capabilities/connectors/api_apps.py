@@ -20,7 +20,11 @@ app's `account`, with their secret fields only: the app fills the rest and binds
 - `POST   /api/orgs/{id}/connectors/api/apps/{account}/import` — org admin: candidate
   actions from an OpenAPI document (`url` or `inline`), saved by a PATCH;
 - `DELETE /api/orgs/{id}/connectors/api/apps/{account}`      — org admin: retire it
-  (archived); its keys stay in the vault and refuse by name until removed.
+  (archived); its keys stay in the vault and refuse by name until removed;
+- `POST   /api/orgs/{id}/custom-api-apps/{account}/connect` — members: an app in
+  `oauth2_user` mode — the URL of the API's sign-in page for the caller; on return the
+  front completes (`POST /api/me/connectors/api/complete`) and the caller's own key of
+  the app holds their refresh token (`auth/api_oauth.py`).
 """
 from __future__ import annotations
 
@@ -39,7 +43,9 @@ from ..registry import CAPABILITIES
 _ID = {"id": "org_id"}
 _PATH = "/api/orgs/{id}/connectors/api/apps"
 _ONE = _PATH + "/{account}"
-_DEF_KEYS = ("label", "description", "logo_domain", "headers", "variables", "operations")
+_SIGN_IN = "/api/orgs/{id}/custom-api-apps/{account}/connect"
+_DEF_KEYS = ("label", "description", "logo_domain", "headers", "variables", "operations",
+             "mcp_tools")
 
 
 class ApiApp(BaseModel):
@@ -109,6 +115,8 @@ class _DefinitionParts(BaseModel):
     variables: Optional[dict] = None
     operations: Optional[list[Any]] = Field(default=None, description=(
         "When given, REPLACES the action list."))
+    mcp_tools: Optional[list[str]] = Field(default=None, description=(
+        "Protocol `mcp`: the remote tools open to agents (names); [] = all."))
 
 
 class CreateInput(_DefinitionParts):
@@ -129,6 +137,21 @@ class PatchInput(_DefinitionParts):
     account: str
     connection: Optional[dict] = Field(default=None, description=(
         "Only the fields given change; an empty value clears an optional one."))
+
+
+class ConnectInput(BaseModel):
+    org_id: int
+    account: str
+    app: Optional[str] = Field(default=None, description=(
+        "The front to come back to after sign-in (a known key, e.g. `tulina`); "
+        "unknown or absent = the default dashboard."))
+
+
+class ApiAppConnect(BaseModel):
+    """Open `auth_url` in the browser: the API's own sign-in page. `redirect_uri` = oto's
+    callback, the one registered for the app's client at the sign-in server."""
+    auth_url: str
+    redirect_uri: str
 
 
 class ImportInput(BaseModel):
@@ -163,6 +186,9 @@ def _vue(ctx: ResolvedCtx, app: dict) -> dict:
     out["access_team"] = team if out["access"] == "group" else None
     for k in ("operations", "scope", "id"):
         out.pop(k, None)
+    if (out.get("connection") or {}).get("auth_mode") == "oauth2_user":
+        from ...auth import api_oauth
+        out["redirect_uri"] = api_oauth.redirect()
     return out
 
 
@@ -233,9 +259,17 @@ def _create(ctx: ResolvedCtx, inp: CreateInput) -> dict:
 def _patch(ctx: ResolvedCtx, inp: PatchInput) -> dict:
     app = _app(inp.org_id, inp.account)
     old = app["connection"] or {}
+    given = dict(inp.connection) if inp.connection is not None else None
+    if given is not None and _rediscover(old, given):
+        # Another MCP server: its sign-in is found again at the next Connect, never
+        # carried over from the old one (unless the admin sends new values).
+        from ...auth import mcp_discovery
+        for k in mcp_discovery.FILLED:
+            if k not in given or given.get(k) == old.get(k):
+                given[k] = ""
     try:
-        connection = (apps.valider_connexion(inp.connection, base=old)
-                      if inp.connection is not None else old)
+        connection = (apps.valider_connexion(given, base=old)
+                      if given is not None else old)
         definition = apps.valider_definition(_definition_given(inp), connection)
     except apps.AppRefused as e:
         raise _refus(e)
@@ -251,6 +285,14 @@ def _patch(ctx: ResolvedCtx, inp: PatchInput) -> dict:
     return {**_vue(ctx, saved), "stale_keys": stale}
 
 
+def _rediscover(old: dict, given: dict) -> bool:
+    """An mcp + oauth2_user app whose server address moves to another origin."""
+    new = {**old, **{k: v for k, v in given.items() if v is not None}}
+    if new.get("protocol") != "mcp" or new.get("auth_mode") != "oauth2_user":
+        return False
+    return apps._origine(old.get("base_url", "")) != apps._origine(new.get("base_url", ""))
+
+
 def _import(ctx: ResolvedCtx, inp: ImportInput) -> dict:
     app = _app(inp.org_id, inp.account)
     try:
@@ -259,6 +301,31 @@ def _import(ctx: ResolvedCtx, inp: ImportInput) -> dict:
     except ops_store.ImportFailed as e:
         raise AuthzDenied(400, "import_failed", str(e))
     return {"account": app["account"], "operations": cands, "skipped": skipped}
+
+
+def _connect(ctx: ResolvedCtx, inp: ConnectInput) -> dict:
+    from ...auth import api_oauth
+    from ...connectors import activation_gate, cle_perso
+    app = _app(inp.org_id, inp.account)
+    if cle_perso.interdite(inp.org_id, store.CONNECTOR):
+        raise AuthzDenied(403, "personal_key_forbidden", cle_perso.texte_refus(
+            inp.org_id, store.CONNECTOR, cle_perso.A_LA_CONNEXION))
+    activation_gate.exiger_connectable_capacite(store.CONNECTOR, ctx.sub, perso=True)
+    conn = app.get("connection") or {}
+    if conn.get("protocol") == "mcp" and conn.get("auth_mode") == "oauth2_user":
+        # Like Claude: the MCP server says where to sign in (`auth/mcp_discovery.py`).
+        from ...auth import mcp_discovery
+        try:
+            app = mcp_discovery.complete_app(app, ctx.sub)
+        except mcp_discovery.DiscoveryRefused as e:
+            raise AuthzDenied(409, "mcp_discovery_failed", e.message)
+    try:
+        url = api_oauth.authorize_url(app, ctx.sub, inp.app or "")
+    except api_oauth.ApiOAuthRefused as e:
+        if e.code == "api_app_not_oauth_user":
+            raise AuthzDenied(409, "api_app_not_oauth_user", e.message)
+        raise AuthzDenied(409, "api_app_incomplete", e.message)
+    return {"auth_url": url, "redirect_uri": api_oauth.redirect()}
 
 
 def _remove(ctx: ResolvedCtx, inp: OneInput) -> dict:
@@ -316,6 +383,25 @@ CAPABILITIES += [
                errors=(_NOT_FOUND, DeclaredError(400, "import_failed",
                                                  "the document cannot be read")),
                rest=RestBinding("POST", _ONE + "/import", _ID)),
+    Capability(key="custom_api.apps.connect", handler=_connect, Input=ConnectInput,
+               Output=ApiAppConnect, authz=ORG_MEMBER_OF("org_id"), mcp=None,
+               description=("Start the caller's own sign-in to a Custom API app in "
+                            "`oauth2_user` mode: the URL of the API's sign-in page."),
+               errors=(_NOT_FOUND,
+                       DeclaredError(409, "api_app_not_oauth_user",
+                                     "the app does not use per-member sign-in"),
+                       DeclaredError(409, "api_app_incomplete",
+                                     "the app's sign-in coordinates are incomplete"),
+                       DeclaredError(403, "personal_key_forbidden",
+                                     "the org forbids personal keys for the Custom API"),
+                       DeclaredError(409, "mcp_discovery_failed",
+                                     "protocol mcp: the server's sign-in could not be "
+                                     "discovered, or it accepts no client Tulina can be")),
+               # Not under `…/connectors/api/apps`: a connection-flow face never names a
+               # connector (`tests/connectors/test_connector_flow.py`). The common
+               # `me.connector_connect` is not used either: declaring a flow for `api`
+               # would turn EVERY Custom API card's form into an OAuth one.
+               rest=RestBinding("POST", _SIGN_IN, _ID)),
     Capability(key="custom_api.apps.remove", handler=_remove, Input=OneInput,
                Output=ApiAppRemoved, authz=ORG_ADMIN_OF("org_id"), mcp=None,
                description="Retire a Custom API app (org admin); its keys then refuse.",

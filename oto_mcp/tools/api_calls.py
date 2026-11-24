@@ -28,7 +28,7 @@ from fastmcp import FastMCP
 
 from mcp.types import INVALID_PARAMS, ErrorData
 
-from .. import custom_ops, custom_ops_output, session_org
+from .. import custom_ops, custom_ops_output, egress, session_org
 from ..mcp_errors import McpError
 from ..texte_tiers import cloture
 from ..connectors import api_apps
@@ -45,7 +45,8 @@ ARGS = {
     "request": ("method", "path", "params", "body", "dry_run"),
     "import": ("source", "url", "document"),
     "set_definition": ("operations", "label", "description", "logo_domain", "headers",
-                       "variables"),
+                       "variables", "mcp_tools"),
+    "mcp_call": ("operation", "args"),
 }
 
 
@@ -215,9 +216,51 @@ def _set_app_definition(sub: str, rc, given: dict) -> dict:
             "label": d["label"], "actions": [o["name"] for o in d["operations"]]}
 
 
+def _mcp_card(rc):
+    from ..connectors import api_mcp
+    if not api_mcp.is_mcp(rc.fields):
+        raise _bad(f"custom connector `{rc.account}` is a REST API, not an MCP server "
+                   "(its protocol is `http`): use `api_act(op=\"call\")` or "
+                   "`op=\"request\"`.")
+    return api_mcp
+
+
+def _mcp_refus(e) -> McpError:
+    return McpError(ErrorData(code=INVALID_PARAMS, message=f"Refusal `{e.code}`: {e.message}",
+                              data={"code": e.code, "retryable": e.code in (
+                                  "mcp_unreachable", "mcp_no_answer")}))
+
+
+def mcp_tools() -> dict:
+    """`api(op="mcp_tools")`: the remote MCP server's tools, filtered by the
+    definition's allowlist."""
+    rc = _resolved()
+    api_mcp = _mcp_card(rc)
+    try:
+        out = api_mcp.list_tools(rc.fields, _row(rc), _definition(rc))
+    except api_mcp.McpRefused as e:
+        raise _mcp_refus(e)
+    except egress.EgressRefused as e:
+        raise _bad(str(e))
+    return {"account": rc.account, **out,
+            "next": "api_act(op=\"mcp_call\", operation=<name>, args={…})"}
+
+
+def _mcp_call(operation: Optional[str], args: Optional[dict]) -> dict:
+    rc = _resolved()
+    api_mcp = _mcp_card(rc)
+    try:
+        out = api_mcp.call_tool(rc.fields, _row(rc), _definition(rc), operation, args)
+    except api_mcp.McpRefused as e:
+        raise _mcp_refus(e)
+    except egress.EgressRefused as e:
+        raise _bad(str(e))
+    return {"account": rc.account, **out}
+
+
 def register(mcp: FastMCP) -> None:
     @mcp.tool(name="api_act", annotations=ACTE)
-    def api_act(op: Literal["call", "request", "import", "set_definition"],
+    def api_act(op: Literal["call", "request", "import", "set_definition", "mcp_call"],
                  operation: Optional[str] = None, args: Optional[dict] = None,
                  method: Optional[str] = None, path: Optional[str] = None,
                  params: Optional[dict] = None, body: Optional[dict | list] = None,
@@ -226,6 +269,7 @@ def register(mcp: FastMCP) -> None:
                  operations: Optional[list[dict]] = None, label: Optional[str] = None,
                  description: Optional[str] = None, logo_domain: Optional[str] = None,
                  headers: Optional[dict] = None, variables: Optional[dict] = None,
+                 mcp_tools: Optional[list[str]] = None,
                  dry_run: bool = False) -> dict:
         """Act on a custom connector (Custom API) — ops: `call`, `request`, `import`,
         `set_definition`. Reads (the org's connectors, an action's input, the setup
@@ -254,13 +298,18 @@ def register(mcp: FastMCP) -> None:
           message}] (an error the service writes in a success body, served as that
           named refusal). Never a secret here: the key stays on the card.
 
+        - `mcp_call`: on a custom connector whose protocol is `mcp`, call one remote
+          tool by name (`operation`) with its arguments (`args`) — list them with
+          `api(op="mcp_tools")`. The card's auth is applied; the remote server applies
+          its own rights.
+
         `dry_run=true` (`call`, `request`) returns {method, path, query, body} without
         sending it.
 
         Args:
-            op: call | request | import | set_definition.
-            operation: call — name of the action.
-            args: call — its arguments, by name.
+            op: call | request | import | set_definition | mcp_call.
+            operation: call — name of the action; mcp_call — name of the remote tool.
+            args: call, mcp_call — its arguments, by name.
             method: request — GET | POST | PUT | PATCH | DELETE.
             path: request — relative to the connector's base URL, starts with /, no
                 query.
@@ -280,13 +329,15 @@ def register(mcp: FastMCP) -> None:
                 version).
             variables: set_definition — saved values {name: {value, description}} that
                 fill an action argument of the same name when the call omits it.
+            mcp_tools: set_definition — protocol `mcp`: the remote tools open to
+                agents (names); [] = all.
             dry_run: call, request — validate and preview, send nothing.
         """
         given = {"operation": operation, "args": args, "method": method, "path": path,
                  "params": params, "body": body, "source": source, "url": url,
                  "document": document, "operations": operations, "label": label,
                  "description": description, "logo_domain": logo_domain,
-                 "headers": headers, "variables": variables,
+                 "headers": headers, "variables": variables, "mcp_tools": mcp_tools,
                  "dry_run": dry_run or None}
         refuse_foreign("api_act", op, given, ARGS[op])
         sub = _sub()
@@ -296,5 +347,7 @@ def register(mcp: FastMCP) -> None:
             return _request(method, path, params, body, dry_run)
         if op == "import":
             return _import(sub, source, url, document)
+        if op == "mcp_call":
+            return _mcp_call(operation, args)
         return _set_definition(sub, {k: given[k] for k in ARGS["set_definition"]
                                      if given[k] is not None})

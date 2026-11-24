@@ -775,6 +775,77 @@ propriétaire : un agent monté sur une application à droits étendus, partagé
 leur rend ce que son propriétaire voit. Pas d'import GraphQL (l'import lit OpenAPI ; une
 API GraphQL se décrit par une action `POST /graphql`).
 
+### Le mode `oauth2_user` des applications de Custom API : chaque membre se connecte (23/11/2026)
+
+Une API interne qui applique ses droits PAR PERSONNE (un CRM où chaque commercial ne voit
+que ses comptes) n'était joignable qu'avec UNE identité : une clé, un couple basic, un
+client `client_credentials`. Le mode `oauth2_user` donne à chaque membre la sienne
+(`auth/api_oauth.py`) :
+
+- **l'application** porte où se connecter, jamais un secret : `authorize_url`,
+  `token_url`, `oauth_client_id` (un client PUBLIC, PKCE S256, sans secret — type
+  natif / SPA chez le serveur d'autorisation), `scope`, `resource` (RFC 8707, envoyé à
+  l'autorisation, à l'échange et au renouvellement : sans lui, un serveur OpenID qui émet
+  ses jetons par ressource rend un jeton opaque que l'API refuse). `offline_access` dans
+  les scopes fait envoyer `prompt=consent` (sans lui, pas de refresh token) ;
+- **« Connecter »** = `POST /api/orgs/{id}/custom-api-apps/{account}/connect`
+  (membre de l'org ; refusé si l'org interdit la clé perso du Custom API). Le retour suit
+  la règle commune (`auth/flow.py`) : callback `/api/custom-api/oauth/callback`, carte
+  `api`, complétion par le front avec le jeton de la personne ;
+- **la clé du membre** = une ligne ordinaire du coffre, palier membre, sous le nom de
+  compte de l'application, liée par `meta.api_app` (`completer_la_pose`, comme une clé
+  posée à la main) ; son seul secret est `refresh_token` ;
+- **à l'appel**, `tools/api.client_for` demande un jeton d'accès à `access_token_for` et
+  appelle en `bearer` : oto-core ne connaît pas ce mode (`HOST_AUTH_MODES`, hors du
+  tripwire `test_api_auth_modes.py`). Renouvellement sous verrou consultatif de la LIGNE,
+  rotation écrite dans la même transaction, grant mort revérifié contre la ligne puis
+  MARQUÉ (`health_ko`), jamais purgé ; le jeton d'accès ne va jamais en base.
+
+Pas de clé d'équipe ni d'org dans ce mode côté produit : l'intérêt est l'identité de la
+personne. Un agent hébergé appelle sous l'identité de son propriétaire, donc avec SA clé.
+
+### Un serveur MCP comme Custom API : `protocol: mcp` (23/11/2026)
+
+Une carte (ou une application) de Custom API peut désigner un SERVEUR MCP distant
+(Streamable HTTP) au lieu d'une API REST : champ `protocol` = `mcp`, `base_url` =
+l'adresse du serveur (`connectors/api_mcp.py`). Ce n'est **pas** la fédération retirée
+(ADR 0069) : rien n'est monté au catalogue, aucun outil distant ne devient un outil
+d'oto. Deux verbes l'atteignent, par la carte :
+
+- `api(op="mcp_tools")` — les outils distants (nom, description, schéma d'entrée) ;
+- `api_act(op="mcp_call", operation=<outil>, args={…})` — un appel, effet `detruire`
+  (les annotations d'un serveur tiers ne sont que sa parole).
+
+L'auth est celle de la carte (tout mode sauf `session` et `visitor`), connexion par
+membre `oauth2_user` comprise — un jeton refusé (401) est oublié et l'appel rejoué une
+fois. Une session courte par verbe (`initialize`, `notifications/initialized`, la
+requête, `DELETE`), réponse JSON ou SSE, corps borné, **aucune redirection suivie**,
+`base_url` et `token_url` sous la garde d'egress. La définition porte une liste blanche
+`mcp_tools` (noms ; vide = tous) que l'admin pose : un outil hors liste est refusé avant
+tout envoi, et n'apparaît pas à la liste.
+
+### Un serveur MCP en `oauth2_user` se connecte comme Claude : sans clé ni client saisis (24/11/2026)
+
+Pour une application `protocol: mcp` en `oauth2_user`, l'admin ne donne que l'adresse du
+serveur ; le premier « Connecter » d'un membre découvre le reste (`auth/mcp_discovery.py`,
+spec d'autorisation MCP) et l'ÉCRIT sur l'application (seuls les champs vides) :
+
+1. un `initialize` sans jeton → 401 + `WWW-Authenticate: Bearer resource_metadata=…`
+   (sinon les chemins connus de RFC 9728) ; la `resource` annoncée DOIT être l'adresse
+   de l'app, sinon refus (un serveur ne peut pas réclamer les jetons d'un autre) ;
+2. les métadonnées du serveur d'autorisation (RFC 8414, puis OpenID) DOIVENT nommer
+   l'émetteur cherché ; PKCE S256 exigé ;
+3. l'identité du client : notre **Client ID Metadata Document**
+   (`GET /api/custom-api/oauth/client.json`, servi sans authentification, client
+   public, notre callback) si le serveur l'accepte ; sinon une inscription dynamique
+   (RFC 7591, client public) ; sinon refus nommé `mcp_discovery_failed` — l'admin crée
+   un client public et pose son ID.
+
+Changer l'adresse d'une telle app vers une autre origine efface ce qui avait été
+découvert (sauf valeurs neuves envoyées par l'admin) : rien n'est reporté d'un serveur à
+l'autre. Le membre qui déclenche la découverte écrit donc la connexion de l'app
+(`updated_by` = lui).
+
 ### Le renommage `http` → `api` (12/11/2026)
 
 Décision du propriétaire du produit : le connecteur s'appelle `api`, ses outils `api`, `api_act`, `api_get`,

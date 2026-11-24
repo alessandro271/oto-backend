@@ -28,7 +28,13 @@ from ._model import CredentialField, _c
 # dep would remove the connector from the catalog instead of degrading it). The copy is
 # held by the `test_api_auth_modes.py` tripwire, which compares it to oto-core AND checks
 # that the fields declared required per mode are EXACTLY the ones `build_auth` requires.
-AUTH_MODES = ("bearer", "header", "query", "basic", "oauth2", "session", "visitor", "none")
+CORE_AUTH_MODES = ("bearer", "header", "query", "basic", "oauth2", "session", "visitor", "none")
+# Modes the HOST resolves before oto-core sees the call: `oauth2_user` = each member
+# signs in at the API's own authorization server (authorization code + PKCE, a refresh
+# token per person in the vault, `auth/api_oauth.py`). At call time it becomes a
+# `bearer` for oto-core — the lib never learns it exists.
+HOST_AUTH_MODES = ("oauth2_user",)
+AUTH_MODES = CORE_AUTH_MODES + HOST_AUTH_MODES
 
 CONNECTOR = _c(
     "api", ["api"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
@@ -56,7 +62,9 @@ CONNECTOR = _c(
     help="connect any tool that has an API key but no connector in the catalogue "
          "(e.g. a payroll or ERP tool): fill in the API's base URL, the auth mode "
          "(bearer / key in header or query / basic / oauth2 / session) and paste the key "
-         "here — never in a chat. oto stores it encrypted and calls the API directly; the "
+         "here — never in a chat. In `oauth2_user` mode nobody pastes a key: each member "
+         "clicks Connect and signs in at the API's own sign-in page (SSO), and oto keeps "
+         "their personal refresh token, so the API applies its own rights per person. oto stores it encrypted and calls the API directly; the "
          "operations you describe (or import from its OpenAPI) become callable by name. "
          "The session mode is for a service with no API key: oto signs in with an "
          "account's login and password, keeps the session cookie encrypted in the vault, "
@@ -72,6 +80,14 @@ CONNECTOR = _c(
                              "private network) is refused until it has been "
                              "declared as a named exception by the platform "
                              "operator — the refusal says how"),
+        # `mcp` (23/11/2026): the base URL is a remote MCP server (Streamable HTTP), its
+        # tools reached by name (`connectors/api_mcp.py`) — never mounted in the catalogue.
+        CredentialField("protocol", "Protocol", secret=False, required=False,
+                        choices=("http", "mcp"),
+                        help="`http` (default): a REST API, called by path or by saved "
+                             "action. `mcp`: the base URL is an MCP server (Streamable "
+                             "HTTP); agents list its tools (`api(op=\"mcp_tools\")`) and "
+                             "call them (`api_act(op=\"mcp_call\")`), same auth"),
         CredentialField("auth_mode", "Auth mode", secret=False,
                         choices=AUTH_MODES,
                         help="what the API expects to authenticate you — it decides the "
@@ -129,14 +145,41 @@ CONNECTOR = _c(
                              "{\"login\": {\"path\": \"/api/session\", \"method\": "
                              "\"GET\"}}"),
         CredentialField("token_url", "Token URL", secret=False,
-                        when=("oauth2",), help="client-credentials endpoint"),
+                        when=("oauth2", "oauth2_user"),
+                        help="token endpoint of the authorization server (client "
+                             "credentials in `oauth2` mode; code exchange and renewal "
+                             "in `oauth2_user` mode)"),
         CredentialField("client_id", "Client ID", secret=False,
                         when=("oauth2",), help="identifier of the client application"),
         CredentialField("client_secret", "Client secret", secret=True,
                         when=("oauth2",), help="secret of the client application"),
         CredentialField("scope", "Scope", secret=False,
-                        when=("oauth2",), required=False,
-                        help="scopes requested from the token server"),
+                        when=("oauth2", "oauth2_user"), required=False,
+                        help="scopes requested from the token server (space-separated; "
+                             "`oauth2_user`: add `offline_access` if the server needs it "
+                             "to issue a refresh token)"),
+        # `oauth2_user`: the app's sign-in coordinates, common to every member and never
+        # a secret — a PUBLIC client (PKCE S256, no client secret), registered at the
+        # API's authorization server with oto's callback as redirect URI.
+        CredentialField("authorize_url", "Authorization URL", secret=False,
+                        when=("oauth2_user",),
+                        help="authorization endpoint of the API's sign-in server "
+                             "(`authorization_endpoint` of its "
+                             "/.well-known/openid-configuration)"),
+        CredentialField("oauth_client_id", "Client ID (public)", secret=False,
+                        when=("oauth2_user",),
+                        help="identifier of the public client (native / SPA type, PKCE, "
+                             "no secret) registered for oto at the sign-in server, with "
+                             "oto's callback as redirect URI"),
+        CredentialField("resource", "Resource (audience)", secret=False,
+                        when=("oauth2_user",), required=False,
+                        help="resource indicator of the API at the sign-in server (RFC "
+                             "8707), sent on authorization, exchange and renewal — e.g. "
+                             "the API identifier a Logto or Auth0 server issues tokens for"),
+        # The member's own grant, written by the Connect flow — never typed by anyone.
+        CredentialField("refresh_token", "Refresh token", secret=True,
+                        when=("oauth2_user",),
+                        help="set by the Connect flow, never by hand"),
     ),
 )
 

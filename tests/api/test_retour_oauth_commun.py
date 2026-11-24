@@ -22,6 +22,7 @@ from oto_mcp.auth import flow as oauth_flow
 
 #: Le chemin de chaque retour, enregistré octet pour octet chez son fournisseur.
 CHEMINS = {
+    "custom_api": "/api/custom-api/oauth/callback",
     "google": "/api/google/oauth/callback",
     "hubspot": "/api/hubspot/oauth/callback",
     "instagram_meta": "/api/instagram_meta/oauth/callback",
