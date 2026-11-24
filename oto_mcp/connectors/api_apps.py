@@ -182,6 +182,17 @@ def org_de(entity_type: str, entity_id: str) -> Optional[int]:
     return None
 
 
+def refuser_le_jeton_hors_membre(entity_type: str, fields: Optional[dict]) -> None:
+    """Le `refresh_token` du mode `oauth2_user` est la connexion d'UNE personne : il ne
+    se pose qu'au palier membre. Une clé d'équipe ou d'org qui le porterait ferait
+    parler toute l'équipe sous le nom de qui l'a obtenu."""
+    if entity_type != credentials_store.MEMBER and \
+            str((fields or {}).get("refresh_token") or "").strip():
+        raise AppRefused(400, "refresh_token_member_only", (
+            "`refresh_token` is a member's own sign-in (`oauth2_user` mode): it is set "
+            "by that member's « Connect », never on a team or org key."))
+
+
 def completer_la_pose(entity_type: str, entity_id: str, connector: str, account: str,
                       api_key: Optional[str],
                       fields: Optional[dict]) -> tuple[Optional[str], Optional[dict], dict]:
@@ -197,6 +208,8 @@ def completer_la_pose(entity_type: str, entity_id: str, connector: str, account:
     l'empêcherait de faire tourner une clé peut-être compromise. Pour rejoindre
     l'application, son porteur retire sa carte puis pose sa clé sur celle de
     l'application."""
+    if connector == CONNECTOR:
+        refuser_le_jeton_hors_membre(entity_type, fields)
     if connector != CONNECTOR or not (account or "").strip():
         return api_key, fields, {}
     org = org_de(entity_type, entity_id)

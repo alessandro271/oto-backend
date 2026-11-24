@@ -794,7 +794,9 @@ client `client_credentials`. Le mode `oauth2_user` donne à chaque membre la sie
   `api`, complétion par le front avec le jeton de la personne ;
 - **la clé du membre** = une ligne ordinaire du coffre, palier membre, sous le nom de
   compte de l'application, liée par `meta.api_app` (`completer_la_pose`, comme une clé
-  posée à la main) ; son seul secret est `refresh_token` ;
+  posée à la main) ; son seul secret est `refresh_token`, qui ne se pose qu'au palier
+  membre : une clé d'équipe ou d'org qui le porte est refusée
+  (`refresh_token_member_only`) ;
 - **à l'appel**, `tools/api.client_for` demande un jeton d'accès à `access_token_for` et
   appelle en `bearer` : oto-core ne connaît pas ce mode (`HOST_AUTH_MODES`, hors du
   tripwire `test_api_auth_modes.py`). Renouvellement sous verrou consultatif de la LIGNE,

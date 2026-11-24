@@ -467,3 +467,31 @@ def test_oauth2_un_autre_token_url_ne_recoit_pas_le_secret_client(rest, monde, c
     assert (r.status_code, r.json()["stale_keys"]) == (200, 1), r.text
     with pytest.raises(Exception, match="not sent there"):
         comme(LEAD)._resolved("crm_oauth")
+
+
+# --- le mode `oauth2_user` : chaque membre se connecte lui-même -------------------
+
+SSO = {"base_url": "https://crm.example.test", "auth_mode": "oauth2_user",
+       "authorize_url": "https://crm.example.test/oauth/authorize",
+       "token_url": "https://crm.example.test/oauth/token",
+       "oauth_client_id": "client-public", "scope": "openid offline_access"}
+
+
+def _creer_sso(rest, monde, account: str, connection: dict = SSO):
+    r = rest.post(_apps(monde), json={"account": account, "connection": connection},
+                  headers=_h(ADMIN, monde["org"]))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_le_jeton_de_renouvellement_ne_se_pose_qu_au_palier_membre(rest, monde):
+    _creer_sso(rest, monde, "crm_sso_cles")
+    r = _cle_equipe(rest, monde, "crm_sso_cles", {"refresh_token": "rt-equipe"})
+    assert (r.status_code, r.json()["error"]) == (400, "refresh_token_member_only")
+    r = _cle_org(rest, monde, "crm_sso_cles", {"refresh_token": "rt-org"})
+    assert (r.status_code, r.json()["error"]) == (400, "refresh_token_member_only")
+    # Sans application non plus : une carte d'org en `oauth2_user` n'en porte pas.
+    r = _cle_org(rest, monde, "carte_sso", {**SSO, "refresh_token": "rt"})
+    assert (r.status_code, r.json()["error"]) == (400, "refresh_token_member_only")
+    r = _cle_perso(rest, monde, VENTE, "crm_sso_cles", {"refresh_token": "rt-vente"})
+    assert r.status_code == 200, r.text
