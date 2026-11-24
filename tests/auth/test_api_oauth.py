@@ -38,8 +38,10 @@ def _params(url: str) -> dict:
 
 # --- starting -------------------------------------------------------------------
 
-def test_l_url_d_autorisation_porte_pkce_resource_et_consentement():
-    url = api_oauth.authorize_url(APP, "sub-1", "tulina")
+def test_l_url_d_autorisation_porte_pkce_resource_et_consentement(monkeypatch):
+    monkeypatch.setitem(oauth_flow.RETURN_APPS, "front-test",
+                        ("https://front.example.test", "/connectors"))
+    url = api_oauth.authorize_url(APP, "sub-1", "front-test")
     assert url.startswith("https://auth.example.test/oidc/auth?")
     p = _params(url)
     assert p["response_type"] == "code" and p["client_id"] == "public-client"
@@ -51,7 +53,7 @@ def test_l_url_d_autorisation_porte_pkce_resource_et_consentement():
     assert "client_secret" not in p
     d = api_oauth.verify_state(p["state"])
     assert d["sub"] == "sub-1" and d["org"] == 42 and d["api_app"] == 7
-    assert d["account"] == "crm" and d["app"] == "tulina" and d["v"]
+    assert d["account"] == "crm" and d["app"] == "front-test" and d["v"]
 
 
 def test_sans_offline_access_pas_de_prompt_et_sans_resource_pas_de_parametre():

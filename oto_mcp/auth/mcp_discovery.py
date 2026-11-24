@@ -1,4 +1,4 @@
-"""How Tulina signs in to a remote MCP server the way Claude does: with no key pasted
+"""How a Custom API app signs in to a remote MCP server the way Claude does: with no key pasted
 anywhere (MCP authorization spec — RFC 9728, RFC 8414, Client ID Metadata Documents,
 RFC 7591).
 
@@ -205,7 +205,7 @@ def _register(endpoint: str) -> str:
     cid = body.get("client_id") if isinstance(body, dict) else None
     if not isinstance(cid, str) or not cid:
         raise DiscoveryRefused("mcp_registration_refused",
-                               "The sign-in server refused to register Tulina as a "
+                               "The sign-in server refused to register oto as a "
                                "client: an org admin sets the app's client ID by hand.")
     return cid
 

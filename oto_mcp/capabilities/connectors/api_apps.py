@@ -142,7 +142,7 @@ class ConnectInput(BaseModel):
     org_id: int
     account: str
     app: Optional[str] = Field(default=None, description=(
-        "The front to come back to after sign-in (a known key, e.g. `tulina`); "
+        "The front to come back to after sign-in (a front key the platform knows); "
         "unknown or absent = the default dashboard."))
 
 
@@ -395,7 +395,7 @@ CAPABILITIES += [
                                      "the org forbids personal keys for the Custom API"),
                        DeclaredError(409, "mcp_discovery_failed",
                                      "protocol mcp: the server's sign-in could not be "
-                                     "discovered, or it accepts no client Tulina can be")),
+                                     "discovered, or it accepts no client oto can be")),
                # A sub-action of the app resource, like `/import`: the path names the
                # app, not a connector flow (the exemption is in
                # `tests/connectors/test_connector_flow.py`). The common
