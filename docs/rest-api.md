@@ -412,8 +412,10 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 - `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
 - `POST /api/admin/users/{sub}/reset-mfa` — super admin only ; efface TOUS les facteurs de
   double authentification d'un compte (récupération : appli ET codes de secours perdus,
-  aucun autre moyen de rentrer). La politique MFA de son org, si mandatoire, continue de
-  s'appliquer — il configurera un facteur neuf à sa prochaine connexion.
+  aucun autre moyen de rentrer). Toutes ses sessions et tous ses jetons `oto_` sont
+  fermés (`docs/auth-logto.md` §Double authentification changée). La politique MFA de son
+  org, si mandatoire, continue de s'appliquer — il configurera un facteur neuf à sa
+  prochaine connexion.
 - `POST /api/admin/users/{sub}/grants/{key_id}` body `{daily_quota}` — set/update quota par grant (admin only)
 - `GET|POST /api/me/tokens` + `DELETE …/{token_id}`, `GET|POST /api/admin/users/{sub}/tokens`
   + `DELETE …/{token_id}`, `GET|POST /api/admin/platform-keys` + `DELETE …/{provider}/{label}`

@@ -112,6 +112,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.orgs.SUBSCRIPTION_STATES,  # état d'abonnement d'une org, poussé par le commerce
     schema.effacements.EFFACEMENTS,  # demandes d'effacement d'une org, et leur reçu
     schema.embeddings.EMBED_FILE,    # file d'indexation : réservations, échecs, tokens du jour
+    schema.users.EMPREINTES_2FA,     # empreinte des facteurs de double authentification d'un compte
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)
