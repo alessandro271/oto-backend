@@ -71,6 +71,20 @@ def test_une_app_d_un_autre_mode_ou_incomplete_refuse_en_le_nommant():
     assert e.value.code == "api_app_incomplete" and "oauth_client_id" in e.value.message
 
 
+def test_le_verifier_voyage_scelle_dans_le_state():
+    url = api_oauth.authorize_url(APP, "sub-1")
+    state = _params(url)["state"]
+    brut = oauth_flow.read_state("custom_api", state)
+    assert "v" not in brut and brut["vs"]
+    d = api_oauth.verify_state(state)
+    assert d["v"] and d["v"] not in state and "vs" not in d
+    # Sealed for ITS state: under another jti it does not open, and the state is refused.
+    autre = oauth_flow.sign_state("custom_api", {**{k: v for k, v in brut.items()
+                                                   if k not in ("aud", "ts")},
+                                                "jti": "autre-jti"})
+    assert api_oauth.verify_state(autre) is None
+
+
 def test_un_state_d_un_autre_flux_est_refuse():
     autre = oauth_flow.sign_state("jefacture", {"sub": "s", "org": 1, "jti": "j"})
     assert api_oauth.verify_state(autre) is None

@@ -13,7 +13,7 @@ sales only see their accounts) could only be reached as an admin, or not at all.
    (RFC 8707). Nothing secret lives on the app;
 2. a member clicks "Connect" on the app's card (`custom_api.apps.connect`): the browser
    goes to the sign-in server with a signed, single-use `state` carrying the person, the
-   org, the app and the PKCE verifier;
+   org, the app and the PKCE verifier — sealed, readable by this server only;
 3. the server sends the browser back to `CALLBACK_PATH`; the callback hands the code to
    the front, which completes with its own token (`auth/flow.py`, card `api`). The code
    becomes a refresh token, stored as the member's KEY of the app (member tier, under the
@@ -110,22 +110,32 @@ def _scopes(scope: str) -> list[str]:
 
 def make_state(sub: str, org_id: int, app_id: int, account: str, verifier: str,
                return_app: str = "") -> str:
+    """The signed, single-use state. The PKCE verifier rides SEALED in it (`vs`:
+    AES-GCM, bound to this state's `jti`, `flow.seal_code`): the sign-in server and the
+    browser carry the state, only this server reads the verifier back."""
+    jti = oauth_flow.new_jti()
     return oauth_flow.sign_state(_AUD, {
         "sub": sub, "org": int(org_id), "api_app": int(app_id), "account": account,
-        "v": verifier, "app": return_app, "jti": oauth_flow.new_jti()})
+        "vs": oauth_flow.seal_code(_AUD, jti, {"v": verifier}), "app": return_app,
+        "jti": jti})
 
 
 def verify_state(state: Optional[str]) -> Optional[dict]:
-    """The state's payload if valid, issued FOR this flow, and complete; else None."""
+    """The state's payload if valid, issued FOR this flow, and complete — with the
+    unsealed verifier as `v`; else None."""
     data = oauth_flow.read_state(_AUD, state) if state else None
     if not data:
         return None
     ok = (isinstance(data.get("sub"), str) and isinstance(data.get("org"), int)
           and isinstance(data.get("api_app"), int) and isinstance(data.get("account"), str)
-          and isinstance(data.get("v"), str) and data["v"]
+          and isinstance(data.get("vs"), str) and data["vs"]
           and isinstance(data.get("jti"), str) and data["jti"])
     if not ok:
         return None
+    scelle = oauth_flow.unseal_code(_AUD, data["jti"], data.pop("vs"))
+    if not scelle or not isinstance(scelle.get("v"), str) or not scelle["v"]:
+        return None
+    data["v"] = scelle["v"]
     if not isinstance(data.get("app"), str):
         data["app"] = ""
     return data
