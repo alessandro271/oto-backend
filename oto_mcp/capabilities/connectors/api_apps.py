@@ -21,7 +21,7 @@ app's `account`, with their secret fields only: the app fills the rest and binds
   actions from an OpenAPI document (`url` or `inline`), saved by a PATCH;
 - `DELETE /api/orgs/{id}/connectors/api/apps/{account}`      — org admin: retire it
   (archived); its keys stay in the vault and refuse by name until removed;
-- `POST   /api/orgs/{id}/custom-api-apps/{account}/connect` — members: an app in
+- `POST   /api/orgs/{id}/connectors/api/apps/{account}/connect` — members: an app in
   `oauth2_user` mode — the URL of the API's sign-in page for the caller; on return the
   front completes (`POST /api/me/connectors/api/complete`) and the caller's own key of
   the app holds their refresh token (`auth/api_oauth.py`).
@@ -43,7 +43,6 @@ from ..registry import CAPABILITIES
 _ID = {"id": "org_id"}
 _PATH = "/api/orgs/{id}/connectors/api/apps"
 _ONE = _PATH + "/{account}"
-_SIGN_IN = "/api/orgs/{id}/custom-api-apps/{account}/connect"
 _DEF_KEYS = ("label", "description", "logo_domain", "headers", "variables", "operations",
              "mcp_tools")
 
@@ -397,11 +396,12 @@ CAPABILITIES += [
                        DeclaredError(409, "mcp_discovery_failed",
                                      "protocol mcp: the server's sign-in could not be "
                                      "discovered, or it accepts no client Tulina can be")),
-               # Not under `…/connectors/api/apps`: a connection-flow face never names a
-               # connector (`tests/connectors/test_connector_flow.py`). The common
-               # `me.connector_connect` is not used either: declaring a flow for `api`
-               # would turn EVERY Custom API card's form into an OAuth one.
-               rest=RestBinding("POST", _SIGN_IN, _ID)),
+               # A sub-action of the app resource, like `/import`: the path names the
+               # app, not a connector flow (the exemption is in
+               # `tests/connectors/test_connector_flow.py`). The common
+               # `me.connector_connect` is not used: declaring a flow for `api` would turn
+               # EVERY Custom API card's form into an OAuth one.
+               rest=RestBinding("POST", _ONE + "/connect", _ID)),
     Capability(key="custom_api.apps.remove", handler=_remove, Input=OneInput,
                Output=ApiAppRemoved, authz=ORG_ADMIN_OF("org_id"), mcp=None,
                description="Retire a Custom API app (org admin); its keys then refuse.",

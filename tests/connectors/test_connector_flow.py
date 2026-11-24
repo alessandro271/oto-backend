@@ -203,6 +203,21 @@ _NOMMES_TOLERES = {
 }
 
 
+# Les sous-actions d'une APPLICATION de Custom API (`capabilities/connectors/api_apps.py`) :
+# `api` y nomme la ressource « application de Custom API » d'une org — un objet que l'org
+# crée, comme ses projets —, pas le flux d'un connecteur du catalogue. « Connecter » y est
+# une action sur CETTE application (son serveur, son client), à côté de `/import`. La
+# tolérance est bornée à ce préfixe ET aux capacités `custom_api.apps.*` : un autre chemin
+# nommé, ou une autre famille sous ce préfixe, reste refusé.
+_RESSOURCE_APP_CUSTOM_API = "/api/orgs/{id}/connectors/api/apps/{account}/"
+_FAMILLE_APP_CUSTOM_API = "custom_api.apps."
+
+
+def _sous_action_d_app_custom_api(cle: str, chemin: str) -> bool:
+    return cle.startswith(_FAMILLE_APP_CUSTOM_API) and \
+        chemin.startswith(_RESSOURCE_APP_CUSTOM_API)
+
+
 def _sous_le_prefixe(chemin: str) -> str:
     """Le chemin REST APRÈS le préfixe `/api` — que le connecteur `api` porte le même
     nom que le préfixe ne doit pas compter pour un chemin nommé."""
@@ -221,9 +236,27 @@ def test_aucune_face_rest_de_connexion_nommee_dapres_un_connecteur():
         if not any(v in cap.key for v in _VERBES_DE_FLUX):
             continue
         for binding in cap.rest_bindings():
+            if _sous_action_d_app_custom_api(cap.key, binding.path):
+                continue
             for n in providers.REGISTRY:
                 assert f"/{n}/" not in _sous_le_prefixe(binding.path), (
                     f"{cap.key} expose une face REST nommée : {binding.path}")
+
+
+def test_la_tolerance_des_apps_custom_api_reste_etroite():
+    """La tolérance ne couvre que les capacités `custom_api.apps.*` sous la ressource
+    application ; elle sert (sinon elle est à retirer), et rien d'autre n'en profite."""
+    from oto_mcp.capabilities import registry
+    couverts = sorted(
+        (c.key, b.path) for c in registry.CAPABILITIES for b in c.rest_bindings()
+        if any(v in c.key for v in _VERBES_DE_FLUX)
+        and _sous_action_d_app_custom_api(c.key, b.path))
+    assert couverts == [("custom_api.apps.connect",
+                         "/api/orgs/{id}/connectors/api/apps/{account}/connect")], couverts
+    assert not _sous_action_d_app_custom_api(
+        "me.connector_connect", "/api/orgs/{id}/connectors/api/apps/{account}/connect")
+    assert not _sous_action_d_app_custom_api(
+        "custom_api.apps.connect", "/api/me/connectors/api/connect")
 
 
 def test_la_tolerance_de_chemin_nomme_ne_ment_pas():

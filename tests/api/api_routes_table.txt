@@ -678,8 +678,8 @@ PATCH /api/orgs/{id}/connectors/api/apps/{account} -> _handler
 OPTIONS /api/orgs/{id}/connectors/api/apps/{account} -> options_handler
 POST /api/orgs/{id}/connectors/api/apps/{account}/import -> _handler
 OPTIONS /api/orgs/{id}/connectors/api/apps/{account}/import -> options_handler
-POST /api/orgs/{id}/custom-api-apps/{account}/connect -> _handler
-OPTIONS /api/orgs/{id}/custom-api-apps/{account}/connect -> options_handler
+POST /api/orgs/{id}/connectors/api/apps/{account}/connect -> _handler
+OPTIONS /api/orgs/{id}/connectors/api/apps/{account}/connect -> options_handler
 DELETE /api/orgs/{id}/connectors/api/apps/{account} -> _handler
 OPTIONS /api/orgs/{id}/connectors/api/apps/{account} -> options_handler
 GET,HEAD /api/me/instructions/{slug}/share -> _handler
