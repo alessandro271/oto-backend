@@ -87,7 +87,7 @@ CONNECTOR = _c(
                         help="`http` (default): a REST API, called by path or by saved "
                              "action. `mcp`: the base URL is an MCP server (Streamable "
                              "HTTP); agents list its tools (`api(op=\"mcp_tools\")`) and "
-                             "call them (`api_act(op=\"mcp_call\")`), same auth"),
+                             "call them (`api_act(op=\"call_mcp\")`), same auth"),
         CredentialField("auth_mode", "Auth mode", secret=False,
                         choices=AUTH_MODES,
                         help="what the API expects to authenticate you — it decides the "

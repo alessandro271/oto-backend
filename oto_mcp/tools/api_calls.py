@@ -46,7 +46,7 @@ ARGS = {
     "import": ("source", "url", "document"),
     "set_definition": ("operations", "label", "description", "logo_domain", "headers",
                        "variables", "mcp_tools"),
-    "mcp_call": ("operation", "args"),
+    "call_mcp": ("operation", "args"),
 }
 
 
@@ -243,10 +243,10 @@ def mcp_tools() -> dict:
     except egress.EgressRefused as e:
         raise _bad(str(e))
     return {"account": rc.account, **out,
-            "next": "api_act(op=\"mcp_call\", operation=<name>, args={…})"}
+            "next": "api_act(op=\"call_mcp\", operation=<name>, args={…})"}
 
 
-def _mcp_call(operation: Optional[str], args: Optional[dict]) -> dict:
+def _call_mcp(operation: Optional[str], args: Optional[dict]) -> dict:
     rc = _resolved()
     api_mcp = _mcp_card(rc)
     try:
@@ -260,7 +260,7 @@ def _mcp_call(operation: Optional[str], args: Optional[dict]) -> dict:
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool(name="api_act", annotations=ACTE)
-    def api_act(op: Literal["call", "request", "import", "set_definition", "mcp_call"],
+    def api_act(op: Literal["call", "request", "import", "set_definition", "call_mcp"],
                  operation: Optional[str] = None, args: Optional[dict] = None,
                  method: Optional[str] = None, path: Optional[str] = None,
                  params: Optional[dict] = None, body: Optional[dict | list] = None,
@@ -298,7 +298,7 @@ def register(mcp: FastMCP) -> None:
           message}] (an error the service writes in a success body, served as that
           named refusal). Never a secret here: the key stays on the card.
 
-        - `mcp_call`: on a custom connector whose protocol is `mcp`, call one remote
+        - `call_mcp`: on a custom connector whose protocol is `mcp`, call one remote
           tool by name (`operation`) with its arguments (`args`) — list them with
           `api(op="mcp_tools")`. The card's auth is applied; the remote server applies
           its own rights.
@@ -307,9 +307,9 @@ def register(mcp: FastMCP) -> None:
         sending it.
 
         Args:
-            op: call | request | import | set_definition | mcp_call.
-            operation: call — name of the action; mcp_call — name of the remote tool.
-            args: call, mcp_call — its arguments, by name.
+            op: call | request | import | set_definition | call_mcp.
+            operation: call — name of the action; call_mcp — name of the remote tool.
+            args: call, call_mcp — its arguments, by name.
             method: request — GET | POST | PUT | PATCH | DELETE.
             path: request — relative to the connector's base URL, starts with /, no
                 query.
@@ -347,7 +347,7 @@ def register(mcp: FastMCP) -> None:
             return _request(method, path, params, body, dry_run)
         if op == "import":
             return _import(sub, source, url, document)
-        if op == "mcp_call":
-            return _mcp_call(operation, args)
+        if op == "call_mcp":
+            return _call_mcp(operation, args)
         return _set_definition(sub, {k: given[k] for k in ARGS["set_definition"]
                                      if given[k] is not None})

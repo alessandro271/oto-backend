@@ -197,7 +197,7 @@ def register(mcp: FastMCP) -> None:
           already pasted in a chat, tell them to revoke it and create a new one.
         - `mcp_tools`: on a custom connector whose protocol is `mcp` (its base URL is a
           remote MCP server), the remote tools open to agents — name, description,
-          input schema. Call one with `api_act(op="mcp_call", operation=<name>,
+          input schema. Call one with `api_act(op="call_mcp", operation=<name>,
           args={…})`. `_account` when you reach several custom connectors.
 
         Args:

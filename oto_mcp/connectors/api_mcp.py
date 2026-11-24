@@ -8,7 +8,7 @@ like any other — its address, its auth (any mode the card allows, the per-memb
 
 - `api(op="mcp_tools")` — the remote tools (name, description, input schema), filtered
   by the definition's `mcp_tools` allowlist when the admin set one;
-- `api_act(op="mcp_call")` — one remote tool, by name, with its arguments; refused by
+- `api_act(op="call_mcp")` — one remote tool, by name, with its arguments; refused by
   name when the allowlist does not carry it.
 
 One short session per verb: `initialize` → `notifications/initialized` → the request →
@@ -306,7 +306,7 @@ def call_tool(fields: dict, row, definition: dict, name: Optional[str],
               arguments: Optional[dict]) -> dict:
     if not name or not isinstance(name, str):
         raise McpRefused("mcp_tool_required",
-                         "`api_act(op=\"mcp_call\")` needs `operation`: the remote tool's "
+                         "`api_act(op=\"call_mcp\")` needs `operation`: the remote tool's "
                          "name, from `api(op=\"mcp_tools\")`.")
     ouverts = allowlist(definition)
     if ouverts and name not in ouverts:

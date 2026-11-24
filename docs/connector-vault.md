@@ -815,7 +815,7 @@ l'adresse du serveur (`connectors/api_mcp.py`). Ce n'est **pas** la fédération
 d'oto. Deux verbes l'atteignent, par la carte :
 
 - `api(op="mcp_tools")` — les outils distants (nom, description, schéma d'entrée) ;
-- `api_act(op="mcp_call", operation=<outil>, args={…})` — un appel, effet `detruire`
+- `api_act(op="call_mcp", operation=<outil>, args={…})` — un appel, effet `detruire`
   (les annotations d'un serveur tiers ne sont que sa parole).
 
 L'auth est celle de la carte (tout mode sauf `session` et `visitor`), connexion par
