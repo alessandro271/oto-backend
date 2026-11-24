@@ -382,3 +382,40 @@ def test_le_client_3cx_porte_une_session_gardee(monkeypatch):
         "base_url": "https://pbx.exemple.test", "auth_mode": "api_client",
         "client_id": "c", "client_secret": "s"})
     assert _monte(threecx.client().session)
+
+
+def test_l_echange_du_code_salesforce_sort_par_une_session_gardee(monkeypatch, aucune_socket):
+    """`login_url` vient de la carte d'un administrateur et reçoit le code ET le secret
+    de l'application. La carte a été contrôlée à la pose ; ce qui fait foi à l'échange
+    est la résolution AU MOMENT de la connexion (ici interne) : refusé, sans socket."""
+    from oto_mcp.auth import salesforce
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _Resolveur(["127.0.0.1"]))
+    monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
+    with pytest.raises(RuntimeError, match="boucle locale"):
+        salesforce.exchange_code("c", "id", "secret", "https://acme.my.exemple.test", "v")
+
+
+def test_l_echange_partage_n_utilise_la_session_que_si_on_la_donne(monkeypatch):
+    """Le défaut des autres fournisseurs (hôte fixe) ne bouge pas : `requests.post`."""
+    from oto_mcp.auth import flow as oauth_flow
+
+    class _Rep:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": "a"}
+
+    vus = []
+    monkeypatch.setattr(oauth_flow.requests, "post",
+                        lambda *a, **k: vus.append("module") or _Rep())
+
+    class _Session:
+        def post(self, *a, **k):
+            vus.append("session")
+            return _Rep()
+
+    args = dict(code="c", client_id="i", client_secret="s", redirect="https://r.test/cb")
+    oauth_flow.exchange_code("https://ex.test/token", **args)
+    oauth_flow.exchange_code("https://ex.test/token", session=_Session(), **args)
+    assert vus == ["module", "session"]

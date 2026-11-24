@@ -288,15 +288,15 @@ Câblé : `web_read`/`web_image` (`tools/web.py`), une source `url` de fichier
 (`api_operations.fetch_public_document`), le CV d'une candidature (`tools/wttj_resume.py`),
 l'import d'avatar, et la session des clients `api` (`tools/api.client_for`, login du mode
 session compris), `n8n`, `make`, `github`, `posthog`, `lucca`, `threecx` et du webhook
-`clay`. Banc : `tests/test_egress_transport.py`.
+`clay`, et l'échange du code OAuth de Salesforce sur `login_url` (`auth/salesforce.exchange_code`
+passe une session gardée à `auth/flow.exchange_code`, dont le défaut — hôte fixe des
+autres fournisseurs — ne change pas). Banc : `tests/test_egress_transport.py`.
 
 ⚠️ **Ce qui reste sous le seul contrôle précoce, nommé** : les appels qu'oto-core fait par
 `requests.<verbe>` au niveau module, sans session à monter — `lighton`, `salesforce`
 (dont l'échange du refresh token sur `login_url`), `wordpress`, le jeton `oauth2` du
 connecteur `api` (`token_url`) et les jetons `threecx`. Les fermer demande un
-paramètre `session=` côté lib, donc un bump de pin. Côté backend, l'échange du code
-OAuth de Salesforce (`auth/flow.exchange_code`, partagé par tous les fournisseurs)
-ne passe pas non plus par une session gardée.
+paramètre `session=` côté lib, donc un bump de pin.
 
 ⚠️ **Contredit l'ADR 0037 §4**, qui décidait « zéro code SSRF dans le connecteur » et
 renvoyait le blocage des plages privées à un egress proxy « plus tard… si le besoin

@@ -41,6 +41,7 @@ from __future__ import annotations
 import socket
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -122,9 +123,17 @@ class _Epinglee:
         raise derniere  # type: ignore[misc]
 
 
+@lru_cache(maxsize=None)
 def _classes_de_pool(politique: Politique) -> dict:
     """Les classes de pool d'une politique — la politique vit SUR les classes,
-    jamais dans les `pool_kwargs` (qui entrent dans la clé de pool d'urllib3)."""
+    jamais dans les `pool_kwargs` (qui entrent dans la clé de pool d'urllib3).
+
+    Mémorisées par politique (`Politique` est figée, donc hachable) : un client par
+    appel (`tools/api.client_for`, une session par lecture d'URL) ne refabrique pas
+    quatre classes à chaque fois. Les politiques sont en nombre fini — un couple
+    (connecteur, champ, exceptions) écrit dans le code, jamais une valeur d'appel —
+    d'où un cache sans borne. Le dict rendu est partagé : on le recopie avant de le
+    poser sur un poolmanager."""
     class ConnexionHttp(_Epinglee, HTTPConnection):
         _politique = politique
 

@@ -235,3 +235,75 @@ def test_un_nom_explicite_mal_forme_est_refuse(monkeypatch, nom):
     _serve(monkeypatch, {_CLE_OPAQUE: b"x"})
     with pytest.raises(fs.FileSourceError, match="filename"):
         fs.resolve({"kind": "url", "url": _CLE_OPAQUE, "filename": nom})
+
+
+# ── le budget court sur TOUS les sauts, et le plafond porte sur les octets DÉCODÉS ──
+
+def test_le_budget_court_sur_l_ensemble_des_sauts(monkeypatch):
+    """Le budget est global : un premier saut qui l'entame laisse moins au suivant,
+    et un saut qui part après l'échéance n'est jamais demandé."""
+    vus = []
+
+    def handler(request):
+        vus.append(request.url)
+        if request.url == "https://a.example/f":
+            return _go("https://cdn.example/f.csv")
+        return _Rep(200, b"x")
+    _monter(monkeypatch, handler)
+    t = _horloge(monkeypatch)        # chaque lecture d'horloge avance d'une seconde
+    with pytest.raises(fs.FileSourceError, match="budget"):
+        fs.resolve({"kind": "url", "url": "https://a.example/f"},
+                   follow_redirects=True, deadline=t["now"] + 1.5)
+    assert vus == ["https://a.example/f"], "le second saut part après l'échéance"
+
+
+def test_une_bombe_de_compression_est_coupee_au_plafond(monkeypatch):
+    """Un corps gzip de quelques dizaines de Ko qui se décompresse en 16 Mo, annoncé
+    par un `Content-Length` sous le plafond : le plafond porte sur les octets
+    DÉCODÉS, appliqué PENDANT la lecture, par morceaux bornés — jamais le corps
+    entier décompressé d'un coup. Joué sur le vrai transport épinglé, vers un serveur
+    de la boucle locale (la socket décidée y est routée)."""
+    import gzip
+    import http.server
+    import socket
+    import threading
+
+    bombe = gzip.compress(b"\0" * (16 * 1024 * 1024))
+    plafond = 1024 * 1024
+
+    class Gestion(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(bombe)))
+            self.end_headers()
+            self.wfile.write(bombe)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Gestion)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    monkeypatch.setattr(egress_transport, "_ouvrir",
+                        lambda adresse, p, timeout, *a: socket.create_connection(
+                            ("127.0.0.1", port), timeout))
+    tailles = []
+    vrai = requests.Response.iter_content
+
+    def iter_content(self, *a, **k):
+        for morceau in vrai(self, *a, **k):
+            tailles.append(len(morceau))
+            yield morceau
+    monkeypatch.setattr(requests.Response, "iter_content", iter_content)
+    try:
+        assert len(bombe) < plafond, "la bombe passe le contrôle d'en-tête"
+        with pytest.raises(fs.FileSourceError, match=f"> {plafond}"):
+            fs.resolve({"kind": "url", "url": "http://bombe.example/f.csv"},
+                       max_bytes=plafond)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert max(tailles) <= 65536, "chaque morceau décodé est borné"
+    assert sum(tailles) <= plafond + 65536, "la lecture s'arrête au plafond"
