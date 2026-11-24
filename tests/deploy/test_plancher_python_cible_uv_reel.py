@@ -38,7 +38,14 @@ def _gere(version: str) -> bool:
 
 @pytest.fixture
 def uv_reel():
-    """Sondé au test, jamais à l'import (un import définit, il ne travaille pas)."""
+    """Sondé au test, jamais à l'import (un import définit, il ne travaille pas).
+
+    ⚠️ CI SEULEMENT (`OTO_BANC_UV_REEL_EXIGE=1`) : ce banc lance le vrai `uv python install`
+    sur des interpréteurs de la machine. Sur un poste partagé, la moindre fuite hors de la
+    racine jetable touche le dossier uv de tout le monde (liens de version mineure) — le banc
+    ne tourne donc que sur un runner jetable."""
+    if os.environ.get("OTO_BANC_UV_REEL_EXIGE") != "1":
+        pytest.skip("vrai uv : CI seulement (OTO_BANC_UV_REEL_EXIGE=1), jamais sur un poste partagé")
     if not (_gere(ANCIEN) and _gere(NOUVEAU)):
         motif = f"uv et ses interpréteurs gérés {ANCIEN} et {NOUVEAU} requis (aucun téléchargement)"
         if os.environ.get("OTO_BANC_UV_REEL_EXIGE") == "1":
@@ -64,10 +71,17 @@ def banc(tmp_path, uv_reel):
         f'#!/bin/bash\necho "uv $*" >> "$BANC_TRACE"\nexec {UV} --no-config "$@"\n')
     # Les interpréteurs gérés du rôle sont ceux déjà posés par uv sur la machine : l'amorce
     # les y « installe » sans rien télécharger.
-    pythons = subprocess.run([UV, "python", "dir"], capture_output=True, text=True,
-                             check=True).stdout.strip()
-    (banc.racine / "opt/exemple").mkdir(parents=True)
-    (banc.racine / "opt/exemple/python").symlink_to(pythons)
+    # Un VRAI dossier jetable, où chaque interpréteur installé est relié un à un : uv y écrit
+    # ses liens de version mineure (`cpython-3.12-…`), jamais dans le dossier uv de la
+    # machine. Relier le dossier entier y faisait écrire `uv python install` (liens mineurs
+    # réécrits vers la racine jetable, effacée ensuite : tous les venvs de la machine cassés).
+    pythons = pathlib.Path(subprocess.run([UV, "python", "dir"], capture_output=True,
+                                          text=True, check=True).stdout.strip())
+    dossier = banc.racine / "opt/exemple/python"
+    dossier.mkdir(parents=True)
+    for installe in pythons.iterdir():
+        if installe.name.startswith("cpython-") and installe.is_dir() and not installe.is_symlink():
+            (dossier / installe.name).symlink_to(installe)
     _plancher(banc, ANCIEN)
     return banc
 
