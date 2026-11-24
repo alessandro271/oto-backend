@@ -169,8 +169,8 @@ status_hints.register("salesforce", _salesforce_pending_action)
 
 
 def _start_flow(ctx, values: dict) -> dict:
-    """Entry point of the generic flow — delegates to the SAME handler as the
-    `me.salesforce_connect` capability, so there is only one way to start.
+    """Entry point of the generic flow (`me.connector_connect`, the card's Connect
+    button) — `salesforce_connect.start_for`, the one way to start.
 
     `app` (like `scope`) is a hidden key, not a declared `FlowParam`: the
     dashboard/front passes it outside the form (the client knows who it is), it must

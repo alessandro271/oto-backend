@@ -29,7 +29,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import links
 from .. import (providers, credentials_store, db, group_store, instance_refs, org_store,
                 session_org, tenant_vault)
-from ..connectors import cle_perso
+from ..connectors import cle_perso, connect_link
 from . import (cascade, chain_shadow, credits, heritage, indices, limite_du_jour,
                platform_rate, prets, quotas, rbac, resolve_anon, scope, tenant_budget)
 from .resolved_credential import ResolvedCredential
@@ -354,9 +354,9 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     if win is None:
         lien_org = heritage.org_du_lien(sub, active_org)   # #480: their account, not the org
         # byo-only: no platform tier (basic_auth mounts, multi-secrets).
-        if want == "byo":
-            raise CredentialUnavailable(ErrorData(
-                code=INVALID_PARAMS,
+        if want == "byo":   # the refusal carries the connection page (`connect_link`)
+            raise connect_link.sans_compte(
+                CredentialUnavailable, provider, sub=sub, org=lien_org,
                 message=(
                     indices.refus_sans_cle(
                         sub, active_org, provider,
@@ -364,10 +364,10 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                         f"Set it{links.ou_poser_la_cle(sub, org=lien_org, connecteur=provider)}.")
                     + heritage.indice_refus(sub, active_org, provider)
                 ),
-            ))
+            )
         # The platform tier only exists if the registry ALLOWS it (gate in the walker).
-        raise CredentialUnavailable(ErrorData(
-            code=INVALID_PARAMS,
+        raise connect_link.sans_compte(
+            CredentialUnavailable, provider, sub=sub, org=lien_org,
             # The key is set on the CARRIER (delegation): sending someone to
             # "the Whatsapp section" of their account page, where there is no field,
             # is a dead end. The "a team has the key" hint is also looked up
@@ -379,7 +379,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                                        indices._poser_ou_accorder(sub, lien_org, porteur))
                 + heritage.indice_refus(sub, active_org, porteur)
             ),
-        ))
+        )
 
     if check_usage and win.mode == "tenant":
         # Per-org budget of the tenant→org edge (L-keys PR 2) — no-op without an edge.

@@ -629,6 +629,7 @@ oto_connector	force list pause recommend select setup_link unselect	f2cc853acfe3
 oto_connector_access_level	clear get set	ffa2628b78fe842b
 oto_connector_activation	clear list set	7596a92524e0e798
 oto_connector_app	-	d015e84398cf40a2
+oto_connector_connect	-	2f08723ba3335885
 oto_context	-	fd3168d48576c83d
 oto_disable_tool	-	1149380513abd0af
 oto_doc	archive backlinks bulk_create create delete get list move outline patch revert revisions search set_public shared_with_me unarchive update verify	c20aad60a0879f59
@@ -816,7 +817,6 @@ resend_topic	get list	ca69d00179b60475
 routine_fire	-	795d51d55a47cf70
 run_finish	-	a58273cfd52f4114
 run_start	-	1dc80fc7499d4fcc
-salesforce_connect	start	81a411974462b440
 salesforce_describe	-	b08f321a0ab3d244
 salesforce_note	create list	8fb225c1a4a92370
 salesforce_query	soql sosl	af4c2a14ce5b1c7e
@@ -1019,7 +1019,6 @@ zeendoc	binders choices count document file search text values	b86df90f330b0f9e
 zerobounce_credits	-	99334726611ccf58
 zerobounce_verify_batch	-	09062cdf32915f48
 zerobounce_verify_email	-	e554a85546f6e8cd
-zoho_connect	modes start	2a491988a28db2bf
 zoho_modules	-	99334726611ccf58
 zoho_note	create list	6b3760d00c86a138
 zoho_record	create delete get list search update	2c27480697da575c

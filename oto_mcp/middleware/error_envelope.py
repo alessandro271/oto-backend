@@ -1,6 +1,9 @@
 """`ErrorEnvelopeMiddleware` — le contrat d'erreur uniforme rendu à l'agent."""
 from __future__ import annotations
 
+import logging
+from typing import Optional
+
 from fastmcp.server.middleware import Middleware
 from ..mcp_errors import McpError
 from mcp.types import ErrorData
@@ -8,7 +11,10 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import error_taxonomy, session_org
 from ..auth.hooks import current_user_sub_from_token
+from ..connectors import connect_link
 from ..connectors import health as connector_health
+
+logger = logging.getLogger(__name__)
 
 
 def _reachable_suffix(connector: str) -> str:
@@ -52,6 +58,47 @@ def _detail(exc) -> dict:
         if isinstance(d, dict) and d:
             return d
     return {}
+
+
+def _reconnexion_demandee(exc) -> bool:
+    """Un module OAuth a dit que le consentement est mort (refresh refusé, révoqué) : ses
+    exceptions s'appellent `<Fournisseur>ReauthRequired` (Google, Microsoft, HubSpot,
+    LinkedIn Ads, Ubersuggest, jefacture, Instagram). Reconnues au NOM, comme ailleurs dans
+    la taxonomie : l'enveloppe n'importe pas les modules de chaque connecteur."""
+    return any(type(x).__name__.endswith("ReauthRequired")
+               for x in error_taxonomy._chain(exc))
+
+
+def _contrat_reconnexion(trace: Optional[dict]) -> dict:
+    """The connection-refusal contract (`reason: reconnect`) for a key the upstream just
+    refused, from the call's trace: which connector, under which key. Sync (DB) — via
+    `run_in_threadpool`.
+
+    Only a key someone in the org can set again gets an address: the caller's own key
+    (`me`, in the org the key lives in), the org's (`org`) or a team's (`team:<id>`). A
+    key lent by another person, the tenant's or the platform's: none — the contract leaves
+    the host's key out, and the person cannot repair someone else's account."""
+    trace = trace or {}
+    connector = trace.get("resolved_connector")
+    mode = trace.get("key_mode")
+    entity_type, entity_id = (list(trace.get("credential_row") or ()) + [None, None])[:2]
+    sub = current_user_sub_from_token()
+    if not connector or not sub:
+        return {}
+    from .. import access
+    if mode == "user":
+        org_txt, _, titulaire = str(entity_id or "").partition(":")
+        if entity_type != "member" or titulaire != sub or not org_txt.isdigit():
+            return {}
+        org, space = int(org_txt), "me"
+    elif mode == "org":
+        org, space = access.current_org(sub), "org"
+    elif mode == "group" and entity_id:
+        org, space = access.current_org(sub), connect_link.espace_d_equipe(entity_id)
+    else:
+        return {}
+    return connect_link.details_du_refus("reconnect", connector, sub=sub, org=org,
+                                         space=space)
 
 
 class ErrorEnvelopeMiddleware(Middleware):
@@ -107,11 +154,32 @@ class ErrorEnvelopeMiddleware(Middleware):
                 if fournisseur:
                     hint = f"{hint} — chez `{fournisseur}`"
                 await connector_health.suivre_appel(trace, info.message)
+            # The connection-refusal contract (`connectors/connect_link`): the fields a
+            # refusal posed itself (connector cut, no key) — `data.oto.url` is the page
+            # where the person does the one gesture left.
+            message = info.message
+            connexion = connect_link.lu(e)
             # Clé refusée par l'amont (401, ou refus que son connecteur déclare comme
-            # celui de la clé) : même marque au rouge, verdict « repose la clé ».
-            elif error_taxonomy.credential_rejected_in_chain(e):
+            # celui de la clé) : même marque au rouge, verdict « repose la clé » — et
+            # l'adresse où la reposer (`reason: reconnect`), le message finissant par elle.
+            rejet = (info.code != "quota_exhausted"
+                     and error_taxonomy.credential_rejected_in_chain(e))
+            if rejet:
                 await connector_health.suivre_appel(
                     session_org.current_call_trace(), None, rejet=info.message)
+            # Un consentement mort (`<X>ReauthRequired` : son module a déjà marqué sa ligne)
+            # mène au même geste, sans seconde marque.
+            if rejet or _reconnexion_demandee(e):
+                if not connexion:
+                    try:
+                        connexion = await run_in_threadpool(
+                            _contrat_reconnexion, session_org.current_call_trace())
+                    # noqa: SILENT — journalisé : l'adresse manque, le refus d'origine reste servi
+                    except Exception:  # noqa: BLE001
+                        logger.exception("reconnect contract not built")
+                        connexion = {}
+                    message += connect_link.phrase(connexion)
+            data.update(connexion)
             if hint:
                 data["hint"] = hint
             # Faits STRUCTURÉS qu'un outil a posés sur son refus (`oto_detail`, un
@@ -122,7 +190,7 @@ class ErrorEnvelopeMiddleware(Middleware):
                 data["detail"] = detail
             raise McpError(ErrorData(
                 code=error_taxonomy.jsonrpc_code(info),
-                message=info.message,
+                message=message,
                 data={"oto": data},
             )) from e
         # Succès : une marque « crédits épuisés » de la clé servie est levée (une seule

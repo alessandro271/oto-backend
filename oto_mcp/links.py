@@ -76,6 +76,14 @@ DEFAULT_PATHS: dict[str, str] = {
     "connectors": "/connectors",
     "connector_return": "/connectors?connector={connector}",
     "marketplace": "/connectors?tab=marketplace",
+    # The pages where a person does the ONE gesture a connection refusal asks for
+    # (`connectors/connect_link`): their own card of one connector (key form, Connect
+    # button or hosted login), and the org's or a team's connectors opened on it, for an
+    # administrator. Under the org of the refusal, never the home org: a personal key is
+    # stored per org. Opening any of them starts nothing (the page's button does).
+    "connect_member": "/o/{org}/connectors/{connector}",
+    "connect_org": "/o/{org}/org/connectors?connector={connector}",
+    "connect_team": "/o/{org}/org/teams/{group}/connectors?connector={connector}",
 }
 
 # Link kinds an instance may DECLARE that our own dashboard does not have: no default
@@ -230,7 +238,9 @@ def connector_setup_link(connector: str, *, sub: Optional[str] = None, org: Any 
 
 # The NAME of the object, to tell a human what has no address.
 _NOMS = {"table": "table", "doc": "page", "project": "project",
-         "public_doc": "public page", "connectors": "connectors"}
+         "public_doc": "public page", "connectors": "connectors",
+         "connect_member": "connection", "connect_org": "org connectors",
+         "connect_team": "team connectors"}
 
 
 def table_lit_sa_vue(sub: Optional[str]) -> bool:
