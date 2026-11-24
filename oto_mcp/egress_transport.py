@@ -24,10 +24,11 @@ sessions gardées sont concernées, une politique par session.
 
 **Les proxies d'environnement sont ignorés** (`trust_env=False`) et un proxy
 explicite est REFUSÉ : derrière un proxy, c'est lui qui résout, et l'épinglage ne
-voit plus rien. Aucun déploiement ne fait sortir ces appels par un proxy (aucune
-variable de proxy n'est lue par le service, `env_inventory.py`). `trust_env=False`
-écarte aussi `REQUESTS_CA_BUNDLE`/`.netrc` : la vérification TLS reste celle du
-magasin par défaut (`certifi`).
+voit plus rien. Le dépôt ne lit aucune variable de proxy (`env_inventory.py`) ; une
+instance qui ferait sortir son trafic par un proxy d'egress, ou qui compterait sur
+un magasin de certificats posé par `REQUESTS_CA_BUNDLE` (que `trust_env=False`
+écarte aussi, avec `.netrc`), voit ces chemins-ci ÉCHOUER — fermé, jamais ouvert.
+La vérification TLS reste celle du magasin par défaut (`certifi`).
 
 Le refus à la connexion lève `egress.EgressRefused` — un `ValueError`, que ni
 urllib3 ni requests n'attrapent : il traverse jusqu'à l'appelant, comme le refus

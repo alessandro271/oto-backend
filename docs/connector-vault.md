@@ -281,7 +281,7 @@ socket sur l'une de ces adresses ; le nom d'origine reste celui du SNI, de la
 vérification du certificat et de l'en-tête `Host`. Pas de patch global de la
 résolution : le processus parle légitimement à sa boucle locale. Les proxies
 d'environnement sont ignorés (`trust_env=False`) et un proxy explicite est refusé —
-derrière un proxy, c'est lui qui résout ; aucun déploiement n'en déclare.
+derrière un proxy, c'est lui qui résout. Le dépôt ne lit aucune variable de proxy ; une instance derrière un proxy d'egress ou un magasin de certificats propre (`REQUESTS_CA_BUNDLE`) voit ces chemins échouer, fermés.
 
 Câblé : `web_read`/`web_image` (`tools/web.py`), une source `url` de fichier
 (`file_source.py`), l'import d'une description publique
@@ -294,7 +294,9 @@ session compris), `n8n`, `make`, `github`, `posthog`, `lucca`, `threecx` et du w
 `requests.<verbe>` au niveau module, sans session à monter — `lighton`, `salesforce`
 (dont l'échange du refresh token sur `login_url`), `wordpress`, le jeton `oauth2` du
 connecteur `api` (`token_url`) et les jetons `threecx`. Les fermer demande un
-paramètre `session=` côté lib, donc un bump de pin.
+paramètre `session=` côté lib, donc un bump de pin. Côté backend, l'échange du code
+OAuth de Salesforce (`auth/flow.exchange_code`, partagé par tous les fournisseurs)
+ne passe pas non plus par une session gardée.
 
 ⚠️ **Contredit l'ADR 0037 §4**, qui décidait « zéro code SSRF dans le connecteur » et
 renvoyait le blocage des plages privées à un egress proxy « plus tard… si le besoin
