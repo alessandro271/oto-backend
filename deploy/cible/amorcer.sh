@@ -22,7 +22,11 @@
 # Chaque manque refuse, en nommant ce qu'il faut poser.
 #
 # usage : amorcer.sh <déclaration.json> <rôle>             amorce le rôle
-#         amorcer.sh <déclaration.json> <rôle> maintenance  pose le timer de maintenance
+#         amorcer.sh <déclaration.json> <rôle> maintenance-verifier <couleur>
+#                                                            rend et valide, sans rien poser,
+#                                                            les unités de maintenance pour
+#                                                            l'arbre de <couleur> (avant bascule)
+#         amorcer.sh <déclaration.json> <rôle> maintenance  pose les unités de maintenance
 #                                                            sur l'arbre de la couleur active
 # Env   : OTO_CIBLE_DEPOT  URL du dépôt du tronc (posée par la porte, deploy/cible/porte.sh)
 # ============================================================================
@@ -42,41 +46,100 @@ refus() { echo "amorce : REFUS — $*" >&2; exit 1; }
 VARIABLES=$(python3 "$ICI/declaration.py" variables "$DECLARATION" "$ROLE") || exit 1
 eval "$VARIABLES"
 
-# --- rend un gabarit de deploy/cible/ : chaque @CLE@ remplacée, aucune laissée.
-rendre() {
-  local gabarit=$1 cible=$2 arbre_actif=${3:-}
-  local tmp; tmp=$(mktemp)
-  sed -e "s|@UNITE@|${UNITE}|g" -e "s|@UTILISATEUR@|${UTILISATEUR}|g" \
+# --- rend un gabarit de deploy/cible/ dans <fichier> : chaque @CLE@ remplacée, aucune laissée.
+rendre_dans() {
+  local gabarit=$1 fichier=$2 arbre_actif=${3:-}
+  [ -r "$gabarit" ] || refus "gabarit $gabarit absent du tag"
+  if ! sed -e "s|@UNITE@|${UNITE}|g" -e "s|@UTILISATEUR@|${UTILISATEUR}|g" \
       -e "s|@ARBRE@|${BG_TREE}|g" -e "s|@ETC@|${ETC_ROLE}|g" \
       -e "s|@CLE_SCW@|${CLE_SCW}|g" -e "s|@ARBRE_ACTIF@|${arbre_actif}|g" \
       -e "s|@ARRET_MAX@|$((BG_DRAIN_MAX + 30))|g" \
-      "$gabarit" > "$tmp"
-  if grep -q '@[A-Z_]*@' "$tmp"; then
-    rm -f "$tmp"; refus "gabarit $gabarit : clé non rendue"
+      "$gabarit" > "$fichier"; then
+    rm -f "$fichier"; refus "gabarit $gabarit : rendu en échec"
   fi
+  local restes
+  restes=$(grep -o '@[A-Z_]*@' "$fichier" | sort -u | tr '\n' ' ') || true
+  if [ -n "$restes" ]; then
+    rm -f "$fichier"; refus "gabarit $gabarit : clé non rendue (${restes% })"
+  fi
+}
+
+# --- rend un gabarit et le pose à <cible>.
+rendre() {
+  local gabarit=$1 cible=$2 arbre_actif=${3:-} tmp
+  tmp=$(mktemp)
+  rendre_dans "$gabarit" "$tmp" "$arbre_actif"
   install -m 0644 "$tmp" "$cible"
   rm -f "$tmp"
 }
 
-# --- les timers de maintenance et d'archive du journal vivent au niveau du RÔLE, pas de la couleur : posé APRÈS la
-# --- bascule, sur l'arbre de la couleur qui sert (comme install_timers de notre prod).
-# --- Chaque rôle a SA base, donc chacun a sa maintenance.
+# --- les timers de maintenance et d'archive du journal vivent au niveau du RÔLE, pas de la
+# --- couleur : chaque rôle a SA base, donc chacun a sa maintenance. Leurs services nomment
+# --- l'arbre de la couleur qui sert, et doivent la suivre à chaque bascule (montée ou
+# --- retour) : sinon ils tournent sur l'arbre que la montée suivante réécrit, sans que
+# --- personne le voie. D'où deux étapes, appelées par deploy/cible/deployer.sh :
+# ---   `maintenance-verifier <couleur>`, AVANT la bascule : les unités sont rendues et
+# ---     validées pour la couleur qui va servir, dans un dossier jetable, sans rien poser —
+# ---     un refus ici arrête la montée, rien n'a basculé ;
+# ---   `maintenance`, APRÈS la bascule : les mêmes unités, rendues pour la couleur en
+# ---     service, sont posées, rechargées, leurs timers activés, puis RELUES — chaque échec
+# ---     refuse en nommant le geste (la montée échoue alors, bruyamment).
+# --- <nom de l'unité>:<timer du tag>, le service venant du gabarit deploy/cible/<nom>.service.
+UNITES_MAINTENANCE=(maintenance:oto-mcp-maintenance journal-archive:oto-journal-archive)
+
+# --- rend les services et copie les timers, pour l'arbre de <couleur>, dans <dossier>.
+preparer_maintenance() {
+  local couleur=$1 dossier=$2 paire nom timer
+  case "$couleur" in blue|green) ;; *) refus "couleur « $couleur » inconnue (blue | green)" ;; esac
+  [ -d "${BG_TREE}-${couleur}" ] || refus "arbre ${BG_TREE}-${couleur} absent — l'amorce du rôle n'a pas tourné"
+  for paire in "${UNITES_MAINTENANCE[@]}"; do
+    nom=${paire%%:*} timer=${paire#*:}
+    rendre_dans "$ICI/${nom}.service" "$dossier/${UNITE}-${nom}.service" "${BG_TREE}-${couleur}"
+    [ -r "$DEPLOY/${timer}.timer" ] || refus "timer $DEPLOY/${timer}.timer absent du tag"
+    cp "$DEPLOY/${timer}.timer" "$dossier/${UNITE}-${nom}.timer" \
+      || refus "timer $DEPLOY/${timer}.timer illisible"
+  done
+}
+
+if [ "$ETAPE" = maintenance-verifier ] || [ "$ETAPE" = maintenance ]; then
+  RENDU=$(mktemp -d)
+  trap 'rm -rf "$RENDU"' EXIT
+fi
+
+if [ "$ETAPE" = maintenance-verifier ]; then
+  couleur="${4:?couleur attendue (blue | green)}"
+  preparer_maintenance "$couleur" "$RENDU"
+  amorce_log "maintenance : unités rendues et valides pour ${BG_TREE}-${couleur}, posées après la bascule"
+  exit 0
+fi
+
 if [ "$ETAPE" = maintenance ]; then
-  actif=$(cat "$BG_ACTIVE")
+  actif=$(cat "$BG_ACTIVE") || refus "pointeur $BG_ACTIVE illisible"
   case "$actif" in blue|green) ;; *) refus "pointeur $BG_ACTIVE illisible (« $actif »)" ;; esac
-  rendre "$ICI/maintenance.service" "/etc/systemd/system/${UNITE}-maintenance.service" "${BG_TREE}-${actif}"
-  install -m 0644 "$DEPLOY/oto-mcp-maintenance.timer" "/etc/systemd/system/${UNITE}-maintenance.timer"
-  # L'archive du journal d'appels, même pose : sans elle, la rétention ne tourne jamais
-  # et le journal grossit sans que rien ne le signale.
-  rendre "$ICI/journal-archive.service" "/etc/systemd/system/${UNITE}-journal-archive.service" "${BG_TREE}-${actif}"
-  install -m 0644 "$DEPLOY/oto-journal-archive.timer" "/etc/systemd/system/${UNITE}-journal-archive.timer"
-  systemctl daemon-reload
-  systemctl enable --now "${UNITE}-maintenance.timer" >/dev/null
-  systemctl enable --now "${UNITE}-journal-archive.timer" >/dev/null
+  preparer_maintenance "$actif" "$RENDU"
+  for paire in "${UNITES_MAINTENANCE[@]}"; do
+    nom=${paire%%:*}
+    for f in "${UNITE}-${nom}.service" "${UNITE}-${nom}.timer"; do
+      install -m 0644 "$RENDU/$f" "/etc/systemd/system/$f" \
+        || refus "écriture de /etc/systemd/system/$f en échec"
+    done
+  done
+  systemctl daemon-reload || refus "systemctl daemon-reload en échec"
+  for paire in "${UNITES_MAINTENANCE[@]}"; do
+    nom=${paire%%:*}
+    systemctl enable --now "${UNITE}-${nom}.timer" >/dev/null \
+      || refus "systemctl enable --now ${UNITE}-${nom}.timer en échec"
+  done
+  # Relire ce qui est posé, pas ce qu'on a cru écrire.
+  for paire in "${UNITES_MAINTENANCE[@]}"; do
+    nom=${paire%%:*}
+    grep -qxF "WorkingDirectory=${BG_TREE}-${actif}" "/etc/systemd/system/${UNITE}-${nom}.service" \
+      || refus "/etc/systemd/system/${UNITE}-${nom}.service, relu, ne vise pas ${BG_TREE}-${actif}"
+  done
   amorce_log "maintenance : ${UNITE}-maintenance.timer et ${UNITE}-journal-archive.timer sur ${BG_TREE}-${actif}"
   exit 0
 fi
-[ "$ETAPE" = socle ] || refus "étape inconnue « $ETAPE » (socle | maintenance)"
+[ "$ETAPE" = socle ] || refus "étape inconnue « $ETAPE » (socle | maintenance-verifier | maintenance)"
 
 # --- ce que l'amorce exige et ne pose pas ----------------------------------------
 [ "$(id -u)" = 0 ] || refus "l'amorce tourne en root (par la porte, deploy/cible/porte.sh)"
