@@ -1133,7 +1133,15 @@ Garde : `tests/test_rest_query_repeated_param.py`.
 **Un octet NUL (`%00`) dans une clé ou une valeur de query string est REFUSÉ — `400
 invalid_query`, qui nomme la clé** — avant tout handler : aucune colonne texte de
 PostgreSQL ne le porte, le pilote levait en pleine lecture (un 500 sur n'importe quel
-filtre). Garde : `tests/test_query_valeurs_illisibles.py`.
+filtre). Garde : `tests/test_query_valeurs_illisibles.py`. **Même règle dans le chemin
+et dans le corps** : un paramètre de chemin qui porte un NUL (`/rows/%00/claim`) est
+refusé `400 invalid_path` par l'adaptateur, avant le tampon `deprecations` (qui lit la
+base avec l'adresse du chemin) ; une chaîne du corps JSON — clé ou valeur, à toute
+profondeur — qui porte `\u0000` ou une moitié de paire de substitution seule
+(`\ud800`, ne s'encode pas en UTF-8) est refusée `400 invalid_body` par
+`json_body.read_json_body`, qui nomme son chemin (`filters[0].value`). Sans elle, la
+réservation, la libération, le commentaire ou l'écriture d'une ligne tombaient en 500
+dans le pilote. Garde : `tests/test_chemin_et_corps_illisibles.py`.
 
 **Garde au seam** : `tests/test_rest_query_list_fields.py` balaye le registre, exige une
 **valeur d'exemple valide** par champ liste (`EXEMPLES`) et exerce le vrai handler avec
