@@ -53,6 +53,9 @@ _KNOWN: dict[str, str] = {
     "/api/ubersuggest/oauth/callback": NATURE,
     "/api/jefacture/oauth/callback": NATURE,
     "/api/custom-api/oauth/callback": NATURE,
+    # Client ID Metadata Document read, unauthenticated, by a remote MCP server's
+    # authorization server (`auth/mcp_discovery.py`) — its URL is our client id.
+    "/api/custom-api/oauth/client.json": NATURE,
     "/api/linkedin_ads/oauth/callback": NATURE,
     # Écran d'autorisation WordPress (mot de passe d'application) : même geste de
     # navigateur, sans code à échanger.

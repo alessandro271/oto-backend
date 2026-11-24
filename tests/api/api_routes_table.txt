@@ -55,6 +55,7 @@ GET,HEAD /api/slack/oauth/callback -> callback
 GET,HEAD /api/ubersuggest/oauth/callback -> callback
 GET,HEAD /api/wordpress/connect/callback -> callback
 GET,HEAD /api/zoho/oauth/callback -> callback
+GET,HEAD /api/custom-api/oauth/client.json -> custom_api_client_document
 POST /api/sirene/headquarters -> headquarters
 OPTIONS /api/sirene/headquarters -> options_handler
 GET,HEAD /api/sirene/siege -> siege

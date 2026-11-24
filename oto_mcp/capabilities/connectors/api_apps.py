@@ -259,9 +259,17 @@ def _create(ctx: ResolvedCtx, inp: CreateInput) -> dict:
 def _patch(ctx: ResolvedCtx, inp: PatchInput) -> dict:
     app = _app(inp.org_id, inp.account)
     old = app["connection"] or {}
+    given = dict(inp.connection) if inp.connection is not None else None
+    if given is not None and _rediscover(old, given):
+        # Another MCP server: its sign-in is found again at the next Connect, never
+        # carried over from the old one (unless the admin sends new values).
+        from ...auth import mcp_discovery
+        for k in mcp_discovery.FILLED:
+            if k not in given or given.get(k) == old.get(k):
+                given[k] = ""
     try:
-        connection = (apps.valider_connexion(inp.connection, base=old)
-                      if inp.connection is not None else old)
+        connection = (apps.valider_connexion(given, base=old)
+                      if given is not None else old)
         definition = apps.valider_definition(_definition_given(inp), connection)
     except apps.AppRefused as e:
         raise _refus(e)
@@ -275,6 +283,14 @@ def _patch(ctx: ResolvedCtx, inp: PatchInput) -> dict:
     moved = apps.destination(old) != apps.destination(connection)
     stale = len(store.cles_liees(int(app["id"]))) if moved else 0
     return {**_vue(ctx, saved), "stale_keys": stale}
+
+
+def _rediscover(old: dict, given: dict) -> bool:
+    """An mcp + oauth2_user app whose server address moves to another origin."""
+    new = {**old, **{k: v for k, v in given.items() if v is not None}}
+    if new.get("protocol") != "mcp" or new.get("auth_mode") != "oauth2_user":
+        return False
+    return apps._origine(old.get("base_url", "")) != apps._origine(new.get("base_url", ""))
 
 
 def _import(ctx: ResolvedCtx, inp: ImportInput) -> dict:
@@ -295,6 +311,14 @@ def _connect(ctx: ResolvedCtx, inp: ConnectInput) -> dict:
         raise AuthzDenied(403, "personal_key_forbidden", cle_perso.texte_refus(
             inp.org_id, store.CONNECTOR, cle_perso.A_LA_CONNEXION))
     activation_gate.exiger_connectable_capacite(store.CONNECTOR, ctx.sub, perso=True)
+    conn = app.get("connection") or {}
+    if conn.get("protocol") == "mcp" and conn.get("auth_mode") == "oauth2_user":
+        # Like Claude: the MCP server says where to sign in (`auth/mcp_discovery.py`).
+        from ...auth import mcp_discovery
+        try:
+            app = mcp_discovery.complete_app(app, ctx.sub)
+        except mcp_discovery.DiscoveryRefused as e:
+            raise AuthzDenied(409, "mcp_discovery_failed", e.message)
     try:
         url = api_oauth.authorize_url(app, ctx.sub, inp.app or "")
     except api_oauth.ApiOAuthRefused as e:
@@ -369,7 +393,10 @@ CAPABILITIES += [
                        DeclaredError(409, "api_app_incomplete",
                                      "the app's sign-in coordinates are incomplete"),
                        DeclaredError(403, "personal_key_forbidden",
-                                     "the org forbids personal keys for the Custom API")),
+                                     "the org forbids personal keys for the Custom API"),
+                       DeclaredError(409, "mcp_discovery_failed",
+                                     "protocol mcp: the server's sign-in could not be "
+                                     "discovered, or it accepts no client Tulina can be")),
                # Not under `…/connectors/api/apps`: a connection-flow face never names a
                # connector (`tests/connectors/test_connector_flow.py`). The common
                # `me.connector_connect` is not used either: declaring a flow for `api`

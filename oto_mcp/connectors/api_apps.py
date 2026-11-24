@@ -99,12 +99,16 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
         raise AppRefused(400, "invalid_app_connection",
                          f"`auth_mode` must be one of {', '.join(api_card.AUTH_MODES)}.")
     champs = _champs()
+    # An MCP server in `oauth2_user` mode SAYS where to sign in: what discovery finds
+    # (`auth/mcp_discovery.py`) may be left empty here, filled at the first Connect.
+    decouvrable = (set(("authorize_url", "token_url", "oauth_client_id"))
+                   if mode == OAUTH_USER and out.get("protocol") == "mcp" else set())
     for name in CONNECTION_FIELDS:
         f = champs[name]
         relevant = not f.when or mode in f.when
         if not relevant:
             out.pop(name, None)
-        elif f.required and not out.get(name):
+        elif f.required and not out.get(name) and name not in decouvrable:
             raise AppRefused(400, "invalid_app_connection",
                              f"`{name}` is required in `{mode}` mode.")
     p = urlsplit(out["base_url"])
@@ -115,6 +119,8 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
                          "`?query`, no `#`.")
     if mode == OAUTH_USER:
         for name in ("authorize_url", "token_url"):
+            if name in decouvrable and not out.get(name):
+                continue
             q = urlsplit(out.get(name, ""))
             if q.scheme != "https" or not q.hostname or q.username or q.password \
                     or q.fragment:

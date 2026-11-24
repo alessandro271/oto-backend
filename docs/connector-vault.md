@@ -824,6 +824,28 @@ requête, `DELETE`), réponse JSON ou SSE, corps borné, **aucune redirection su
 `mcp_tools` (noms ; vide = tous) que l'admin pose : un outil hors liste est refusé avant
 tout envoi, et n'apparaît pas à la liste.
 
+### Un serveur MCP en `oauth2_user` se connecte comme Claude : sans clé ni client saisis (24/11/2026)
+
+Pour une application `protocol: mcp` en `oauth2_user`, l'admin ne donne que l'adresse du
+serveur ; le premier « Connecter » d'un membre découvre le reste (`auth/mcp_discovery.py`,
+spec d'autorisation MCP) et l'ÉCRIT sur l'application (seuls les champs vides) :
+
+1. un `initialize` sans jeton → 401 + `WWW-Authenticate: Bearer resource_metadata=…`
+   (sinon les chemins connus de RFC 9728) ; la `resource` annoncée DOIT être l'adresse
+   de l'app, sinon refus (un serveur ne peut pas réclamer les jetons d'un autre) ;
+2. les métadonnées du serveur d'autorisation (RFC 8414, puis OpenID) DOIVENT nommer
+   l'émetteur cherché ; PKCE S256 exigé ;
+3. l'identité du client : notre **Client ID Metadata Document**
+   (`GET /api/custom-api/oauth/client.json`, servi sans authentification, client
+   public, notre callback) si le serveur l'accepte ; sinon une inscription dynamique
+   (RFC 7591, client public) ; sinon refus nommé `mcp_discovery_failed` — l'admin crée
+   un client public et pose son ID.
+
+Changer l'adresse d'une telle app vers une autre origine efface ce qui avait été
+découvert (sauf valeurs neuves envoyées par l'admin) : rien n'est reporté d'un serveur à
+l'autre. Le membre qui déclenche la découverte écrit donc la connexion de l'app
+(`updated_by` = lui).
+
 ### Le renommage `http` → `api` (12/11/2026)
 
 Décision du propriétaire du produit : le connecteur s'appelle `api`, ses outils `api`, `api_act`, `api_get`,
