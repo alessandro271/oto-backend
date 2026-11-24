@@ -96,9 +96,50 @@ def test_un_arbre_qui_suit_un_autre_depot_refuse(banc):
     assert fini.returncode == 1 and "pas le tronc" in fini.stderr
 
 
-def test_un_venv_hors_du_plancher_refuse(banc):
-    fini = banc.lancer("amorcer.sh", "prod", BANC_PYV="3.12")
-    assert fini.returncode == 1 and "le tag exige 3.10" in fini.stderr
+def _plancher(banc, version: str) -> None:
+    py = banc.tag / "pyproject.toml"
+    texte, n = re.subn(r'^requires-python\s*=\s*"[^"]*"', f'requires-python = ">={version}"',
+                       py.read_text(encoding="utf-8"), count=1, flags=re.M)
+    assert n == 1
+    py.write_text(texte, encoding="utf-8")
+
+
+def test_un_venv_que_le_tag_admet_reste_tel_quel_sans_mot(banc):
+    """3.12 sous `>=3.10` : le `requires-python` est satisfait, rien à dire ni à faire."""
+    assert banc.lancer("amorcer.sh", "prod", BANC_PYV="3.12").returncode == 0
+    banc.trace.write_text("")
+    fini = banc.lancer("amorcer.sh", "prod")
+    assert fini.returncode == 0, fini.stderr
+    assert "n'admet pas" not in fini.stdout
+    assert not [c for c in banc.commandes() if c.startswith("uv venv")]
+
+
+def test_un_venv_que_le_tag_n_admet_pas_se_dit_sans_refus_ni_recreation(banc):
+    """3.10 sous `>=3.12` : l'écart se dit. Le venv d'une couleur ne change de Python qu'à
+    la montée qui l'installe : l'amorce tourne aussi au retour arrière, quand la couleur
+    inactive EST le retour (tests/deploy/test_plancher_python_cible.py)."""
+    assert banc.lancer("amorcer.sh", "prod").returncode == 0
+    _plancher(banc, "3.12")
+    banc.trace.write_text("")
+    fini = banc.lancer("amorcer.sh", "prod")
+    assert fini.returncode == 0, fini.stderr
+    assert ("/opt/exemple/prod-green/.venv est en Python 3.10, que le requires-python du tag "
+            "n'admet pas (plancher 3.12)") in fini.stdout.replace(str(banc.racine), "")
+    assert not [c for c in banc.commandes() if c.startswith("uv venv")]
+
+
+def test_l_amorce_installe_aussi_l_interpreteur_choisi(banc, tmp_path):
+    declaration = tmp_path / "declaration_python.json"
+    doc = json.loads(DECLARATION.read_text())
+    doc["python"] = "3.12"
+    declaration.write_text(json.dumps(doc))
+    fini = banc.lancer("amorcer.sh", "prod", declaration=declaration)
+    assert fini.returncode == 0, fini.stderr
+    cmds = banc.commandes()
+    assert "uv python install --quiet 3.10" in cmds and "uv python install --quiet 3.12" in cmds
+    # la naissance d'un venv reste au plancher : c'est la montée qui suit le choix
+    assert ("uv venv --quiet --seed --python 3.10 --python-preference only-managed "
+            "/opt/exemple/prod-blue/.venv") in cmds
 
 
 def test_sans_depot_du_tronc_refuse(banc):

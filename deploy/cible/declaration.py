@@ -8,6 +8,7 @@ workflow de la cible le transmet à chaque déploiement ; ce module est le seul 
     {
       "instance": "<nom court>",                    # ^[a-z][a-z0-9]{1,15}$
       "secrets": {"region": "<région>", "projet": "<projet Scaleway de la cible>"},
+      "python": "<MAJEUR.MINEUR>",                  # FACULTATIF : l'interpréteur des venvs
       "roles": {
         "preprod" | "prod": {
           "ports": {"blue": <port>, "green": <port>},
@@ -19,6 +20,10 @@ workflow de la cible le transmet à chaque déploiement ; ce module est le seul 
         }
       }
     }
+
+`python` choisit l'interpréteur des venvs de l'instance (sinon : le plancher du
+`requires-python` du tag) ; il doit satisfaire ce `requires-python`, ce que le déploiement
+vérifie avant toute action (deploy/cible/deployer.sh, docs/instance-cible.md).
 
 TOUT le reste se DÉRIVE du nom d'instance et du rôle — utilisateur de service, arbres,
 unités, amont Caddy, verrou, vidange — pour qu'aucun chemin écrit par root ne vienne
@@ -57,6 +62,8 @@ PROJET = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 # Posées par l'unité elle-même : les redéclarer dans le `.env` les écraserait.
 PORTEES_PAR_L_UNITE = frozenset({"HOST", "PORT", "MCP_TRANSPORT"})
 CLES = {"instance", "secrets", "roles"}
+CLES_FACULTATIVES = {"python"}
+PYTHON = re.compile(r"^[0-9]+\.[0-9]+$")
 CLES_SECRETS = {"region", "projet"}
 CLES_ROLE = {"ports", "hote_public", "ask", "drain_max", "secrets_optionnels", "env"}
 # La santé du bleu/vert : le chemin que la bibliothèque DU TAG interroge, en local sur
@@ -72,11 +79,12 @@ class Refus(Exception):
         self.ecarts = ecarts
 
 
-def _cles(ecarts: list[str], ou: str, obj, attendues: set[str]) -> bool:
+def _cles(ecarts: list[str], ou: str, obj, attendues: set[str],
+          facultatives: frozenset[str] | set[str] = frozenset()) -> bool:
     if not isinstance(obj, dict):
         ecarts.append(f"{ou} : un objet est attendu")
         return False
-    for c in sorted(set(obj) - attendues):
+    for c in sorted(set(obj) - attendues - facultatives):
         ecarts.append(f"{ou}.{c} : clé inconnue")
     for c in sorted(attendues - set(obj)):
         ecarts.append(f"{ou}.{c} : manquante")
@@ -159,8 +167,10 @@ def _role(ecarts: list[str], nom: str, r) -> None:
 def valider(doc) -> dict:
     """Le document tel quel s'il est conforme ; sinon `Refus` avec TOUS les écarts."""
     ecarts: list[str] = []
-    if _cles(ecarts, "declaration", doc, CLES):
+    if _cles(ecarts, "declaration", doc, CLES, CLES_FACULTATIVES):
         i = doc.get("instance")
+        if "python" in doc and not (isinstance(doc["python"], str) and PYTHON.match(doc["python"])):
+            ecarts.append(f"python : MAJEUR.MINEUR attendu (reçu {doc['python']!r})")
         if "instance" in doc and not (isinstance(i, str) and INSTANCE.match(i)):
             ecarts.append(f"instance : {INSTANCE.pattern} attendu (reçu {i!r})")
         s = doc.get("secrets")
@@ -212,6 +222,7 @@ def variables(doc: dict, role: str) -> dict[str, str]:
         "ETC_ROLE": etc,
         "CLE_SCW": f"/etc/{i}/scw.key",
         "PYTHONS": f"/opt/{i}/python",
+        "PYTHON_CHOISI": doc.get("python", ""),
         "BG_ENV": role,
         "BG_UNIT": unite,
         "BG_TREE": f"/opt/{i}/{role}",
