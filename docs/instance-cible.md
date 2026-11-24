@@ -147,8 +147,8 @@ si :
   spécification, intervalles compris : `deploy/cible/plancher_python.py`, bibliothèque
   standard seule, exécutée par le `python3` du système — `packaging` n'y est pas
   forcément) ;
-- **ou** l'instance a choisi un Python (`python`) et la version MAJEUR.MINEUR du venv en
-  diffère.
+- **ou** l'instance a choisi un Python (`python`) et la version du venv en diffère, au
+  niveau de détail du choix : au patch près pour `"3.12.8"`, à MAJEUR.MINEUR pour `"3.12"`.
 
 La version visée est le choix de l'instance, à défaut **le plancher** du tag (la clause
 `>=` ou `~=` du `requires-python`, MAJEUR.MINEUR, qui doit elle-même le satisfaire). Ce
@@ -156,7 +156,27 @@ n'est pas une égalité avec le plancher : un venv 3.12 sous un tag `>=3.10`, sa
 reste tel quel ; un venv 3.10 sous un tag `>=3.12` est recréé en 3.12.
 
 **Le choix de l'instance.** Champ facultatif de la déclaration, au premier niveau :
-`"python": "3.12"` (MAJEUR.MINEUR, validé par `declaration.py`). Un choix que le
+`"python": "3.12.8"` ou `"3.12"` (MAJEUR.MINEUR.PATCH ou MAJEUR.MINEUR, validé par
+`declaration.py` ; tout autre format est refusé). **Recommandé : le patch**, qui fige
+l'interpréteur — l'amorce installe exactement cette version (`uv python install 3.12.8`,
+sous `/opt/<i>/python`) et la montée y recrée le venv (`uv venv --python 3.12.8`,
+interpréteurs gérés seuls, sans téléchargement) ; sans patch, la 3.12.x que uv retient
+convient et peut changer d'une machine à l'autre. Un choix au patch est jugé sur cette
+version exacte ; un choix MAJEUR.MINEUR est admis s'il existe une version de cette série
+qui satisfait le `requires-python` (`"3.12"` sous `>=3.12.4` : admis). La version d'un
+venv se lit toujours par son interpréteur (`.venv/bin/python -V`), jamais par son chemin ni
+par `pyvenv.cfg` ; après la recréation, la montée vérifie que le venv rend bien la version
+visée (au patch près si le choix en porte un), sinon elle refuse et remet l'ancien.
+
+⚠️ **Ne jamais poser un autre patch dans `/opt/<i>/python` sans l'avoir prévu.** uv y crée,
+à côté de `cpython-3.12.14-…`, un lien de version mineure `cpython-3.12-…`, et c'est lui
+qu'un venv inscrit comme `home` dans son `pyvenv.cfg`. Un `uv python install 3.12.15`
+déplace ce lien, et avec lui **tous** les venvs de la série, sans rien signaler : le patch
+« figé » change sous les deux couleurs à la fois. Changer de patch, c'est changer le choix
+de la déclaration et monter, comme pour tout changement de Python (§ Changer de Python, sans coupure) ; puis
+vérifier chaque couleur par `<arbre>/.venv/bin/python -V`.
+
+Un choix que le
 `requires-python` du tag n'admet pas est **refusé net**, avant l'amorce et avant toute
 action, en le nommant (« l'instance choisit Python 3.9 […] que le requires-python de
 <tag> n'admet pas »). Le choix ne s'évalue qu'à la montée : le retour ne le lit pas. Sans
@@ -414,7 +434,8 @@ code du tag qu'on montera :
 python3 deploy/cible/declaration.py verifier declaration.json
 ```
 
-Champ facultatif, au premier niveau : `"python": "<MAJEUR.MINEUR>"`, l'interpréteur des venvs
+Champ facultatif, au premier niveau : `"python": "<MAJEUR.MINEUR[.PATCH]>"` (le patch est
+recommandé : il fige l'interpréteur), l'interpréteur des venvs
 de l'instance (sinon le plancher du `requires-python` du tag). Il doit satisfaire le
 `requires-python` des tags qu'on monte ; le poser suit une séquence (§ Changer de Python,
 sans coupure).

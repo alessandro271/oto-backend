@@ -182,3 +182,35 @@ def test_choix_de_l_instance_sur_le_vrai_uv(banc, tmp_path):
     _monter(banc, "v2.2.0", declaration=declaration)       # la verte, déjà au choix : rien
     assert (_venv(banc, "green") / "temoin").exists()
     assert not [c for c in banc.commandes() if c.startswith("uv venv")]
+
+
+def _patch(python: str) -> str:
+    return subprocess.run([python, "-c", 'import sys; print("%d.%d.%d" % sys.version_info[:3])'],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_choix_au_patch_sur_le_vrai_uv(banc, tmp_path):
+    """L'instance fige l'interpréteur au patch (celui du 3.12 géré présent, sans
+    téléchargement) : la couleur installée est recréée sur CETTE version exacte, lue par
+    son interpréteur ; au même choix, la montée suivante ne recrée rien. Deux patchs d'une
+    même série ne sont pas éprouvés ici : il faudrait télécharger le second (les doublures
+    le couvrent, tests/deploy/test_plancher_python_cible.py)."""
+    chemin = subprocess.run([UV, "python", "find", "--managed-python", "--no-config", NOUVEAU],
+                            capture_output=True, text=True, check=True,
+                            env={**os.environ, "UV_PYTHON_DOWNLOADS": "never"}).stdout.strip()
+    exacte = _patch(chemin)
+    _monter(banc, "v1.0.0")
+    _monter(banc, "v1.1.0")
+    doc = json.loads(DECLARATION.read_text())
+    doc["python"] = exacte
+    declaration = tmp_path / "declaration_patch.json"
+    declaration.write_text(json.dumps(doc))
+    fini = _monter(banc, "v2.0.0", declaration=declaration)
+    assert f"--python {exacte} --python-preference only-managed" in " ".join(banc.commandes())
+    assert f"→ {exacte} recréé" in fini.stdout
+    assert _patch(str(_venv(banc, "green") / "bin/python")) == exacte
+    _monter(banc, "v2.1.0", declaration=declaration)       # la bleue
+    (_venv(banc, "green") / "temoin").write_text("green")
+    _monter(banc, "v2.2.0", declaration=declaration)       # la verte, déjà au patch : rien
+    assert (_venv(banc, "green") / "temoin").exists()
+    assert not [c for c in banc.commandes() if c.startswith("uv venv")]
