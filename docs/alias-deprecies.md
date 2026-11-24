@@ -1,20 +1,72 @@
 ---
-title: Alias dépréciés et dates de retrait
+title: Alias dépréciés, compteurs d'usage et dates de revue
 type: reference
 description: >-
   La table UNIQUE des noms servis qui portent encore l'ancien vocabulaire du
   produit (#519, « doctrine » → « guide ») : pour chaque surface — outil MCP, clé
   de capacité, chemin REST, clé de réponse, schéma OpenAPI, code d'erreur, objet en
-  base — l'ancien nom, le nouveau, la forme de la coexistence, et LA date de
-  retrait. Explique pourquoi la date se compte en tags et non en merges, où elle
-  vit dans le code (oto_mcp/deprecations.RETRAIT), et ce qu'un consommateur doit
-  faire avant cette date. À charger avant de renommer une surface, avant de
-  consommer un nom qui figure ici, et au moment du retrait (lot D, #526).
+  base — l'ancien nom, le nouveau, la forme de la coexistence. Depuis la décision
+  du 23/11/2026, aucune date de retrait n'est servie : un ancien nom reste servi
+  tant que son usage compté n'est pas nul, et la PR de retrait pose seule une date
+  ferme. Dit comment mesurer cet usage (args.deprecated_name, args.deprecated_value,
+  lignes des 308) et où vivent les dates de REVUE (oto_mcp/deprecations.REVUE*).
+  À charger avant de renommer une surface, avant de consommer un nom qui figure
+  ici, et avant d'ouvrir une PR de retrait (lot D, #526).
 adr:
   - "0042"
 ---
 
-# Alias dépréciés et dates de retrait
+# Alias dépréciés, compteurs d'usage et dates de revue
+
+## La règle du retrait (décision du 23/11/2026)
+
+**Plus aucun couperet par date.** Un ancien nom — outil MCP, chemin REST, valeur d'un
+champ — reste servi **tant que son usage compté n'est pas à zéro**.
+
+- **Aucun texte servi ne porte de date de retrait.** Chaque avis dit « déprécié,
+  utilise X ; l'ancien nom sera retiré avec un préavis »
+  (`deprecations.PREAVIS_DE_RETRAIT`) : description et réponse d'un ancien nom d'outil,
+  `deprecation_warning` d'une valeur réécrite, annonce du connecteur `api`, entrées
+  dépréciées et schémas d'hier de `/openapi.json`. Les 308 des anciens chemins REST
+  portent `Deprecation: true`, **sans `Sunset`**.
+- **Le retrait réel est une PR séparée**, ouverte quand les mesures ci-dessous sont
+  vides. C'est elle qui pose une date ferme, **au moins deux mois après le premier
+  avis daté qu'elle servira** (art. 8.2 du contrat de service,
+  `deprecations.PREAVIS_MOIS`).
+- **Les constantes `REVUE`, `REVUE_CONNECTEUR_API`,
+  `REVUE_DATASTORE`** (`oto_mcp/deprecations.py`) sont des **dates de revue** : le jour
+  où relire les compteurs. Elles n'ont aucun effet sur ce qui est servi — une date de
+  revue passée ne change rien, et aucun test ne les compare au jour
+  (`tests/test_alias_deprecies_outils.py` vérifie qu'aucun texte servi ne porte de date
+  et qu'une date de revue passée laisse tout à l'identique).
+
+## Mesurer l'usage
+
+Tout se lit dans le journal `tool_calls` :
+
+| Ce qu'on compte | Où | Exemple |
+| --- | --- | --- |
+| Un appel sous un ancien nom d'outil | `args.deprecated_name` (`tool` = le nom d'aujourd'hui) | `tool='api_get'`, `args.deprecated_name='http_get'` |
+| Une valeur dépréciée réécrite (`deprecations.valeur_canonique`), faces MCP et REST | `args.deprecated_value = "<champ>=<valeur reçue>"` | `args.deprecated_value='resource_type=doctrine'` |
+| Une redirection 308 d'un ancien chemin REST | une ligne `kind='rest'` : `tool` = verbe + chemin d'aujourd'hui, `args.deprecated_name` = l'ancien chemin **gabarit** (jamais le chemin réel) ; org, compte et jeton s'ils sont connus | `tool='GET /api/me/guides/{guide_id}'`, `args.deprecated_name='/api/me/doctrines/{doctrine_id}'` |
+
+```sql
+SET statement_timeout = '15s';
+SELECT args->>'deprecated_name' AS ancien, args->>'deprecated_value' AS valeur,
+       count(*), max(created_at)
+  FROM tool_calls
+ WHERE created_at > now() - interval '30 days'
+   AND (args ? 'deprecated_name' OR args ? 'deprecated_value')
+ GROUP BY 1, 2 ORDER BY 3 DESC;
+```
+
+La ligne d'une 308 est écrite par le journal des routes (`api.routes.RestCallLogger`,
+écriture asynchrone habituelle) : la redirection n'authentifie pas et ne requête rien.
+La mesure ne dépend donc plus des sept jours du journal du proxy. Une PR de retrait
+s'ouvre quand ces compteurs sont vides sur la fenêtre de rétention du journal.
+
+⚠️ Ce qui suit, jusqu'à la règle ci-dessus, garde l'historique des dates qui étaient
+servies : elles ne le sont plus.
 
 Le produit a changé de mot le 28/08/2026 (#519, décision d'Alexis) : il dit **guide**
 (ADR 0042 — le guide est la primitive unique d'instruction) et **procédure** pour ce
@@ -22,6 +74,23 @@ qui s'exécute. L'ancien mot servait pour deux choses à la fois, l'objet produi
 « principe maison » ; c'est cette double vie qui prête à confusion.
 
 ⚠️ **Cette page couvre CE renommage-là (#519) — pas tous les renommages datés.**
+
+⚠️ **23/11/2026 — la règle générale est désormais `docs/compat-surfaces-servies.md`**
+(décision d'Alexis) : tout changement cassant d'une surface servie rend le code métier
+propre tout de suite et traduit l'ancienne forme EN BORDURE, par une entrée du tampon
+`oto_mcp/deprecations.py`. Chaque entrée = un réglage d'instance éteint par défaut, une
+trace par appel, un critère de retrait (compteur à zéro chez toutes les instances qui
+l'ont allumée) et une date de REVUE, jamais une date couperet. Les entrées sous cette
+règle :
+
+| Entrée | Réglage d'instance | Trace (`tool_calls.args`) | Revue |
+| --- | --- | --- | --- |
+| Tableau désigné par son NOM (§ ci-dessous) | `OTO_MCP_COMPAT_TABLEAU_PAR_NOM` | `ref_kind = 'name'` | 14/12/2026 (#1296) |
+| Renommages de vocabulaire (outils, chemins REST en 308, valeurs) | — (toujours servis) | `deprecated_name`, `deprecated_value`, ligne de chaque 308 | `REVUE*` |
+
+Les renommages qui suivent sont antérieurs à cette règle. Depuis la décision du
+23/11/2026, ils ne servent plus de date de retrait non plus : §La règle du retrait
+ci-dessus.
 
 ⚠️ **25/09/2026 — la règle de retrait change** (Alexis, #966) : plus de délai fixe (les
 « deux mois habituels » ci-dessous). Une ancienne forme se retire quand **tous les
@@ -63,9 +132,11 @@ Trois raisons, dans l'ordre de ce qu'elles coûtent :
    est renommé sous la prod du même geste. Les renommages en base sont donc
    **additifs** (vue d'abord, table ensuite, au tag).
 
-## La date
+## La date de revue (historique : c'était la date de retrait servie)
 
-**Retrait au premier tag `vX.Y.Z` posé à partir du 30/11/2026** — reporté le 30/10/2026
+**Date de revue : 30/11/2026** (`deprecations.REVUE`). Elle était servie comme date de
+retrait jusqu'à la décision du 23/11/2026, qui en fait une date de revue sans effet.
+Historique : retrait au premier tag posé à partir du 30/11/2026, reporté le 30/10/2026
 depuis le 29/10/2026, qui tombait **deux mois** après la mise en production du préavis
 (le plancher dû, `deprecations.PREAVIS_DU`). Pourquoi le report : le dashboard lit
 encore les clés d'hier, et le journal `tool_calls` ne voit pas les anciens noms
@@ -77,8 +148,9 @@ préavis de deux mois avant toute rupture d'interface. Le mécanisme en a servi 
 du 29/08 au 01/09/2026 — constat, référence de l'article et correction dans
 oto-backend#767 ; la formulation qui fait foi est celle de la pièce, pas celle de
 cette page. La durée vit dans
-`deprecations.PREAVIS_MOIS`, la date en est DÉRIVÉE, et un test en fait un plancher :
-allonger est libre, descendre sous deux mois rougit.
+`deprecations.PREAVIS_MOIS`, et un test en fait un plancher : allonger est libre,
+descendre sous deux mois rougit. Elle ne produit plus de date servie : c'est la PR de
+retrait qui datera le retrait, au moins cette durée après son premier avis daté.
 
 ⚠️ **Un tag, pas un merge — aux deux bouts.** `main` est la PREPROD : un alias retiré
 au merge serait retiré du serveur que les intégrateurs sondent, avec deux mois de
@@ -94,11 +166,10 @@ obligatoire, un champ retiré, un type changé n'ont ni alias ni date ; et il es
 prévenu. Un préavis actif demande le canal de notification qui manque à la plateforme
 (#766).
 
-La date vit à **un seul endroit** dans le code — `oto_mcp/deprecations.RETRAIT` — et
-chaque avis servi la recopie depuis là. Décaler le retrait est alors un geste (changer
-la constante), et non une chasse aux chaînes dans quarante descriptions dont on
-oublierait trois. `tests/test_alias_deprecies_outils.py` garde cette propriété, et
-**rougit quand la date est dépassée** : c'est la sonnerie du lot D.
+Le texte servi vit à **un seul endroit** dans le code — `deprecations.avis`,
+`avis_d_appel`, `valeur_canonique`, `PREAVIS_DE_RETRAIT` — et ne cite aucune date. Plus
+aucun test ne compare une date au jour : la sonnerie du lot D est le compteur d'usage,
+pas le calendrier.
 
 Le retrait lui-même = **lot D, issue #526**, qui porte la liste complète, le
 préalable de blocage (le lot C — dashboard, oto-core, oto-cli, plugin — doit avoir
@@ -106,27 +177,31 @@ basculé) et la migration en base.
 
 ## La table
 
-Une ligne par surface. « Forme » dit comment les deux noms coexistent.
+Une ligne par surface. « Forme » dit comment les deux noms coexistent — ou depuis quand
+l'ancien est retiré. **Lot D (#526) : outil, chemins REST et clés de réponse retirés le
+23/11/2026**, les mesures étant à zéro sur toutes les instances (décision du 23/11/2026 :
+l'avis déjà servi valait préavis). Restent servis : paramètres d'entrée, code d'erreur
+hérité, schéma OpenAPI d'hier ; la relation en base attend sa migration.
 
-| Surface | Ancien nom (part le 30/11/2026) | Nouveau nom | Forme | Lot |
+| Surface | Ancien nom | Nouveau nom | Forme | Lot |
 | --- | --- | --- | --- | --- |
-| Outil MCP | `oto_admin_doctrine` | `oto_admin_guide` | les deux listés et appelables ; l'ancien porte l'avis en tête de sa description | B1 |
-| Chemin REST | `GET /api/me/doctrines/library` | `GET /api/me/guide-library` | 308 | B2 |
-| Chemin REST | `GET /api/me/doctrines/library/{slug}` | `GET /api/me/guide-library/{slug}` | 308 | B2 |
-| Chemin REST | `DELETE /api/me/doctrines/library/{id}` | `DELETE /api/me/guide-library/{id}` | 308 | B2 |
-| Chemin REST | `POST /api/me/doctrines/publish` | `POST /api/me/guide-library/publish` | 308 | B2 |
-| Chemin REST | `POST /api/me/doctrines/fork` | `POST /api/me/guide-library/fork` | 308 | B2 |
-| Chemin REST | `GET /api/me/doctrines/{doctrine_id}` | `GET /api/me/guides/{guide_id}` | 308 | B2 |
-| Clé de capacité | `org.doctrine.get` | `org.guide.get` | **renommée, sans alias** (voir plus bas) | B2 |
-| Clé de capacité | `org.doctrine.admin_get` | `org.guide.admin_get` | idem | B2 |
-| Clé de capacité | `org.doctrine.admin_list` | `org.guide.admin_list` | idem | B2 |
-| Clé de capacité | `admin.doctrine` | `admin.guide` | idem | B2 |
-| Clé de réponse | `doctrine_id` | `guide_id` | les deux servies, même valeur | B3 |
-| Clé de réponse | `doctrine_version` | `guide_version` | idem | B3 |
-| Clé de réponse | `doctrine_ref_count` | `guide_ref_count` | idem | B3 |
-| Clé de réponse | `doctrines` | `guides` | idem | B3 |
-| Clé de réponse | `group_doctrine` | `group_guide` | idem | B3 |
-| Clé de réponse | `doctrine` | `guide` | idem | B3 |
+| Outil MCP | `oto_admin_doctrine` | `oto_admin_guide` | **retiré le 23/11/2026** (lot D) : nom inconnu | B1 |
+| Chemin REST | `GET /api/me/doctrines/library` | `GET /api/me/guide-library` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Chemin REST | `GET /api/me/doctrines/library/{slug}` | `GET /api/me/guide-library/{slug}` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Chemin REST | `DELETE /api/me/doctrines/library/{id}` | `DELETE /api/me/guide-library/{id}` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Chemin REST | `POST /api/me/doctrines/publish` | `POST /api/me/guide-library/publish` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Chemin REST | `POST /api/me/doctrines/fork` | `POST /api/me/guide-library/fork` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Chemin REST | `GET /api/me/doctrines/{doctrine_id}` | `GET /api/me/guides/{guide_id}` | **retiré le 23/11/2026** (lot D) : 404 | B2 |
+| Clé de capacité | `org.doctrine.get` | `org.guide.get` | **renommée, sans alias** ; son `operationId` historique, porté par l'ancien chemin, est parti avec lui le 23/11/2026 | B2 |
+| Clé de capacité | `org.doctrine.admin_get` | `org.guide.admin_get` | **renommée, sans alias** ; son `operationId` historique, porté par l'ancien chemin, est parti avec lui le 23/11/2026 | B2 |
+| Clé de capacité | `org.doctrine.admin_list` | `org.guide.admin_list` | **renommée, sans alias** ; son `operationId` historique, porté par l'ancien chemin, est parti avec lui le 23/11/2026 | B2 |
+| Clé de capacité | `admin.doctrine` | `admin.guide` | **renommée, sans alias** ; son `operationId` historique, porté par l'ancien chemin, est parti avec lui le 23/11/2026 | B2 |
+| Clé de réponse | `doctrine_id` | `guide_id` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
+| Clé de réponse | `doctrine_version` | `guide_version` | **retiré le 23/11/2026** (lot D) partout, SAUF dans les lignes de `GET /api/orgs/{id}/monitoring/runs`, où un client la lit encore : servie à côté de `guide_version`, même valeur, non déclarée dans `/openapi.json` ; part au lot suivant | B3 |
+| Clé de réponse | `doctrine_ref_count` | `guide_ref_count` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
+| Clé de réponse | `doctrines` | `guides` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
+| Clé de réponse | `group_doctrine` | `group_guide` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
+| Clé de réponse | `doctrine` | `guide` | **retiré le 23/11/2026** (lot D) : seule la clé d'aujourd'hui est servie | B3 |
 | Paramètre d'entrée | `doctrine_id` | `guide_id` | les deux acceptés | B3 |
 | Paramètre d'entrée | `run_start(doctrine=)` | `run_start(guide=)` | les deux acceptés | B3 |
 | Code d'erreur | `unknown_doctrine` | `unknown_guide` | l'ancien dans `details.legacy_code` | B3 |
@@ -135,26 +210,24 @@ Une ligne par surface. « Forme » dit comment les deux noms coexistent.
 
 ### Une valeur d'entrée renommée : la famille « procédure » d'`oto_resource` (oto#65)
 
-**Sa propre date : retrait au premier tag posé à partir du 23/11/2026**
-(`deprecations.ANNONCE_PROCEDURE` = 23/09/2026 + `PREAVIS_MOIS`). Ce n'est pas la date du
-lot #519 : ce renommage-là a été oublié par le lot B, et son préavis court à partir du
-moment où il est posé.
+**Retirée le 23/11/2026** avec le lot D : l'ancienne valeur est inconnue, refusée comme
+toute valeur invalide. Son usage, compté par `args.deprecated_value`, était à zéro.
 
 Arbitrage d'Alexis du 23/09/2026 : « doctrine est l'ancien terme, ne doit plus
 apparaître ». `oto_resource` / `oto_resource_v2` (et `POST /api/resources[/v2]`) ne
 publient plus que `resource_type ∈ {datastore_namespace, project, procedure, doc}` —
 énuméré, discriminant de la réponse, descriptions, refus.
 
-| Surface | Ancien nom (part le 23/11/2026) | Nouveau nom | Forme |
+| Surface | Ancien nom | Nouveau nom | Forme |
 | --- | --- | --- | --- |
-| Valeur d'entrée `resource_type` | `doctrine` | `procedure` | l'ancienne est ACCEPTÉE sur les deux surfaces, réécrite avant l'autz, et la réponse porte `deprecation_warning` (nom d'aujourd'hui + date) ; la réponse ne sert QUE `procedure` |
+| Valeur d'entrée `resource_type` | `doctrine` | `procedure` | **retiré le 23/11/2026** (lot D) : valeur inconnue, refusée comme toute valeur invalide (`unsupported_resource_type` sur la surface héritée, refus de validation sur la stricte) |
 | Motif de cascade `reason` | `doctrine_needs_org_owner` | — | **retiré sec** : inatteignable depuis l'ADR 0068 (les trois paliers d'un nouveau propriétaire sont ceux d'une procédure) ; un palier inconnu ressort `status: "failed"` avec la raison du store |
 
 **Pourquoi un alias** : un appelant vivant l'envoie — l'écran de partage d'une procédure
 du dashboard (`DoctrineView` → `SharePrincipalDialog`, valeur codée en dur, op
 `get`/`share`/`unshare`), mesuré le 23/09/2026. Ni le nouveau front, ni le plugin, ni
 oto-core, ni la CLI ne l'emploient. **Le porteur du pont** est donc le dashboard : sa
-valeur passe à `procedure`, puis l'alias part à sa date.
+valeur est passée à `procedure`, puis l'alias est parti, à compteur nul.
 
 **Ce qui ne change pas** : la valeur ÉCRITE en base (`resource_grants.resource_type`)
 garde le mot d'avant #519 — nommée une seule fois, `ownership.TYPE_RESSOURCE_PROCEDURE`,
@@ -180,7 +253,21 @@ Les vitrines anonymes `/api/guide-library[/{slug}]` (marché) et `/api/guides/li
 qui n'y menaient plus que vers un 404 (otomata-tech/oto#84). La face authentifiée
 `/api/me/guide-library` reste.
 
-### Une adresse : le NOM d'un tableau (lot 0 du retrait, 29/09/2026)
+### Une adresse : le NOM d'un tableau (lot 0 du retrait, 29/09/2026) — RETIRÉ du métier, TAMPON par instance
+
+⚠️ **Retiré du code métier** : un nom de tableau y est refusé, sans repli, sur toutes les
+faces (`400 datastore_by_name`, `datastore/errors.TableauParNom`, #1786). C'est ce qui est
+servi par défaut.
+
+**Tampon depuis le 23/11/2026** : une instance dont des consommateurs désignent encore un
+tableau par son nom allume `OTO_MCP_COMPAT_TABLEAU_PAR_NOM`. Le nom est alors traduit en
+numéro au bord (MCP, REST, portée d'un jeton), avec la résolution d'avant le retrait, et
+chaque désignation laisse `args.ref_kind = 'name'` au journal. Un nom qui ne désigne rien
+reste refusé comme introuvable. La réponse MCP le signale comme accepté et déprécié, avec
+le numéro à passer. La description des outils ne documente que le numéro. Revue le
+14/12/2026 (#1296) : l'entrée part quand le compteur est à zéro chez toutes les instances
+qui l'ont allumée. Détails, lieux couverts et requête :
+`docs/compat-surfaces-servies.md` §Les entrées. Ce qui suit est l'histoire.
 
 **Sa propre date : un nom de tableau est refusé à partir du 08/11/2026**
 (`deprecations.RETRAIT_NOM_DE_TABLEAU` = `RETRAIT_DATASTORE`, décision d'Alexis : un seul
@@ -191,8 +278,8 @@ qu'à partir de ce lot — à moins de deux mois. `PREAVIS_MOIS` ne bouge pas.
 
 Forme de la coexistence : **servi, et dit**. Une réponse MCP obtenue par un nom
 (`data_*`, `oto_project op=link`, `oto_fleet op=create`) porte en tête l'avis qui donne le
-numéro et la date ; une route REST adressée par un nom répond `Deprecation: true` et
-`Sunset`. La portée d'un jeton range ses tableaux par numéro (oto#158) : une portée
+numéro et la date ; une route REST adressée par un nom répond `Deprecation: true` (sans
+`Sunset` depuis le 23/11/2026). La portée d'un jeton range ses tableaux par numéro (oto#158) : une portée
 émise avant, encore par nom, est refusée en le disant (`token_scope_by_name`). Les
 données qui gardent un nom se migrent par `scripts/tableaux_par_numero.py`.
 
@@ -351,12 +438,12 @@ lot.
 
 ### Le connecteur Custom API renommé `api` (12/11/2026)
 
-**Sa propre date : au plus tôt le 31/01/2027** (`deprecations.RETRAIT_CONNECTEUR_API`,
-au moins deux mois après `ANNONCE_CONNECTEUR_API`, avec la marge d'un tag de production
-posé jusqu'au 30/11/2026). Ce n'est pas une échéance automatique : l'ancien nom part quand
+**Sa propre date de revue : 31/01/2027** (`deprecations.REVUE_CONNECTEUR_API`), sans
+effet sur ce qui est servi. L'ancien nom part quand
 **tous les consommateurs déclarés ont suivi** (règle du 25/09/2026) et que **l'usage compté
 est nul** — chaque appel servi par un ancien nom d'outil porte `args.deprecated_name` dans
-le journal `tool_calls` (le nom `tool` reste celui d'aujourd'hui).
+le journal `tool_calls` (le nom `tool` reste celui d'aujourd'hui), et chaque 308 d'un ancien
+chemin laisse sa ligne `kind='rest'`.
 
 | Surface | Ancien nom | Nouveau nom | Forme |
 | --- | --- | --- | --- |
@@ -443,7 +530,7 @@ Ce que ça donne comme test avant de doubler, plutôt qu'une préférence :
    reste à l'ancien nom, ou bascule à sec, le doublage ne tient pas sa promesse.
    `tests/datastore/test_cle_namespace_doublee.py` est l'instrument qui répond à cette
    question par un balayage AST — c'est faisable, ce n'est pas une affaire de vigilance.
-2. **La date de retrait est-elle celle des chemins ?** Elles avaient été liées ici par
+2. **Le retrait est-il celui des chemins ?** Leurs dates avaient été liées ici par
    commodité et découplées le 10/09 : un chemin qui change rend un 308 (ça se voit), une
    clé qui disparaît ne rend rien. Deux modes d'échec, deux calendriers.
 3. **Qui porte le pont chez le consommateur, et qui le retirera ?** Un pont sans porteur
@@ -466,14 +553,14 @@ seule partie du chantier qu'un client ne peut pas ignorer.
 
 Ce qui RESTE dans la prose servie après B5 n'est plus de la prose : ce sont des
 **valeurs** qu'un agent passe ou lit — `kind=missing_doctrine`, le paramètre `doctrine` de `run_start`, `doctrine_id`. Elles
-vivent en base ou sont des alias datés ; elles partent au lot D.
+vivent en base ou sont des alias ; elles partent au lot D, à compteur nul.
 
 ## Ce qu'un consommateur doit faire
 
 1. **Lire la liste ci-dessus** et chercher les anciens noms dans son code.
 2. **Basculer sur le nouveau nom** — il répond déjà, aujourd'hui, à l'identique.
-3. Ne pas attendre le retrait pour le découvrir : après le tag, l'ancien nom ne
-   répond plus du tout.
+3. Ne pas attendre le retrait pour le découvrir : il sera annoncé avec un préavis
+   daté, puis l'ancien nom ne répondra plus du tout.
 
 ## Comment c'est fait, côté serveur
 
@@ -506,8 +593,9 @@ répond **308** vers le nouveau. Quatre crans, chacun payé par un incident poss
 - **Les alias sont montés EN DERNIER.** Un alias ne peut alors capturer que ce que
   rien d'autre ne sert : impossible qu'un de ses placeholders éclipse une vraie route.
 
-L'ancien chemin porte aussi `Deprecation: true` et `Sunset: <date>` — un intégrateur
-qui lit ses logs voit la date sans ouvrir cette page.
+L'ancien chemin porte aussi `Deprecation: true` — un intégrateur qui lit ses logs voit
+la dépréciation sans ouvrir cette page —, **sans `Sunset`** (décision du 23/11/2026).
+Chaque redirection laisse sa ligne au journal `tool_calls` (§Mesurer l'usage).
 
 **Les outils MCP** : le doublage se fait au **bord du protocole**, dans
 `ToolAliasMiddleware` (`oto_mcp/middleware/alias.py`), le middleware le plus externe

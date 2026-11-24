@@ -184,7 +184,7 @@ def test_rest_delete_journals_previous_status(monkeypatch):
     _mount(monkeypatch, store)
 
     call("me.datastore.delete_row",
-         path_params={"datastore": "leads-clients", "row_id": "row-1"})
+         path_params={"datastore": "160", "row_id": "row-1"})
 
     assert written[0]["tool"] == "data_delete_row"
     assert written[0]["args"]["from_status"] == "enrichi"
@@ -498,7 +498,7 @@ def test_datastore_activity_is_a_capability_not_a_handwritten_route():
 # au tenant pour ne pas fuiter, il change au renommage, et `slot:<name>` échappait.
 
 def test_resolve_notes_the_entity_whatever_the_agent_typed(monkeypatch):
-    """`data_write("leads-clients")` et `data_write("160")` visent le même tableau :
+    """`data_write("160")` et `data_write("slot:vivier")` visent le même tableau :
     le relevé porte l'id résolu dans les deux cas."""
     from oto_mcp import ownership, session_org
     from oto_mcp.datastore.core import DatastorePg
@@ -510,7 +510,7 @@ def test_resolve_notes_the_entity_whatever_the_agent_typed(monkeypatch):
     st = DatastorePg("u-1", acting_org=35)
     monkeypatch.setattr(st, "_active_scope", lambda: ([35], []))
 
-    for typed in ("leads-clients", "160", "slot:vivier"):
+    for typed in ("160", "slot:vivier"):
         holder: dict = {}
         tok = session_org.set_call_trace(holder)
         try:
@@ -534,7 +534,7 @@ def test_resolve_leaves_no_trace_when_access_is_refused(monkeypatch):
     tok = session_org.set_call_trace(holder)
     try:
         with pytest.raises(DatastoreNotFound):
-            st._resolve("le-tableau-d-une-autre-org")
+            st._resolve("999999999")
     finally:
         session_org.reset_call_trace(tok)
     assert holder == {}
@@ -553,7 +553,7 @@ def test_resolve_is_inert_outside_an_mcp_call(monkeypatch):
     st = DatastorePg("u-1", acting_org=35)
     monkeypatch.setattr(st, "_active_scope", lambda: ([35], []))
     assert session_org.current_call_trace() is None
-    assert st._resolve("leads-clients") == 160     # ne lève pas
+    assert st._resolve("160") == 160     # ne lève pas
 
 
 def test_the_trace_survives_the_threadpool():

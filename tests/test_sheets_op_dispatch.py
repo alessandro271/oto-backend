@@ -24,7 +24,7 @@ from oto_mcp.mcp_errors import McpError
 # « aucune autre ne l'a été ».
 WRITE_METHODS = ("write", "append", "clear")
 
-EXPECTED_TOOLS = {"sheets_create", "sheets_spreadsheet"}
+EXPECTED_TOOLS = {"sheets_create", "sheets_spreadsheet", "sheets_chart"}
 
 
 def _register():
@@ -64,7 +64,7 @@ def client(monkeypatch):
 
 # --- la surface elle-même ------------------------------------------------------
 
-def test_surface_is_exactly_the_two_consolidated_tools():
+def test_surface_is_exactly_the_consolidated_tools():
     """Un tool oublié en route (ou resté en double) se voit ici, pas en prod."""
     assert {t.name for t in asyncio.run(_register()._list_tools())} == EXPECTED_TOOLS
 

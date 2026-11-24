@@ -351,7 +351,7 @@ def test_get_guide_by_id_with_grant(monkeypatch):
     out = asyncio.run(oi._get_guide(ResolvedCtx(sub="client", org_id=35),
                                        oi.GuideGetInput(doctrine_id=77)))
     # l'org_id rendu = l'org PROPRIÉTAIRE du guide, pas l'org active du lecteur
-    assert out["org_id"] == 42 and out["doctrine_id"] == 77
+    assert out["org_id"] == 42 and out["guide_id"] == 77
     assert out["slug"] == "process" and out["body_md"] == "corps"
 
 

@@ -440,10 +440,9 @@ def _accept_invitation_row(inv: dict, sub: str, *,
 
 def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
     """Honore une invitation d'org par l'EMAIL au signup : si un nouvel inscrit a une
-    invitation d'org en attente pour son email vérifié, on l'accepte automatiquement
-    — il rejoint directement l'org au lieu de rester avec une invitation orpheline
-    (cas vécu : invité qui s'inscrit sans passer par le lien /invite). Sûr car l'email
-    est vérifié par Logto (signup email+code). None si aucune invitation.
+    invitation d'org de son tenant (`db.invitation_du_tenant_de`) en attente pour son
+    email vérifié selon le jeton (`upsert_user`), on l'accepte — il rejoint l'org au lieu
+    de garder une invitation orpheline (invité inscrit sans le lien /invite). None sinon.
 
     ⚠️ Une invitation REFUSÉE (#654) en est exclue par `_PENDING`, et c'est le point
     le plus facile à manquer : sans ça, refuser puis créer son compte avec la même
@@ -453,8 +452,9 @@ def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
     Les partages en attente d'UN objet (`resource_kind`) en sont exclus : ils ne
     rejoignent rien et se comptent par objet — `partage_en_attente.honorer_au_signup`
     les honore tous, à côté de cette invitation d'org."""
+    from .. import db  # la façade (le nom n'est pas lié à l'import)
     row = _pending_for_email(email)
-    if not row:
+    if not row or not db.invitation_du_tenant_de(row, sub):
         return None
     # Aucun clic : c'est le système qui honore l'invitation au signup.
     return _accept_invitation_row(row, sub, actor=None)

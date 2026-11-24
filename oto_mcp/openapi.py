@@ -171,7 +171,8 @@ laquelle un client décide), `detail` (la phrase, actionnable) et parfois `detai
 structurée). Les 4xx listés sur une opération sont ceux qu'elle DÉCLARE, chacun rejoué par
 un test ; la liste n'est pas exhaustive : tout appel peut rendre `400 invalid_input` /
 `unknown_fields` / `invalid_json` / `invalid_body` (validation de la requête par
-l'adaptateur), `401` et `403`.
+l'adaptateur), `401` et `403` ; et tout appel qui désigne un tableau, `400
+datastore_by_name` quand il le désigne par son NOM — un tableau se désigne par son numéro.
 
 ## Ce que ce document ne dit pas encore
 
@@ -532,8 +533,7 @@ def _handwritten(routes: Iterable, defs: Optional[dict] = None, *,
     # qui apparie par chemin, lisait alors la souche à la place de l'opération et
     # concluait que six opérations avaient perdu leurs paramètres. Elles ne les
     # avaient pas perdus : c'est le document qui décrivait mal la redirection.
-    alias = ({a.ancien for a in deprecations.REST}
-             | {a.ancien for a in deprecations.alias_rest_derives()})
+    alias = {a.ancien for a in deprecations.alias_rest_derives()}
     for route in routes or ():
         path = getattr(route, "path", None)
         methods = getattr(route, "methods", None)
@@ -568,30 +568,29 @@ def _handwritten(routes: Iterable, defs: Optional[dict] = None, *,
 
 
 def _alias_deprecies() -> dict:
-    """Les anciens chemins, décrits comme ce qu'ils sont : **dépréciés et datés**.
+    """Les anciens chemins, décrits comme ce qu'ils sont : **dépréciés, sans date**.
 
-    Ils sont DÉCLARÉS (`deprecations.REST`), pas relevés dans la table vivante :
-    un intégrateur qui lit ce document doit y voir la date de retrait même quand
-    le document est bâti sans table de routes.
+    Ils sont DÉRIVÉS des capacités (`deprecations.alias_rest_derives`), pas relevés
+    dans la table vivante : un intégrateur qui lit ce document doit y voir la
+    dépréciation même quand le document est bâti sans table de routes.
 
-    Trois choses que l'entrée porte et qu'un `deprecated: true` seul ne dirait pas :
-    le chemin de REMPLACEMENT (sinon « déprécié » n'est qu'un reproche), la DATE
-    (sinon rien ne dit quand agir), et l'`operationId` HISTORIQUE — le nom de méthode
-    qu'un client généré s'est donné, qu'on ne fait pas changer pour rien.
+    Ce que l'entrée porte et qu'un `deprecated: true` seul ne dirait pas : le chemin
+    de REMPLACEMENT (sinon « déprécié » n'est qu'un reproche). Son `operationId` est
+    dérivé de son chemin — celui de la capacité reste au nouveau chemin. Aucune date de retrait (ni dans le texte, ni
+    en en-tête `Sunset`) : le retrait sera daté par la PR qui le fera, avec un préavis
+    (décision du 23/11/2026).
     """
     out: dict = {}
-    for alias in tuple(deprecations.REST) + tuple(deprecations.alias_rest_derives()):
+    for alias in deprecations.alias_rest_derives():
         item = out.setdefault(_openapi_path(alias.ancien), {})
         item[alias.verbe.lower()] = {
-            "operationId": alias.operation_id or _handwritten_operation_id(
-                alias.verbe, alias.ancien),
+            "operationId": _handwritten_operation_id(alias.verbe, alias.ancien),
             "summary": f"Déprécié : utilisez {alias.nouveau} "
-                       f"(retrait le {deprecations._sunset(alias)})",
+                       f"(l'ancien chemin sera retiré avec un préavis)",
             "description": (
-                f"Ancien chemin, conservé le temps du préavis. Il répond **308** vers "
+                f"Ancien chemin, toujours servi. Il répond **308** vers "
                 f"`{alias.nouveau}` — même méthode, même corps, query string reportée "
-                f"— et **cesse de répondre au premier tag posé à partir du "
-                f"{deprecations._sunset(alias)}**. Bascule sur le nouveau chemin : "
+                f"— et sera retiré avec un préavis. Bascule sur le nouveau chemin : "
                 f"il sert déjà, à l'identique."),
             "deprecated": True,
             "tags": ["_deprecated"],
@@ -602,8 +601,8 @@ def _alias_deprecies() -> dict:
                 "308": {"description": f"Redirection permanente vers {alias.nouveau}",
                         "headers": {
                             "Location": {"schema": {"type": "string"}},
-                            "Sunset": {"description": "date de retrait (JJ/MM/AAAA)",
-                                       "schema": {"type": "string"}},
+                            "Deprecation": {"description": "`true` : chemin déprécié",
+                                            "schema": {"type": "string"}},
                         }},
             },
         }
@@ -656,16 +655,16 @@ def build(routes: Optional[Iterable] = None, *, server_url: Optional[str] = None
             item = paths.setdefault(_openapi_path(binding.path), {})
             item[binding.verb.lower()] = op          # la capacité prime sur le legacy
     # Noms de schéma d'HIER (#519) : un `$ref` vers celui d'aujourd'hui, marqué
-    # déprécié. Un client généré qui vise l'ancien nom continue de résoudre jusqu'au
-    # retrait — un `$ref` cassé, lui, fait échouer la génération ENTIÈRE du client,
+    # déprécié. Un client généré qui vise l'ancien nom continue de résoudre tant que
+    # l'alias est servi — un `$ref` cassé, lui, fait échouer la génération ENTIÈRE du client,
     # pas seulement le modèle visé.
     for ancien, actuel in deprecations.SCHEMAS.items():
         if actuel in schemas and ancien not in schemas:
             schemas[ancien] = {
                 "$ref": f"#/components/schemas/{actuel}",
                 "deprecated": True,
-                "description": f"Déprécié : utilisez `{actuel}` (retrait le "
-                               f"{deprecations.date_de_retrait()}).",
+                "description": f"Déprécié : utilisez `{actuel}` "
+                               f"({deprecations.PREAVIS_DE_RETRAIT}).",
             }
     doc = {
         "openapi": "3.1.0",

@@ -17,7 +17,8 @@ from typing import Literal, Optional
 from pydantic import BaseModel, field_validator
 
 from .. import config, db, email as mailer, org_store, outreach_optout, tenancy
-from ._authz import PLATFORM_ADMIN, SUB_ONLY
+from ._authz import PLATFORM_ADMIN, SERVICE_OU, SUB_ONLY
+from ..auth.service_identity import COMMERCE
 from ._lecture_bornee import bornee
 from ._types import (AuthzDenied, cap_limit, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
@@ -573,7 +574,7 @@ CAPABILITIES += [
     # Le premier appel de chaque org : l'horloge de l'essai d'un tenant qui facture
     # ses orgs (son service d'usage la fige de son côté, le journal expire à ~30 j).
     Capability(key="platform.usage.first_calls", handler=_first_calls, Input=FirstCallsInput,
-               Output=FirstCallsOut, authz=PLATFORM_ADMIN,
+               Output=FirstCallsOut, authz=SERVICE_OU(COMMERCE, PLATFORM_ADMIN),
                description="[platform admin] First journaled call (MCP or REST) of each "
                            "org in `org_ids` — null for an org that never called.",
                rest=RestBinding("GET", "/api/admin/usage/first-calls")),

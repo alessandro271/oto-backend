@@ -56,7 +56,7 @@ from .registry import CAPABILITIES
 
 PROJECT_RTYPE = "project"
 APP_RTYPE = "app"
-MAX_HTML = 512_000
+MAX_HTML = 1_000_000
 MAX_TITLE = 200
 MAX_PROJECTS = 200
 _THUMB_KEYS = {"image", "color", "emoji", "design"}

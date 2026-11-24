@@ -90,8 +90,15 @@ def _resout(m, adresse: str) -> int:
 
 def test_le_monde_porte_bien_deux_homonymes_atteignables(monde):
     """L'instrument d'abord : sans l'homonyme perso mieux classé, les tests suivants
-    seraient verts sur l'ancien code pour de mauvaises raisons."""
-    assert _resout(monde, "vivier") == monde["ns_perso"]
+    seraient verts sur l'ancien code pour de mauvaises raisons. Le store, lui, refuse
+    le nom depuis le 08/11/2026 : c'est le résolveur de la base qui montre l'homonyme."""
+    from oto_mcp import db
+    from oto_mcp.datastore.errors import TableauParNom
+    vu = db.resolve_datastore_ns("vivier", sub=monde["moi"], org_ids=[monde["org_a"]],
+                                 group_ids=[monde["equipe"]])
+    assert int(vu["id"]) == monde["ns_perso"]
+    with pytest.raises(TableauParNom):
+        _resout(monde, "vivier")
 
 
 # Pont ① — les LIGNES d'un nœud-tableau (`node_rows`).
@@ -205,16 +212,17 @@ _RESOLVEURS_PAR_NOM = {"get_datastore", "resolve_datastore_ns", "resolve_datasto
 
 EXEMPTIONS = {
     ("oto_mcp/datastore/core.py", "_trouver"):
-        "l'adressage du store lui-même (`_resolve` le compose) : le nom (ou "
-        "l'identifiant) que l'APPELANT a tapé, résolu dans SA portée — c'est la règle, "
-        "pas un pont",
+        "l'adressage du store lui-même (`_resolve` le compose) : l'identifiant que "
+        "l'APPELANT a tapé, résolu dans SA portée — un nom y est refusé avant "
+        "(`TableauParNom`, 08/11/2026)",
     ("oto_mcp/db/projects.py", "list_project_links_many"):
         "LE lieu où un lien de projet posé par nom se résout, dans la portée du "
         "propriétaire de SON projet (groupe par groupe quand plusieurs projets se lisent "
         "en lot), ambiguïté refusée (#365)",
     ("oto_mcp/capabilities/projects.py", "_resolve_tableau_id"):
-        "normalisation nom→id À LA POSE du lien, sur les propriétaires du projet ; "
-        "l'identifiant retenu est rendu à qui pose le lien (`rewritten_from`)",
+        "retrouver sous son identifiant un lien STOCKÉ par nom avant la normalisation, "
+        "sur les propriétaires du projet (`_ref_canonizer`) ; un nom passé par "
+        "l'appelant est refusé avant (`datastore_by_name`)",
     ("oto_mcp/capabilities/_lignes_reservables.py", "cle_a_la_declaration"):
         "résolution nom→id À LA DÉCLARATION d'une automatisation, dans la portée du "
         "déclarant, ambiguïté refusée (#1067) ; l'identifiant retenu est gardé et servi",
@@ -222,6 +230,10 @@ EXEMPTIONS = {
         "reprise des automatisations d'avant #1067 qui ne gardent qu'un nom : refusée si "
         "l'ancienne règle et celle de la déclaration divergent, fixée au premier "
         "armement ou travail — à retirer quand plus aucune ne garde un nom",
+    ("oto_mcp/deprecations.py", "traduire_tableau"):
+        "le tampon de compatibilité, allumé par instance (`OTO_MCP_COMPAT_TABLEAU_PAR_NOM`) : "
+        "le nom TAPÉ par l'appelant, résolu dans SA portée active comme avant #1786, "
+        "au bord, avant le métier — à retirer avec l'entrée, au compteur zéro",
 }
 
 #: Les modules qui lisent un NŒUD. Aucune de leurs fonctions ne mêle le titre d'un

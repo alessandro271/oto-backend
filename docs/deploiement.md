@@ -136,10 +136,12 @@ l'extérieur ne joue deux fois le même travail**, par l'un de deux mécanismes 
   `transcription_worker` (`pending → running`, `FOR UPDATE SKIP LOCKED`),
   `jev_jobs_worker` (bail en base), `runner_tick` (compare-and-swap sur `next_due`).
 
-Les boucles qui n'écrivent qu'en base (`embed_worker`, `file_extract_worker`,
-`rank_backfill`, `formula_backfill`, `credits_echeances`) et le chien de garde local
-`hang_watch` n'ont ni l'un ni l'autre : en double, elles refont un travail idempotent, sans
-effet chez personne. Une boucle tierce neuve choisit l'un des deux mécanismes ;
+Les boucles qui n'écrivent qu'en base (`file_extract_worker`, `rank_backfill`,
+`formula_backfill`, `credits_echeances`) et le chien de garde local `hang_watch` n'ont ni
+l'un ni l'autre : en double, elles refont un travail idempotent, sans effet chez personne.
+`embed_worker` n'agit chez aucun tiers mais paie chaque appel à Mistral : il a les deux,
+le verrou de boucle et un bail par source (`db/embed_file.py`), plus un plafond de tokens
+par jour (`OTO_EMBED_PLAFOND_TOKENS_JOUR`). Une boucle tierce neuve choisit l'un des deux mécanismes ;
 `tests/test_verrou_de_boucle.py` le vérifie.
 
 ⚠️ Ce que le verrou ne fait pas : un processus **gelé** en plein tour (boucle d'événements

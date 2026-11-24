@@ -241,6 +241,13 @@ Refus nommés : `service_forbidden`, `service_machine_required`, `service_role_m
 `service_required`, `invalid_token`. Banc : `tests/test_service_identity_1068.py`.
 Les capacités ouvertes au rôle `commerce` : `docs/droits-declares.md` §L'API du commerce.
 
+**Routes d'administration ouvertes au service** (combinateur `_authz.SERVICE_OU(role, règle)`).
+Certaines routes `/api/admin/*` acceptent aussi le service de rôle `commerce`, sans
+route-sœur sous `/api/service/` : une identité de service posée → `SERVICE_ROLE` seule ;
+sinon → la règle de compte d'origine, inchangée (jeton `oto_` et session comme avant). Le
+service n'a pas de borne : il voit tous les tenants et toutes les orgs de l'instance, comme
+sur `/api/service/*`. Liste : `docs/rest-api.md` §Routes d'administration ouvertes au service.
+
 ## Coexistence multi-domaine (pré-cutover, 2026-07-02)
 
 Avant le cutover ADR 0040 (cf. ci-dessous), `mcp.oto.cx/mcp` servait le MCP en
