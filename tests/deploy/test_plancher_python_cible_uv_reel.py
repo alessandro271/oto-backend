@@ -195,10 +195,12 @@ def test_choix_au_patch_sur_le_vrai_uv(banc, tmp_path):
     son interpréteur ; au même choix, la montée suivante ne recrée rien. Deux patchs d'une
     même série ne sont pas éprouvés ici : il faudrait télécharger le second (les doublures
     le couvrent, tests/deploy/test_plancher_python_cible.py)."""
-    chemin = subprocess.run([UV, "python", "find", "--managed-python", "--no-config", NOUVEAU],
-                            capture_output=True, text=True, check=True,
-                            env={**os.environ, "UV_PYTHON_DOWNLOADS": "never"}).stdout.strip()
-    exacte = _patch(chemin)
+    # Le patch est celui que la fixture a copié dans les interpréteurs du rôle — pas ce que
+    # `uv python find` trouverait sur la machine (un Python du runner peut avoir un autre patch).
+    poses = sorted(d.name.split("-")[1] for d in (banc.racine / "opt/exemple/python").iterdir()
+                   if d.name.startswith(f"cpython-{NOUVEAU}.") and not d.is_symlink())
+    assert len(poses) == 1, poses
+    exacte = poses[0]
     _monter(banc, "v1.0.0")
     _monter(banc, "v1.1.0")
     doc = json.loads(DECLARATION.read_text())
