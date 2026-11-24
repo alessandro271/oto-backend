@@ -67,6 +67,12 @@
 # Son pendant pour `--rollback` : `bg_garde_avant_retour <arbre>`, appelée AVANT de
 # redémarrer la couleur précédente ; même contrat (deploy/cible/deployer.sh y vérifie que
 # la base est à la tête que connaît ce code, #1195).
+# Et, avant l'installation : `bg_avant_installation <couleur> <arbre>`, appelée sur la seule
+# couleur qu'une montée va installer, après l'attente de vidange et l'arrêt de cette
+# couleur, AVANT `bg_install` (donc avant tout `git reset`) ; jamais au `--rollback`. Même
+# contrat : un code non nul arrête tout, rien n'est installé. deploy/cible/deployer.sh y
+# recrée le venv de cette couleur quand le plancher Python du tag a changé — la couleur en
+# service, et donc le retour arrière, gardent le leur.
 # ============================================================================
 set -uo pipefail
 
@@ -442,6 +448,11 @@ bg_run() {
   else
     if [ "$BG_LANCEUR" = propage ]; then
       bg_propagate_start "$old" "$new" || bg_abort "$new" "propagation du lanceur en échec"
+    fi
+    if declare -F bg_avant_installation >/dev/null \
+       && ! bg_avant_installation "$new" "$(bg_tree "$new")"; then
+      bg_log "REFUS avant installation : rien n'est installé dans ${new} — ${BG_ENV} reste servie par ${old}, rien n'a basculé"
+      exit 1
     fi
     bg_install "$new" "$ref" || bg_abort "$new" "installation de ${ref} en échec"
     if [ "$BG_LANCEUR" = versionne ] && [ ! -f "$(bg_tree "$new")/deploy/lanceur_secrets.py" ]; then

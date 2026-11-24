@@ -117,8 +117,18 @@ for couleur in blue green; do
     uv venv --quiet --seed --python "$PYV" --python-preference only-managed "$arbre/.venv"
     amorce_log "venv Python ${PYV} créé dans ${arbre}"
   fi
-  version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
-  [ "$version" = "$PYV" ] || refus "$arbre/.venv est en Python $version, le tag exige $PYV — recréer ce venv"
+  # Un venv hors du plancher du tag se DIT, et c'est tout : l'amorce ne le recrée ni ne
+  # le refuse. Elle tourne à chaque montée, à chaque retour arrière et avant la
+  # maintenance — à ces moments, la couleur inactive est le RETOUR ARRIÈRE, et son venv
+  # est celui de la version qu'elle porte. Refuser ici bloquerait toute montée dès que le
+  # plancher change (les deux couleurs ne changent jamais de Python ensemble), et tout
+  # retour vers la couleur d'avant. Le venv d'une couleur est recréé au plancher par la
+  # montée qui l'INSTALLE, et elle seule (`bg_avant_installation`, deploy/cible/deployer.sh).
+  version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null) \
+    || version="illisible"
+  if [ "$version" != "$PYV" ]; then
+    amorce_log "${arbre}/.venv est en Python ${version}, le plancher du tag est ${PYV} — laissé tel quel ; recréé par la montée qui installera cette couleur"
+  fi
 done
 
 # --- naissance : la couleur « en service » d'un rôle qui n'a jamais servi est bleue ;

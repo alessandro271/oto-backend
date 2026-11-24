@@ -28,9 +28,15 @@ if [ "$1" = -u ] && [ -n "${2:-}" ]; then [ -e "$BANC_RACINE/utilisateurs/$2" ] 
 echo 0''',
     "useradd": r'''mkdir -p "$BANC_RACINE/utilisateurs"; touch "$BANC_RACINE/utilisateurs/${!#}"''',
     "uv": r'''
+# `venv` : l'interpréteur du venv est la version DEMANDÉE (`--python X`), sauf dictée
+# (`BANC_PYV`, un uv qui servirait autre chose) ; comme le vrai, refuse un dossier existant.
 if [ "$1" = venv ]; then
-  cible="${!#}"; mkdir -p "$cible/bin"
-  printf '#!/bin/bash\necho %s\n' "${BANC_PYV:-3.10}" > "$cible/bin/python"; chmod +x "$cible/bin/python"
+  cible="${!#}" version=""; prec=""
+  for a in "$@"; do [ "$prec" = --python ] && version=$a; prec=$a; done
+  [ -e "$cible" ] && { echo "uv : $cible existe déjà" >&2; exit 2; }
+  [ -n "${BANC_UV_VENV_KO:-}" ] && { mkdir -p "$cible"; echo "uv : interpréteur $version introuvable" >&2; exit 2; }
+  mkdir -p "$cible/bin"
+  printf '#!/bin/bash\necho %s\n' "${BANC_PYV:-${version:-3.10}}" > "$cible/bin/python"; chmod +x "$cible/bin/python"
 fi
 # `sync --frozen` (oto-backend#932) : comme le vrai, refuse un arbre sans verrou.
 if [ "$1" = sync ]; then [ -f uv.lock ] || { echo "uv : pas de uv.lock dans $(pwd)" >&2; exit 2; }; fi''',
@@ -51,8 +57,19 @@ esac
 for a in "$@"; do case "$a" in --short) echo 0123456; exit 0 ;; HEAD) echo "$BANC_SHA"; exit 0 ;; esac; done''',
     "caddy": "exit 0",
     # Aucune vidange ne tourne (unité `*-vidange`) : la montée n'a rien à attendre.
+    # Les unités de couleur ont un état : `start` les rend actives, `stop` les arrête ;
+    # `BANC_UNITE_ACTIVE` en garde une active malgré un `stop` (un arrêt qui n'a pas pris).
     "systemctl": r'''case "$1 $3" in "is-active "*-vidange*) exit 3 ;; esac
-[ "$1" = is-active ] && [ -n "${BANC_DEMARRAGE_KO:-}" ] && exit 3; exit 0''',
+etat="$BANC_RACINE/unites-actives"; mkdir -p "$etat"
+case "$1" in
+  start) touch "$etat/$2" ;;
+  stop) rm -f "$etat/$2" ;;
+  is-active)
+    [ -n "${BANC_DEMARRAGE_KO:-}" ] && exit 3
+    [ "$3" = "${BANC_UNITE_ACTIVE:-}" ] && exit 0
+    case "$3" in *@blue|*@green) [ -e "$etat/$3" ] || exit 3 ;; esac ;;
+esac
+exit 0''',
     "curl": r'''
 url=""; for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
 case "$url" in
