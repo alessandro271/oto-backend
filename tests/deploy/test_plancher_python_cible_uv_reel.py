@@ -71,17 +71,20 @@ def banc(tmp_path, uv_reel):
         f'#!/bin/bash\necho "uv $*" >> "$BANC_TRACE"\nexec {UV} --no-config "$@"\n')
     # Les interpréteurs gérés du rôle sont ceux déjà posés par uv sur la machine : l'amorce
     # les y « installe » sans rien télécharger.
-    # Un VRAI dossier jetable, où chaque interpréteur installé est relié un à un : uv y écrit
-    # ses liens de version mineure (`cpython-3.12-…`), jamais dans le dossier uv de la
-    # machine. Relier le dossier entier y faisait écrire `uv python install` (liens mineurs
-    # réécrits vers la racine jetable, effacée ensuite : tous les venvs de la machine cassés).
+    # Un VRAI dossier jetable, où les interpréteurs du banc sont COPIÉS : uv y écrit ses
+    # liens de version mineure (`cpython-3.12-…`), jamais dans le dossier uv de la machine.
+    # Relier le dossier entier y faisait écrire `uv python install` (liens mineurs réécrits
+    # vers la racine jetable, effacée ensuite : tous les venvs de la machine cassés) ; un lien
+    # par interpréteur n'est pas reconnu comme installé, et uv voudrait télécharger.
     pythons = pathlib.Path(subprocess.run([UV, "python", "dir"], capture_output=True,
                                           text=True, check=True).stdout.strip())
     dossier = banc.racine / "opt/exemple/python"
     dossier.mkdir(parents=True)
     for installe in pythons.iterdir():
-        if installe.name.startswith("cpython-") and installe.is_dir() and not installe.is_symlink():
-            (dossier / installe.name).symlink_to(installe)
+        serie = installe.name.split("-")[1] if installe.name.startswith("cpython-") else ""
+        if (serie.rsplit(".", 1)[0] in (ANCIEN, NOUVEAU) and serie.count(".") == 2
+                and installe.is_dir() and not installe.is_symlink()):
+            shutil.copytree(installe, dossier / installe.name, symlinks=True)
     _plancher(banc, ANCIEN)
     return banc
 
