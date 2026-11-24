@@ -12,8 +12,11 @@ like any other — its address, its auth (any mode the card allows, the per-memb
   name when the allowlist does not carry it.
 
 One short session per verb: `initialize` → `notifications/initialized` → the request →
-`DELETE` of the session (best effort). The answer may be JSON or an SSE stream; only the
-JSON-RPC answer to OUR id is read. Every request goes out under the egress guard, with
+`DELETE` of the session (best effort). Every request after the `initialize` carries the
+negotiated `MCP-Protocol-Version`, with or without a session id. The answer may be JSON
+or an SSE stream; only the JSON-RPC answer to OUR id is read. What the remote server
+writes (tool descriptions, text content, error messages) reaches the agent fenced as
+third-party data (`texte_tiers.cloture`). Every request goes out under the egress guard, with
 no redirect followed (a redirect would carry the key to a host nobody chose), and the
 body read is bounded.
 """
@@ -26,6 +29,7 @@ from typing import Any, Optional
 import requests
 
 from .. import egress
+from ..texte_tiers import cloture
 
 logger = logging.getLogger(__name__)
 
@@ -131,18 +135,29 @@ def _messages(r: requests.Response, corps: bytes) -> list[dict]:
     return out
 
 
+def _tiers(balise: str, texte: str, origine: str) -> str:
+    return cloture(balise, texte, origine=origine, lecture="data")
+
+
 class _Client:
     def __init__(self, url: str, session: requests.Session):
         self.url, self.s = url, session
         self.sid: Optional[str] = None
+        #: The protocol version the `initialize` settled on; sent on every request after.
+        self.version: Optional[str] = None
         self.n = 0
+
+    def _entetes(self) -> dict:
+        h: dict = {}
+        if self.sid:
+            h["Mcp-Session-Id"] = self.sid
+        if self.version:
+            h["MCP-Protocol-Version"] = self.version
+        return h
 
     def _post(self, payload: dict) -> requests.Response:
         h = {"Content-Type": "application/json",
-             "Accept": "application/json, text/event-stream"}
-        if self.sid:
-            h["Mcp-Session-Id"] = self.sid
-            h["MCP-Protocol-Version"] = PROTOCOL_VERSION
+             "Accept": "application/json, text/event-stream", **self._entetes()}
         try:
             r = self.s.post(self.url, data=json.dumps(payload), headers=h, timeout=TIMEOUT,
                             stream=True, allow_redirects=False)
@@ -178,10 +193,15 @@ class _Client:
                 continue
             if "error" in m:
                 err = m["error"] if isinstance(m["error"], dict) else {}
-                raise McpRefused("mcp_error",
-                                 f"The MCP server refused `{method}`: "
-                                 f"{str(err.get('message') or 'error')[:500]}")
-            return m.get("result")
+                raise McpRefused("mcp_error", f"The MCP server refused `{method}`."
+                                 + _tiers("remote-mcp-error",
+                                          str(err.get("message") or "error")[:500],
+                                          "Message written by the remote MCP server"))
+            res = m.get("result")
+            if method == "initialize":
+                v = res.get("protocolVersion") if isinstance(res, dict) else None
+                self.version = v if isinstance(v, str) and v else PROTOCOL_VERSION
+            return res
         raise McpRefused("mcp_no_answer",
                          f"The MCP server sent no answer to `{method}`.")
 
@@ -193,7 +213,7 @@ class _Client:
         if not self.sid:
             return
         try:
-            self.s.delete(self.url, headers={"Mcp-Session-Id": self.sid},
+            self.s.delete(self.url, headers=self._entetes(),
                           timeout=10, allow_redirects=False)
         # noqa: SILENT — fin de session de courtoisie : le serveur l'expire seul
         except requests.RequestException:
@@ -237,11 +257,31 @@ def _une_fois(fields: dict, row, fn):
 # --- the two verbs ---------------------------------------------------------------
 
 def _resume(t: dict) -> dict:
-    out = {"name": t.get("name"), "description": t.get("description"),
+    desc = t.get("description")
+    out = {"name": t.get("name"),
+           "description": _tiers("remote-mcp-tool-description", str(desc),
+                                 "Tool description written by the remote MCP server")
+           if desc else desc,
            "input_schema": t.get("inputSchema") or {"type": "object"}}
     if isinstance(t.get("annotations"), dict):
         out["annotations"] = t["annotations"]
     return out
+
+
+def _contenu_cloture(bloc):
+    """A content block of a remote tool's answer, its text fenced as third-party data
+    (a `text` block, or the `text` of an embedded resource)."""
+    if not isinstance(bloc, dict):
+        return bloc
+    origine = "Content returned by the remote MCP server"
+    if bloc.get("type") == "text" and isinstance(bloc.get("text"), str):
+        return {**bloc, "text": _tiers("remote-mcp-content", bloc["text"], origine)}
+    res = bloc.get("resource")
+    if bloc.get("type") == "resource" and isinstance(res, dict) \
+            and isinstance(res.get("text"), str):
+        return {**bloc, "resource": {**res, "text": _tiers("remote-mcp-content",
+                                                           res["text"], origine)}}
+    return bloc
 
 
 def list_tools(fields: dict, row, definition: dict) -> dict:
@@ -280,7 +320,7 @@ def call_tool(fields: dict, row, definition: dict, name: Optional[str],
     def run(c: _Client) -> dict:
         res = c.request("tools/call", {"name": name, "arguments": arguments or {}}) or {}
         out = {"tool": name, "is_error": bool(res.get("isError")),
-               "content": res.get("content") or []}
+               "content": [_contenu_cloture(b) for b in (res.get("content") or [])]}
         if "structuredContent" in res:
             out["structured"] = res["structuredContent"]
         return out

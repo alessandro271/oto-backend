@@ -42,6 +42,8 @@ class _Serveur:
     def __init__(self, sse=False, status=None):
         self.recus: list[tuple[dict, dict]] = []
         self.sse, self.status, self.fermee = sse, status, False
+        self.session_id: str | None = "sess-1"
+        self.version = api_mcp.PROTOCOL_VERSION
 
     def post(self, url, data=None, headers=None, timeout=None, stream=None,
              allow_redirects=None, **_):
@@ -55,8 +57,9 @@ class _Serveur:
             return _Rep(202)
         if m == "initialize":
             return _Rep(body={"jsonrpc": "2.0", "id": msg["id"],
-                              "result": {"protocolVersion": api_mcp.PROTOCOL_VERSION}},
-                        headers={"Mcp-Session-Id": "sess-1"})
+                              "result": {"protocolVersion": self.version}},
+                        headers={"Mcp-Session-Id": self.session_id}
+                        if self.session_id else {})
         if m == "tools/list":
             return _Rep(body={"jsonrpc": "2.0", "id": msg["id"], "result": {"tools": TOOLS}},
                         sse=self.sse)
@@ -177,3 +180,43 @@ def test_la_definition_accepte_la_liste_blanche():
     assert d.validate_definition({"mcp_tools": ["a", "a", "b.c"]}) == {"mcp_tools": ["a", "b.c"]}
     with pytest.raises(custom_ops.OperationsInvalid):
         d.validate_definition({"mcp_tools": "a"})
+
+
+def test_la_version_negociee_part_sur_chaque_requete_meme_sans_session(serveur):
+    serveur.session_id, serveur.version = None, "2025-03-26"
+    api_mcp.list_tools(CARD, None, {})
+    (_, init), *apres = serveur.recus
+    assert "MCP-Protocol-Version" not in init
+    assert [h.get("MCP-Protocol-Version") for _, h in apres] == ["2025-03-26"] * 2
+    assert all("Mcp-Session-Id" not in h for _, h in apres)
+
+
+def test_la_version_part_aussi_avec_la_session(serveur):
+    api_mcp.list_tools(CARD, None, {})
+    assert all(h.get("MCP-Protocol-Version") == api_mcp.PROTOCOL_VERSION
+               for _, h in serveur.recus[1:])
+
+
+def test_le_texte_du_serveur_distant_est_servi_comme_donnee(serveur):
+    out = api_mcp.call_tool(CARD, None, {}, "search_accounts", {"q": "acme"})
+    texte = out["content"][0]["text"]
+    assert texte.startswith("\n<remote-mcp-content>\nok search_accounts")
+    assert "UNTRUSTED DATA" in texte
+    desc = api_mcp.list_tools(CARD, None, {})["tools"][0]["description"]
+    assert "<remote-mcp-tool-description>\nSearch accounts\n" in desc
+
+
+def test_le_message_d_erreur_du_serveur_distant_est_servi_comme_donnee(serveur):
+    with pytest.raises(api_mcp.McpRefused) as e:
+        api_mcp._une_fois(CARD, None, lambda c: c.request("inconnue"))
+    assert e.value.code == "mcp_error"
+    assert "<remote-mcp-error>\nunknown\n</remote-mcp-error>" in e.value.message
+
+
+def test_une_ressource_embarquee_est_cloturee_le_reste_intact():
+    bloc = {"type": "resource", "resource": {"uri": "x://1", "text": "lis-moi"}}
+    out = api_mcp._contenu_cloture(bloc)
+    assert out["resource"]["uri"] == "x://1" and "<remote-mcp-content>" in \
+        out["resource"]["text"]
+    image = {"type": "image", "data": "AAAA", "mimeType": "image/png"}
+    assert api_mcp._contenu_cloture(image) == image
