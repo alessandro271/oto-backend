@@ -115,6 +115,10 @@ CAS = [
     ("POST", "/api/datastores/{ns}/rows/{rid}/comments", b'{"body":"a\\u0000b"}', _CORPS),
     ("POST", "/api/datastores/{ns}/rows", b'{"t":"a\\u0000b"}', _CORPS),
     ("POST", "/api/datastores/{ns}/rows", b'{"t":"\\ud800"}', _CORPS),
+    # `json.loads` lit aussi un substitut UTF-8 BRUT et un corps UTF-16 : le juge porte
+    # sur le corps décodé, pas sur les octets.
+    ("POST", "/api/datastores/{ns}/rows", b'{"t":"\xed\xa0\x80"}', _CORPS),
+    ("POST", "/api/datastores/{ns}/rows", '{"t":"a\\u0000b"}'.encode("utf-16"), _CORPS),
     # Ce qui doit rester servi : une paire complète, un antislash échappé.
     ("POST", "/api/datastores/{ns}/rows/{rid}/claim", b'{"worker":"w\\ud83d\\ude00"}', 200),
     ("POST", "/api/datastores/{ns}/rows", b'{"t":"\\\\u0000"}', 201),
