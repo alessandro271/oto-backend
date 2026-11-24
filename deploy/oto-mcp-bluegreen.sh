@@ -71,8 +71,12 @@
 # couleur qu'une montée va installer, après l'attente de vidange et l'arrêt de cette
 # couleur, AVANT `bg_install` (donc avant tout `git reset`) ; jamais au `--rollback`. Même
 # contrat : un code non nul arrête tout, rien n'est installé. deploy/cible/deployer.sh y
-# recrée le venv de cette couleur quand le plancher Python du tag a changé — la couleur en
+# recrée le venv de cette couleur quand il ne convient plus au tag — la couleur en
 # service, et donc le retour arrière, gardent le leur.
+# Son pendant, après l'installation : `bg_apres_installation <couleur> <arbre> <code>`,
+# appelée sur cette même couleur avec le code de `bg_install` (0 = installée), qu'il y ait
+# eu succès ou échec ; un code non nul fait de l'installation un échec. deploy/cible/
+# deployer.sh y retire l'ancien venv au succès, et remet code et venv d'avant à l'échec.
 # ============================================================================
 set -uo pipefail
 
@@ -454,7 +458,13 @@ bg_run() {
       bg_log "REFUS avant installation : rien n'est installé dans ${new} — ${BG_ENV} reste servie par ${old}, rien n'a basculé"
       exit 1
     fi
-    bg_install "$new" "$ref" || bg_abort "$new" "installation de ${ref} en échec"
+    local installe=0
+    bg_install "$new" "$ref" || installe=$?
+    if declare -F bg_apres_installation >/dev/null \
+       && ! bg_apres_installation "$new" "$(bg_tree "$new")" "$installe"; then
+      [ "$installe" != 0 ] || installe=1
+    fi
+    [ "$installe" = 0 ] || bg_abort "$new" "installation de ${ref} en échec"
     if [ "$BG_LANCEUR" = versionne ] && [ ! -f "$(bg_tree "$new")/deploy/lanceur_secrets.py" ]; then
       bg_abort "$new" "${ref} ne porte pas le lanceur versionné (deploy/lanceur_secrets.py) — tag antérieur à #967"
     fi

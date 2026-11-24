@@ -39,10 +39,25 @@ if [ "$1" = venv ]; then
   printf '#!/bin/bash\necho %s\n' "${BANC_PYV:-${version:-3.10}}" > "$cible/bin/python"; chmod +x "$cible/bin/python"
 fi
 # `sync --frozen` (oto-backend#932) : comme le vrai, refuse un arbre sans verrou.
-if [ "$1" = sync ]; then [ -f uv.lock ] || { echo "uv : pas de uv.lock dans $(pwd)" >&2; exit 2; }; fi''',
+# `BANC_UV_SYNC_KO` : un `uv sync` qui échoue après avoir commencé à remplir le venv.
+if [ "$1" = sync ]; then
+  [ -f uv.lock ] || { echo "uv : pas de uv.lock dans $(pwd)" >&2; exit 2; }
+  if [ -n "${BANC_UV_SYNC_KO:-}" ]; then touch .venv/a-moitie-rempli; echo "uv : sync en échec" >&2; exit 2; fi
+fi''',
     "git": r'''
 if [ "$1" = clone ]; then mkdir -p "${!#}/.git"; echo "$3" > "${!#}/.git/origine"; exit 0; fi
 if [ "$1" = -C ] && [ "$3" = remote ]; then cat "$2/.git/origine"; exit 0; fi
+# `BANC_GIT_FETCH_KO` : le fetch de l'installation échoue (réseau, dépôt).
+if [ "$1" = fetch ] && [ -n "${BANC_GIT_FETCH_KO:-}" ]; then echo "git : fetch en échec" >&2; exit 1; fi
+# `BANC_GIT_TETES` : chaque arbre a sa tête (`.git/tete`), que `reset --hard <réf>` déplace
+# et que `rev-parse HEAD` lit ; sans elle, tout arbre est au sha du banc.
+if [ -n "${BANC_GIT_TETES:-}" ]; then
+  dossier=.; [ "$1" = -C ] && dossier=$2
+  case " $* " in
+    *" reset "*) echo "${!#}" > "$dossier/.git/tete" ;;
+    *" rev-parse HEAD "*) [ -f "$dossier/.git/tete" ] && { cat "$dossier/.git/tete"; exit 0; } ;;
+  esac
+fi
 # `reset --hard <tag>` : l'arbre prend le contenu du tag (ce que le déploiement lit).
 if [ "$1" = reset ]; then
   mkdir -p deploy && cp "$BANC_TAG/deploy/lanceur_secrets.py" deploy/ \

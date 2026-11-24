@@ -56,6 +56,9 @@ def test_l_exemple_est_conforme(doc):
     # forme `<credential>_ID` d'une famille dynamique de l'inventaire : elle passe.)
     (lambda d: d["roles"]["prod"]["env"].update(OTO_MCP_OAUTH_RELAY_HOSTS="mcp.x.test"),
      "OTO_MCP_OAUTH_RELAY_HOSTS : variable absente de l'inventaire"),
+    (lambda d: d.update(python="3"), "python : MAJEUR.MINEUR attendu"),
+    (lambda d: d.update(python=3.12), "python : MAJEUR.MINEUR attendu"),
+    (lambda d: d.update(python="3.12.4"), "python : MAJEUR.MINEUR attendu"),
     (lambda d: d["roles"]["prod"].update(secrets_optionnels=["OTO_ENV"]),
      "OTO_ENV n'est pas un secret facultatif"),
     (lambda d: d["roles"]["prod"].update(secrets_optionnels=["DATABASE_URL"]),
@@ -109,6 +112,15 @@ def test_tout_se_derive_du_nom_et_du_role(doc):
     # Chaque chemin est sous un préfixe fixe, jamais une valeur de la déclaration.
     for cle in ("BG_TREE", "BG_UPSTREAM", "BG_ACTIVE", "BG_LOCK", "BG_DRAIN", "CLE_SCW"):
         assert v[cle].startswith(("/opt/exemple/", "/etc/", "/var/lock/", "/usr/local/lib/exemple/"))
+
+
+def test_le_choix_d_interpreteur_est_facultatif(doc):
+    """`python` (MAJEUR.MINEUR) choisit l'interpréteur des venvs ; absent, c'est le plancher
+    du tag (deploy/cible/deployer.sh)."""
+    assert decl.variables(doc, "prod")["PYTHON_CHOISI"] == ""
+    doc["python"] = "3.12"
+    decl.valider(doc)
+    assert decl.variables(doc, "prod")["PYTHON_CHOISI"] == "3.12"
 
 
 def test_un_role_non_declare_refuse(doc):

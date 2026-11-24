@@ -88,8 +88,8 @@ done
 [ "$(stat -c %a "$CLE_SCW")" = 600 ] || refus "$CLE_SCW doit être en 0600 (lue par systemd seul)"
 [ -f "$BG_CADDYFILE" ] || refus "$BG_CADDYFILE absent — Caddy n'est pas installé"
 
-PYV=$(grep -oP '^requires-python\s*=\s*">=\K[0-9]+\.[0-9]+' "$RACINE_TAG/pyproject.toml") \
-  || refus "plancher Python introuvable dans le pyproject du tag"
+PYV=$(python3 "$ICI/plancher_python.py" plancher "$RACINE_TAG/pyproject.toml") \
+  || refus "plancher Python illisible dans le pyproject du tag (motif ci-dessus)"
 
 # --- utilisateur de service : système, sans shell, sans maison — jamais root -----
 if ! id -u "$UTILISATEUR" >/dev/null 2>&1; then
@@ -104,6 +104,12 @@ install -d -m 0700 "$ETC_INSTANCE" "$ETC_ROLE"
 python3 "$ICI/declaration.py" ecrire "$DECLARATION" "$ROLE" / >/dev/null
 export UV_PYTHON_INSTALL_DIR="$PYTHONS"
 uv python install --quiet "$PYV"
+# L'interpréteur que l'instance choisit (`python` de la déclaration), en plus du plancher :
+# la montée y recrée le venv de la couleur qu'elle installe (deploy/cible/deployer.sh), qui
+# refuse, avant cette amorce, un choix que le tag n'admet pas. L'amorce, elle, ne refuse rien.
+if [ -n "$PYTHON_CHOISI" ] && [ "$PYTHON_CHOISI" != "$PYV" ]; then
+  uv python install --quiet "$PYTHON_CHOISI"
+fi
 
 for couleur in blue green; do
   arbre="${BG_TREE}-${couleur}"
@@ -117,17 +123,18 @@ for couleur in blue green; do
     uv venv --quiet --seed --python "$PYV" --python-preference only-managed "$arbre/.venv"
     amorce_log "venv Python ${PYV} créé dans ${arbre}"
   fi
-  # Un venv hors du plancher du tag se DIT, et c'est tout : l'amorce ne le recrée ni ne
-  # le refuse. Elle tourne à chaque montée, à chaque retour arrière et avant la
-  # maintenance — à ces moments, la couleur inactive est le RETOUR ARRIÈRE, et son venv
-  # est celui de la version qu'elle porte. Refuser ici bloquerait toute montée dès que le
-  # plancher change (les deux couleurs ne changent jamais de Python ensemble), et tout
-  # retour vers la couleur d'avant. Le venv d'une couleur est recréé au plancher par la
-  # montée qui l'INSTALLE, et elle seule (`bg_avant_installation`, deploy/cible/deployer.sh).
-  version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null) \
+  # Un venv que le `requires-python` du tag n'admet pas se DIT, et c'est tout : l'amorce
+  # ne le recrée ni ne le refuse. Elle tourne à chaque montée, à chaque retour arrière et
+  # avant la maintenance — à ces moments, la couleur inactive est le RETOUR ARRIÈRE, et son
+  # venv est celui de la version qu'elle porte. Refuser ici bloquerait toute montée dès que
+  # le plancher change (les deux couleurs ne changent jamais de Python ensemble), et tout
+  # retour vers la couleur d'avant. Même règle que la montée, qui recrée le venv de la
+  # couleur qu'elle INSTALLE, et d'elle seule (`bg_avant_installation`,
+  # deploy/cible/deployer.sh) : un venv qui satisfait le `requires-python` reste tel quel.
+  version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null) \
     || version="illisible"
-  if [ "$version" != "$PYV" ]; then
-    amorce_log "${arbre}/.venv est en Python ${version}, le plancher du tag est ${PYV} — laissé tel quel ; recréé par la montée qui installera cette couleur"
+  if [ "$version" = illisible ] || ! python3 "$ICI/plancher_python.py" satisfait "$RACINE_TAG/pyproject.toml" "$version"; then
+    amorce_log "${arbre}/.venv est en Python ${version}, que le requires-python du tag n'admet pas (plancher ${PYV}) — laissé tel quel ; recréé par la montée qui installera cette couleur"
   fi
 done
 

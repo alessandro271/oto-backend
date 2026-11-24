@@ -31,6 +31,25 @@ DECLARATION=$1 ACTION=$2 ROLE=$3 TAG=$4
 VARIABLES=$(python3 "$ICI/declaration.py" variables "$DECLARATION" "$ROLE") || exit 1
 eval "$VARIABLES"
 
+# --- le Python du tag (`requires-python`, évalué par deploy/cible/plancher_python.py) et
+# --- celui que l'instance choisit (`python` de la déclaration, facultatif). Un choix qui ne
+# --- satisfait pas le `requires-python` du tag est refusé ici, avant toute action ; jamais
+# --- au retour, qui ne recrée rien.
+PLANCHER_PY="$ICI/plancher_python.py"
+PYPROJECT_DU_TAG="$ICI/../../pyproject.toml"
+PYV=$(python3 "$PLANCHER_PY" plancher "$PYPROJECT_DU_TAG") \
+  || { echo "déploiement : REFUS — plancher Python illisible dans le pyproject du tag (motif ci-dessus)" >&2; exit 1; }
+PY_VISEE=${PYTHON_CHOISI:-$PYV}
+if [ "$ACTION" = deployer ] && [ -n "$PYTHON_CHOISI" ]; then
+  python3 "$PLANCHER_PY" satisfait "$PYPROJECT_DU_TAG" "$PYTHON_CHOISI"
+  case $? in
+    0) ;;
+    1) echo "déploiement : REFUS — l'instance choisit Python ${PYTHON_CHOISI} (« python » de la déclaration), que le requires-python de ${TAG} n'admet pas : rien n'est touché" >&2
+       exit 1 ;;
+    *) exit 1 ;;
+  esac
+fi
+
 bash "$ICI/amorcer.sh" "$DECLARATION" "$ROLE" || { echo "déploiement : amorce en échec, rien n'a basculé" >&2; exit 1; }
 
 # --- les commandes du lanceur d'un arbre, hors service : mêmes fichiers d'environnement et
@@ -69,50 +88,100 @@ bg_garde_avant_retour() {
   return 1
 }
 
-# --- le venv de la couleur qu'on INSTALLE suit le plancher Python du tag. Appelée par la
-# --- bibliothèque bleu/vert sur cette seule couleur, après l'attente de vidange et son arrêt,
-# --- AVANT `bg_install` (donc avant le `git reset`) — jamais au retour arrière. L'amorce,
-# --- elle, ne fait que dire l'écart : elle tourne aussi quand la couleur inactive est le
-# --- retour arrière. Même version : rien. Sinon le venv est recréé à l'identique de sa
-# --- naissance (amorcer.sh), sur l'interpréteur géré par uv que l'amorce vient de poser,
-# --- jamais le Python du système ; `uv sync --frozen` le remplit ensuite. Refus, sans rien
-# --- toucher, si la couleur sert ou pourrait servir : son unité tourne, ou le pointeur est
-# --- illisible ou la désigne.
-PYV=$(grep -oP '^requires-python\s*=\s*">=\K[0-9]+\.[0-9]+' "$ICI/../../pyproject.toml") \
-  || { echo "déploiement : REFUS — plancher Python introuvable dans le pyproject du tag" >&2; exit 1; }
+# --- le venv de la couleur qu'on INSTALLE suit le Python du tag et de l'instance. Appelée
+# --- par la bibliothèque bleu/vert sur cette seule couleur, après l'attente de vidange et
+# --- son arrêt, AVANT `bg_install` (donc avant le `git reset`) — jamais au retour arrière.
+# --- L'amorce, elle, ne fait que dire l'écart : elle tourne aussi quand la couleur inactive
+# --- est le retour arrière. La règle (docs/instance-cible.md, § Changer de Python) : le
+# --- venv est recréé si sa version ne satisfait pas le `requires-python` du tag, ou si elle
+# --- diffère du choix de l'instance (`python` de la déclaration) ; la version visée est ce
+# --- choix, à défaut le plancher. Sinon : rien. Recréé à l'identique de sa naissance
+# --- (amorcer.sh), sur l'interpréteur géré par uv que l'amorce vient de poser, jamais le
+# --- Python du système ; `uv sync --frozen` le remplit ensuite. Refus, sans rien toucher,
+# --- si la couleur sert ou pourrait servir : son unité tourne, ou le pointeur est
+# --- illisible ou la désigne. L'ancien venv est GARDÉ jusqu'à ce que l'installation
+# --- réussisse (`bg_apres_installation`) : en cas d'échec, la couleur redevient ce
+# --- qu'elle était — code et venv ensemble —, donc un retour arrière valable.
 bg_avant_installation() {
-  local couleur=$1 arbre=$2 version actif
+  local couleur=$1 arbre=$2 version mm actif code majeur mineur
+  AVANT_PLANCHER_ARBRE="" AVANT_PLANCHER_TETE="" AVANT_PLANCHER_VERSION=""
   if [ -x "$arbre/.venv/bin/python" ]; then
-    version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null) \
+    version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null) \
       || version="illisible"
   else
     version="absent"
   fi
-  [ "$version" = "$PYV" ] && return 0
-  # Le plancher change, et seulement alors : les interpréteurs gérés du rôle (posés par
+  mm=$version
+  case "$version" in
+    absent|illisible) ;;
+    *)
+      IFS=. read -r majeur mineur _ <<< "$version"; mm="${majeur}.${mineur}"
+      python3 "$PLANCHER_PY" satisfait "$PYPROJECT_DU_TAG" "$version"; code=$?
+      [ "$code" -le 1 ] || return 1
+      if [ "$code" = 0 ] && { [ -z "$PYTHON_CHOISI" ] || [ "$mm" = "$PYTHON_CHOISI" ]; }; then
+        return 0
+      fi ;;
+  esac
+  # Le venv change, et seulement alors : les interpréteurs gérés du rôle (posés par
   # l'amorce), et eux seuls — pour le venv recréé ici, et pour le `uv sync` de
-  # l'installation qui suit (même shell), s'il devait en recréer un. À plancher égal,
+  # l'installation qui suit (même shell), s'il devait en recréer un. Sinon,
   # l'environnement de l'installation reste celui d'avant.
   export UV_PYTHON_INSTALL_DIR="$PYTHONS" UV_PYTHON_PREFERENCE=only-managed
   actif=$(bg_active) || { echo "déploiement : REFUS — pointeur de couleur illisible, le venv de ${arbre} n'est pas touché" >&2; return 1; }
   if [ "$actif" = "$couleur" ]; then
-    echo "déploiement : REFUS — ${couleur} est la couleur en service, son venv (Python ${version}) n'est pas touché" >&2
+    echo "déploiement : REFUS — ${couleur} est la couleur en service, son venv (Python ${mm}) n'est pas touché" >&2
     return 1
   fi
   if systemctl is-active --quiet "${BG_UNIT}@${couleur}"; then
-    echo "déploiement : REFUS — ${BG_UNIT}@${couleur} tourne encore, son venv (Python ${version}) n'est pas touché" >&2
+    echo "déploiement : REFUS — ${BG_UNIT}@${couleur} tourne encore, son venv (Python ${mm}) n'est pas touché" >&2
     return 1
   fi
   rm -rf "$arbre/.venv.avant-plancher"
-  [ ! -e "$arbre/.venv" ] || mv "$arbre/.venv" "$arbre/.venv.avant-plancher" || return 1
-  if ! uv venv --quiet --seed --python "$PYV" --python-preference only-managed "$arbre/.venv"; then
+  if [ -e "$arbre/.venv" ]; then
+    AVANT_PLANCHER_TETE=$(git -C "$arbre" rev-parse HEAD) \
+      || { echo "déploiement : REFUS — tête de ${arbre} illisible, son venv n'est pas touché" >&2; return 1; }
+    mv "$arbre/.venv" "$arbre/.venv.avant-plancher" || return 1
+    AVANT_PLANCHER_ARBRE=$arbre AVANT_PLANCHER_VERSION=$mm
+  fi
+  if ! UV_PYTHON_DOWNLOADS=never uv venv --quiet --seed --python "$PY_VISEE" --python-preference only-managed "$arbre/.venv"; then
     rm -rf "$arbre/.venv"
     [ ! -e "$arbre/.venv.avant-plancher" ] || mv "$arbre/.venv.avant-plancher" "$arbre/.venv"
-    echo "déploiement : REFUS — venv Python ${PYV} non créé dans ${arbre} (l'ancien est remis)" >&2
+    AVANT_PLANCHER_ARBRE=""
+    echo "déploiement : REFUS — venv Python ${PY_VISEE} non créé dans ${arbre} (l'ancien est remis)" >&2
     return 1
   fi
-  rm -rf "$arbre/.venv.avant-plancher"
-  bg_log "venv ${version} → ${PYV} recréé dans ${arbre}"
+  bg_log "venv ${mm} → ${PY_VISEE} recréé dans ${arbre} (l'ancien est gardé jusqu'à la fin de l'installation)"
+}
+
+# --- après `bg_install` de la couleur dont le venv vient d'être recréé : succès, l'ancien
+# --- venv part ; échec (fetch, reset, `uv sync`, bac à sable), la couleur reprend son
+# --- code d'avant (`git reset --hard` sur sa tête d'avant, si l'installation l'avait déjà
+# --- déplacée) ET son venv d'avant, ensemble : elle reste le retour arrière. Si le code
+# --- ne peut pas être remis, le venv d'avant n'est pas remis non plus (code neuf + venv
+# --- ancien serait pire) : il reste dans `.venv.avant-plancher`, et le journal dit que
+# --- cette couleur n'est PAS un retour valable.
+bg_apres_installation() {
+  local couleur=$1 arbre=$2 code=$3 tete
+  [ -n "$AVANT_PLANCHER_ARBRE" ] && [ "$AVANT_PLANCHER_ARBRE" = "$arbre" ] || return 0
+  AVANT_PLANCHER_ARBRE=""
+  if [ "$code" = 0 ]; then
+    rm -rf "$arbre/.venv.avant-plancher"
+    return 0
+  fi
+  tete=$(git -C "$arbre" rev-parse HEAD 2>/dev/null) || tete=""
+  if [ "$tete" != "$AVANT_PLANCHER_TETE" ]; then
+    if ! git -C "$arbre" reset --quiet --hard "$AVANT_PLANCHER_TETE"; then
+      bg_log "ATTENTION : installation en échec et code d'avant (${AVANT_PLANCHER_TETE}) NON remis dans ${arbre} : ${couleur} n'est PAS un retour arrière valable ; venv d'avant (Python ${AVANT_PLANCHER_VERSION}) laissé dans ${arbre}/.venv.avant-plancher"
+      return 1
+    fi
+  fi
+  rm -rf "$arbre/.venv"
+  if ! mv "$arbre/.venv.avant-plancher" "$arbre/.venv"; then
+    bg_log "ATTENTION : installation en échec et venv d'avant NON remis dans ${arbre} : ${couleur} n'est PAS un retour arrière valable"
+    return 1
+  fi
+  bg_log "installation en échec : ${couleur} remise à son état d'avant (code ${AVANT_PLANCHER_TETE}, venv Python ${AVANT_PLANCHER_VERSION}) — elle reste le retour arrière"
+  return 1
 }
 
 # --- le bac à sable des fonctions : l'exécution de contrôle de l'installation passe par
