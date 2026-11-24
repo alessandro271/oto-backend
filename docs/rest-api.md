@@ -433,8 +433,10 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 - `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
 - `POST /api/admin/users/{sub}/reset-mfa` — super admin only ; efface TOUS les facteurs de
   double authentification d'un compte (récupération : appli ET codes de secours perdus,
-  aucun autre moyen de rentrer). La politique MFA de son org, si mandatoire, continue de
-  s'appliquer — il configurera un facteur neuf à sa prochaine connexion.
+  aucun autre moyen de rentrer). Toutes ses sessions et tous ses jetons `oto_` sont
+  fermés (`docs/auth-logto.md` §Double authentification changée). La politique MFA de son
+  org, si mandatoire, continue de s'appliquer — il configurera un facteur neuf à sa
+  prochaine connexion.
 - `POST /api/admin/users/{sub}/grants/{key_id}` body `{daily_quota}` — set/update quota par grant (admin only)
 - `GET|POST /api/me/tokens` + `DELETE …/{token_id}`, `GET|POST /api/admin/users/{sub}/tokens`
   + `DELETE …/{token_id}`, `GET|POST /api/admin/platform-keys` + `DELETE …/{provider}/{label}`
@@ -512,7 +514,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   fermée : les trois Zoho), `400 invalid_oauth_app` (app incomplète ou région inconnue).
   Lue par le consentement seul, jamais servie comme clé d'appel.
 - **Palier org** (100 % en CAPACITÉS — `capabilities/orgs*.py` ; ⚠️ cette ligne renvoyait à `api_routes_orgs.py` jusqu'au 2026-08-27, fichier **supprimé** lors de la migration : projection 1:1 des meta-tools `oto_admin_*org*` / `oto_list_orgs`) :
-  - self-service : `GET|POST /api/me/orgs` (**`POST` = `org.create` self-serve**, créateur→org_admin, cap `OTO_MCP_MAX_ORGS_PER_USER`) ; `GET /api/orgs/{id}` ; `POST|DELETE /api/orgs/{id}/members[/{sub}]` + `GET /api/orgs/{id}/members/events` (journal des entrées, sorties et changements de rôle, le plus récent d'abord, `limit`/`before_id` ; oto#145) + `PUT|DELETE /api/orgs/{id}/secrets/{provider}` (org_admin)
+  - self-service : `GET|POST /api/me/orgs` (**`POST` = `org.create` self-serve**, créateur→org_admin, cap `OTO_MCP_MAX_ORGS_PER_USER`) ; `GET /api/orgs/{id}` ; `POST|DELETE /api/orgs/{id}/members[/{sub}]` (`POST /members` sur un non-membre = une invitation à son adresse, `status: invited` ; il n'est membre qu'après l'avoir acceptée) + `GET /api/orgs/{id}/members/events` (journal des entrées, sorties et changements de rôle, le plus récent d'abord, `limit`/`before_id` ; oto#145) + `PUT|DELETE /api/orgs/{id}/secrets/{provider}` (org_admin)
   - **invitations — feature cascade plateforme/org/équipe** (le scope est DÉRIVÉ des cibles : org_id NULL = plateforme, org_id seul = org, org_id+group_id = équipe). Trois faces émettrices, une seule acceptation :
     - **org** : `POST|GET /api/orgs/{id}/invitations` + `DELETE …/{inv}` (org_admin ; `oto_org` op=invite). Le POST refuse en 409 une adresse déjà membre (`already_member`) ou déjà invitée avec une invitation valide (`already_invited`, l'existante dans `details`) — #622, 29/08/2026.
     - **équipe** : `POST|GET /api/groups/{id}/invitations` + `DELETE …/{inv}` (group_admin ; `oto_group` op=invite). L'invité rejoint l'org parente PUIS l'équipe à l'acceptation.

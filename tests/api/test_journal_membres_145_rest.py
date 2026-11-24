@@ -67,10 +67,20 @@ def monde(live):
         def __init__(self, sub):
             self.sub = sub
 
-    # Les gestes par les VRAIES capacités (celles que servent REST et MCP).
-    om._add_member(Ctx(ADMIN), om.AddMemberInput(org_id=o, target=MEMBRE))
-    om._add_member(Ctx(ADMIN), om.AddMemberInput(org_id=o, target=PARTANT))
-    om._add_member(Ctx(ADMIN), om.AddMemberInput(org_id=o, target=RETIRE))
+    # Les gestes par les VRAIES capacités (celles que servent REST et MCP). Ajouter un
+    # non-membre l'invite : il entre en acceptant, c'est donc lui qui agit.
+    from oto_mcp.auth import annuaire
+    from oto_mcp.capabilities.orgs import invites
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("OTO_INVITE_BASE_URL", "https://front.example.test")
+        mp.setattr(annuaire, "magic_url", lambda url, email, **_: url)
+        mp.setattr(invites.email_mod, "send_invite_email", lambda *a, **kw: True)
+        for sub in (MEMBRE, PARTANT, RETIRE):
+            out = om._add_member(Ctx(ADMIN), om.AddMemberInput(
+                org_id=o, target=f"{sub}@journal.invalid"))
+            assert out["status"] == "invited"
+            assert org_store.accept_invitation(
+                out["invite_url"].rsplit("/invitation/", 1)[1], sub)
     om._set_member_role(Ctx(ADMIN), om.SetMemberRoleInput(org_id=o, sub=MEMBRE,
                                                            role="org_admin"))
     # Re-ajout au MÊME rôle : aucun changement, aucune ligne.
@@ -102,9 +112,9 @@ def client(monde):
 def test_chaque_geste_ecrit_sa_ligne(monde):
     assert [_geste(e) for e in _journal(monde["o"])] == [
         (ADMIN, "added", None, "org_admin", ADMIN),
-        (MEMBRE, "added", None, "org_member", ADMIN),
-        (PARTANT, "added", None, "org_member", ADMIN),
-        (RETIRE, "added", None, "org_member", ADMIN),
+        (MEMBRE, "added", None, "org_member", MEMBRE),
+        (PARTANT, "added", None, "org_member", PARTANT),
+        (RETIRE, "added", None, "org_member", RETIRE),
         (MEMBRE, "role_changed", "org_member", "org_admin", ADMIN),
         # (le re-ajout au même rôle n'a rien écrit)
         (MEMBRE, "role_changed", "org_admin", "org_member", MEMBRE),

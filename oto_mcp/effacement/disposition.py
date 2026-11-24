@@ -123,6 +123,7 @@ NON_EXPORTEES: dict[str, Decision] = {
         "prescription (5 ans, Code civil art. 2224) sous le seul identifiant du compte, "
         "sans adresse IP ni navigateur"),
     "outreach_sends": effacer("nos relances envoyées à un compte qui part"),
+    "empreintes_2fa": effacer("empreinte de double authentification d'un compte qui part"),
     "outreach_optouts": effacer("refus de relance d'un compte qui part : sans objet, "
                                 "le compte n'existe plus"),
     "credit_payer_modes": effacer("qui paie dans l'org"),
