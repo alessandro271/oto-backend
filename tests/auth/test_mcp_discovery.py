@@ -144,6 +144,9 @@ def test_completer_l_app_ne_remplit_que_le_vide_et_l_ecrit_une_fois(web, monkeyp
     assert conn["oauth_client_id"] == d.client_document_url()
     assert conn["scope"] == "openid crm.read"              # the admin's, kept
     assert conn["resource"] == MCP and len(ecrits) == 1
+    # What the remote server announced stays marked as such; the admin's scope is not.
+    assert conn["discovered"] == ["authorize_url", "oauth_client_id", "resource",
+                                  "token_url"]
     assert d.complete_app(out, "sub-1") is out            # complete: no second discovery
 
 
@@ -256,3 +259,23 @@ def test_un_refus_d_egress_pendant_la_decouverte_remonte(web, monkeypatch):
     monkeypatch.setattr("oto_mcp.egress.check_url", check)
     with pytest.raises(egress.EgressRefused):
         d.discover(MCP)
+
+
+def test_un_champ_decouvert_que_l_admin_change_ou_vide_n_est_plus_marque(monkeypatch):
+    from oto_mcp.connectors import api_apps
+    monkeypatch.setattr("oto_mcp.egress.check_url", lambda *a, **k: None)
+    base = {"base_url": MCP, "protocol": "mcp", "auth_mode": "oauth2_user",
+            "authorize_url": "https://auth.example.test/oidc/auth",
+            "token_url": "https://auth.example.test/oidc/token",
+            "oauth_client_id": "cid", "discovered": ["authorize_url", "token_url"]}
+    garde = api_apps.valider_connexion({"scope": "openid"}, base=base)
+    assert garde["discovered"] == ["authorize_url", "token_url"]
+    meme = api_apps.valider_connexion({"token_url": base["token_url"]}, base=base)
+    assert meme["discovered"] == ["authorize_url", "token_url"]
+    saisi = api_apps.valider_connexion(
+        {"token_url": "https://auth.example.test/autre/token"}, base=base)
+    assert saisi["discovered"] == ["authorize_url"]
+    vide = api_apps.valider_connexion({"token_url": "", "authorize_url": ""}, base=base)
+    assert "discovered" not in vide
+    with pytest.raises(api_apps.AppRefused):    # never written through a route
+        api_apps.valider_connexion({"discovered": ["token_url"]}, base=base)

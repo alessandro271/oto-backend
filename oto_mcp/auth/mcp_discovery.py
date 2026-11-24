@@ -267,9 +267,14 @@ def complete_app(app: dict, by: Optional[str]) -> dict:
              "scope": meta["scope"], "resource": meta["resource"]}
     if not conn.get("oauth_client_id"):
         found["oauth_client_id"] = client_id_for(meta)
-    for k, v in found.items():
-        if v and not conn.get(k):
-            conn[k] = v
+    from ..connectors import api_apps
+    remplis = [k for k, v in found.items() if v and not conn.get(k)]
+    for k in remplis:
+        conn[k] = found[k]
+    # Ce que le serveur distant a annoncé reste marqué comme tel : son `token_url` est
+    # revérifié sans exception de sortie à chaque échange (`auth/api_oauth.py`).
+    conn[api_apps.DECOUVERTS] = sorted(set(conn.get(api_apps.DECOUVERTS) or []) |
+                                       set(remplis))
     saved = store.modifier(int(app["id"]), connection=conn, by=by)
     logger.info("custom api: MCP sign-in discovered for app #%s (%s)", app["id"],
                 urlsplit(meta["issuer"]).hostname)

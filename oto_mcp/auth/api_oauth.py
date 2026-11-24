@@ -223,12 +223,19 @@ def _corps_borne(r: requests.Response, host: str) -> bytes:
     return bytes(corps)
 
 
-def _token_request(token_url: str, data: dict) -> dict:
+def _token_request(token_url: str, data: dict, *, annoncee: bool) -> dict:
     """POST form to the token endpoint; refusals built by us (never `raise_for_status`,
     whose message carries the URL). The token URL is the final address: a redirect is
-    refused, never followed, and the answer read is bounded."""
+    refused, never followed, and the answer read is bounded. `annoncee` = the remote
+    MCP server announced this URL (discovery): it is checked with no declared egress
+    exception, at every exchange and every renewal; one the admin typed keeps the
+    platform's policy."""
     from .. import egress
-    egress.check_url(token_url, connector=CONNECTOR, field="token_url")
+    try:
+        egress.check_url(token_url, connector=CONNECTOR, field="token_url",
+                         exceptions_declarees=not annoncee)
+    except egress.EgressRefused as e:
+        raise oauth_flow.OAuthExchangeRefused(str(e)) from None
     host = urlsplit(token_url).hostname or "?"
     try:
         r = requests.post(token_url, data=data, timeout=_TIMEOUT, allow_redirects=False,
@@ -261,6 +268,23 @@ def _token_request(token_url: str, data: dict) -> dict:
     return body
 
 
+def _annoncee(app: Optional[dict], token_url: str) -> bool:
+    """The app's `token_url` came from the remote server (MCP discovery), and is the
+    one about to be called."""
+    from ..connectors import api_apps
+    conn = (app or {}).get("connection") or {}
+    return api_apps.est_decouvert(conn, "token_url") and conn.get("token_url") == token_url
+
+
+def _app_de_la_ligne(row: dict) -> Optional[dict]:
+    from ..db import api_apps as store
+    app_id = (row.get("meta") or {}).get(store.META_KEY)
+    try:
+        return store.get(int(app_id)) if app_id is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _pack(fields: dict) -> str:
     return credentials_store.pack_secret(CONNECTOR, fields)
 
@@ -281,7 +305,7 @@ def exchange_and_persist(d: dict, code: str) -> dict:
             "code_verifier": d["v"]}
     if c["resource"]:
         data["resource"] = c["resource"]
-    tokens = _token_request(c["token_url"], data)
+    tokens = _token_request(c["token_url"], data, annoncee=_annoncee(app, c["token_url"]))
     rt = tokens.get("refresh_token")
     if not rt:
         raise oauth_flow.CompletionRefused(
@@ -332,8 +356,9 @@ def _renouveler(ligne: tuple, fields: dict, *, reprise: bool = False) -> str:
                 "client_id": c["oauth_client_id"]}
         if c["resource"]:
             data["resource"] = c["resource"]
+        annoncee = _annoncee(_app_de_la_ligne(row), c["token_url"])
         try:
-            tokens = _token_request(c["token_url"], data)
+            tokens = _token_request(c["token_url"], data, annoncee=annoncee)
         except oauth_flow.OAuthExchangeRefused as e:
             if not oauth_flow.grant_is_dead(getattr(e, "status_code", 0),
                                             getattr(e, "body_text", "")):

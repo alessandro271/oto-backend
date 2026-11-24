@@ -56,6 +56,16 @@ KEY_FIELDS = ("token", "username", "password", "client_id", "client_secret",
               "refresh_token")
 #: Le mode où chaque membre se connecte lui-même au serveur d'autorisation de l'API.
 OAUTH_USER = "oauth2_user"
+#: Dans la connexion d'une application : les champs que la découverte MCP a remplis
+#: (`auth/mcp_discovery.complete_app`), donc annoncés par le serveur distant et non
+#: saisis par l'admin. Posé par la découverte seule (hors `CONNECTION_FIELDS`, aucune
+#: route ne l'écrit) ; un champ que l'admin change ou vide en sort.
+DECOUVERTS = "discovered"
+
+
+def est_decouvert(conn: dict, name: str) -> bool:
+    """`name` de cette connexion a été annoncé par le serveur distant."""
+    return name in (conn.get(DECOUVERTS) or [])
 _ACCOUNT_MAX = 80
 
 
@@ -86,6 +96,7 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
                          f"unknown connection field(s): {', '.join(unknown)} — an app "
                          f"holds {', '.join(CONNECTION_FIELDS)}; keys hold the secrets.")
     out = dict(base or {})
+    avant = dict(base or {})
     for k, v in given.items():
         v = "" if v is None else str(v)
         if k != "session":
@@ -94,6 +105,12 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
             out[k] = v.rstrip("/") if k == "base_url" else v
         else:
             out.pop(k, None)
+    garde = [k for k in (avant.get(DECOUVERTS) or [])
+             if out.get(k) and out.get(k) == avant.get(k)]
+    if garde:
+        out[DECOUVERTS] = garde
+    else:
+        out.pop(DECOUVERTS, None)
     mode = out.get("auth_mode", "")
     if mode not in api_card.AUTH_MODES:
         raise AppRefused(400, "invalid_app_connection",

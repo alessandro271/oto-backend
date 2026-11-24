@@ -9,7 +9,11 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from oto_mcp import egress
 from oto_mcp.auth import api_oauth, flow as oauth_flow
+
+#: The real guard, kept before the fixture replaces it.
+_GARDE = egress.check_url
 
 APP = {
     "id": 7, "org_id": 42, "account": "crm",
@@ -137,6 +141,9 @@ def coffre(monkeypatch):
                         c.get_credential_with_meta)
     # `completer_la_pose` looks for an existing unbound card of the same name.
     monkeypatch.setattr("oto_mcp.db.api_apps.ligne", lambda *a: None)
+    # Renewal reads the key's app (its `token_url` origin) by the row's `meta.api_app`.
+    c.apps = {7: APP}
+    monkeypatch.setattr("oto_mcp.db.api_apps.get", lambda i: c.apps.get(int(i)))
 
     @contextmanager
     def _verrou(ligne):
@@ -375,3 +382,57 @@ def test_un_refus_au_retour_ne_range_rien(monkeypatch, coffre, retour):
     issue, _ = terminer(api_oauth.CALLBACK_PATH, {"error": "access_denied",
                                                   "state": state})
     assert issue == "denied" and not coffre.rows
+
+
+# --- a token URL the remote server announced: no declared egress exception --------
+
+INTERNE = "https://auth.interne.test/oidc/token"
+DECOUVERTE = {**APP, "connection": {**APP["connection"], "token_url": INTERNE,
+                                     "discovered": ["authorize_url", "token_url"]}}
+SAISIE = {**APP, "connection": {**APP["connection"], "token_url": INTERNE}}
+
+
+@pytest.fixture
+def pont_declare(monkeypatch, dns_simule):
+    """`auth.interne.test` is internal, reachable only through a declared exception."""
+    monkeypatch.setattr("oto_mcp.egress.check_url", _GARDE)
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://oto.example.test")
+    monkeypatch.setenv("OTO_EGRESS_ALLOW", "pont=10.0.0.7:443")
+    dns_simule.update({"auth.interne.test": {"10.0.0.7"}})
+
+
+def test_un_echange_vers_un_token_url_annonce_ne_prend_pas_d_exception(
+        monkeypatch, coffre, pont_declare):
+    monkeypatch.setattr("oto_mcp.db.api_apps.vivante", lambda org, account: DECOUVERTE)
+    envois = _poste(monkeypatch)
+    with pytest.raises(oauth_flow.OAuthExchangeRefused) as e:
+        api_oauth.exchange_and_persist(_etat(), "c")
+    assert "token_url" in str(e.value) and not envois and not coffre.rows
+
+
+def test_un_token_url_saisi_par_l_admin_garde_l_exception_declaree(
+        monkeypatch, coffre, pont_declare):
+    monkeypatch.setattr("oto_mcp.db.api_apps.vivante", lambda org, account: SAISIE)
+    envois = _poste(monkeypatch, _Rep(200, {"access_token": "at", "refresh_token": "rt",
+                                            "expires_in": 3600}))
+    assert api_oauth.exchange_and_persist(_etat(), "c")["account"] == "crm"
+    assert envois[0][0] == INTERNE
+
+
+def test_un_renouvellement_vers_un_token_url_annonce_ne_prend_pas_d_exception(
+        monkeypatch, coffre, pont_declare):
+    coffre.apps[7] = DECOUVERTE
+    champs = {**_pose(coffre), "token_url": INTERNE}
+    envois = _poste(monkeypatch)
+    with pytest.raises(api_oauth.ApiOAuthRefused) as e:
+        api_oauth.access_token_for(LIGNE, champs)
+    assert e.value.code == "api_oauth_renewal_refused"
+    assert not envois and not coffre.marques     # refused before sending, nothing marked
+
+
+def test_un_renouvellement_vers_un_token_url_saisi_garde_l_exception(
+        monkeypatch, coffre, pont_declare):
+    coffre.apps[7] = SAISIE
+    champs = {**_pose(coffre), "token_url": INTERNE}
+    envois = _poste(monkeypatch, _Rep(200, {"access_token": "at", "expires_in": 3600}))
+    assert api_oauth.access_token_for(LIGNE, champs) == "at" and len(envois) == 1

@@ -824,7 +824,9 @@ fois. Une session courte par verbe (`initialize`, `notifications/initialized`, l
 requête, `DELETE`), réponse JSON ou SSE, corps borné, **aucune redirection suivie**,
 `base_url` et `token_url` sous la garde d'egress. La définition porte une liste blanche
 `mcp_tools` (noms ; vide = tous) que l'admin pose : un outil hors liste est refusé avant
-tout envoi, et n'apparaît pas à la liste.
+tout envoi, et n'apparaît pas à la liste. Ce que le serveur distant écrit (descriptions,
+texte, `structuredContent` en JSON indenté, messages d'erreur) arrive à l'agent dans un
+bloc nommé de données tierces (`texte_tiers.cloture`).
 
 ### Un serveur MCP en `oauth2_user` se connecte comme Claude : sans clé ni client saisis (24/11/2026)
 
@@ -842,6 +844,12 @@ spec d'autorisation MCP) et l'ÉCRIT sur l'application (seuls les champs vides) 
    public, notre callback) si le serveur l'accepte ; sinon une inscription dynamique
    (RFC 7591, client public) ; sinon refus nommé `mcp_discovery_failed` — l'admin crée
    un client public et pose son ID.
+
+Les champs remplis par la découverte sont marqués dans la connexion (`discovered`,
+écrit par la découverte seule ; un champ que l'admin change ou vide en sort). Un
+`token_url` ainsi annoncé est revérifié par la garde d'egress **sans exception
+déclarée** à chaque échange de code et à chaque renouvellement ; celui que l'admin a
+saisi garde la politique de la plateforme.
 
 Changer l'adresse d'une telle app vers une autre origine efface ce qui avait été
 découvert (sauf valeurs neuves envoyées par l'admin) : rien n'est reporté d'un serveur à
