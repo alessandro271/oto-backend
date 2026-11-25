@@ -361,7 +361,8 @@ dit si la migration peut suivre.
 ### Retirer les références orphelines — `oto-mcp maintenance orphelins` (#905)
 
 Les lignes qui nomment un connecteur absent du catalogue servi (constat :
-`oto_admin_monitoring op=connecteurs_orphelins`) ne résolvent rien. La commande les
+`oto_admin_monitoring op=connecteurs_orphelins`, où l'ancien nom d'un connecteur renommé porte
+`renomme_en` et se compte à part dans `total_renommes`) ne résolvent rien. La commande les
 retire : installations, retraits et activations supprimés, noms retirés du kit des orgs
 (`array_remove`, les autres noms restent). **À blanc par défaut**, `--appliquer` pour
 écrire ; une transaction courte par table (15 s / 5 s de verrou), relue après coup,

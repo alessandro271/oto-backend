@@ -16,7 +16,10 @@ Ce module ne répare rien, il SIGNALE :
   outil, mais il ne disparaît plus sans un mot.
 - `constat()` : la lecture, seule et bornée, de TOUTES les tables qui nomment un
   connecteur, par table et par nom. Servie à l'admin plateforme par
-  `oto_admin_monitoring op=connecteurs_orphelins`.
+  `oto_admin_monitoring op=connecteurs_orphelins`. Un ANCIEN nom d'un connecteur renommé
+  (`providers.CONNECTEURS_RENOMMES`) y porte `renomme_en` : ses lignes sont les restes
+  d'une copie sous le nouveau nom, comptées à part (`total_renommes`), pas des clés de
+  propriétaires à prévenir.
 
 Hors de son périmètre : le catalogue en table et les clés étrangères (le neuf, ailleurs).
 
@@ -123,19 +126,32 @@ def constat() -> dict:
     """Les références orphelines de chaque table, par nom — lecture seule, bornée.
 
     `{"catalogue": n, "tables": [{"table", "connecteurs": [{"connecteur", "lignes"}]}],
-    "total": lignes}` ; une table sans orphelin figure avec une liste vide, pour qu'un
-    zéro se lise comme « regardé », jamais comme « oublié »."""
+    "total": lignes, "total_renommes": lignes}` ; une table sans orphelin figure avec une
+    liste vide, pour qu'un zéro se lise comme « regardé », jamais comme « oublié ».
+
+    Un nom de `providers.CONNECTEURS_RENOMMES` porte en plus `renomme_en` (le nouveau
+    nom) : ses lignes ont été copiées sous ce nom et attendent `oto-mcp maintenance
+    orphelins`. Elles comptent dans `total_renommes`, jamais dans `total`."""
+    from .. import providers
     from ..db import lecture_bornee
 
     connus = sorted(catalogue())
     tables = []
     total = 0
+    total_renommes = 0
     with lecture_bornee.lecture_d_agregat("constat des connecteurs orphelins",
                                           isolation="REPEATABLE READ") as conn:
         for table, sql in REFERENCES:
             rows = conn.execute(sql, {"catalogue": connus}).fetchall()
             lignes = sorted(({"connecteur": r["connecteur"], "lignes": int(r["lignes"])}
                              for r in rows), key=lambda d: (-d["lignes"], d["connecteur"]))
-            total += sum(d["lignes"] for d in lignes)
+            for d in lignes:
+                nouveau = providers.CONNECTEURS_RENOMMES.get(d["connecteur"])
+                if nouveau is None:
+                    total += d["lignes"]
+                else:
+                    d["renomme_en"] = nouveau
+                    total_renommes += d["lignes"]
             tables.append({"table": table, "connecteurs": lignes})
-    return {"catalogue": len(connus), "tables": tables, "total": total}
+    return {"catalogue": len(connus), "tables": tables, "total": total,
+            "total_renommes": total_renommes}
