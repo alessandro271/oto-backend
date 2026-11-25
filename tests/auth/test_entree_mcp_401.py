@@ -22,6 +22,10 @@ from starlette.testclient import TestClient
 
 from oto_mcp.auth import entree_mcp
 
+# Importé AVANT tout patch du lecteur d'identité : il le lie à son import, et un
+# import pendant le test lierait le faux pour tout le worker (#1111).
+from oto_mcp.middleware import account_suspended  # noqa: E402
+
 _SUB = "banc-revocation"
 _JWT_AVANT, _JWT_APRES, _OTO_AVANT, _OTO_APRES = "jwt-avant", "jwt-apres", "oto_avant", "oto_apres"
 _FERME_LE = time.time() - 600          # la fermeture : il y a dix minutes
@@ -165,7 +169,6 @@ def test_la_garde_relit_quand_le_sub_canonique_differe(lectures, monkeypatch):
     sub canonique, la garde lit le sien."""
     from oto_mcp.auth import hooks
     monkeypatch.setattr(hooks, "current_user_sub_from_token", lambda: "canonique")
-    from oto_mcp.middleware import account_suspended
     monkeypatch.setattr(account_suspended, "current_user_sub_from_token",
                         lambda: "canonique")
     with TestClient(_app_minimale()) as c:
