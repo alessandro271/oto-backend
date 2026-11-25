@@ -137,7 +137,7 @@ class _Garde:
                           headers={"user-agent": self.user_agent})
         except egress.EgressRefused:
             raise
-        except Exception as e:  # rendered in the result (error), not swallowed
+        except Exception as e:  # noqa: SILENT — the failure is the probe's answer, rendered in its `error`
             return {"domain": domain, "error": f"{type(e).__name__}: {e}"}
         h = {k.lower(): v for k, v in r.headers.items()}
         checks = {key: header in h for key, header in _SECURITY_HEADERS}
@@ -150,7 +150,7 @@ class _Garde:
         adresse = _adresse_gardee(host, port)
         try:
             return _poignee_tls(host, adresse, port)
-        except Exception as e:  # rendered in the result (error), not swallowed
+        except Exception as e:  # noqa: SILENT — the failure is the probe's answer, rendered in its `error`
             return {"host": host, "port": port, "error": f"{type(e).__name__}: {e}"}
 
 
