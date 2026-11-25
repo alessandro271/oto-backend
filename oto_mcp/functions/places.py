@@ -122,54 +122,57 @@ def en_cours() -> int:
     return _total
 
 
-def _attente(tenues: list[_Tenue], maintenant: float) -> int:
-    """Les secondes avant que l'une de ces places se libère au plus tard. Sous `_verrou`.
+def _attente(tenues: list[_Tenue], maintenant: float) -> tuple[int, list[_Tenue]]:
+    """`(les secondes avant que l'une de ces places se libère au plus tard, celles qui
+    ont dépassé leur borne)`. Sous `_verrou`, sans E/S : l'appelant journalise après.
     Une place sans borne, ou qui a dépassé la sienne, peut se libérer à tout instant ou
     ne dit plus rien : l'attente ne dépasse alors pas `ATTENTE_S`."""
-    vivantes = []
-    for t in tenues:
-        if t.echeance is None:
-            continue
-        if t.echeance > maintenant:
-            vivantes.append(t)
-        else:
-            # Ni le compte ni les données : seulement ce qui dit qu'une place ne se rend pas.
-            logger.warning("bac à sable : une place est tenue %.0f s après sa borne (prise "
-                           "il y a %.0f s)", maintenant - t.echeance, maintenant - t.debut)
+    vivantes = [t for t in tenues if t.echeance is not None and t.echeance > maintenant]
+    depassees = [t for t in tenues if t.echeance is not None and t.echeance <= maintenant]
     if not vivantes:
-        return ATTENTE_S
+        return ATTENTE_S, depassees
     attente = max(1, math.ceil(min(t.echeance for t in vivantes) - maintenant))
-    return min(attente, ATTENTE_S) if len(vivantes) < len(tenues) else attente
+    return (min(attente, ATTENTE_S) if len(vivantes) < len(tenues) else attente), depassees
+
+
+def _signaler(depassees: list[_Tenue], maintenant: float) -> None:
+    """Ni le compte ni les données : seulement ce qui dit qu'une place ne se rend pas."""
+    for t in depassees:
+        logger.warning("bac à sable : une place est tenue %.0f s après sa borne (prise "
+                       "il y a %.0f s)", maintenant - t.echeance, maintenant - t.debut)
 
 
 def _prendre(sub: Optional[str], duree_max_s: Optional[float] = None) -> int:
     global _total
     maximum = plafond()
+    refus: Optional[BacASableOccupe] = None
     with _verrou:
         maintenant = time.monotonic()
         if _par_compte.get(sub, 0) >= PAR_COMPTE:
             siennes = [t for t in _tenues.values() if t.sub == sub]
-            attente = _attente(siennes, maintenant)
+            attente, depassees = _attente(siennes, maintenant)
             depuis = (f" (started {max(0, int(maintenant - siennes[0].debut))} s ago)"
                       if siennes else "")
-            raise BacASableOccupe(
+            refus = BacASableOccupe(
                 f"sandbox_busy: this account already has {PAR_COMPTE} execution running "
-                f"in the sandbox{depuis} — the per-account limit, "
-                f"whatever the server's load; retry in {attente} s, once it has "
-                "finished.", retry_after=attente)
-        if _total >= maximum:
-            attente = _attente(list(_tenues.values()), maintenant)
-            raise BacASableOccupe(
+                f"in the sandbox{depuis} — the per-account limit, whatever the server's "
+                f"load; retry in {attente} s, once it has finished.", retry_after=attente)
+        elif _total >= maximum:
+            attente, depassees = _attente(list(_tenues.values()), maintenant)
+            refus = BacASableOccupe(
                 f"sandbox_busy: the sandbox is running its maximum of {maximum} "
                 "simultaneous executions — the server-wide limit, shared by all "
                 f"accounts; retry in {attente} s, when the first of them is due to end.",
                 retry_after=attente)
-        _par_compte[sub] = _par_compte.get(sub, 0) + 1
-        _total += 1
-        jeton = next(_jetons)
-        _tenues[jeton] = _Tenue(sub, maintenant, None if duree_max_s is None
-                                else maintenant + duree_max_s)
-        return jeton
+        else:
+            _par_compte[sub] = _par_compte.get(sub, 0) + 1
+            _total += 1
+            jeton = next(_jetons)
+            _tenues[jeton] = _Tenue(sub, maintenant, None if duree_max_s is None
+                                    else maintenant + duree_max_s)
+            return jeton
+    _signaler(depassees, maintenant)
+    raise refus
 
 
 def _rendre(sub: Optional[str], jeton: Optional[int] = None) -> None:
