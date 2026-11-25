@@ -141,6 +141,7 @@ chemins = [
   "oto_mcp/borne_session.py",
   "oto_mcp/sessions_mcp.py",
   "oto_mcp/egress.py",
+  "oto_mcp/egress_transport.py",
   "oto_mcp/crypto.py",
   "oto_mcp/env_inventory.py",
   "oto_mcp/env_secrets.py",

@@ -37,13 +37,19 @@ Le défaut est **vide** : ce fichier est public, les destinations réelles se
 déclarent au déploiement. Une destination absente de la liste échoue avec un
 message qui nomme la variable et le format — jamais en silence.
 
-⚠️ **Limite assumée.** Entre le contrôle et la connexion, le client HTTP résout
-une seconde fois : un DNS hostile qui répond « public » puis « interne » (DNS
-rebinding) n'est pas couvert, et l'ADR 0037 avait raison sur ce point précis.
-Une redirection 3xx vers l'intérieur ne l'est pas non plus : la garde tient au
-moment où le backend construit le client, pas dans le transport d'oto-core.
-Fermer ces deux fenêtres demande d'épingler l'adresse résolue dans le transport,
-côté lib — autre lot, et un bump de pin.
+**Le contrôle fait foi à la CONNEXION (`egress_transport`).** `check_url` est le
+refus précoce, celui qui explique : il tombe avant qu'un client soit construit et
+nomme la carte à corriger. Mais entre ce contrôle et la connexion, le client HTTP
+résolvait une seconde fois — un DNS hostile qui répond « public » puis « interne »
+(DNS rebinding) passait, et une redirection 3xx vers l'intérieur passait aussi,
+puisque la garde tenait là où le backend construit le client, pas dans son
+transport. Les sessions gardées (`egress_transport.session` / `.harden`) ferment
+ces deux fenêtres : à chaque connexion, redirections comprises, l'hôte est résolu
+UNE fois, la décision ci-dessous (`decide`) s'applique à ces adresses-là, et la
+socket s'ouvre sur l'une d'elles — le nom d'origine restant celui du SNI, de la
+vérification du certificat et de l'en-tête `Host`. ⚠️ Ne couvre que les chemins qui
+passent par une session gardée : un client de la lib qui appelle `requests.<verbe>`
+au niveau module n'en a pas (`docs/connector-vault.md` §Egress, la liste).
 
 **L'instance elle-même n'est pas une destination (#1499).** Son hôte public
 (`config.public_host()`, lu de `OTO_MCP_PUBLIC_URL`), ses sous-domaines et ses hôtes
@@ -225,12 +231,7 @@ def check_url(url: str, *, connector: str, field: str = "base_url",
         raise EgressRefused(
             f"connecteur `{connector}` : `{field}` est une URL sans hôte.")
     port = morceaux.port or (443 if morceaux.scheme == "https" else 80)
-    if _vise_l_instance(hote):
-        raise EgressRefused(
-            f"`{connector}` : destination refusée. `{hote}` est oto lui-même (l'hôte "
-            "de OTO_MCP_PUBLIC_URL) : un agent n'appelle pas oto par un connecteur, il "
-            "passe par ses outils, où sa liste est tenue. Aucune exception ne s'y "
-            f"applique. (Champ `{field}`.)")
+    refuse_instance(hote, connector=connector, field=field)
 
     try:
         adresses = resolved_addresses(hote, port)
@@ -240,6 +241,26 @@ def check_url(url: str, *, connector: str, field: str = "base_url",
             f"pas ({e}). La destination ne peut pas être contrôlée, donc elle "
             "n'est pas appelée.") from None
 
+    decide(hote, port, adresses, connector=connector, field=field,
+           exceptions_declarees=exceptions_declarees)
+
+
+def refuse_instance(hote: str, *, connector: str, field: str) -> None:
+    """Lève si `hote` est cette instance (#1499) — quelle que soit la politique."""
+    if _vise_l_instance(hote):
+        raise EgressRefused(
+            f"`{connector}` : destination refusée. `{hote}` est oto lui-même (l'hôte "
+            "de OTO_MCP_PUBLIC_URL) : un agent n'appelle pas oto par un connecteur, il "
+            "passe par ses outils, où sa liste est tenue. Aucune exception ne s'y "
+            f"applique. (Champ `{field}`.)")
+
+
+def decide(hote: str, port: int, adresses, *, connector: str, field: str,
+           exceptions_declarees: bool) -> None:
+    """LA décision, sur des adresses DÉJÀ résolues : lève si l'une d'elles est
+    interne sans exception applicable. Partagée par `check_url` (le refus précoce,
+    qui explique) et par le transport épinglé (`egress_transport`, qui fait foi
+    parce qu'il décide sur les adresses mêmes auxquelles il se connecte)."""
     for adresse in sorted(adresses):
         raison = internal_reason(adresse)
         if raison is None:

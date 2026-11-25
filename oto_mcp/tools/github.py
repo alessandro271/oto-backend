@@ -44,7 +44,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, egress
+from .. import access, egress, egress_transport
 from ..connectors import verify as connector_verify
 from . import github_index
 from .lecture import ACTE
@@ -159,8 +159,9 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
     """
     from oto.tools.github.client import GitHubClient
     _check_base_url(fields.get("base_url"))
-    client = GitHubClient(token=fields["token"],
-                          base_url=(fields.get("base_url") or None))
+    client = egress_transport.pinned(
+        GitHubClient(token=fields["token"], base_url=(fields.get("base_url") or None)),
+        connector="github")
     who = client.me()
     if not isinstance(who, dict) or not who.get("login"):
         raise ValueError(
@@ -177,8 +178,9 @@ def register(mcp: FastMCP) -> None:
     def _client() -> GitHubClient:
         creds = access.resolve_credential_fields("github")
         _check_base_url(creds.get("base_url"))
-        return GitHubClient(token=creds["token"],
-                            base_url=(creds.get("base_url") or None))
+        return egress_transport.pinned(
+            GitHubClient(token=creds["token"], base_url=(creds.get("base_url") or None)),
+            connector="github")
 
     def _run(fn):
         try:

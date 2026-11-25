@@ -123,7 +123,7 @@ def _check_url(url: str) -> None:
 def _reste(deadline: Optional[float]) -> Optional[float]:
     """Seconds left before `deadline` (monotonic), or None without a deadline.
 
-    Refuses once it is past: the per-phase timeout of httpx bounds each read, not
+    Refuses once it is past: the per-socket timeout bounds each read, not
     the whole download — a server that drips one byte per read would otherwise
     hold a threadpool thread for as long as it likes (same class as the freeze
     of 21/09)."""
@@ -167,15 +167,27 @@ def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False,
         explicite = os.path.basename(explicite.strip())
     from urllib.parse import unquote, urljoin, urlsplit
 
-    import httpx
+    import requests
+
+    from . import egress, egress_transport
     # Redirections DÉSACTIVÉES par défaut : un 3xx pourrait pointer une IP interne.
     # Opt-in (`follow_redirects`) : suivies à la main, chaque saut re-vérifié, jamais
-    # de https vers http.
-    with httpx.Client(follow_redirects=False, timeout=60.0) as c:
+    # de https vers http. La session est ÉPINGLÉE (`egress_transport`) : la garde
+    # décide à la connexion, sur les adresses mêmes que la socket joint — une
+    # résolution qui change après `_check_url` (DNS rebinding) est refusée là.
+    with egress_transport.session(connector="source url", field="url",
+                                  exceptions_declarees=False) as c:
         for _ in range(MAX_REDIRECTS + 1):
             reste = _reste(deadline)
-            with c.stream("GET", url,
-                          timeout=60.0 if reste is None else min(60.0, reste)) as r:
+            try:
+                r = c.get(url, stream=True, allow_redirects=False,
+                          timeout=60.0 if reste is None else min(60.0, reste))
+            except egress.EgressRefused as e:
+                raise FileSourceError(str(e)) from None
+            except requests.RequestException as e:
+                raise FileSourceError(
+                    f"source url: the URL could not be read ({type(e).__name__}).") from None
+            with r:
                 if 300 <= r.status_code < 400:
                     if not follow_redirects:
                         raise FileSourceError(
@@ -196,12 +208,16 @@ def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False,
                     raise FileSourceError(
                         f"fichier distant trop volumineux ({declared} > {max_bytes} octets).")
                 chunks, total = [], 0
-                for chunk in r.iter_bytes():
-                    _reste(deadline)
-                    total += len(chunk)
-                    if total > max_bytes:
-                        raise FileSourceError(f"fichier distant > {max_bytes} octets.")
-                    chunks.append(chunk)
+                try:
+                    for chunk in r.iter_content(chunk_size=65536):
+                        _reste(deadline)
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise FileSourceError(f"fichier distant > {max_bytes} octets.")
+                        chunks.append(chunk)
+                except requests.RequestException as e:
+                    raise FileSourceError(
+                        f"source url: the download was cut ({type(e).__name__}).") from None
                 data = b"".join(chunks)
                 mime = (r.headers.get("content-type")
                         or "application/octet-stream").split(";")[0].strip()

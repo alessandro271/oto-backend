@@ -273,14 +273,22 @@ def exchange_code(code: str, client_id: str, client_secret: str, login_url: str,
     (form-encoded body, never a secret in the query string, error without URL); here we only
     keep the PKCE `code_verifier` and the translation of the message into an actionable hint
     (`_sf_error_hint`, shared with the probe)."""
+    from .. import egress, egress_transport
     from ..tools.salesforce import _sf_error_hint
+    # `login_url` vient de la carte d'un administrateur d'org, et reçoit le code ET le
+    # secret de l'application : l'échange sort par une session GARDÉE (la garde
+    # d'egress tient à la connexion, sur l'adresse jointe — `egress_transport`).
     try:
-        return oauth_flow.exchange_code(
-            f"{_clean_login_url(login_url)}/services/oauth2/token",
-            code=code, client_id=client_id, client_secret=client_secret,
-            redirect=oauth_flow.redirect_uri(_CALLBACK_PATH),
-            extra={"code_verifier": verifier},
-        )
+        with egress_transport.session(connector="salesforce", field="login_url",
+                                      exceptions_declarees=True) as s:
+            return oauth_flow.exchange_code(
+                f"{_clean_login_url(login_url)}/services/oauth2/token",
+                code=code, client_id=client_id, client_secret=client_secret,
+                redirect=oauth_flow.redirect_uri(_CALLBACK_PATH),
+                extra={"code_verifier": verifier}, session=s,
+            )
+    except egress.EgressRefused as e:
+        raise RuntimeError(str(e)) from None
     except oauth_flow.OAuthFlowError as e:
         raise RuntimeError(_sf_error_hint(e)) from e
 

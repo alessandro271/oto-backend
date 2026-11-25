@@ -269,15 +269,41 @@ voulu. Avant d'armer sur un déploiement, établir les destinations des instance
 existantes — `GET /api/settings/api-keys/{provider}` rend les champs NON secrets, donc
 `base_url`, sans jamais rendre de secret (scope `org`/`group` = admin du palier).
 
-⚠️ **Deux fenêtres restent ouvertes, et c'est nommé** : le DNS rebinding (le client
-résout une seconde fois après le contrôle) et une redirection 3xx vers l'intérieur — la
-garde tient là où le backend construit le client, pas dans le transport d'oto-core. Les
-fermer demande d'épingler l'adresse résolue dans la lib, donc un bump de pin.
+**La garde fait foi à la CONNEXION (`oto_mcp/egress_transport.py`).** `check_url` reste
+le refus précoce, celui qui explique et nomme la carte. Mais le client HTTP résolvait
+l'hôte une seconde fois pour se connecter : un DNS qui répond « public » au contrôle puis
+« interne » à la connexion (DNS rebinding) passait, et une redirection 3xx vers
+l'intérieur aussi. Une session `requests` gardée (`egress_transport.session`, `.harden`,
+`.pinned`) monte un adaptateur dont chaque connexion — redirections comprises, puisque
+chaque saut ouvre la sienne — résout l'hôte UNE fois, applique la même décision
+(`egress.refuse_instance` + `egress.decide`, exceptions selon la politique) et ouvre la
+socket sur l'une de ces adresses ; le nom d'origine reste celui du SNI, de la
+vérification du certificat et de l'en-tête `Host`. Pas de patch global de la
+résolution : le processus parle légitimement à sa boucle locale. Les proxies
+d'environnement sont ignorés (`trust_env=False`) et un proxy explicite est refusé —
+derrière un proxy, c'est lui qui résout. Le dépôt ne lit aucune variable de proxy ; une instance derrière un proxy d'egress ou un magasin de certificats propre (`REQUESTS_CA_BUNDLE`) voit ces chemins échouer, fermés.
+
+Câblé : `web_read`/`web_image` (`tools/web.py`), une source `url` de fichier
+(`file_source.py`), l'import d'une description publique
+(`api_operations.fetch_public_document`), le CV d'une candidature (`tools/wttj_resume.py`),
+l'import d'avatar, et la session des clients `api` (`tools/api.client_for`, login du mode
+session compris), `n8n`, `make`, `github`, `posthog`, `lucca`, `threecx` et du webhook
+`clay`, et l'échange du code OAuth de Salesforce sur `login_url` (`auth/salesforce.exchange_code`
+passe une session gardée à `auth/flow.exchange_code`, dont le défaut — hôte fixe des
+autres fournisseurs — ne change pas). Banc : `tests/test_egress_transport.py`.
+
+⚠️ **Ce qui reste sous le seul contrôle précoce, nommé** : les appels qu'oto-core fait par
+`requests.<verbe>` au niveau module, sans session à monter — `lighton`, `salesforce`
+(dont l'échange du refresh token sur `login_url`), `wordpress`, le jeton `oauth2` du
+connecteur `api` (`token_url`) et les jetons `threecx`. Les fermer demande un
+paramètre `session=` côté lib, donc un bump de pin.
 
 ⚠️ **Contredit l'ADR 0037 §4**, qui décidait « zéro code SSRF dans le connecteur » et
 renvoyait le blocage des plages privées à un egress proxy « plus tard… si le besoin
 naît ». Ce proxy n'a jamais existé ; le seul filtrage réel est un `IPAddressDeny` du
-lien-local. L'ADR est à amender.
+lien-local. L'ADR (dépôt d'archive, lecture seule) reste à amender : la garde vit dans
+le code, et depuis le transport épinglé elle tient aussi contre le rebinding et les
+redirections, le point sur lequel l'ADR avait raison.
 
 ## Coffre — `connector_credentials` (table unique)
 

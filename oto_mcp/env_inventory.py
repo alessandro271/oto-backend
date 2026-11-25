@@ -377,7 +377,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "Destinations internes autorisées en egress (`nom=adresse:port`, "
              "virgules). Absente = aucune exception : fail-closed, jamais un défaut "
              "qui ouvre la machine.",
-             ("oto_mcp/egress.py:138",)),
+             ("oto_mcp/egress.py:155",)),
     Variable("OTO_EGRESS_IP", Classe.REGLAGE, "",
              "Adresse IP sortante de l'instance, servie par le marqueur `{{egress_ip}}` "
              "des docs connecteur (liste blanche d'IP chez le fournisseur, ex. "

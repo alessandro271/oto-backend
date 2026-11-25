@@ -233,7 +233,7 @@ def cdn(monkeypatch):
     vus = {"get": [], "extract": []}
     monkeypatch.setattr(egress, "check_url", lambda url, **kw: vus.setdefault("egress", url))
     vus["reponse"] = _Telechargement(b"%PDF-1.4 cv")
-    monkeypatch.setattr("requests.get", lambda url, **kw: vus["get"].append(url)
+    monkeypatch.setattr("requests.Session.get", lambda self, url, **kw: vus["get"].append(url)
                         or vus["reponse"])
     vus["extraction"] = file_extract.Extraction(file_extract.OK, text="Infirmière, 8 ans",
                                                 pages=2)
