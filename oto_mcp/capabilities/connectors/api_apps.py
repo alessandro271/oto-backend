@@ -149,9 +149,13 @@ class ConnectInput(BaseModel):
 
 class ApiAppConnect(BaseModel):
     """Open `auth_url` in the browser: the API's own sign-in page. `redirect_uri` = oto's
-    callback, the one registered for the app's client at the sign-in server."""
+    callback, the one registered for the app's client at the sign-in server.
+    `sign_in_host` (where the member signs in) and `api_host` (where their access is then
+    used) are shown to the member BEFORE they leave for the sign-in page."""
     auth_url: str
     redirect_uri: str
+    sign_in_host: str
+    api_host: str
 
 
 class ImportInput(BaseModel):
@@ -322,10 +326,10 @@ def _connect(ctx: ResolvedCtx, inp: ConnectInput) -> dict:
     try:
         url = api_oauth.authorize_url(app, ctx.sub, inp.app or "")
     except api_oauth.ApiOAuthRefused as e:
-        if e.code == "api_app_not_oauth_user":
-            raise AuthzDenied(409, "api_app_not_oauth_user", e.message)
+        if e.code in ("api_app_not_oauth_user", "api_app_origin_mixed"):
+            raise AuthzDenied(409, e.code, e.message)
         raise AuthzDenied(409, "api_app_incomplete", e.message)
-    return {"auth_url": url, "redirect_uri": api_oauth.redirect()}
+    return {"auth_url": url, "redirect_uri": api_oauth.redirect(), **api_oauth.hotes(app)}
 
 
 def _remove(ctx: ResolvedCtx, inp: OneInput) -> dict:
@@ -392,6 +396,10 @@ CAPABILITIES += [
                                      "the app does not use per-member sign-in"),
                        DeclaredError(409, "api_app_incomplete",
                                      "the app's sign-in coordinates are incomplete"),
+                       DeclaredError(409, "api_app_origin_mixed",
+                                     "the app's authorization and token endpoints are not "
+                                     "on one origin, or an MCP server's resource is not "
+                                     "its address"),
                        DeclaredError(403, "personal_key_forbidden",
                                      "the org forbids personal keys for the Custom API"),
                        DeclaredError(400, "egress_refused",
@@ -399,7 +407,8 @@ CAPABILITIES += [
                                      "server's sign-in is refused by the egress policy"),
                        DeclaredError(409, "mcp_discovery_failed",
                                      "protocol mcp: the server's sign-in could not be "
-                                     "discovered (no usable metadata, no PKCE S256)"),
+                                     "discovered (no usable metadata, no PKCE S256, "
+                                     "endpoints off the issuer's origin)"),
                        DeclaredError(409, "mcp_unreachable",
                                      "protocol mcp: the server could not be reached"),
                        DeclaredError(409, "mcp_no_auth_needed",

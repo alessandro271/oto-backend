@@ -881,6 +881,36 @@ Changer l'adresse d'une telle app vers une autre origine efface ce qui avait ét
 découvert (sauf valeurs neuves envoyées par l'admin) : rien n'est reporté d'un serveur à
 l'autre. Le membre qui déclenche la découverte écrit donc la connexion de l'app
 (`updated_by` = lui).
+Tout membre peut ainsi déclencher la découverte : elle ne lit que des métadonnées
+publiques du serveur choisi par l'admin et n'écrit que ce qu'elle a trouvé — admis tel
+quel.
+
+### Un seul service d'autorisation, une seule ressource, `iss` vérifié (25/11/2026)
+
+L'admin d'une org est traité comme non fiable par la garde d'egress ; il ne doit pas
+davantage pouvoir faire partir le code, le verifier ou le jeton d'un membre vers un tiers
+(`connectors/api_apps.refus_d_origine`, relu à l'enregistrement de l'app, à la
+découverte et à chacune des trois demandes — autorisation, échange, renouvellement) :
+
+- `authorize_url` et `token_url` sont sur UNE origine (schéma, hôte, port) : celle de
+  l'émetteur découvert (`issuer`, écrit par la découverte seule) quand il est connu,
+  sinon celle que l'admin a déclarée. Un mélange est refusé (`invalid_app_connection` à
+  l'écriture, `api_app_origin_mixed` à l'usage, `mcp_discovery_failed` à la
+  découverte) ;
+- en mode MCP, `resource` est l'adresse canonique du serveur (RFC 8707,
+  `ressource_canonique`), imposée aux trois demandes ; une autre saisie est refusée ;
+- au retour, le callback scelle le code avec le paramètre `iss` (RFC 9207) : exigé et
+  égal à l'émetteur quand le serveur annonce `authorization_response_iss_parameter_supported`,
+  refusé dans tous les cas s'il est présent et différent (`api_oauth_issuer_mismatch`) ;
+- « Connecter » rend `sign_in_host` et `api_host`, pour que l'écran les montre avant
+  le départ ; le document client (CIMD) nomme `oto`.
+
+Toutes les requêtes de ce chemin (découverte, inscription, échange, renouvellement, et
+les quatre requêtes MCP) partent sur une session épinglée (`egress_transport`). Le
+renouvellement fait sa requête HORS transaction ; seule l'écriture du jeton tourné prend
+le verrou de la ligne, et n'écrase pas un jeton changé entretemps. ⚠️ Limite : le mode
+`oauth2` (client credentials) d'une carte MCP obtient son jeton par oto-core, hors de
+ce transport.
 
 ### Le renommage `http` → `api` (12/11/2026)
 

@@ -520,6 +520,9 @@ def test_connecter_rend_la_page_de_connexion_de_l_api_au_membre(rest, monde, eta
     d = api_oauth.verify_state(q["state"])
     assert (d["sub"], d["org"], d["account"]) == (VENTE, monde["org"], "crm_sso")
     assert r.json()["redirect_uri"] == api_oauth.redirect()
+    # What the member is about to trust, shown before they leave for the sign-in page.
+    assert (r.json()["sign_in_host"], r.json()["api_host"]) == ("crm.example.test",
+                                                                "crm.example.test")
 
 
 def test_connecter_est_reserve_aux_membres_de_l_org(rest, monde, etat_secret):
@@ -564,18 +567,26 @@ MCP_SSO = {"base_url": "https://crm2.example.test/mcp", "protocol": "mcp",
            "auth_mode": "oauth2_user"}
 
 
+def _sessions(monkeypatch, *, post, get=None):
+    """Discovery's pinned sessions (`mcp_discovery._session`) answer with these."""
+    from oto_mcp.auth import mcp_discovery
+
+    class _Session:
+        def __init__(self, what, *, annonce):
+            self.post, self.get = post, get
+    monkeypatch.setattr(mcp_discovery, "_session", _Session)
+
+
 def test_connecter_un_serveur_mcp_qui_annonce_une_adresse_interne_est_refuse(
         rest, monde, etat_secret, monkeypatch, dns_simule):
     from oto_mcp.auth import mcp_discovery
     dns_simule.update({"interne.example.test": {"10.0.0.5"}})
     _creer_sso(rest, monde, "mcp_interne", MCP_SSO)
-    monkeypatch.setattr(mcp_discovery.requests, "post", lambda *a, **k: _Reponse(
-        401, {"WWW-Authenticate": 'Bearer resource_metadata="https://interne.example.test'
-                                  '/.well-known/oauth-protected-resource"'}))
-
     def lire(*a, **k):
         raise AssertionError("an address refused by the egress policy is never read")
-    monkeypatch.setattr(mcp_discovery.requests, "get", lire)
+    _sessions(monkeypatch, post=lambda *a, **k: _Reponse(
+        401, {"WWW-Authenticate": 'Bearer resource_metadata="https://interne.example.test'
+                                  '/.well-known/oauth-protected-resource"'}), get=lire)
     r = _connecter(rest, monde, "mcp_interne")
     assert (r.status_code, r.json()["error"]) == (400, "egress_refused"), r.text
 
@@ -587,6 +598,6 @@ def test_connecter_un_serveur_mcp_injoignable_le_dit(rest, monde, etat_secret,
 
     def post(*a, **k):
         raise mcp_discovery.requests.ConnectionError("x")
-    monkeypatch.setattr(mcp_discovery.requests, "post", post)
+    _sessions(monkeypatch, post=post)
     r = _connecter(rest, monde, "mcp_muet")
     assert (r.status_code, r.json()["error"]) == (409, "mcp_unreachable"), r.text

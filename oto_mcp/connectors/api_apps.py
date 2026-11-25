@@ -61,12 +61,66 @@ OAUTH_USER = "oauth2_user"
 #: saisis par l'admin. Posé par la découverte seule (hors `CONNECTION_FIELDS`, aucune
 #: route ne l'écrit) ; un champ que l'admin change ou vide en sort.
 DECOUVERTS = "discovered"
+#: Dans la connexion, posés par la découverte MCP seule (comme `DECOUVERTS`) : l'émetteur
+#: annoncé par le serveur d'autorisation (RFC 8414 `issuer`) et s'il renvoie `iss` au
+#: retour (RFC 9207). Ils tombent dès que l'adresse du serveur ou un point OAuth change.
+ISSUER = "issuer"
+ISS_ANNONCE = "iss_parameter_supported"
+_DECOUVERTE_AS = (ISSUER, ISS_ANNONCE)
 
 
 def est_decouvert(conn: dict, name: str) -> bool:
     """`name` de cette connexion a été annoncé par le serveur distant."""
     return name in (conn.get(DECOUVERTS) or [])
+
+
 _ACCOUNT_MAX = 80
+
+
+def ressource_canonique(url: str) -> str:
+    """L'URI canonique d'un serveur MCP comme ressource (RFC 8707, spécification
+    d'autorisation MCP) : schéma et hôte en minuscules, port omis quand c'est celui du
+    schéma, chemin sans `/` final, ni requête ni fragment."""
+    p = urlsplit((url or "").strip())
+    schema, hote = (p.scheme or "").lower(), (p.hostname or "").lower()
+    if ":" in hote:
+        hote = f"[{hote}]"
+    port = p.port
+    if port is not None and port != {"https": 443, "http": 80}.get(schema):
+        hote = f"{hote}:{port}"
+    return f"{schema}://{hote}{p.path.rstrip('/')}"
+
+
+def est_mcp_par_membre(conn: dict) -> bool:
+    return (conn.get("protocol") or "") == "mcp" and \
+        (conn.get("auth_mode") or "") == OAUTH_USER
+
+
+def refus_d_origine(conn: dict) -> Optional[str]:
+    """Pourquoi les points OAuth de cette connexion ne sont pas sur UNE origine — ou None.
+
+    Le navigateur du membre va à `authorize_url`, son code et son verifier partent à
+    `token_url`, son jeton de renouvellement aussi : les deux doivent être le même service
+    d'autorisation (schéma, hôte, port), celui de l'émetteur découvert quand la découverte
+    l'a lu (`ISSUER`), sinon celui que l'admin a déclaré par `authorize_url`. En mode MCP,
+    `resource` est l'adresse du serveur (`ressource_canonique`), jamais une autre."""
+    a, t = (conn.get("authorize_url") or "").strip(), (conn.get("token_url") or "").strip()
+    if a and t and _origine(a) != _origine(t):
+        return (f"`authorize_url` ({_origine(a)}) and `token_url` ({_origine(t)}) must be "
+                "on the same origin (scheme, host, port): one sign-in server.")
+    emetteur = (conn.get(ISSUER) or "").strip()
+    if emetteur:
+        for name, v in (("authorize_url", a), ("token_url", t)):
+            if v and _origine(v) != _origine(emetteur):
+                return (f"`{name}` ({_origine(v)}) is not on the origin of the sign-in "
+                        f"server's issuer ({_origine(emetteur)}).")
+    if est_mcp_par_membre(conn) and (conn.get("resource") or "").strip() and \
+            ressource_canonique(conn["resource"]) != ressource_canonique(
+                conn.get("base_url") or ""):
+        return ("`resource` of an MCP server is its own address "
+                f"({ressource_canonique(conn.get('base_url') or '')}): another value is "
+                "refused.")
+    return None
 
 
 class AppRefused(ValueError):
@@ -111,6 +165,11 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
         out[DECOUVERTS] = garde
     else:
         out.pop(DECOUVERTS, None)
+    # L'émetteur découvert ne vaut que pour l'adresse et les points d'où il a été lu.
+    if any((out.get(k) or "") != (avant.get(k) or "")
+           for k in ("base_url", "authorize_url", "token_url")):
+        for k in _DECOUVERTE_AS:
+            out.pop(k, None)
     mode = out.get("auth_mode", "")
     if mode not in api_card.AUTH_MODES:
         raise AppRefused(400, "invalid_app_connection",
@@ -149,6 +208,9 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
             raise AppRefused(400, "invalid_app_connection",
                              "`resource` is an absolute URI (RFC 8707), e.g. "
                              "https://api.example.com.")
+        refus = refus_d_origine(out)
+        if refus:
+            raise AppRefused(400, "invalid_app_connection", refus)
     for name in ("base_url", "token_url"):
         if out.get(name):
             try:

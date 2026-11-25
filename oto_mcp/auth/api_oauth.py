@@ -21,14 +21,28 @@ sales only see their accounts) could only be reached as an admin, or not at all.
 4. at call time `tools/api.client_for` asks `access_token_for` for a valid access token
    and calls the API as a `bearer` — oto-core never sees this mode.
 
-**Renewal** (same rules as `auth/jefacture.py`): under an advisory lock on the vault ROW
-(across processes and instances), the row is re-read, a token a concurrent caller just
-got is reused, and a rotated refresh token is written in the same transaction. A dead
-grant (`invalid_grant`) is re-checked against the row before it marks anything — a
-refresh token that changed meanwhile is a reconnection, retried once. A dead grant MARKS
-the row (`health_ko`), never purges it; any other refusal (client unknown, server error)
-marks nothing. The access token never goes to the database: a process cache keyed by the
-hash of the row and its refresh token.
+**One sign-in server.** `authorize_url` and `token_url` are on ONE origin — the
+discovered issuer's when discovery read it, else the one the admin declared — and, for an
+MCP server, `resource` is the server's own address (`api_apps.refus_d_origine`). This is
+checked when the app is written AND re-read at each of the three requests (authorization,
+exchange, renewal): an app that breaks it refuses (`api_app_origin_mixed`). The return's
+`iss` (RFC 9207) is sealed by the callback with the code, and checked before the
+exchange: required and equal to the recorded issuer when the server announced it, and a
+present `iss` that differs is refused in every case.
+
+**Renewal**: the token request goes out with NO transaction open (a slow sign-in server
+never holds a database lock); calls of one process for one row are serialised in memory,
+so they share one renewal. Only the write of a rotated refresh token takes the advisory
+lock on the vault ROW, re-reads it and writes only if the row still holds the refresh
+token the request was made with — a token changed meanwhile (a reconnection, another
+process's renewal) is kept, never overwritten. A dead grant (`invalid_grant`) is
+re-checked against the row before it marks anything — a refresh token that changed
+meanwhile is a reconnection, retried once. A dead grant MARKS the row (`health_ko`),
+never purges it; any other refusal (client unknown, server error) marks nothing. The
+access token never goes to the database: a process cache keyed by the hash of the row
+and its refresh token.
+
+Every request goes out on a session pinned by the egress guard (`egress_transport`).
 """
 from __future__ import annotations
 
@@ -44,8 +58,9 @@ from urllib.parse import urlencode, urlsplit
 
 import requests
 
-from .. import credentials_store
+from .. import credentials_store, egress, egress_transport
 from ..connectors import health as connector_health
+from ..texte_tiers import cloture
 from . import flow as oauth_flow
 from . import pkce
 
@@ -58,10 +73,14 @@ CALLBACK_PATH = "/api/custom-api/oauth/callback"
 _TIMEOUT = 20
 #: The largest token answer read — a few tokens and their lifetimes, never more.
 _MAX_TOKEN_BODY = 64 * 1024
+#: The sign-in server's `error` / `error_description`, as far as they are read.
+_MAX_ERREUR = 300
 
 # {opaque key: (access_token, epoch expiry)} — never in the database.
 _JETONS: dict[str, tuple[str, float]] = {}
 _VERROU = threading.Lock()
+# {row hash: lock} — one renewal at a time per row in this process.
+_RENOUVELLEMENTS: dict[str, threading.Lock] = {}
 
 
 class ApiOAuthRefused(RuntimeError):
@@ -85,9 +104,12 @@ def redirect() -> str:
     return oauth_flow.redirect_uri(CALLBACK_PATH)
 
 
-def _coordonnees(conn: dict) -> dict:
+def _coordonnees(conn: dict, app_conn: Optional[dict] = None) -> dict:
     """`authorize_url`, `token_url`, `oauth_client_id`, `scope`, `resource` of an app (or
-    of a served key: same names), or `ApiOAuthRefused` naming what is missing."""
+    of a served key: same names), or `ApiOAuthRefused` naming what is missing or what
+    mixes origins. `app_conn` = the app's connection when `conn` is a served key (it
+    carries the discovered issuer). For an MCP server, `resource` is ALWAYS its address."""
+    from ..connectors import api_apps
     if (conn.get("auth_mode") or "").strip() != MODE:
         raise ApiOAuthRefused("api_app_not_oauth_user",
                               "This Custom API app does not use per-member sign-in "
@@ -99,7 +121,22 @@ def _coordonnees(conn: dict) -> dict:
         raise ApiOAuthRefused("api_app_incomplete",
                               f"The Custom API app is missing {', '.join(manquants)}: an "
                               "org admin completes its connection.")
+    emetteur = (app_conn or conn).get(api_apps.ISSUER)
+    refus = api_apps.refus_d_origine({**conn, api_apps.ISSUER: emetteur or ""})
+    if refus:
+        raise ApiOAuthRefused("api_app_origin_mixed",
+                              f"{refus} Nothing was sent: an org admin corrects the app.")
+    if api_apps.est_mcp_par_membre(conn):
+        out["resource"] = api_apps.ressource_canonique(conn.get("base_url") or "")
     return out
+
+
+def hotes(app: dict) -> dict:
+    """What the member is about to trust, to show before « Connect »: the host of the
+    sign-in server their browser goes to, and the host their access is used on."""
+    conn = app.get("connection") or {}
+    return {"sign_in_host": urlsplit(conn.get("authorize_url") or "").hostname or "",
+            "api_host": urlsplit(conn.get("base_url") or "").hostname or ""}
 
 
 def _scopes(scope: str) -> list[str]:
@@ -223,6 +260,25 @@ def _corps_borne(r: requests.Response, host: str) -> bytes:
     return bytes(corps)
 
 
+def _session(annoncee: bool) -> requests.Session:
+    """A session pinned by the egress guard (checked at each connection)."""
+    return egress_transport.session(connector=CONNECTOR, field="token_url",
+                                    exceptions_declarees=not annoncee)
+
+
+def _detail_d_erreur(body, status: int) -> str:
+    """The sign-in server's `error` and `error_description`, bounded and fenced: its
+    words, never ours."""
+    if not isinstance(body, dict):
+        return f"HTTP {status}"
+    detail = " : ".join(str(v).strip() for v in (
+        body.get("error") or f"HTTP {status}", body.get("error_description")) if v)
+    if len(detail) > _MAX_ERREUR:
+        detail = detail[:_MAX_ERREUR] + "…"
+    return cloture("sign-in-server-error", detail,
+                   origine="Error written by the sign-in server", lecture="a diagnostic")
+
+
 def _token_request(token_url: str, data: dict, *, annoncee: bool) -> dict:
     """POST form to the token endpoint; refusals built by us (never `raise_for_status`,
     whose message carries the URL). The token URL is the final address: a redirect is
@@ -230,7 +286,6 @@ def _token_request(token_url: str, data: dict, *, annoncee: bool) -> dict:
     MCP server announced this URL (discovery): it is checked with no declared egress
     exception, at every exchange and every renewal; one the admin typed keeps the
     platform's policy."""
-    from .. import egress
     try:
         egress.check_url(token_url, connector=CONNECTOR, field="token_url",
                          exceptions_declarees=not annoncee)
@@ -238,8 +293,11 @@ def _token_request(token_url: str, data: dict, *, annoncee: bool) -> dict:
         raise oauth_flow.OAuthExchangeRefused(str(e)) from None
     host = urlsplit(token_url).hostname or "?"
     try:
-        r = requests.post(token_url, data=data, timeout=_TIMEOUT, allow_redirects=False,
-                          stream=True, headers={"Accept": "application/json"})
+        r = _session(annoncee).post(token_url, data=data, timeout=_TIMEOUT,
+                                    allow_redirects=False, stream=True,
+                                    headers={"Accept": "application/json"})
+    except egress.EgressRefused as e:
+        raise oauth_flow.OAuthExchangeRefused(str(e)) from None
     except requests.RequestException as e:
         raise oauth_flow.OAuthExchangeRefused(
             f"The sign-in server ({host}) could not be reached ({type(e).__name__}).")
@@ -256,10 +314,8 @@ def _token_request(token_url: str, data: dict, *, annoncee: bool) -> dict:
         raise oauth_flow.OAuthExchangeRefused(
             f"Unreadable answer from the sign-in server ({host}, HTTP {r.status_code}).")
     if r.status_code >= 400 or (isinstance(body, dict) and "error" in body):
-        detail = " : ".join(str(v).strip() for v in (
-            body.get("error") or f"HTTP {r.status_code}", body.get("error_description"))
-            if v) if isinstance(body, dict) else f"HTTP {r.status_code}"
-        e = oauth_flow.OAuthExchangeRefused(f"The sign-in server ({host}) refused: {detail}.")
+        detail = _detail_d_erreur(body, r.status_code)
+        e = oauth_flow.OAuthExchangeRefused(f"The sign-in server ({host}) refused:{detail}")
         e.status_code, e.body_text = r.status_code, texte  # type: ignore[attr-defined]
         raise e
     if not isinstance(body, dict) or not body.get("access_token"):
@@ -289,8 +345,33 @@ def _pack(fields: dict) -> str:
     return credentials_store.pack_secret(CONNECTOR, fields)
 
 
-def exchange_and_persist(d: dict, code: str) -> dict:
-    """The code brought back by the browser → tokens → the member's key of the app."""
+def verifier_iss(conn: dict, iss: Optional[str]) -> None:
+    """RFC 9207 on the return. With a recorded issuer: `iss` is required when the sign-in
+    server announced it sends one, and must equal that issuer whenever present. Without
+    one (an app declared by hand), a present `iss` must be on `authorize_url`'s origin.
+    Raises `ApiOAuthRefused` (`api_oauth_issuer_mismatch`)."""
+    from ..connectors import api_apps
+    emetteur = (conn.get(api_apps.ISSUER) or "").strip()
+    iss = (iss or "").strip() or None
+    refus = ApiOAuthRefused("api_oauth_issuer_mismatch",
+                            "The sign-in answer did not come from this app's sign-in "
+                            "server: nothing was exchanged. Start the connection again.")
+    if emetteur:
+        if iss is None:
+            if conn.get(api_apps.ISS_ANNONCE) is True:
+                raise refus
+            return
+        if iss.rstrip("/") != emetteur.rstrip("/"):
+            raise refus
+        return
+    if iss is not None and api_apps._origine(iss) != api_apps._origine(
+            conn.get("authorize_url") or ""):
+        raise refus
+
+
+def exchange_and_persist(d: dict, code: str, *, iss: Optional[str] = None) -> dict:
+    """The code brought back by the browser → tokens → the member's key of the app.
+    `iss` = the return's issuer parameter (RFC 9207), checked before anything is sent."""
     from ..connectors import api_apps
     from ..db import api_apps as store
 
@@ -300,6 +381,7 @@ def exchange_and_persist(d: dict, code: str) -> dict:
             409, "api_app_removed", "This Custom API app was removed or replaced while "
             "you were signing in. Start the connection again from its card.")
     c = _coordonnees(app.get("connection") or {})
+    verifier_iss(app.get("connection") or {}, iss)
     data = {"grant_type": "authorization_code", "code": code,
             "redirect_uri": redirect(), "client_id": c["oauth_client_id"],
             "code_verifier": d["v"]}
@@ -340,48 +422,69 @@ def _lire(ligne: tuple) -> dict:
     return row
 
 
+def _verrou_memoire(ligne: tuple) -> threading.Lock:
+    with _VERROU:
+        return _RENOUVELLEMENTS.setdefault(_prefixe(ligne), threading.Lock())
+
+
 def _renouveler(ligne: tuple, fields: dict, *, reprise: bool = False) -> str:
-    c = _coordonnees(fields)
+    with _verrou_memoire(ligne):
+        return _renouveler_seul(ligne, fields, reprise=reprise)
+
+
+def _renouveler_seul(ligne: tuple, fields: dict, *, reprise: bool) -> str:
+    row = _lire(ligne)
+    stored = credentials_store.unpack_secret(CONNECTOR, row["secret"])
+    rt = stored.get("refresh_token") or ""
+    if not rt:
+        raise ApiOAuthRefused("api_oauth_reconnect",
+                              f"This key holds no sign-in: {_reconnecter(ligne[2])}.")
+    if (deja := _en_cache(ligne, rt)):
+        return deja   # renewed by the call we waited for
+    app = _app_de_la_ligne(row)
+    c = _coordonnees(fields, (app or {}).get("connection"))
+    data = {"grant_type": "refresh_token", "refresh_token": rt,
+            "client_id": c["oauth_client_id"]}
+    if c["resource"]:
+        data["resource"] = c["resource"]
     refus = None
-    with _verrou_ligne(ligne) as conn:
-        row = _lire(ligne)
-        stored = credentials_store.unpack_secret(CONNECTOR, row["secret"])
-        rt = stored.get("refresh_token") or ""
-        if not rt:
-            raise ApiOAuthRefused("api_oauth_reconnect",
-                                  f"This key holds no sign-in: {_reconnecter(ligne[2])}.")
-        if (deja := _en_cache(ligne, rt)):
-            return deja   # renewed while we waited for the lock
-        data = {"grant_type": "refresh_token", "refresh_token": rt,
-                "client_id": c["oauth_client_id"]}
-        if c["resource"]:
-            data["resource"] = c["resource"]
-        annoncee = _annoncee(_app_de_la_ligne(row), c["token_url"])
-        try:
-            tokens = _token_request(c["token_url"], data, annoncee=annoncee)
-        except oauth_flow.OAuthExchangeRefused as e:
-            if not oauth_flow.grant_is_dead(getattr(e, "status_code", 0),
-                                            getattr(e, "body_text", "")):
-                raise ApiOAuthRefused(
-                    "api_oauth_renewal_refused",
-                    f"{e} The access could not be renewed; if it persists, an org admin "
-                    "checks the app's sign-in settings.") from e
-            refus = e
-        else:
-            nouveau = tokens.get("refresh_token") or rt
-            if nouveau != rt:
-                credentials_store.set_credential(
-                    ligne[0], ligne[1], CONNECTOR, _pack({**stored, "refresh_token": nouveau}),
-                    set_by=row.get("set_by"), meta=row.get("meta") or {},
-                    account=ligne[2], conn=conn)
-            _garder(ligne, nouveau, tokens["access_token"], tokens.get("expires_in"))
+    # The request goes out with NO transaction open: only the write below locks.
+    try:
+        tokens = _token_request(c["token_url"], data,
+                                annoncee=_annoncee(app, c["token_url"]))
+    except oauth_flow.OAuthExchangeRefused as e:
+        if not oauth_flow.grant_is_dead(getattr(e, "status_code", 0),
+                                        getattr(e, "body_text", "")):
+            raise ApiOAuthRefused(
+                "api_oauth_renewal_refused",
+                f"{e} The access could not be renewed; if it persists, an org admin "
+                "checks the app's sign-in settings.") from e
+        refus = e
     if refus is None:
+        nouveau = tokens.get("refresh_token") or rt
+        garde = True
+        if nouveau != rt:
+            with _verrou_ligne(ligne) as conn:
+                row = _lire(ligne)
+                courant = credentials_store.unpack_secret(CONNECTOR, row["secret"])
+                if (courant.get("refresh_token") or "") == rt:
+                    credentials_store.set_credential(
+                        ligne[0], ligne[1], CONNECTOR,
+                        _pack({**courant, "refresh_token": nouveau}),
+                        set_by=row.get("set_by"), meta=row.get("meta") or {},
+                        account=ligne[2], conn=conn)
+                else:
+                    # Changed while we asked (a reconnection, another renewal): the
+                    # row's token stays; ours serves this call only, never cached.
+                    garde = False
+        if garde:
+            _garder(ligne, nouveau, tokens["access_token"], tokens.get("expires_in"))
         connector_health.record_health(CONNECTOR, ligne, True, None)
         return tokens["access_token"]
     if not reprise:
         now = credentials_store.unpack_secret(CONNECTOR, _lire(ligne)["secret"])
         if now.get("refresh_token") != rt:
-            return _renouveler(ligne, fields, reprise=True)
+            return _renouveler_seul(ligne, fields, reprise=True)
     message = (f"The sign-in server no longer accepts this connection (expired or "
                f"revoked): {_reconnecter(ligne[2])}.")
     connector_health.mark_rejected(ligne[0], ligne[1], CONNECTOR, ligne[2], message)
@@ -420,18 +523,36 @@ def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
                                   d["jti"], d)
 
 
+def _code_scelle(query, rs: oauth_flow.ReturnState) -> Optional[str]:
+    """What the callback hands the front: the code AND the return's `iss`, sealed for
+    this state — so that `iss` reaches the exchange as the sign-in server sent it, and a
+    code that did not come through this callback completes nothing."""
+    code = query.get("code")
+    if not code:
+        return None
+    iss = query.get("iss")
+    return oauth_flow.seal_code(_AUD, rs.jti, {"c": code,
+                                              "iss": iss if isinstance(iss, str) else None})
+
+
 def _finish_return(d: dict, code: str) -> dict:
+    recu = oauth_flow.unseal_code(_AUD, d["jti"], code)
+    if recu is None or not isinstance(recu.get("c"), str) or not recu["c"]:
+        raise oauth_flow.CompletionRefused(
+            400, "invalid_state", "This Custom API connection link is invalid or has "
+            "expired. Start the connection again.")
     if not still_allowed(d):
         oauth_flow.not_allowed(
             "You are no longer a member of this organization, or the Custom API (or a "
             "personal key for it) is now turned off there.")
     try:
-        return exchange_and_persist(d, code)
+        return exchange_and_persist(d, recu["c"], iss=recu.get("iss"))
     except ApiOAuthRefused as e:
         raise oauth_flow.CompletionRefused(409, e.code, e.message)
 
 
 RETURN = oauth_flow.OAuthReturn(
     audience=_AUD, callback_path=CALLBACK_PATH, label="Custom API", default_card=CONNECTOR,
-    read=_return_state, finish=_finish_return, cards=lambda: (CONNECTOR,))
+    read=_return_state, finish=_finish_return, cards=lambda: (CONNECTOR,),
+    code=_code_scelle)
 oauth_flow.declare_return(RETURN)

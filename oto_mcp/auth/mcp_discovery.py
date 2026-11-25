@@ -18,12 +18,20 @@ gives the server's URL and nothing else. At the first "Connect" of a member:
 3. what was found is written on the APP (only the fields the admin left empty), so every
    member after the first connects without discovery, and with the same client.
 
-Every request goes out under the egress guard, without following a redirect; every
+Every request goes out on a session pinned by the egress guard (`egress_transport`: the
+host resolved once and checked at each connection), without following a redirect; every
 document read is bounded and must be JSON. The server's address (typed by the admin) and
 the well-known paths on its host follow the platform's egress policy; an address the
 remote server ANNOUNCES (its metadata, its sign-in server, its registration endpoint)
 gets no declared exception: an exception covers what an operator chose, never what a
 third party points to.
+
+What a member's sign-in may reach is held to ONE origin: the authorization and token
+endpoints must be on the origin of the issuer the sign-in server announces (and that
+issuer is recorded, with whether it sends `iss` back — RFC 9207 — for the return to be
+checked against it); the `resource` asked for is the server's own address
+(`api_apps.ressource_canonique`). Any member may trigger discovery by clicking Connect:
+it only reads public metadata and writes what was found on the app, admissible as is.
 """
 from __future__ import annotations
 
@@ -35,13 +43,14 @@ from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
-from .. import egress
+from .. import egress, egress_transport
 from . import flow as oauth_flow
 
 logger = logging.getLogger("oto_mcp.auth.mcp_discovery")
 
 CLIENT_DOCUMENT_PATH = "/api/custom-api/oauth/client.json"
-CLIENT_NAME = "Custom API"
+#: How the sign-in server names oto to the member on its consent page.
+CLIENT_NAME = "oto"
 _TIMEOUT = 15
 _MAX = 256 * 1024
 _RM = re.compile(r'resource_metadata="([^"]+)"')
@@ -66,6 +75,13 @@ def _https(url: str, what: str, *, annonce: bool = True) -> str:
     return url
 
 
+def _session(what: str, *, annonce: bool) -> requests.Session:
+    """A session pinned by the egress guard: the destination is checked at each
+    connection, on the very address joined (`egress_transport`)."""
+    return egress_transport.session(connector="api", field=what.replace(" ", "_"),
+                                    exceptions_declarees=not annonce)
+
+
 def _lire_borne(r: requests.Response) -> Optional[bytes]:
     """The body, or None past `_MAX` bytes (or when the transfer breaks)."""
     corps = bytearray()
@@ -84,8 +100,9 @@ def _lire_borne(r: requests.Response) -> Optional[bytes]:
 def _get_json(url: str, what: str, *, annonce: bool = True) -> Optional[dict]:
     _https(url, what, annonce=annonce)
     try:
-        r = requests.get(url, timeout=_TIMEOUT, allow_redirects=False,
-                         headers={"Accept": "application/json"}, stream=True)
+        r = _session(what, annonce=annonce).get(
+            url, timeout=_TIMEOUT, allow_redirects=False,
+            headers={"Accept": "application/json"}, stream=True)
     except requests.RequestException:
         return None
     if r.status_code != 200:
@@ -118,14 +135,15 @@ def _resource_metadata_url(mcp_url: str) -> list[tuple[str, bool]]:
     of the `initialize` are read, never its body."""
     urls: list[tuple[str, bool]] = []
     try:
-        r = requests.post(mcp_url, timeout=_TIMEOUT, allow_redirects=False, stream=True,
-                          headers={"Content-Type": "application/json",
-                                   "Accept": "application/json, text/event-stream"},
-                          data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                                           "params": {"protocolVersion": "2025-06-18",
-                                                      "capabilities": {},
-                                                      "clientInfo": {"name": "oto-custom-api",
-                                                                     "version": "1"}}}))
+        r = _session("base url", annonce=False).post(
+            mcp_url, timeout=_TIMEOUT, allow_redirects=False, stream=True,
+            headers={"Content-Type": "application/json",
+                     "Accept": "application/json, text/event-stream"},
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                             "params": {"protocolVersion": "2025-06-18",
+                                        "capabilities": {},
+                                        "clientInfo": {"name": "oto-custom-api",
+                                                       "version": "1"}}}))
         r.close()
         if r.status_code == 401:
             m = _RM.search(r.headers.get("WWW-Authenticate") or "")
@@ -140,9 +158,20 @@ def _resource_metadata_url(mcp_url: str) -> list[tuple[str, bool]]:
     return urls + [(u, False) for u in _well_known(mcp_url, "oauth-protected-resource")]
 
 
+def _origine_commune(asm: dict) -> bool:
+    """The metadata's endpoints are on the origin of the issuer it names."""
+    from ..connectors import api_apps
+    emetteur = str(asm.get("issuer") or "")
+    return bool(emetteur) and all(
+        api_apps._origine(str(asm.get(k) or "")) == api_apps._origine(emetteur)
+        for k in ("authorization_endpoint", "token_endpoint"))
+
+
 def discover(mcp_url: str) -> dict:
-    """`{resource, issuer, authorize_url, token_url, scope, registration_endpoint, cimd}`
-    of an MCP server, or `DiscoveryRefused` naming the step that failed."""
+    """`{resource, issuer, iss_parameter_supported, authorize_url, token_url, scope,
+    registration_endpoint, cimd}` of an MCP server, or `DiscoveryRefused` naming the
+    step that failed."""
+    from ..connectors import api_apps
     _https(mcp_url, "base url", annonce=False)
     prm = None
     for u, annonce in _resource_metadata_url(mcp_url):
@@ -156,7 +185,8 @@ def discover(mcp_url: str) -> dict:
                                "URL, token URL and client ID by hand.")
     # RFC 9728 §3.3: the metadata must be about THIS server — or a server could announce
     # another one's resource (ours) and receive members' tokens for it.
-    if str(prm.get("resource") or "").rstrip("/") != mcp_url.rstrip("/"):
+    if api_apps.ressource_canonique(str(prm.get("resource") or "")) != \
+            api_apps.ressource_canonique(mcp_url):
         raise DiscoveryRefused("mcp_discovery_failed",
                                "The MCP server's metadata describes another resource than "
                                "the app's address: nothing was followed.")
@@ -169,10 +199,13 @@ def discover(mcp_url: str) -> dict:
         # RFC 8414 §3.3: the metadata must name the issuer it was looked up for. One
         # tolerance: an MCP server that names ITSELF as authorization server and
         # republishes its identity provider's metadata (a common front for a hosted
-        # Logto / Auth0) — the server already vouches for its own sign-in. The resource
-        # check above is what keeps another server's tokens out of reach.
+        # Logto / Auth0) — the server already vouches for its own sign-in, and the
+        # issuer then recorded is the one the metadata names, its endpoints on ITS
+        # origin. The resource check above is what keeps another server's tokens out
+        # of reach.
         if asm and str(asm.get("issuer") or "").rstrip("/") != issuer and not (
-                urlsplit(issuer).hostname == urlsplit(mcp_url).hostname):
+                urlsplit(issuer).hostname == urlsplit(mcp_url).hostname
+                and asm.get("issuer")):
             asm = None
             continue
         if asm and asm.get("authorization_endpoint") and asm.get("token_endpoint"):
@@ -181,6 +214,11 @@ def discover(mcp_url: str) -> dict:
         raise DiscoveryRefused("mcp_discovery_failed",
                                f"The sign-in server {urlsplit(issuer).hostname} publishes "
                                "no usable metadata (RFC 8414).")
+    if not _origine_commune(asm):
+        raise DiscoveryRefused("mcp_discovery_failed",
+                               "The sign-in server's authorization and token endpoints are "
+                               "not on the origin of the issuer it names: nothing was "
+                               "followed.")
     methods = asm.get("code_challenge_methods_supported")
     if isinstance(methods, list) and "S256" not in methods:
         raise DiscoveryRefused("mcp_discovery_failed",
@@ -189,8 +227,10 @@ def discover(mcp_url: str) -> dict:
     if "offline_access" in (asm.get("scopes_supported") or []) and \
             "offline_access" not in scopes:
         scopes.append("offline_access")
-    return {"resource": str(prm["resource"]),
-            "issuer": issuer,
+    return {"resource": api_apps.ressource_canonique(mcp_url),
+            "issuer": str(asm["issuer"]),
+            "iss_parameter_supported":
+                asm.get("authorization_response_iss_parameter_supported") is True,
             "authorize_url": _https(asm["authorization_endpoint"], "authorization url"),
             "token_url": _https(asm["token_endpoint"], "token url"),
             "scope": " ".join(scopes),
@@ -218,17 +258,20 @@ def _register(endpoint: str) -> str:
     _https(endpoint, "registration endpoint")
     body: object = {}
     try:
-        r = requests.post(endpoint, timeout=_TIMEOUT, allow_redirects=False, stream=True,
-                          json={"client_name": CLIENT_NAME,
-                                "redirect_uris": [api_oauth.redirect()],
-                                "grant_types": ["authorization_code", "refresh_token"],
-                                "response_types": ["code"],
-                                "token_endpoint_auth_method": "none"})
+        r = _session("registration endpoint", annonce=True).post(
+            endpoint, timeout=_TIMEOUT, allow_redirects=False, stream=True,
+            json={"client_name": CLIENT_NAME,
+                  "redirect_uris": [api_oauth.redirect()],
+                  "grant_types": ["authorization_code", "refresh_token"],
+                  "response_types": ["code"],
+                  "token_endpoint_auth_method": "none"})
         if r.status_code in (200, 201):
             corps = _lire_borne(r)
             body = json.loads(corps) if corps else {}
         else:
             r.close()
+    except egress.EgressRefused:
+        raise
     except (requests.RequestException, ValueError):
         body = {}
     cid = body.get("client_id") if isinstance(body, dict) else None
@@ -259,18 +302,27 @@ def complete_app(app: dict, by: Optional[str]) -> dict:
     any is missing (only the empty ones), else returned unchanged."""
     from ..db import api_apps as store
 
+    from ..connectors import api_apps
     conn = dict(app.get("connection") or {})
     if all(conn.get(k) for k in ("authorize_url", "token_url", "oauth_client_id")):
         return app
     meta = discover(conn.get("base_url") or "")
     found = {"authorize_url": meta["authorize_url"], "token_url": meta["token_url"],
              "scope": meta["scope"], "resource": meta["resource"]}
-    if not conn.get("oauth_client_id"):
-        found["oauth_client_id"] = client_id_for(meta)
-    from ..connectors import api_apps
     remplis = [k for k, v in found.items() if v and not conn.get(k)]
     for k in remplis:
         conn[k] = found[k]
+    conn[api_apps.ISSUER] = meta["issuer"]
+    conn[api_apps.ISS_ANNONCE] = meta["iss_parameter_supported"]
+    # Ce qui part du navigateur du membre et ce qui part de nous vont au MÊME service
+    # d'autorisation, celui de l'émetteur découvert — y compris quand l'admin a saisi
+    # l'un des deux points : vérifié AVANT toute inscription auprès de ce service.
+    refus = api_apps.refus_d_origine(conn)
+    if refus:
+        raise DiscoveryRefused("mcp_discovery_failed", refus)
+    if not conn.get("oauth_client_id"):
+        conn["oauth_client_id"] = client_id_for(meta)
+        remplis.append("oauth_client_id")
     # Ce que le serveur distant a annoncé reste marqué comme tel : son `token_url` est
     # revérifié sans exception de sortie à chaque échange (`auth/api_oauth.py`).
     conn[api_apps.DECOUVERTS] = sorted(set(conn.get(api_apps.DECOUVERTS) or []) |

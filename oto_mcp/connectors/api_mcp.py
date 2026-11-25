@@ -16,19 +16,25 @@ One short session per verb: `initialize` → `notifications/initialized` → the
 negotiated `MCP-Protocol-Version`, with or without a session id. The answer may be JSON
 or an SSE stream; only the JSON-RPC answer to OUR id is read. What the remote server
 writes (tool descriptions, text content, structured content, error messages) reaches
-the agent fenced as third-party data (`texte_tiers.cloture`). Every request goes out under the egress guard, with
-no redirect followed (a redirect would carry the key to a host nobody chose), and the
-body read is bounded.
+the agent fenced as third-party data (`texte_tiers.cloture`): descriptions, input
+schemas, annotations and every content block, each bounded (`MAX_DESCRIPTION`,
+`MAX_SCHEMA`, `MAX_TOOLS`, `MAX_SERVED`); a remote tool whose name is not a plain
+identifier (`NOM_OUTIL`) is never served nor called. Every request — `initialize`, the
+notification, the request, the session's `DELETE` — goes out on a session pinned by the
+egress guard (`egress_transport.harden`: the host is resolved once and checked at each
+connection), with no redirect followed (a redirect would carry the key to a host nobody
+chose), and the body read is bounded.
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Optional
 
 import requests
 
-from .. import egress
+from .. import egress, egress_transport
 from ..texte_tiers import cloture
 
 logger = logging.getLogger(__name__)
@@ -39,6 +45,14 @@ PROTOCOL_VERSION = "2025-06-18"
 TIMEOUT = 45
 MAX_BODY = 4 * 1024 * 1024
 MAX_PAGES = 10
+#: What reaches the agent, at most: tools listed, characters of one description, of one
+#: tool's input schema (as JSON), and of a whole answer (list or call).
+MAX_TOOLS = 200
+MAX_DESCRIPTION = 2000
+MAX_SCHEMA = 8000
+MAX_SERVED = 256 * 1024
+#: A remote tool's name: a plain identifier, or it is neither listed nor called.
+NOM_OUTIL = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 #: Modes that sign in with a person's password or a visitor's cookies: not for MCP.
 _MODES_REFUSES = ("session", "visitor")
 
@@ -72,7 +86,7 @@ def _session(fields: dict, row) -> requests.Session:
                          f"A Custom API in `{mode}` mode cannot reach an MCP server: use "
                          "a token, a header key, OAuth2 or the per-member sign-in "
                          "(`oauth2_user`).")
-    s = requests.Session()
+    s = egress_transport.harden(requests.Session(), connector="api", field="base_url")
     s.max_redirects = 0
     if mode == "oauth2_user":
         from ..auth import api_oauth
@@ -215,8 +229,9 @@ class _Client:
         try:
             self.s.delete(self.url, headers=self._entetes(),
                           timeout=10, allow_redirects=False)
-        # noqa: SILENT — fin de session de courtoisie : le serveur l'expire seul
-        except requests.RequestException:
+        # noqa: SILENT — fin de session de courtoisie : le serveur l'expire seul ; un
+        # refus d'egress à la connexion n'envoie rien, il ne masque pas l'issue du verbe
+        except (requests.RequestException, egress.EgressRefused):
             logger.info("api mcp: session close not acknowledged")
 
 
@@ -256,44 +271,66 @@ def _une_fois(fields: dict, row, fn):
 
 # --- the two verbs ---------------------------------------------------------------
 
+def _borne(texte: str, n: int) -> str:
+    return texte if len(texte) <= n else texte[:n] + f" […truncated at {n} characters]"
+
+
+def _json(valeur) -> str:
+    try:
+        return json.dumps(valeur, ensure_ascii=False, indent=1, sort_keys=False)
+    except (TypeError, ValueError):
+        return str(valeur)
+
+
+def nom_valide(name) -> bool:
+    return isinstance(name, str) and bool(NOM_OUTIL.match(name))
+
+
 def _resume(t: dict) -> dict:
+    """One remote tool as served: its name (already checked), and everything else it
+    wrote fenced and bounded — the description, the input schema (its titles,
+    descriptions and enums are the server's prose too), the annotations."""
     desc = t.get("description")
-    out = {"name": t.get("name"),
-           "description": _tiers("remote-mcp-tool-description", str(desc),
+    out = {"name": t["name"],
+           "description": _tiers("remote-mcp-tool-description",
+                                 _borne(str(desc), MAX_DESCRIPTION),
                                  "Tool description written by the remote MCP server")
-           if desc else desc,
-           "input_schema": t.get("inputSchema") or {"type": "object"}}
+           if desc else None,
+           "input_schema": cloture(
+               "remote-mcp-tool-schema",
+               _borne(_json(t.get("inputSchema") or {"type": "object"}), MAX_SCHEMA),
+               origine="Input schema written by the remote MCP server",
+               lecture="data (a JSON Schema)")}
     if isinstance(t.get("annotations"), dict):
-        out["annotations"] = t["annotations"]
+        out["annotations"] = cloture(
+            "remote-mcp-tool-annotations", _borne(_json(t["annotations"]), MAX_DESCRIPTION),
+            origine="Tool annotations written by the remote MCP server",
+            lecture="data (JSON)")
     return out
 
 
-def _contenu_cloture(bloc):
-    """A content block of a remote tool's answer, its text fenced as third-party data
-    (a `text` block, or the `text` of an embedded resource)."""
-    if not isinstance(bloc, dict):
-        return bloc
+def _contenu_cloture(bloc, reste: int = MAX_SERVED):
+    """A content block of a remote tool's answer, fenced as third-party data, within
+    `reste` characters: a `text` block keeps its type with its text fenced; any other
+    block (an embedded resource, a `resource_link`, an image…) is served whole as fenced
+    JSON — its uri, name, title, description and data are the server's words too."""
     origine = "Content returned by the remote MCP server"
-    if bloc.get("type") == "text" and isinstance(bloc.get("text"), str):
-        return {**bloc, "text": _tiers("remote-mcp-content", bloc["text"], origine)}
-    res = bloc.get("resource")
-    if bloc.get("type") == "resource" and isinstance(res, dict) \
-            and isinstance(res.get("text"), str):
-        return {**bloc, "resource": {**res, "text": _tiers("remote-mcp-content",
-                                                           res["text"], origine)}}
-    return bloc
+    if isinstance(bloc, dict) and bloc.get("type") == "text" \
+            and isinstance(bloc.get("text"), str):
+        return {"type": "text",
+                "text": _tiers("remote-mcp-content", _borne(bloc["text"], reste), origine)}
+    genre = bloc.get("type") if isinstance(bloc, dict) else None
+    return {"type": genre if nom_valide(genre) else "unknown",
+            "fenced": cloture("remote-mcp-content", _borne(_json(bloc), reste),
+                              origine=origine, lecture="data (JSON)")}
 
 
-def _structure_cloture(valeur) -> str:
+def _structure_cloture(valeur, reste: int = MAX_SERVED) -> str:
     """The remote tool's `structuredContent`, served as fenced third-party data: its
     JSON, indented, inside the same named block as its text content. Any string in it
     is the remote server's prose, so the object as a whole is fenced — the agent still
     reads it as JSON, with no tag to strip and no key renamed."""
-    try:
-        texte = json.dumps(valeur, ensure_ascii=False, indent=1, sort_keys=False)
-    except (TypeError, ValueError):
-        texte = str(valeur)
-    return cloture("remote-mcp-structured", texte,
+    return cloture("remote-mcp-structured", _borne(_json(valeur), reste),
                    origine="Structured content returned by the remote MCP server",
                    lecture="data (JSON)")
 
@@ -308,11 +345,27 @@ def list_tools(fields: dict, row, definition: dict) -> dict:
             res = c.request("tools/list", {"cursor": cursor} if cursor else {}) or {}
             tools += [t for t in (res.get("tools") or []) if isinstance(t, dict)]
             cursor = res.get("nextCursor")
-            if not cursor:
+            if not cursor or len(tools) >= MAX_TOOLS * 4:
                 break
-        vus = [_resume(t) for t in tools if not ouverts or t.get("name") in ouverts]
-        return {"tools": vus, "count": len(vus),
-                "hidden": len(tools) - len(vus) if ouverts else 0}
+        nommes = [t for t in tools if nom_valide(t.get("name"))]
+        ouverts_ici = [t for t in nommes if not ouverts or t["name"] in ouverts]
+        vus: list[dict] = []
+        taille, tronque = 0, False
+        for t in ouverts_ici:
+            r = _resume(t)
+            poids = len(_json(r))
+            if len(vus) >= MAX_TOOLS or taille + poids > MAX_SERVED:
+                tronque = True
+                break
+            vus.append(r)
+            taille += poids
+        out = {"tools": vus, "count": len(vus),
+               "hidden": len(nommes) - len(ouverts_ici) if ouverts else 0}
+        if len(nommes) < len(tools):
+            out["refused_names"] = len(tools) - len(nommes)
+        if tronque or cursor:
+            out["truncated"] = True
+        return out
     return _une_fois(fields, row, run)
 
 
@@ -322,6 +375,10 @@ def call_tool(fields: dict, row, definition: dict, name: Optional[str],
         raise McpRefused("mcp_tool_required",
                          "`api_act(op=\"call_mcp\")` needs `operation`: the remote tool's "
                          "name, from `api(op=\"mcp_tools\")`.")
+    if not nom_valide(name):
+        raise McpRefused("mcp_tool_name_invalid",
+                         "A remote tool's name is 1 to 64 letters, digits, `_`, `.` or "
+                         "`-`: this one is not called.")
     ouverts = allowlist(definition)
     if ouverts and name not in ouverts:
         raise McpRefused("mcp_tool_not_allowed",
@@ -333,9 +390,21 @@ def call_tool(fields: dict, row, definition: dict, name: Optional[str],
 
     def run(c: _Client) -> dict:
         res = c.request("tools/call", {"name": name, "arguments": arguments or {}}) or {}
-        out = {"tool": name, "is_error": bool(res.get("isError")),
-               "content": [_contenu_cloture(b) for b in (res.get("content") or [])]}
-        if "structuredContent" in res:
-            out["structured"] = _structure_cloture(res["structuredContent"])
+        blocs = res.get("content") or []
+        blocs = blocs if isinstance(blocs, list) else []
+        contenu: list = []
+        reste = MAX_SERVED
+        for b in blocs:
+            if reste <= 0:
+                break
+            servi = _contenu_cloture(b, reste)
+            contenu.append(servi)
+            reste -= len(_json(servi))
+        out = {"tool": name, "is_error": bool(res.get("isError")), "content": contenu}
+        if "structuredContent" in res and reste > 0:
+            out["structured"] = _structure_cloture(res["structuredContent"], reste)
+            reste -= len(out["structured"])
+        if len(contenu) < len(blocs) or reste <= 0:
+            out["truncated"] = True
         return out
     return _une_fois(fields, row, run)
