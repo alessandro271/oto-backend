@@ -189,9 +189,10 @@ def courant() -> Optional[Porteur]:
 
 
 def _facteurs_logto(sub_logto: str) -> list[str]:
-    """Les types de facteurs enrôlés (seam de test). Lève sur toute panne."""
-    from .auth.annuaire import facteurs_mfa
-    return facteurs_mfa(sub_logto, timeout=DELAI_LOGTO_S)
+    """Les types de facteurs enrôlés (seam de test). Lève sur toute panne — un sub
+    d'un tenant tiers compris (`require_primary_tenant`)."""
+    from .auth.annuaire import facteurs_2fa
+    return [str(f.get("type")) for f in facteurs_2fa(sub_logto, delai=DELAI_LOGTO_S)]
 
 
 def oublier(sub_logto: Optional[str] = None) -> None:

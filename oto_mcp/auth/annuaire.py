@@ -159,28 +159,6 @@ def logto_user_primary_email(sub: str) -> str | None:
         return None
 
 
-def facteurs_mfa(sub: str, *, timeout: float = 15) -> list[str]:
-    """Les TYPES des seconds facteurs enrôlés d'un user Logto (Management API
-    `GET /api/users/{id}/mfa-verifications`) — `Totp`, `WebAuthn`, `BackupCode`, jamais
-    une valeur. Lu par la garde des administrateurs (`garde_admin`).
-
-    ⚠️ **Lève sur toute panne**, et sur un sub qualifié (`ForeignTenantDirectory`) :
-    c'est à l'appelant de refuser. Une liste vide veut dire « aucun facteur », jamais
-    « on ne sait pas »."""
-    import requests
-
-    from ..tenancy import require_primary_tenant
-    require_primary_tenant(sub, "lecture des facteurs MFA Logto")
-    # Le MÊME délai borne l'obtention du jeton de gestion : un Logto lent ne doit pas
-    # tenir un fil de requête plus longtemps que ce que l'appelant a demandé.
-    base, tok = _logto_base(), _mgmt_token(timeout=timeout)
-    r = requests.get(f"{base}/api/users/{sub}/mfa-verifications",
-                     headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
-                     timeout=timeout)
-    r.raise_for_status()
-    return [str(v.get("type")) for v in r.json()]
-
-
 def reset_user_mfa(sub: str) -> list[str]:
     """Efface tous les facteurs de double authentification d'un user Logto (Management
     API) — geste de récupération de compte : perte de l'appli ET des codes de secours,
@@ -360,22 +338,26 @@ class LectureInachevee(RuntimeError):
     l'appelant dit « à refaire » (le webhook rend 502, Logto relivre)."""
 
 
-def facteurs_2fa(sub: str) -> list[dict]:
+def facteurs_2fa(sub: str, *, delai: float | None = None) -> list[dict]:
     """Les facteurs de double authentification de `sub` (annuaire primaire), tels que
     les rend la Management API (`GET /api/users/{id}/mfa-verifications` :
     `{id, type, createdAt, …}` par facteur). Un appel, borné à `_DELAI_REQUETE_S`.
-    Lève `LectureInachevee` si Logto refuse ou ne répond pas."""
+    Lève `LectureInachevee` si Logto refuse ou ne répond pas.
+
+    `delai` (secondes) borne l'appel ET l'obtention du jeton de gestion : la garde des
+    administrateurs (`garde_admin`) le paie dans le fil d'une requête, un Logto lent ne
+    doit pas le tenir plus longtemps."""
     import requests
     from urllib.parse import quote
 
     from ..tenancy import require_primary_tenant
     require_primary_tenant(sub, "lecture des facteurs de double authentification")
     try:
-        tok = _mgmt_token()
+        tok = _mgmt_token() if delai is None else _mgmt_token(timeout=delai)
         r = requests.get(
             f"{_logto_base()}/api/users/{quote(sub, safe='')}/mfa-verifications",
             headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
-            timeout=_DELAI_REQUETE_S)
+            timeout=_DELAI_REQUETE_S if delai is None else delai)
     except (RuntimeError, requests.RequestException) as e:
         raise LectureInachevee(
             f"facteurs de double authentification de {sub} : {e}") from e

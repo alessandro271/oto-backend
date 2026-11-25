@@ -421,11 +421,12 @@ CASA AL1 3.3.1 (« le MFA est imposé à tout compte d'administration ») ; code
   aucune n'est une surface d'administration, mais un travail d'opérateur y garde son
   rôle.
 - **Les facteurs** : `GET /api/users/{id}/mfa-verifications` (API de gestion, credential
-  `OTO_MCP_LOGTO_M2M_*`, `auth.annuaire.facteurs_mfa`), sur l'identifiant Logto du JWT
+  `OTO_MCP_LOGTO_M2M_*`, `auth.annuaire.facteurs_2fa`), sur l'identifiant Logto du JWT
   (avant le drain d'alias), délai 5 s par appel (jeton de gestion compris), une seule
   lecture à la fois par compte. Cache par compte : 5 min positif, 1 min « aucun
-  facteur », 10 s panne. `reset_user_mfa` le vide. Payé uniquement pour un compte dont
-  le rôle EN BASE est `admin`/`super_admin`.
+  facteur », 10 s panne. `reset_user_mfa` le vide, comme toute empreinte de facteurs
+  posée (`revocation_2fa.poser`, changement constaté par le webhook Logto). Payé
+  uniquement pour un compte dont le rôle EN BASE est `admin`/`super_admin`.
 - **Le refus se dit** : `PLATFORM_ADMIN`, `SUPER_ADMIN`, `LIBRARY_PUBLISHER`,
   `PLATFORM_OPERATOR_OPT` et les règles de tenant rendent `403` avec un code nommé —
   `admin_interactive_session_required`, `admin_mfa_required` (enrôler TOTP ou clé

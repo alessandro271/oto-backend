@@ -489,7 +489,6 @@ async def _authenticate(
     sub = access_token.claims.get("sub")
     if not sub:
         return None, _json_error(request, 401, "missing_sub")
-    sub_logto = sub     # l'identité Logto vérifiée, AVANT le drain d'alias
     # Drain d'alias (B1) : canonicaliser le sub AVANT l'upsert. ⚠️ L'`upsert_user` qui
     # suit n'est PAS sous commande : un vieux sub non redirigé n'échoue pas ici, il
     # RECRÉE le compte supprimé par la fusion. Le drain est donc porteur — il ne
@@ -530,7 +529,10 @@ async def _authenticate(
         # précède déjà sur ce chemin ; celle-ci tient si un appelant l'omet.
         return None, _json_error(request, 403, refus.code, str(refus))
     _EMAIL_VERIFIE.set((sub, email_verifie))
-    porteur = garde_admin.Porteur(garde_admin.SESSION, sub, sub_logto=sub_logto)
+    # Les facteurs se lisent sous l'identité Logto VÉRIFIÉE (le `sub` du jeton, avant le
+    # drain d'alias) : un ancien identifiant redirigé n'a plus de ligne sous le canonique.
+    porteur = garde_admin.Porteur(garde_admin.SESSION, sub,
+                                  sub_logto=access_token.claims.get("sub"))
     garde_admin.poser(porteur)
     _memoriser_porteur(request, cle, sub, email_verified=email_verifie, porteur=porteur)
     servi = _maybe_view_as(sub, apply_view_as)
