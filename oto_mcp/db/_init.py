@@ -742,7 +742,7 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_OUTILS_ANNULES):
         conn.execute(runner_triggers.DDL_COLONNE_OUTILS_ANNULES)
     # Commentaires de CELLULE et de COLONNE d'un tableau (`datastore_commentaires`) —
-    # les mêmes ordres que la révision `20261120_1215_doc_cell_comments` : ordre
+    # les mêmes ordres que la révision `20261125_1710_doc_cell_comments` : ordre
     # indifférent. Chacun gardé par le catalogue : sur une base à jour, aucun verrou.
     from . import datastore_commentaires as _commentaires_tableau
     if _colonne_absente(conn, "datastore_row_comments", _commentaires_tableau.COLONNE_CIBLE):

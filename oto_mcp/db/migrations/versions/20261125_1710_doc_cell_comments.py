@@ -29,8 +29,8 @@ colonne, sans ligne, sont détruits d'abord, puis `row_id` redevient NOT NULL �
 commentaires de cellule restent, comme commentaires de leur ligne), puis la table des
 commentaires de page (ils se perdent ; les pages restent entières).
 
-Révision : 20261120_1215_doc_cell_comments
-Précédente : 20261119_1600_repar_consentie
+Révision : 20261125_1710_doc_cell_comments
+Précédente : 20261125_1700_responsables
 """
 from __future__ import annotations
 
@@ -39,8 +39,8 @@ from alembic import op
 from oto_mcp.db import datastore_commentaires as dc
 from oto_mcp.db.schema.projects import COMMENTAIRES
 
-revision = "20261120_1215_doc_cell_comments"
-down_revision = "20261119_1600_repar_consentie"
+revision = "20261125_1710_doc_cell_comments"
+down_revision = "20261125_1700_responsables"
 branch_labels = None
 depends_on = None
 

@@ -1,4 +1,4 @@
-"""La révision `20261120_1215_doc_cell_comments` pose les commentaires de page et la
+"""La révision `20261125_1710_doc_cell_comments` pose les commentaires de page et la
 cible élargie des commentaires de tableau (cellule, colonne).
 
 Mêmes objets que le démarrage (même fragment, mêmes ordres) : la révision doit les poser
@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 RACINE = Path(__file__).resolve().parents[2]
-_PRECEDENTE = "20261119_1600_repar_consentie"
-_REVISION = "20261120_1215_doc_cell_comments"
+_PRECEDENTE = "20261125_1700_responsables"
+_REVISION = "20261125_1710_doc_cell_comments"
 
 
 def _alembic():

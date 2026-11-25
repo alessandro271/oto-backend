@@ -8,7 +8,9 @@
 4. la face agent : les deux outils sont les mêmes capacités ;
 5. CELLULES et COLONNES (20/11/2026) : un commentaire de cellule est un commentaire de
    sa ligne qui nomme une colonne ; une colonne a son propre fil ; les comptes rendent
-   `cells` et `columns` ; une clé inconnue est refusée.
+   `cells` et `columns` ; une clé inconnue est refusée ;
+6. la face agent suit `agent_access` : une colonne masquée n'a pas de commentaires
+   (exclus en SQL, la pagination reste juste) et ne se commente pas.
 """
 from __future__ import annotations
 
@@ -419,3 +421,69 @@ def test_les_outils_agent_prennent_la_colonne_et_les_routes_de_colonne_sont_rest
         assert cap.mcp is None
         assert [(b.verb, b.path.split("{column}")[1]) for b in cap.rest_bindings()] == [
             (verbe, fin)]
+
+
+# ── 6. la face agent suit `agent_access` (comme l'historique) ─────────────────
+
+def _table_masquee(rest) -> tuple[str, int, str]:
+    from oto_mcp import db
+    ns_id = db.create_datastore("user", A, f"commentaires-masques-{uuid.uuid4().hex[:6]}")
+    db.set_datastore_schema(ns_id, {"fields": [
+        {"key": "vu", "type": "number"},
+        {"key": "cache", "type": "number", "agent_access": "none"}]})
+    r = rest.post(f"/api/datastores/{ns_id}/rows", headers=_h(), json={"vu": 1, "cache": 1})
+    assert r.status_code == 201, r.text
+    return str(ns_id), ns_id, r.json()["_id"]
+
+
+def _face_agent(fn):
+    from oto_mcp import session_org
+    jeton = session_org.set_call_face(session_org.FACE_MCP)
+    try:
+        return fn()
+    finally:
+        session_org.reset_call_face(jeton)
+
+
+def test_face_agent_les_commentaires_d_une_colonne_masquee_ne_se_lisent_pas(rest):
+    from oto_mcp.capabilities._types import ResolvedCtx
+    from oto_mcp.capabilities.datastore import comments as dc
+    ns, _, rid = _table_masquee(rest)
+    # Écrits sur l'écran du propriétaire, du plus ancien au plus récent : le masquage
+    # doit se faire EN SQL, sinon la page de 2 tomberait à 1 et dirait qu'il en reste.
+    _poster(rest, ns, rid, "ligne")
+    for corps, col in (("vu 1", "vu"), ("cache 1", "cache"), ("cache 2", "cache"),
+                       ("vu 2", "vu")):
+        r = rest.post(_url(ns, rid), headers=_h(), json={"body": corps, "column": col})
+        assert r.status_code == 201, r.text
+
+    page = _face_agent(lambda: dc._row_comments(ResolvedCtx(sub=A), dc.RowCommentsInput(
+        datastore=ns, row_id=rid, limit=2)))
+    assert [c["body"] for c in page["comments"]] == ["vu 1", "vu 2"]
+    assert page["next_before_id"] is not None
+    suite = _face_agent(lambda: dc._row_comments(ResolvedCtx(sub=A), dc.RowCommentsInput(
+        datastore=ns, row_id=rid, limit=2, before_id=page["next_before_id"])))
+    assert [c["body"] for c in suite["comments"]] == ["ligne"]
+    assert suite["next_before_id"] is None
+    nommee = _face_agent(lambda: dc._row_comments(ResolvedCtx(sub=A), dc.RowCommentsInput(
+        datastore=ns, row_id=rid, column="cache")))
+    assert nommee["comments"] == []
+    # Hors face agent (l'écran du propriétaire), tout est servi.
+    assert len(rest.get(_url(ns, rid), headers=_h()).json()["comments"]) == 5
+
+
+def test_face_agent_une_colonne_masquee_ne_se_commente_pas(rest):
+    from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
+    from oto_mcp.capabilities.datastore import comments as dc
+    ns, _, rid = _table_masquee(rest)
+    with pytest.raises(AuthzDenied) as refus:
+        _face_agent(lambda: dc._row_comment(ResolvedCtx(sub=A), dc.RowCommentInput(
+            datastore=ns, row_id=rid, column="cache", body="vu par l'agent")))
+    assert (refus.value.status, refus.value.code) == (400, "unknown_column")
+    assert rest.get(_url(ns, rid), headers=_h()).json()["comments"] == []
+    ok = _face_agent(lambda: dc._row_comment(ResolvedCtx(sub=A), dc.RowCommentInput(
+        datastore=ns, row_id=rid, column="vu", body="colonne visible")))
+    assert ok["column"] == "vu"
+    # Le propriétaire, lui, commente la colonne masquée.
+    r = rest.post(_url(ns, rid), headers=_h(), json={"body": "à moi", "column": "cache"})
+    assert r.status_code == 201, r.text

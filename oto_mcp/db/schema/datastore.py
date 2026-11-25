@@ -160,7 +160,7 @@ COMMENTAIRES = """
 -- `column_key` = une CELLULE ; `column_key` seul = une COLONNE du tableau. Jamais aucun
 -- des deux. Sur une base d'avant, la colonne, le relâchement de `row_id` et la contrainte
 -- sont posés par le démarrage (`db/datastore_commentaires.py::DDL_CIBLE`) et par la
--- révision `20261120_1215_doc_cell_comments`.
+-- révision `20261125_1710_doc_cell_comments`.
 CREATE TABLE IF NOT EXISTS datastore_row_comments (
     id BIGSERIAL PRIMARY KEY,
     ns_id BIGINT NOT NULL REFERENCES user_datastores(id) ON DELETE CASCADE,

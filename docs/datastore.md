@@ -4039,4 +4039,8 @@ ni l'un ni l'autre. Chaque commentaire servi porte `column` (`null` = la ligne).
   les lignes demandées qui existent encore) et `columns` (`{colonne: n}`, les
   commentaires de colonne de tout le tableau, par l'index partiel
   `idx_datastore_row_comments_colonne`).
-- Révision `20261120_1215_doc_cell_comments` (le démarrage pose les mêmes ordres).
+- **Face agent** : comme l'historique, les commentaires de cellule suivent
+  l'`agent_access` de leur colonne. Sur `data_row_comments`, les commentaires d'une
+  colonne masquée (`"none"`) sont exclus en SQL (la pagination reste juste) ; sur
+  `data_row_comment`, une colonne masquée est refusée `400 unknown_column`.
+- Révision `20261125_1710_doc_cell_comments` (le démarrage pose les mêmes ordres).

@@ -12,14 +12,14 @@ aucune lecture d'ici ne le rend.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Iterable, Optional
 
 from ._conn import _connect
 
 _COLONNES = "id, row_id, column_key, auteur_sub, body, created_at"
 
 # ── La cible élargie, sur une base d'avant (démarrage ET révision
-# `20261120_1215_doc_cell_comments`, mêmes ordres : ordre indifférent) ──────────────
+# `20261125_1710_doc_cell_comments`, mêmes ordres : ordre indifférent) ──────────────
 COLONNE_CIBLE = "column_key"
 DDL_COLONNE_CIBLE = ("ALTER TABLE datastore_row_comments "
                      "ADD COLUMN IF NOT EXISTS column_key TEXT")
@@ -43,15 +43,24 @@ DDL_INDEX_COLONNE = (
 
 
 def lister(ns_id: int, row_id: str, *, colonne: Optional[str] = None,
-           avant_id: Optional[int] = None, limit: int = 50) -> list[dict]:
+           avant_id: Optional[int] = None, limit: int = 50,
+           sauf_colonnes: Iterable[str] = ()) -> list[dict]:
     """Les commentaires vivants d'une ligne — la ligne ET ses cellules, ou la seule
     cellule `colonne` —, le plus récent d'abord (`id` décroissant), au plus `limit + 1` :
-    celui de trop dit à l'appelant qu'il reste une page."""
+    celui de trop dit à l'appelant qu'il reste une page.
+
+    `sauf_colonnes` écarte, EN SQL, les commentaires des cellules de ces colonnes (les
+    colonnes masquées à un agent) : filtrés après coup, ils videraient des pages et
+    fausseraient `limit + 1`. Les commentaires de la ligne elle-même restent."""
     clauses = ["ns_id = %s", "row_id = %s", "deleted_at IS NULL"]
     params: list = [int(ns_id), str(row_id)]
     if colonne is not None:
         clauses.append("column_key = %s")
         params.append(str(colonne))
+    exclues = sorted({str(c) for c in sauf_colonnes})
+    if exclues:
+        clauses.append("(column_key IS NULL OR NOT (column_key = ANY(%s)))")
+        params.append(exclues)
     if avant_id is not None:
         clauses.append("id < %s")
         params.append(int(avant_id))

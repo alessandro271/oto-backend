@@ -7,6 +7,12 @@ d'une CELLULE (la ligne + `column`) ou d'une COLONNE entière
 colonne : le fil de la ligne le rend (avec `column`), `?column=` ne garde que cette
 cellule, et le compte de la ligne le compte. **Colonne.** Sans ligne : ni le fil d'une
 ligne ni son compte ne le rendent ; ses routes à elle, et `columns` dans les comptes.
+**Face agent.** Les commentaires de cellule suivent l'`agent_access` de leur colonne,
+comme l'historique d'une ligne (`history.py`) : sur un appel d'agent, une colonne
+masquée (`"none"`) n'a pas de commentaires — exclus en SQL à la lecture, pour que la
+pagination reste juste — et ne se commente pas (`400 unknown_column`, le refus d'une
+colonne qui n'existe pas : l'agent n'en apprend pas plus que du schéma servi).
+
 Une colonne se nomme par sa clé : déclarée au schéma, ou présente dans les données
 (un tableau sans schéma complet a des colonnes non déclarées). Une colonne retirée du
 schéma garde ses commentaires, toujours servis : rien ne se détruit en silence.
@@ -37,6 +43,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator
 
 from ... import db, ownership
+from ...datastore import acces_agent as aga
 from ...datastore import identite
 from ...datastore.core import DatastoreNotFound, make_store
 from ...datastore.identite import Adresse
@@ -245,9 +252,23 @@ def _colonne_connue(ns_id: int, colonne: str, donnees: Optional[dict] = None) ->
                 return cle
         elif cle in db.datastore_row_keys(ns_id):
             return cle
-    raise AuthzDenied(400, "unknown_column", (
+    raise _refus_colonne(colonne)
+
+
+def _refus_colonne(colonne: str) -> AuthzDenied:
+    return AuthzDenied(400, "unknown_column", (
         f"No column `{colonne}` in this table: name a column key declared in its schema "
         "(or present in its data)."))
+
+
+def _masquees(ns_id: int) -> frozenset:
+    """Les colonnes masquées à l'appelant : celles d'`agent_access: "none"` sur un appel
+    d'agent, aucune ailleurs (l'écran du propriétaire voit tout) — la règle de
+    l'historique (`history._masquees`)."""
+    if not aga.appel_d_agent():
+        return frozenset()
+    ns = db.get_datastore_by_id(ns_id) or {}
+    return frozenset(aga.masquees(ns.get("schema")))
 
 
 def _servi(c: dict, sub: Optional[str], gouverne: bool, emails: dict) -> dict:
@@ -268,8 +289,10 @@ def _servi(c: dict, sub: Optional[str], gouverne: bool, emails: dict) -> dict:
 def _row_comments(ctx: ResolvedCtx, inp: RowCommentsInput) -> dict:
     store, ns, ns_id, row_id, gouverne, absente = _ligne(ctx, inp)
     limit = max(1, min(LIMITE_MAX, inp.limit))
-    lus = db.datastore_commentaires.lister(ns_id, row_id, colonne=inp.column,
-                                           avant_id=inp.before_id, limit=limit)
+    cachees = _masquees(ns_id)
+    lus = ([] if inp.column in cachees else db.datastore_commentaires.lister(
+        ns_id, row_id, colonne=inp.column, avant_id=inp.before_id, limit=limit,
+        sauf_colonnes=cachees))
     # Comme l'historique : une ligne absente sans rien à montrer est une ligne
     # inconnue, pas une ligne sans commentaire.
     if absente and not lus and inp.before_id is None:
@@ -315,6 +338,8 @@ def _row_comment(ctx: ResolvedCtx, inp: RowCommentInput) -> dict:
     _, _, ns_id, row_id, gouverne, _ = _ligne(ctx, inp, ecrire=True)
     colonne = None
     if inp.column is not None:
+        if inp.column.strip() in _masquees(ns_id):
+            raise _refus_colonne(inp.column)
         colonne = _colonne_connue(ns_id, inp.column,
                                   (db.datastore_get_row(ns_id, row_id) or {}).get("data") or {})
     c = db.datastore_commentaires.ajouter(ns_id, row_id, auteur_sub=ctx.sub, body=inp.body,
