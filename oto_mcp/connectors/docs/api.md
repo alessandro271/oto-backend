@@ -8,7 +8,7 @@ the Custom API connector connects a tool that has **no card of its own** in the 
 
 ## setup — connect it, or have it connected
 
-- fill in the card yourself, or ask the agent: `api(op="setup_link", label="Acme Payroll", base_url=…, auth_mode="bearer")` returns a link to this form, pre-filled with everything **except** the key, to send to whoever holds the key
+- fill in the card yourself, or ask the agent: `api(op="setup_link", label="Acme Payroll", base_url=…, auth_mode="bearer")` returns a link to this form, pre-filled with the name (never an address or an auth mode), to send to whoever holds the key: they type the base URL and pick the auth mode themselves (a link may come from a manipulated agent, so the form never takes an address or a mode from it), then paste the key
 - several APIs, or several accounts of the same one: each is a named account of the card, chosen on every call with `_account`
 - an internal address (loopback, private network) is refused until the platform operator declares it as a named exception
 
