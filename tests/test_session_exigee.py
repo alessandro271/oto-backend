@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 from starlette.requests import Request
@@ -63,6 +64,20 @@ _SESSION_SEULE = [
     ("billing.subscribe", 0), ("billing.confirm", 0), ("billing.cancel", 0),
     ("billing.resume", 0), ("billing.method_change", 0),
     ("billing.method_change_confirm", 0),
+    # Gestes d'administration (#1913) : rôles et droits, état d'un compte ou d'un tenant,
+    # clés et secrets, plan et contrat.
+    ("admin.tenant_admin_add", 0), ("admin.tenant_admin_remove", 0),
+    ("admin.account", 0), ("admin.tenant_disablement", 0),
+    ("billing.admin_set_plan", 0), ("billing.admin_set_contract", 0),
+    ("billing.admin_cancel_contract", 0),
+    ("admin.tenant_key_set", 0), ("admin.tenant_key_clear", 0),
+    ("admin.orgs.billing_identity.set", 0), ("org.admin.create", 0),
+    ("platform.group.grant_key", 0), ("platform.group.revoke_key", 0),
+    ("platform.connector.access_set", 0),
+    ("admin.tenant_app_set", 0), ("admin.tenant_app_clear", 0),
+    ("platform.editor_app.set", 0), ("platform.editor_app.delete", 0),
+    ("platform.key.create", 0), ("platform.key.delete", 0),
+    ("platform.runner.worker", 0), ("platform.option.set", 0),
     # Déjà là avant ce lot — gardés ici pour que la liste dise TOUT ce qui est fermé.
     ("org.api_key.create", 0), ("org.api_key.delete", 0),
     ("platform.token.create", 0), ("platform.token.delete", 0),
@@ -76,13 +91,96 @@ def test_la_route_sensible_refuse_le_porteur_de_jeton(cle, index):
         f"{cle} : le jeton émetteur ne franchit que les routes de SES jetons")
 
 
-@pytest.mark.parametrize("cle", [
-    "org.get", "org.member.add", "org.invite.create", "group.member.add",
-    "platform.org.grant_key", "platform.org.revoke_key"])
-def test_les_routes_laissees_ouvertes_le_restent(cle):
+@pytest.mark.parametrize("cle,index", [
+    ("org.get", 0), ("org.member.add", 0), ("org.invite.create", 0),
+    ("group.member.add", 0),
+    ("platform.key.grant", 0), ("platform.key.revoke", 0),
+    ("connectors.bulk_select", 0),
+    # Restent ouverts en attendant une décision (#1913) : leur fermeture tiendrait en
+    # une ligne (`allow_api_token=False` sur le binding).
+    ("org.secret.set", 0), ("org.secret.set", 1),
+    ("org.secret.delete", 0), ("org.secret.delete", 1)])
+def test_les_routes_laissees_ouvertes_le_restent(cle, index):
     """Lecture générale, ajout/invitation d'un simple membre (la garde de handler juge le
-    rang), et les routes d'administration qu'un service tiers appelle avec son jeton."""
-    assert "allow_api_token" not in _kwargs_d_authentification(cle, 0), cle
+    rang), les routes d'administration qu'un service tiers appelle avec son jeton, et
+    celles qui attendent une décision."""
+    assert "allow_api_token" not in _kwargs_d_authentification(cle, index), cle
+
+
+# ── Les routes appelées sous jeton par un service d'instance ─────────────────
+#
+# Liste NOMINATIVE, par verbe et chemin : un service d'instance les appelle sous un
+# jeton `oto_`. Elles restent ouvertes au jeton sur les deux crans — le binding ne le
+# refuse pas, et le handler ne pose pas la garde. Une fermeture qui en toucherait une
+# casse ici.
+
+_APPELEES_SOUS_JETON = [
+    ("GET", "/api/admin/tenants/{slug}"),
+    ("GET", "/api/admin/tenants/{slug}/keys"),
+    ("GET", "/api/admin/tenants/{slug}/keys/{provider}/grants"),
+    ("PUT", "/api/admin/tenants/{slug}/keys/{provider}/grants/{org_id}"),
+    ("DELETE", "/api/admin/tenants/{slug}/keys/{provider}/grants/{org_id}"),
+    ("GET", "/api/admin/platform-keys"),
+    ("GET", "/api/admin/connectors/{provider}/platform-access"),
+    ("POST", "/api/admin/orgs/{id}/grants/{provider}"),
+    ("DELETE", "/api/admin/orgs/{id}/grants/{provider}"),
+    ("GET", "/api/admin/orgs/{id}/unipile-limit"),
+    ("PUT", "/api/admin/orgs/{id}/unipile-limit"),
+    ("GET", "/api/admin/usage/first-calls"),
+    ("POST", "/api/admin/orgs/{id}/suspension"),
+    ("POST", "/api/admin/orgs/{id}/trial"),
+    ("GET", "/api/admin/orgs/{id}"),
+    ("GET", "/api/admin/orgs"),
+    ("GET", "/api/admin/unipile/seats"),
+    ("DELETE", "/api/admin/unipile/seats/{account_id}"),
+]
+
+
+def _par_chemin(verbe: str, chemin: str):
+    from oto_mcp.capabilities import registry
+    trouves = [(c, i) for c in registry.CAPABILITIES
+               for i, b in enumerate(c.rest_bindings())
+               if (b.verb, b.path) == (verbe, chemin)]
+    assert len(trouves) == 1, f"{verbe} {chemin} : {len(trouves)} binding(s)"
+    return trouves[0]
+
+
+class _GardeAppelee(Exception):
+    pass
+
+
+@pytest.mark.parametrize("verbe,chemin", _APPELEES_SOUS_JETON,
+                         ids=[f"{v} {c}" for v, c in _APPELEES_SOUS_JETON])
+def test_appelee_sous_jeton_par_un_service_d_instance(verbe, chemin, sous_jeton_rest,
+                                                       monkeypatch):
+    """Appelées sous jeton par un service d'instance : jamais 403 `api_token_forbidden`."""
+    c, index = _par_chemin(verbe, chemin)
+    # Cran 1 : l'authentification de la route accepte le jeton.
+    assert "allow_api_token" not in _kwargs_d_authentification(c.key, index), c.key
+
+    # Cran 2 : le handler, joué sous un jeton, n'appelle pas la garde. Elle lit
+    # `porteur_de_jeton` à l'appel : la remplacer la fait SIGNALER, avant toute autre
+    # lecture ; ce que le handler fait ensuite (une base absente…) n'est pas jugé ici.
+    def _signale():
+        raise _GardeAppelee(c.key)
+    monkeypatch.setattr(_session_exigee, "porteur_de_jeton", _signale)
+
+    def _pas_de_base():
+        raise RuntimeError("pas de base dans ce test")
+    from oto_mcp.db import _conn
+    monkeypatch.setattr(_conn, "_get_pool", _pas_de_base)
+    try:
+        champs = {n: (5 if f.annotation in (int, Optional[int]) else "x")
+                  for n, f in c.Input.model_fields.items() if f.is_required()}
+        inp = c.Input.model_construct(**champs)
+        resultat = c.handler(SimpleNamespace(sub="u-jeton", org_id=5, role=None,
+                                             group_id=None, channel="rest"), inp)
+        if asyncio.iscoroutine(resultat):
+            asyncio.run(resultat)
+    except _GardeAppelee:
+        pytest.fail(f"{verbe} {chemin} : le handler pose `exiger_session`")
+    except Exception as e:  # noqa: BLE001 — tout sauf la garde : hors du sujet
+        assert getattr(e, "code", None) != "api_token_forbidden", (verbe, chemin)
 
 
 # ── 2. La garde de handler ───────────────────────────────────────────────────
@@ -151,7 +249,10 @@ _CTX = SimpleNamespace(sub="u-admin", org_id=5, role="org_admin", group_id=None,
 def _gestes():
     """Chaque geste sensible, appelé par SON handler de domaine — celui que servent la
     route REST ET la console MCP. La garde tombe avant toute lecture en base."""
-    from oto_mcp.capabilities import admin_console, org_console, resources, users_admin
+    from oto_mcp.capabilities import (account_suspension as susp, admin_console, billing,
+                                      org_console, resources, tenant_admins as ta,
+                                      tenant_desactivation as td,
+                                      tenant_keys as tk, tenants_admin, users_admin)
     from oto_mcp.capabilities.groups import members as gm
     from oto_mcp.capabilities.orgs import admin as oa, members as om, mfa, update
     return {
@@ -176,7 +277,59 @@ def _gestes():
         "oto_resource op=transfer": lambda: resources._resources(
             _CTX, resources.ResourceInput(op="transfer", resource_type="project",
                                           resource_id="12", new_owner_org=5)),
+        # Gestes d'administration (#1913). La console MCP appelle le même handler de
+        # domaine que la route REST : chacun est joué par les deux entrées.
+        "admin.tenant_admin_add": lambda: ta._add(
+            _CTX, ta.TenantAdminAddInput(slug="pilote", sub="u-x")),
+        "oto_admin_tenant op=admin_add": lambda: tenants_admin._console(
+            _CTX, _console(op="admin_add", slug="pilote", sub="u-x")),
+        "admin.tenant_admin_remove": lambda: ta._remove(
+            _CTX, ta.TenantAdminRemoveInput(slug="pilote", sub="u-x")),
+        "oto_admin_tenant op=admin_remove": lambda: tenants_admin._console(
+            _CTX, _console(op="admin_remove", slug="pilote", sub="u-x")),
+        "admin.account op=suspend": lambda: susp._account(
+            _CTX, susp.AccountSuspensionInput(op="suspend", target="u-x", reason="r")),
+        "admin.account op=resume": lambda: susp._account(
+            _CTX, susp.AccountSuspensionInput(op="resume", target="u-x")),
+        "admin.tenant_disablement op=disable": lambda: td._disablement(
+            _CTX, td.TenantDisablementInput(slug="pilote", op="disable", reason="r")),
+        "oto_admin_tenant op=disable": lambda: tenants_admin._console(
+            _CTX, _console(op="disable", slug="pilote", reason="r")),
+        "oto_admin_tenant op=enable": lambda: tenants_admin._console(
+            _CTX, _console(op="enable", slug="pilote")),
+        "admin.tenant_key_clear": lambda: tk._clear_key(
+            _CTX, tk.TenantKeyClearInput(slug="pilote", provider="serper")),
+        "oto_admin_tenant op=key_clear": lambda: tenants_admin._console(
+            _CTX, _console(op="key_clear", slug="pilote", provider="serper")),
+        "billing.admin_set_plan": lambda: billing._admin_set_plan(
+            _CTX, billing.AdminPlanInput(org_id=5, plan="pro")),
+        "billing.admin_set_contract": lambda: billing._admin_set_contract(
+            _CTX, billing.AdminContractInput(org_id=5, plan="pro", seats=3)),
+        "billing.admin_cancel_contract": lambda: billing._admin_cancel_contract(
+            _CTX, billing.AdminContractCancelInput(org_id=5)),
+        "org.admin.create": lambda: oa._create_org(
+            _CTX, oa.CreateOrgInput(name="acme", admin="u-x")),
+        "oto_admin_org op=create": lambda: admin_console._org(
+            _CTX, admin_console.OrgAdminInput(op="create", name="acme", admin="u-x")),
+        "platform.group.grant_key": lambda: users_admin._grant_group_key(
+            _CTX, users_admin.GroupGrantKeyInput(group_id=9, provider="serper")),
+        "oto_admin_key_grant op=grant scope=group": lambda: admin_console._key_grant(
+            _CTX, admin_console.KeyGrantInput(op="grant", scope="group", group_id=9,
+                                              provider="serper")),
+        "platform.group.revoke_key": lambda: users_admin._revoke_group_key(
+            _CTX, users_admin.GroupRevokeKeyInput(group_id=9, provider="serper")),
+        "oto_admin_key_grant op=revoke scope=group": lambda: admin_console._key_grant(
+            _CTX, admin_console.KeyGrantInput(op="revoke", scope="group", group_id=9,
+                                              provider="serper")),
+        "platform.option.set": lambda: users_admin._set_option(
+            _CTX, users_admin.OptionInput(entity_type="user", entity_id="u-x",
+                                          option="beta", on=True)),
     }
+
+
+def _console(**champs):
+    from oto_mcp.capabilities import tenants_admin
+    return tenants_admin.TenantConsoleInput(**champs)
 
 
 @pytest.fixture()
@@ -210,6 +363,15 @@ def test_la_session_passe_la_garde(sous_session_rest, monkeypatch):
     monkeypatch.setattr(org_store, "get_org", lambda oid: None)
     assert _refus(update._archive_org, _CTX, update.OrgIdInput(org_id=5)) == (
         404, "unknown_org")
+
+
+def test_sous_session_le_geste_d_administration_va_plus_loin(sous_session_rest):
+    """Sous une session, la garde laisse la main au handler : ici le refus qu'il porte
+    lui-même (le plan d'une org se décide dans le service de facturation)."""
+    from oto_mcp.capabilities import billing
+    status, code = _refus(billing._admin_set_plan, _CTX,
+                          billing.AdminPlanInput(org_id=5, plan="pro"))
+    assert (status, code) == (409, "billing_moved")
 
 
 # ── Les gestes conditionnels ─────────────────────────────────────────────────

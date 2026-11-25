@@ -95,7 +95,8 @@ CAPABILITIES += [
         key="platform.runner.worker", handler=_workers, Input=WorkerInput,
         Output=WorkerOut, authz=SUPER_ADMIN,
         mcp=None,   # secret brut en réponse : jamais dans un contexte de modèle
-        rest=RestBinding("POST", "/api/admin/runner/workers"),
+        # Émet et révoque des secrets de machine : session seule (`_session_exigee`).
+        rest=RestBinding("POST", "/api/admin/runner/workers", allow_api_token=False),
         description=(
             "[super admin, REST only] Platform workers of the hosted runner — machine "
             "secrets, not accounts. op=create (label → secret shown ONCE, put it in "
