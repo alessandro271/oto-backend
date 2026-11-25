@@ -797,7 +797,8 @@ repointé vers la copie `api` du même propriétaire et du même compte. Pourquo
 l'id de la copie s'y lit en base, et le démarrage du code neuf précède le tag sur une base partagée avec la
 prod, qui lirait encore ces désignations. Même règle de conflit partout (même sens : le doublon part ; sens
 différent : la révision s'arrête et n'écrit rien). Les lignes `http` du coffre partent plus tard, par
-`oto-mcp maintenance orphelins`.
+`oto-mcp maintenance orphelins` ; d'ici là, le constat (`op=connecteurs_orphelins`) les marque `renomme_en: "api"`
+et les compte à part (`total_renommes`), hors de `total`.
 
 ### La `config` d'une instance — premier écrivain : les opérations d'un « Custom API » (17/10/2026)
 
