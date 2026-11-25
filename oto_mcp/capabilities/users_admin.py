@@ -25,6 +25,7 @@ from . import _identite
 from . import droits_admin
 from ._authz import PLATFORM_ADMIN, SERVICE_OU, SUPER_ADMIN
 from ..auth.service_identity import COMMERCE
+from ._session_exigee import exiger_session
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -214,6 +215,7 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
 
 
 def _set_role(ctx: ResolvedCtx, inp: SetRoleInput) -> dict:
+    exiger_session("Changer le rôle plateforme d'un compte")
     if inp.role not in access.ROLES:
         raise AuthzDenied(400, "invalid_role", f"Rôle invalide. Valides : {list(access.ROLES)}.")
     target = _resolve_target(inp.target)
@@ -224,6 +226,7 @@ def _set_role(ctx: ResolvedCtx, inp: SetRoleInput) -> dict:
 
 
 def _reset_mfa(ctx: ResolvedCtx, inp: ResetMfaInput) -> dict:
+    exiger_session("Effacer la double authentification d'un compte")
     target = _resolve_target(inp.target)
     if not db.get_user(target):
         raise AuthzDenied(404, "unknown_user", f"Compte {target!r} inconnu.")
@@ -507,7 +510,8 @@ CAPABILITIES += [
         authz=SUPER_ADMIN,
         description="[super admin] Set an account's platform role (member|admin|super_admin). "
                     "target = email or sub.",
-        rest=RestBinding("POST", "/api/admin/users/{sub}/role", _SUB),
+        # Session interactive seule (`_session_exigee`).
+        rest=RestBinding("POST", "/api/admin/users/{sub}/role", _SUB, allow_api_token=False),
     ),
     Capability(
         key="platform.user.reset_mfa", handler=_reset_mfa, Input=ResetMfaInput,
@@ -519,7 +523,8 @@ CAPABILITIES += [
                     "they sign in again. Their org's mandatory-MFA policy (if any) still "
                     "applies — they'll be prompted to enroll a fresh factor on next sign-in. "
                     "target = email or sub. Never reveals any factor value, only the types removed.",
-        rest=RestBinding("POST", "/api/admin/users/{sub}/reset-mfa", _SUB),
+        rest=RestBinding("POST", "/api/admin/users/{sub}/reset-mfa", _SUB,
+                         allow_api_token=False),
     ),
     Capability(
         key="platform.key.grant", handler=_grant_key, Input=GrantKeyInput,

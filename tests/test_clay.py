@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
+import requests
+
 import pytest
 
 pytestmark = pytest.mark.exige_pin_oto_core
@@ -28,6 +30,7 @@ class _FauxHook:
     def __init__(self, url, auth_token=None, timeout=None):
         self.url, self.token, self.pushed = url, auth_token, []
         self.timeout = timeout
+        self.session = requests.Session()   # gardée par le backend (egress_transport)
         self.boom_at: dict = {}
         _FauxHook.instances.append(self)
 

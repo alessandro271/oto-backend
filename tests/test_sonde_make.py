@@ -6,6 +6,8 @@ appel de découverte du connecteur. Credential à 2 champs (ADR 0011,
 """
 from __future__ import annotations
 
+import requests
+
 import pytest
 
 from oto_mcp import credentials_store
@@ -23,6 +25,7 @@ class _FauxClient:
     def __init__(self, boom=None):
         self._boom = boom
         self.appels = []
+        self.session = requests.Session()   # gardée par le backend (egress_transport)
 
     def list_organizations(self):
         self.appels.append("list_organizations")

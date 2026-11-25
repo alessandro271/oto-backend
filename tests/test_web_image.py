@@ -110,7 +110,7 @@ def test_une_adresse_interne_est_refusee_avant_toute_connexion(monkeypatch):
     """Le vrai `_fetch_http` : la garde SSRF de `web_read` mord ici aussi."""
     from oto_mcp import egress
     monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"169.254.169.254"})
-    monkeypatch.setattr(W.requests, "get",
+    monkeypatch.setattr(W.requests.Session, "get",
                         lambda *a, **k: pytest.fail("aucune connexion vers l'interne"))
     voir = _web_image(monkeypatch)
     with pytest.raises(McpError) as e:

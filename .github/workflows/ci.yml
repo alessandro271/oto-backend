@@ -245,6 +245,29 @@ jobs:
       - name: Bancs de la garde d'exécution sous 3.10
         run: pytest -q tests/test_db_hors_boucle.py tests/test_lot1_sql_hors_boucle.py
 
+  # Le changement de Python d'une instance cible, avec le VRAI uv (celui de la box, posé
+  # par l'action) : quel interpréteur uv retient, ce que les doublures ne disent pas. Le
+  # banc exige deux interpréteurs gérés par uv (3.11, 3.12), posés ici ; ailleurs il est
+  # ignoré sans eux, ici leur absence est un échec (`OTO_BANC_UV_REEL_EXIGE`). `UV_PYTHON`,
+  # posé par setup-uv, est retiré : le banc choisit ses interpréteurs lui-même.
+  plancher-python-uv-reel:
+    name: Python d'une instance cible, vrai uv
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install (deps + dev, par le verrou)
+        uses: ./.github/actions/installer-par-le-verrou
+        with:
+          python-version: "3.12"
+          extra: dev
+      - name: Interpréteurs gérés par uv
+        run: env -u UV_PYTHON uv python install 3.11 3.12
+      - name: Banc du changement de Python, vrai uv
+        env:
+          OTO_BANC_UV_REEL_EXIGE: "1"
+        run: env -u UV_PYTHON pytest -q -p no:cacheprovider tests/deploy/test_plancher_python_cible_uv_reel.py
+
   # ─────────────────────────────────────────────────────────────────────────────
   # LES CONSOMMATEURS DÉCLARÉS DE NOTRE API (#966).
   #

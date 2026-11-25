@@ -377,7 +377,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "Destinations internes autorisées en egress (`nom=adresse:port`, "
              "virgules). Absente = aucune exception : fail-closed, jamais un défaut "
              "qui ouvre la machine.",
-             ("oto_mcp/egress.py:138",)),
+             ("oto_mcp/egress.py:155",)),
     Variable("OTO_EGRESS_IP", Classe.REGLAGE, "",
              "Adresse IP sortante de l'instance, servie par le marqueur `{{egress_ip}}` "
              "des docs connecteur (liste blanche d'IP chez le fournisseur, ex. "
@@ -694,9 +694,16 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_MCP_MAX_ORGS_PER_USER", Classe.REGLAGE, "10",
              "Plafond d'orgs créées par un même compte (hors super_admin et admin de son tenant).",
              ("oto_mcp/capabilities/orgs/core.py:19",)),
-    Variable("OTO_MCP_INVITE_TTL_DAYS", Classe.REGLAGE, "7",
-             "Durée de vie (jours) d'une invitation d'org.",
-             ("oto_mcp/capabilities/orgs/invites.py:34",)),
+    Variable("OTO_MCP_INVITATION_TTL_HOURS", Classe.REGLAGE, "168",
+             "Durée de vie, en HEURES, d'une invitation (org, équipe, plateforme), d'un "
+             "partage en attente et du lien de connexion joint au mail ; le mail dit la "
+             "durée. Réglage d'instance, 7 jours par défaut. Pas un entier ≥ 1 : refus "
+             "de démarrer.",
+             ("oto_mcp/config.py:279",)),
+    Variable("OTO_MCP_INVITE_TTL_DAYS", Classe.REGLAGE, "",
+             "RETIRÉE le 22/11/2026, remplacée par `OTO_MCP_INVITATION_TTL_HOURS` (en "
+             "heures). Encore définie : refus de démarrer, jamais ignorée en silence.",
+             ("oto_mcp/config.py:274",)),
     Variable("OTO_MCP_DB_IDLE_TX_TIMEOUT_MS", Classe.REGLAGE, "60000",
              "`idle_in_transaction_session_timeout` du pool applicatif.",
              ("oto_mcp/db/_conn.py:73",)),

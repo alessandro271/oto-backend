@@ -14,6 +14,7 @@ import json
 from unittest.mock import patch
 
 import pytest
+import requests
 
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.tools import github_index
@@ -157,6 +158,7 @@ def _fake_creds(monkeypatch):
 class _Fake:
     def __init__(self, retour):
         self.retour = retour
+        self.session = requests.Session()   # gardée par le backend (egress_transport)
 
     def __getattr__(self, name):
         return lambda *a, **kw: self.retour
