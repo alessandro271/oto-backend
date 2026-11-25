@@ -126,7 +126,10 @@ class _IatGatedVerifier(JWTVerifier):
                                                 # posé par `middleware/verrou_org.py`.
                                                 "job_id": row.get("job_id"),
                                                 "verrou_org": row.get("verrou_org"),
-                                                "verrou_org_id": row.get("verrou_org_id")})
+                                                "verrou_org_id": row.get("verrou_org_id"),
+                                                # Sa date de création : la garde
+                                                # d'identité la juge (`session_revoquee`).
+                                                "cree_le": row.get("cree_le")})
 
     def _route(self, token) -> tuple:
         """`(slug du tenant, verifier)` pour ce jeton — sélection par le claim `iss`,

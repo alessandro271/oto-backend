@@ -1,5 +1,10 @@
-"""`AccountSuspendedMiddleware` — un compte en pause, ou d'un tenant désactivé, n'atteint
-aucun outil. La garde est `garde_identite.refus` ; ce middleware en est la porte MCP."""
+"""`AccountSuspendedMiddleware` — un compte en pause, ou d'un tenant désactivé, ou un jeton
+émis avant la fermeture des sessions de son compte, n'atteint aucun
+outil. La garde est `garde_identite.refus` ; ce middleware en est la porte MCP.
+
+Sur la face MCP, un refus est une erreur du protocole (`McpError`, code `-32003`, `data.code`
+nommé) dans la réponse JSON-RPC, pas un statut HTTP : ce middleware tourne une fois
+le jeton admis par la couche HTTP."""
 from __future__ import annotations
 
 import logging
@@ -8,7 +13,7 @@ from fastmcp.server.middleware import Middleware
 from starlette.concurrency import run_in_threadpool
 
 from .. import garde_identite
-from ..auth.hooks import current_user_sub_from_token
+from ..auth.hooks import current_token_emis_le, current_user_sub_from_token
 from ..db import CompteEnPause, TenantDesactive
 from ..mcp_errors import McpError
 
@@ -64,7 +69,10 @@ class AccountSuspendedMiddleware(Middleware):
         # Tout autre échec d'identité MONTE (journalisé par le seam, #464) : le
         # rattraper laissait passer la requête ANONYME, donc sans la garde de pause.
         if sub:
-            refus = await run_in_threadpool(garde_identite.refus, sub)
+            # La date d'émission du jeton : un jeton émis avant la fermeture des sessions
+            # du compte est refusé (`session_revoquee`, code `session_revoked`).
+            refus = await run_in_threadpool(garde_identite.refus, sub,
+                                            current_token_emis_le())
             if refus:
                 raise McpError(_erreur(*refus))
         return await call_next(context)

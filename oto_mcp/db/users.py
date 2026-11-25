@@ -1124,17 +1124,30 @@ def set_user_role(sub: str, role: str) -> None:
 
 @lecture_d_appel
 def get_suspension(sub: str) -> Optional[dict]:
-    """L'état de pause d'un compte : `None` s'il est vivant (le cas de tout le monde).
+    """L'état d'ENTRÉE d'un compte — sa pause et son instant « révoqué avant » —, ou
+    `None` s'il n'a ni l'une ni l'autre (le cas de tout le monde).
 
-    Lecture d'un seul champ décisif (`suspended_at`) sur la clé primaire. C'est la
-    SOURCE UNIQUE du prédicat — le seam `account_suspension` est le seul appelant
-    prévu, et les deux faces passent par lui. Ne jamais dériver « en pause » d'autre
-    chose (une absence de ligne, un rôle, une appartenance) : ce sont des faits
+    `{sub, suspended_at, suspended_by, suspended_reason, revoque_avant}` : les trois
+    premiers champs disent la pause (`suspended_at` NULL = pas en pause), le dernier
+    l'instant avant lequel tout jeton du compte est refusé (`revocations_comptes`,
+    `session_revoquee.py`), en secondes depuis l'époque, NULL s'il n'y en a pas. En
+    nombre, pas en date : la fabrique de lignes rend une date en texte à la seconde,
+    et la comparaison veut la microseconde.
+
+    UNE lecture sur deux clés primaires, la seule que la garde d'identité fait par
+    requête : la date de révocation y est jointe pour ne coûter aucun aller-retour de
+    plus sur le chemin de chaque appel. C'est la SOURCE UNIQUE des deux prédicats — le
+    seam `account_suspension` est le seul appelant prévu. Ne jamais dériver « en pause »
+    d'autre chose (une absence de ligne, un rôle, une appartenance) : ce sont des faits
     différents, et le compte en pause a précisément une ligne et un rôle intacts."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT sub, suspended_at, suspended_by, suspended_reason FROM users "
-            "WHERE sub = %s AND suspended_at IS NOT NULL", (sub,)).fetchone()
+            "SELECT k.sub, u.suspended_at, u.suspended_by, u.suspended_reason, "
+            "EXTRACT(EPOCH FROM r.revoque_avant)::float8 AS revoque_avant "
+            "FROM (SELECT %s::text AS sub) k "
+            "LEFT JOIN users u ON u.sub = k.sub AND u.suspended_at IS NOT NULL "
+            "LEFT JOIN revocations_comptes r ON r.sub = k.sub "
+            "WHERE u.sub IS NOT NULL OR r.sub IS NOT NULL", (sub,)).fetchone()
     return dict(row) if row else None
 
 
