@@ -29,6 +29,13 @@ from .. import output_projection
 from ..mcp_errors import McpError
 
 
+#: `urba_reglement(op="texte")` : le texte brut d'un règlement court sur des millions de
+#: caractères. Bornes de `max_chars`, celles du chapitre que rend `/api/reglement`.
+_TEXTE_DEFAUT = 40_000
+_TEXTE_MIN = 1_000
+_TEXTE_MAX = 200_000
+
+
 def register(mcp: FastMCP) -> None:
     from ..fod import urba as fod_urba
 
@@ -59,10 +66,26 @@ def register(mcp: FastMCP) -> None:
         return gpu.zonage(lon, lat)
 
     @mcp.tool()
-    def urba_reglement(idurba: str, zone: Optional[str] = None, query: Optional[str] = None,
+    def urba_reglement(idurba: Optional[str] = None, zone: Optional[str] = None,
+                       query: Optional[str] = None,
                        max_extraits: int = 8, context_lignes: int = 30,
-                       ingest: bool = False) -> dict:
+                       ingest: bool = False,
+                       op: Literal["extraits", "liste", "texte"] = "extraits",
+                       max_chars: int = _TEXTE_DEFAUT) -> dict:
         """Targeted excerpts of a PLU/PLUi written règlement, via the shared FOD service.
+
+        Three ops:
+        - `op="extraits"` (default): the excerpts for a zone / keyword, described below;
+          requires `idurba`.
+        - `op="liste"`: the règlements ALREADY in the service's cache, metadata only
+          (`idurba`, `titre`, `taille`, `text_chars`, `scanne`, `genere_le`,
+          `doc_type`…), no text. Use it to see the coverage, or to find an `idurba`
+          that answers at once without ingestion. Takes no other parameter.
+        - `op="texte"`: the raw text extracted from the PDF, from its start, cut at
+          `max_chars` (`tronque=true` when cut, the service appends the total length).
+          Requires `idurba`; only for a règlement already cached (`cached=false`
+          otherwise: ingest it through `op="extraits"`, `ingest=true`). Prefer the
+          excerpts: a whole règlement runs to millions of characters.
 
         Intercommunal règlements are huge (often >50 MB, >1000 pages, many zones):
         the FOD service parses and caches each document **once** (keyed by `idurba`)
@@ -90,14 +113,51 @@ def register(mcp: FastMCP) -> None:
           written règlement — `autres_documents` names the ones it publishes.
 
         Args:
-            idurba: document version id — the `zone.idurba` field from `urba_zonage`.
+            idurba: document version id — the `zone.idurba` field from `urba_zonage`
+                (required by op="extraits" and op="texte").
             zone: zone label to search for (e.g. "UCt2", "UM").
             query: alternative keyword (e.g. "hauteur maximale", "emprise au sol").
             max_extraits: max passages returned (1-50). context_lignes: lines kept after each hit.
             ingest: start the on-demand ingestion when the règlement is not cached
                 (default false: only report its state).
+            op: "extraits" (default), "liste" (cached règlements) or "texte" (raw text).
+            max_chars: op="texte" only — characters returned, 1000 to 200000
+                (default 40000).
         """
         from oto_mcp.fod import reglement as fod_reglement
+
+        donnes = [n for n, v, d in (
+            ("idurba", idurba, None), ("zone", zone, None), ("query", query, None),
+            ("max_extraits", max_extraits, 8), ("context_lignes", context_lignes, 30),
+            ("ingest", ingest, False), ("max_chars", max_chars, _TEXTE_DEFAUT))
+            if v != d]
+        propres = {"extraits": {"idurba", "zone", "query", "max_extraits",
+                                "context_lignes", "ingest"},
+                   "liste": set(),
+                   "texte": {"idurba", "max_chars"}}[op]
+        refuses = [n for n in donnes if n not in propres]
+        if refuses:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"op={op!r} does not take {', '.join(refuses)}.")))
+        if op == "liste":
+            return fod_reglement.liste()
+        if not idurba:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"op={op!r} requires idurba — the `zone.idurba` field from `urba_zonage`, "
+                "or an entry of op='liste'.")))
+        if op == "texte":
+            if not _TEXTE_MIN <= max_chars <= _TEXTE_MAX:
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    f"max_chars must be between {_TEXTE_MIN} and {_TEXTE_MAX}.")))
+            texte = fod_reglement.texte(idurba, max_chars=max_chars)
+            if texte is None:
+                return {"idurba": idurba, "cached": False,
+                        "message": "This règlement is not in the cache: call op='extraits' "
+                                   "with ingest=true, then op='texte' once it is ready."}
+            return {"idurba": idurba, "cached": True, "texte": texte,
+                    # Le service coupe à `max_chars` et ajoute la longueur totale :
+                    # seul un texte coupé dépasse la borne.
+                    "tronque": len(texte) > max_chars}
 
         def _extraits() -> dict:
             return fod_reglement.extraits(idurba, zone=zone, query=query,

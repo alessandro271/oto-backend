@@ -245,7 +245,7 @@ folk_user	get list	02d1b68b122ff1cc
 folk_webhook	create list update	e24f68442bee5678
 foncier_beges	-	bad8103ac158d1db
 foncier_comparables_app	-	1a426e142eff17f8
-foncier_conso_elec	-	d85edb175695ce22
+foncier_conso_elec	annees conso	cc0c0647a640cc5e
 foncier_dpe	adresse stats tertiaire	0e1a6f985bedede6
 foncier_dvf	comparables comparables_adresse prix_m2	1d9180761f14d565
 foncier_geocode	-	6d3d63a35c1ee41c
@@ -282,8 +282,8 @@ fr_search	-	4f5ebcdbc4b4dab1
 fr_siret	-	2313e58b98a8154c
 fr_stock_enrich	-	d3efe62a15bc9847
 fr_stock_etablissements	-	ed0d9ac4729d8ab8
-fr_stock_search	-	ab0a00d9aea4b4b4
-fr_stock_siege	-	b401f4a1c66f1bef
+fr_stock_search	info search	233f89dc505713fa
+fr_stock_siege	-	19d54c45f8ba5de4
 fr_stock_siret	-	2313e58b98a8154c
 fr_tenders_get	-	2d12b0804ed627f6
 fr_tenders_search	awarded notices	2889ab2b171f63ce
@@ -966,7 +966,7 @@ urba_iris	-	e5de9e79f2da6956
 urba_lieu	-	3ff47c2e4fa372a0
 urba_qpv	-	258ae38fe9255d5d
 urba_qpv_proximite	-	0b1a0f3b0afbd338
-urba_reglement	-	f04a60d81a77f10b
+urba_reglement	extraits liste texte	b97aa993da06b0f2
 urba_risques	-	258ae38fe9255d5d
 urba_socio	-	258ae38fe9255d5d
 urba_zonage	-	53239cafb65230b5

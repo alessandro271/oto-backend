@@ -64,3 +64,26 @@ def ingestion(idurba: str, *, lancer: bool) -> tuple[int, dict[str, Any], Option
     except ValueError:
         apres = None
     return r.status_code, r.json(), apres
+
+
+def liste() -> dict[str, Any]:
+    """Les règlements déjà ingérés dans le cache du service : `{count, reglements:
+    [{idurba, titre, taille, text_chars, scanne, genere_le, partition, doc_type, …}]}`,
+    métadonnées seulement, sans corps."""
+    return fod_http.get("/api/reglements")
+
+
+def texte(idurba: str, *, max_chars: int) -> Optional[str]:
+    """Le texte brut extrait du PDF, tronqué par le service à `max_chars` caractères
+    (il signale la coupe en fin de texte). `None` si le règlement n'est pas ingéré (404).
+
+    Le service rend du `text/plain`, que `fod.http.get` ne sait pas lire (il décode du
+    JSON) : on passe par `fod.http.etat`, qui rend la réponse brute. Celui-ci ne prend
+    pas de paramètres, d'où la requête écrite dans le chemin. 404 est un ÉTAT (pas
+    ingéré), tout autre refus lève sans adresse interne."""
+    from urllib.parse import quote, urlencode
+
+    chemin = (f"/api/reglements/{quote(idurba, safe='')}/raw?"
+              f"{urlencode({'max_chars': max_chars})}")
+    r = fod_http.etat("GET", chemin, (200, 404))
+    return None if r.status_code == 404 else r.text

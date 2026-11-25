@@ -570,7 +570,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def foncier_conso_elec(
-        annee: str,
+        annee: Optional[str] = None,
+        op: Literal["conso", "annees"] = "conso",
         dept: Optional[str] = None,
         secteur: Optional[str] = None,
         naf2: Optional[list[str]] = None,
@@ -583,6 +584,11 @@ def register(mcp: FastMCP) -> None:
         limit: int = 200,
     ) -> dict:
         """Annual electricity consumption of French sites (open data, no key).
+
+        `op="conso"` (default) returns the consumption below and requires `annee`.
+        `op="annees"` takes no other parameter and returns `annees_disponibles`, the
+        vintages the TRANSPORT tier (ODRÉ) actually serves, newest first — read it
+        before picking `annee` for `reseau="transport"` or `"les_deux"`.
 
         TWO GRID TIERS, and they are not interchangeable. `reseau="distribution"`
         (default) reads Enedis: consumption per ADDRESS, with the NAF division.
@@ -618,7 +624,7 @@ def register(mcp: FastMCP) -> None:
         `mwh_ignores` instead of being silently dropped.
 
         Args:
-            annee: reference year (e.g. "2024"). ODRE lags a year behind Enedis, so the
+            annee: reference year (e.g. "2024"), required by op="conso". ODRE lags a year behind Enedis, so the
                 year that fits distribution may return nothing at all on transport —
                 `avertissement_millesime` says so rather than letting it pass for empty.
             dept: INSEE department code (e.g. "59").
@@ -638,6 +644,7 @@ def register(mcp: FastMCP) -> None:
                 55.3 TWh over 931 rows, of which 22.9 TWh over the 729 single-site
                 ones), and the biggest consumer in France is one of them — filtering
                 them out is how a "largest consumers" query returns the small ones.
+            op: "conso" (default) or "annees" (vintages served by the transport tier).
             limit: max rows per tier (default 200); `limit=-1` means NO ceiling, and
                 `total` is the number of rows RETURNED, not the population — it
                 saturates on `limit`, and says so in `tronque` /
@@ -649,6 +656,18 @@ def register(mcp: FastMCP) -> None:
                 `total: 2` where `limit=-1` answers 61. **Pass `limit=-1` whenever you
                 pass `min_mwh`**, or read `total` as "at least".
         """
+        if op == "annees":
+            donnes = [n for n, v, d in (
+                ("annee", annee, None), ("dept", dept, None), ("secteur", secteur, None),
+                ("naf2", naf2, None), ("code_commune", code_commune, None),
+                ("code_epci", code_epci, None), ("min_mwh", min_mwh, None),
+                ("max_mwh", max_mwh, None), ("reseau", reseau, "distribution"),
+                ("maille", maille, "ligne"), ("limit", limit, 200)) if v != d]
+            if donnes:
+                raise _bad(f"op='annees' takes no other parameter ({', '.join(donnes)} given)")
+            return {"reseau": "transport", "annees_disponibles": odre.annees_disponibles()}
+        if annee is None:
+            raise _bad("op='conso' requires annee — op='annees' lists the transport tier's vintages")
         if reseau not in ("distribution", "transport", "les_deux"):
             raise _bad('reseau must be "distribution", "transport" or "les_deux"')
         if not (dept or code_commune or code_epci) and reseau != "transport":

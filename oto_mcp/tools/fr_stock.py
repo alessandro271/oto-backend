@@ -9,10 +9,12 @@ refreshed monthly by `deploy/refresh_sirene_stock_s3.sh`.
 Tools (parquet source — no key, exhaustive/bulk, monthly vintage):
 - `fr_stock_enrich(sirens=[...] | sirets=[...])` — headquarters of a LIST of SIRENs, or a
   LIST of establishments with their headcount band and employer status, in ONE scan
-- `fr_stock_siege(siren)` — headquarters of a SIREN
+- `fr_stock_siege(siren | sirens=[...])` — raw headquarters record of a SIREN, or of a
+  LIST of SIRENs in one scan
 - `fr_stock_etablissements(siren)` — all establishments of a company
 - `fr_stock_siret(siret)` — one establishment by SIRET
-- `fr_stock_search(...)` — multi-criteria search (NAF, commune, enseigne…)
+- `fr_stock_search(...)` — multi-criteria search (NAF, commune, enseigne…);
+  `op="info"` gives the parquet's vintage and freshness
 
 Typical use case: batch enrichment of several thousand SIRENs where
 the SIRENE API (rate-limited) or Recherche Entreprises (~10 req/s) are too
@@ -20,7 +22,7 @@ slow, and exhaustive enumeration (>10k) that an indexed API does not allow.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastmcp import FastMCP
 from mcp.types import INVALID_PARAMS, ErrorData
@@ -59,16 +61,31 @@ def _avec_raison_sociale(rows: list[dict]) -> list[dict]:
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=LECTURE)
-    def fr_stock_siege(siren: str) -> Optional[dict]:
+    def fr_stock_siege(siren: Optional[str] = None,
+                       sirens: Optional[list[str]] = None) -> Optional[dict]:
         """Headquarters (siège) of a French company from the local SIRENE
-        stock parquet (INSEE, monthly snapshot).
+        stock parquet (INSEE, monthly snapshot) — the RAW establishment record,
+        every column of the stock.
 
         Faster than the live INSEE API for batch enrichment. Returns the latest
         active siège (etablissementSiege=True). None if SIREN unknown.
 
+        Pass `siren` for one company, OR `sirens` for a LIST in a single scan —
+        exactly one of the two. `sirens` returns {siren: raw siège record};
+        SIRENs without a known siège are omitted. For a shaped record (address,
+        NAF, `raison_sociale`, `categorie_entreprise`) use `fr_stock_enrich`.
+
         Args:
             siren: SIREN number (9 digits).
+            sirens: list of SIREN numbers (9 digits).
         """
+        if (siren is None) == (sirens is None):
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                "Refused `siren_ou_sirens`: give EXACTLY ONE of `siren` (one company) "
+                "or `sirens` (a list, one scan)."),
+                data={"code": "siren_ou_sirens", "retryable": False}))
+        if sirens is not None:
+            return sirene_duckdb.lookup_sieges([str(s).strip() for s in sirens])
         return sirene_duckdb.lookup_siege(siren)
 
     @mcp.tool(annotations=LECTURE)
@@ -149,6 +166,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=LECTURE)
     def fr_stock_search(
+        op: Literal["search", "info"] = "search",
         naf: Optional[str] = None,
         code_commune: Optional[str] = None,
         code_postal: Optional[str] = None,
@@ -162,6 +180,11 @@ def register(mcp: FastMCP) -> None:
         offset: int = 0,
     ) -> dict:
         """Multi-criteria search over the SIRENE stock parquet (INSEE local snapshot).
+
+        `op="info"` takes no filter and returns the parquet's metadata instead: the
+        INSEE vintage, the build date and `age_days` (`build_info: "absent"` when
+        the build left no record). Read it before relying on the stock for a
+        recent event (a creation or closure of the last weeks may not be in it yet).
 
         All filters are AND'd. Returns paginated establishments matching, each
         with `raison_sociale` and `categorie_entreprise` from the legal-unit
@@ -177,6 +200,7 @@ def register(mcp: FastMCP) -> None:
           clean way to enumerate ETI/large-PME by real HQ location + size, server-side.
 
         Args:
+            op: "search" (default) or "info" (parquet vintage and freshness).
             naf: APE/NAF code exact match (ex. "4711F").
             code_commune: INSEE COG code (5 digits, ex. "13201").
             code_postal: 5 digits (ex. "13001").
@@ -199,6 +223,20 @@ def register(mcp: FastMCP) -> None:
             limit: max 1000, default 100.
             offset: pagination offset.
         """
+        if op == "info":
+            filtres = [n for n, v, d in (
+                ("naf", naf, None), ("code_commune", code_commune, None),
+                ("code_postal", code_postal, None), ("departement", departement, None),
+                ("denomination", denomination, None), ("enseigne", enseigne, None),
+                ("active_only", active_only, True), ("sieges_only", sieges_only, False),
+                ("tranche_effectifs", tranche_effectifs, None), ("limit", limit, 100),
+                ("offset", offset, 0)) if v != d]
+            if filtres:
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    f"Refused `op_info_sans_filtre`: op='info' takes no filter "
+                    f"({', '.join(filtres)} given)."),
+                    data={"code": "op_info_sans_filtre", "retryable": False}))
+            return sirene_duckdb.parquet_info()
         tranches = (
             [c.strip() for c in tranche_effectifs.split(",") if c.strip()]
             if tranche_effectifs

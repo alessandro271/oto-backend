@@ -28,4 +28,6 @@ the full sirene parquet (insee, monthly vintage) for one-off lookups and **batch
 - `fr_stock_enrich(sirens=[…])` — head offices of a **list** of sirens in a single scan (bulk)
 - `fr_stock_enrich(sirets=[…])` — a **list** of establishments (up to 1,000) in a single scan, each with its headcount band, its year and its employer status, and an error per siret
 - `fr_stock_siege(siren)` / `fr_stock_etablissements(siren)` — head office or all the establishments of a company
+- `fr_stock_siege(sirens=[…])` — raw head-office records of a **list** of sirens in a single scan
 - `fr_stock_search(naf=…, enseigne=…, departement=…)` — enumerates all sites (e.g. all the "intermarché" stores of a département)
+- `fr_stock_search(op="info")` — the parquet's insee vintage, build date and age in days
