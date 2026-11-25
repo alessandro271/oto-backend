@@ -8,7 +8,8 @@ Ce que ce banc fige, sur chaque chemin qui écrit `users.role` vers `admin`/`sup
    jamais Logto ;
 2. la capacité `platform.user.set_role` — route REST `POST /api/admin/users/{sub}/role`
    et `oto_admin_user op=set_role` partagent son handler : 409
-   `admin_mfa_required_for_promotion`, rien n'est écrit ;
+   `admin_mfa_required_for_promotion` (403 `admin_mfa_unverifiable` quand les facteurs
+   sont illisibles), rien n'est écrit ;
 3. le script de maintenance `scripts/migrate_admin_to_super.py` : en `enforce`, un seul
    compte sans facteur et rien n'est écrit.
 """
@@ -107,7 +108,7 @@ def test_enforce_logto_injoignable_refuse(facteurs, mode):
     mode("enforce")
     facteurs["leve"] = TimeoutError("logto")
     m = garde_admin.refus_promotion(CIBLE, "admin")
-    assert m is not None and m.code == garde_admin.CODE_PROMOTION
+    assert m is not None and m.code == garde_admin.CODE_INVERIFIABLE
     assert "could not be verified" in m.message
 
 
@@ -179,7 +180,7 @@ def test_nomination_refusee_logto_injoignable(base, facteurs, mode, chemin):
     facteurs["leve"] = ConnectionError("logto")
     with pytest.raises(AuthzDenied) as e:
         chemin("super_admin")
-    assert (e.value.status, e.value.code) == (409, garde_admin.CODE_PROMOTION)
+    assert (e.value.status, e.value.code) == (403, garde_admin.CODE_INVERIFIABLE)
     assert base == []
 
 

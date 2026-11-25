@@ -343,4 +343,7 @@ def refus_promotion(sub: Optional[str], role: str) -> Optional[Motif]:
         logger.warning("garde admin (report) : %s nommé `%s` sans second facteur fort — "
                        "`enforce` refuserait la nomination (%s)", sub, role, code)
         return None
-    return Motif(CODE_PROMOTION, _PHRASES_PROMOTION[code])
+    # Facteurs illisibles : le même code que la garde par requête (réessayer), distinct
+    # de « aucun facteur » (enrôler).
+    return Motif(CODE_INVERIFIABLE if code == CODE_INVERIFIABLE else CODE_PROMOTION,
+                 _PHRASES_PROMOTION[code])

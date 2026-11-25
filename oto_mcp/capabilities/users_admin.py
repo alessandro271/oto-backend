@@ -226,8 +226,11 @@ def _set_role(ctx: ResolvedCtx, inp: SetRoleInput) -> dict:
     # et `oto_admin_user op=set_role` passent tous deux ici.
     refus = garde_admin.refus_promotion(target, inp.role)
     if refus is not None:
-        # Code EN LITTÉRAL (= `garde_admin.CODE_PROMOTION`) : les refus atteignables se
-        # lisent sur les littéraux (`tests/_refus_atteignables.py`).
+        # Codes EN LITTÉRAL (= `garde_admin.CODE_INVERIFIABLE` / `CODE_PROMOTION`) : les
+        # refus atteignables se lisent sur les littéraux (`tests/_refus_atteignables.py`).
+        # Facteurs illisibles : 403 `admin_mfa_unverifiable`, comme la garde par requête.
+        if refus.code == garde_admin.CODE_INVERIFIABLE:
+            raise AuthzDenied(403, "admin_mfa_unverifiable", refus.message)
         raise AuthzDenied(409, "admin_mfa_required_for_promotion", refus.message)
     db.set_user_role(target, inp.role)
     return {"ok": True, "sub": target, "role": inp.role}

@@ -533,7 +533,8 @@ CASA AL1 3.3.1 (« le MFA est imposé à tout compte d'administration ») ; code
   n'est NOMMÉ `admin` ou `super_admin` sans facteur fort enrôlé — sinon un compte
   porterait un rôle qu'il ne peut exercer, et le relevé de `report` le découvrirait après
   coup. Lecture fraîche chez Logto (le cache n'est pas consulté). `enforce` refuse en
-  `409 admin_mfa_required_for_promotion`, facteurs illisibles compris (fail-closed) ;
+  `409 admin_mfa_required_for_promotion`, et les facteurs illisibles en
+  `403 admin_mfa_unverifiable` (fail-closed, réessayer) ;
   `report` journalise (`garde admin (report) : … nommé`) et laisse passer ; `off` ne lit
   rien. Rétrograder vers `member` passe toujours. Les chemins qui écrivent `users.role` :
   - `platform.user.set_role` (`users_admin._set_role`) — la route
