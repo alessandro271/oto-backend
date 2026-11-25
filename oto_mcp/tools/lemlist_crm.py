@@ -1195,7 +1195,7 @@ def register(mcp: FastMCP) -> None:
             else:
                 try:
                     raw = client.get_call_transcript(links["transcript_url"])
-                except Exception as e:  # noqa: BLE001 — the call is still worth returning
+                except Exception as e:  # noqa: SILENT — the call is returned with `transcript_error` naming the failure
                     result["transcript_error"] = _transcript_error(e)
                 else:
                     result["transcript"] = _readable_transcript(
