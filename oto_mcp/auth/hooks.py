@@ -226,7 +226,8 @@ def current_user_sub_from_token() -> Optional[str]:
     from .. import db
     try:
         canonique = db.resolve_sub(sub)
-        db.upsert_user(canonique, email=claims.get("email"), name=claims.get("name"))
+        db.upsert_user(canonique, email=claims.get("email"), name=claims.get("name"),
+                       email_verified=claims.get("email_verified") is True)
     except Exception as exc:
         # C'est ICI, et nulle part ailleurs, que se dit POURQUOI une requête n'a pas
         # d'identité (oto-backend#464) : les appelants ne rattrapent plus l'échec pour

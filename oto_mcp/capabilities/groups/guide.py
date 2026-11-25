@@ -26,7 +26,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from ... import (deprecations, guide_store, org_store, procedure_diagram,
+from ... import (guide_store, org_store, procedure_diagram,
                  procedure_empreinte, roles, slots as slots_mod, tool_alias)
 from .._auteurs import nommer_l_auteur, nommer_les_auteurs
 from .._authz import GROUP_ADMIN_OF, GROUP_MEMBER_OF, capacite_autorise
@@ -88,7 +88,7 @@ class InstrRevertInput(BaseModel):
 #
 # ⚠️ Ce palier est le MIROIR du guide d'org (`orgs_instructions`), mais le
 # miroir est INFIDÈLE sur trois points qu'un front factorisé prendra de plein fouet :
-#   · `list` rend `doctrine` en **chaîne brute** ici, en **objet** `{exists, version,
+#   · `list` rend `guide` en **chaîne brute** ici, en **objet** `{exists, version,
 #     updated_at}` côté org — même nom de clé, deux types ;
 #   · les écritures d'org portent un `ok`, celles d'équipe **n'en portent pas** ;
 #   · `delete` d'un slug inconnu rend `deleted: false` en 200 ici, un **404** côté org.
@@ -107,10 +107,6 @@ class GroupInstructionIndexEntry(BaseModel):
 
 class GroupInstructionsBundle(BaseModel):
     """Readme d'équipe + index de ses procédures.
-
-    ⚠️ **Chaque clé est servie sous DEUX noms** le temps du préavis (#519) :
-    `guide`/`guide_version` (aujourd'hui) et `doctrine`/`doctrine_version`, qui s'en
-    vont le 30/11/2026 — cf. `docs/alias-deprecies.md`.
 
     ⚠️ **`guide` est le corps MARKDOWN BRUT, pas un objet de métadonnées** — c'est
     l'écart de forme avec le bundle d'org, qui rend là un `{exists, version,
@@ -146,8 +142,6 @@ class GroupInstructionsBundle(BaseModel):
     group_id: int
     guide: str
     guide_version: Optional[int] = None
-    doctrine: str                          # ALIAS déprécié (retrait 30/11/2026)
-    doctrine_version: Optional[int] = None  # ALIAS déprécié (retrait 30/11/2026)
     instructions: list[GroupInstructionIndexEntry]
     can_edit: bool
     # Les deux droits sur les procédures ci-dessus, chacun rendu par la règle d'autz
@@ -290,7 +284,7 @@ class GroupInstructionReverted(BaseModel):
 def _list(ctx: ResolvedCtx, inp: GroupIdInput) -> dict:
     # Readme d'équipe = guide `delivery='init'` (ADR 0042), lu sur sa surface.
     base_body = guide_store.init_guide_body("group", inp.group_id) or ""
-    return deprecations.avec_les_deux_noms({
+    return {
         "group_id": inp.group_id,
         "guide": base_body,
         "guide_version": 1 if base_body else None,
@@ -301,7 +295,7 @@ def _list(ctx: ResolvedCtx, inp: GroupIdInput) -> dict:
         # recalculés — ce qu'on annonce ici est ce qui refuse là-bas.
         **{nom: capacite_autorise(cle, ctx.sub, group_id=inp.group_id)
            for nom, cle in _DROITS_SERVIS.items()},
-    })
+    }
 
 
 def _get(ctx: ResolvedCtx, inp: InstrGetInput) -> dict:

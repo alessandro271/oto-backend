@@ -22,7 +22,7 @@ import secrets
 from typing import Optional
 
 from .db import _connect, _hash_token
-from . import org_store
+from . import config, org_store
 from .org_store import _PENDING
 
 logger = logging.getLogger(__name__)
@@ -38,16 +38,18 @@ def _norm(email: Optional[str]) -> str:
 
 
 def creer(*, resource_type: str, kind: str, resource_id: str, email: str, role: str,
-          ttl_days: Optional[int], invited_by: str, nom: Optional[str],
-          jours: int) -> dict:
+          ttl_days: Optional[int], invited_by: str, nom: Optional[str]) -> dict:
     """Pose le partage en attente de l'objet vers `email`. Rend `{id, token,
     expires_at, nouveau}` — `token` en clair (à mettre dans le lien, jamais
     persisté) seulement quand la ligne est NEUVE : un partage déjà en attente pour
     le même objet et la même adresse est rendu tel quel (`nouveau=False`, `token`
-    None), sans second secret porteur."""
+    None), sans second secret porteur. Le lien vit autant que toute invitation de l'instance
+    (`config.invitation_ttl_hours`) ; `ttl_days` est la durée de l'ACCÈS une fois
+    accepté, une autre chose."""
     email = _norm(email)
     if "@" not in email:
         raise ValueError("email invalide")
+    duree = str(config.invitation_ttl_hours())
     token = "inv_" + secrets.token_urlsafe(32)
     with _connect() as conn:
         # Une ligne ÉCHUE garde sa place dans l'index unique (l'échéance n'est pas dans
@@ -60,12 +62,12 @@ def creer(*, resource_type: str, kind: str, resource_id: str, email: str, role: 
             f"""
             INSERT INTO org_invitations
                 (org_id, email, token_hash, invited_by, source, expires_at, {_COLONNES})
-            VALUES (NULL, %s, %s, %s, %s, NOW() + (%s || ' days')::interval,
+            VALUES (NULL, %s, %s, %s, %s, NOW() + (%s || ' hours')::interval,
                     %s, %s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
             RETURNING id, expires_at
             """,
-            (email, _hash_token(token), invited_by, SOURCE, str(int(jours)),
+            (email, _hash_token(token), invited_by, SOURCE, duree,
              resource_type, kind, resource_id, role, ttl_days, nom),
         ).fetchone()
         if row:
@@ -134,9 +136,10 @@ def honorer(inv: dict, sub: str) -> Optional[dict]:
 
 
 def honorer_au_signup(sub: str, email: str) -> list[dict]:
-    """À la première inscription, par l'adresse VÉRIFIÉE (signup email + code) :
-    honore TOUS les partages en attente adressés à cette adresse — un par objet, et
-    une personne peut en avoir reçu plusieurs avant de créer son compte."""
+    """À la première inscription, par l'adresse VÉRIFIÉE selon le jeton (l'appelant,
+    `upsert_user`, n'appelle pas sinon) : honore TOUS les partages en attente adressés
+    à cette adresse et relevant du tenant du compte — un par objet, et une personne
+    peut en avoir reçu plusieurs avant de créer son compte."""
     email = _norm(email)
     if "@" not in email:
         return []
@@ -145,4 +148,6 @@ def honorer_au_signup(sub: str, email: str) -> list[dict]:
             f"SELECT id, invited_by, {_COLONNES} FROM org_invitations "
             f"WHERE resource_kind IS NOT NULL AND lower(email) = %s AND {_PENDING} "
             f"ORDER BY created_at", (email,)).fetchall()
-    return [r for r in (honorer(dict(row), sub) for row in rows) if r]
+    from . import db  # la façade (le nom n'est pas lié à l'import)
+    return [r for r in (honorer(dict(row), sub) for row in rows
+                        if db.invitation_du_tenant_de(dict(row), sub)) if r]

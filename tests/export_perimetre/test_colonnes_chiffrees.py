@@ -46,6 +46,10 @@ _HORS_TABLE: dict[str, str] = {
         "d'export), jamais sous la nôtre",
     "oto_mcp/export_perimetre/objets.py":
         "scelle les objets de l'archive d'un export sous la clé de l'instance CIBLE",
+    "oto_mcp/auth/flow.py":
+        "scelle pour la durée d'un state le credential qu'un fournisseur renvoie au "
+        "callback (WordPress), remis au front comme `code` opaque : jamais rangé, sous "
+        "une clé dérivée du secret de state",
 }
 
 #: colonne `table.colonne` du schéma nommée `*_enc` sans être chiffrée par `crypto` —

@@ -8,7 +8,8 @@ shape as `ubersuggest`, with the application of `meta_ads`:
    (a QR code scanned with the jefacture.com mobile app, then the consent on first
    sign-in), with a signed, single-use `state` carrying the identity;
 2. jefacture.com sends the browser back to `/api/jefacture/oauth/callback`
-   (`api/jefacture.py`); the code there becomes a refresh token;
+   (`api/oauth_returns.py`); the callback hands the code to the front, which
+   completes with its own token (`auth/flow.py`); the code then becomes a refresh token;
 3. the refresh token goes to the vault, MEMBER tier, with the account's address
    (`get_me().email`) in `meta`: the agent reads what THAT person reaches.
 
@@ -403,3 +404,31 @@ def _etape_manquante(sub: str, org, group, entry: dict) -> Optional[str]:
 
 
 status_hints.register(CONNECTOR, _etape_manquante)
+
+
+# --- the return: the callback hands over, the front completes (`auth/flow.py`) ------
+
+def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
+    d = verify_state(state) if state else None
+    if d is None:
+        return None
+    return oauth_flow.ReturnState(d["sub"], d["org"],
+                                  oauth_flow.resolve_return_app(d["app"]), CONNECTOR,
+                                  d["jti"], d)
+
+
+def _finish_return(d: dict, code: str) -> dict:
+    """Re-read ON RETURN (`still_allowed`): still a member of the org, connector still
+    open there; then the exchange and the vault."""
+    if not still_allowed(d):
+        oauth_flow.not_allowed(
+            "You are no longer a member of this organization, or jefacture.com is now "
+            "turned off there.")
+    exchange_and_persist(d, code)
+    return {"account": None, "scope": "member"}
+
+
+RETURN = oauth_flow.OAuthReturn(
+    audience=_AUD, callback_path=CALLBACK_PATH, label="jefacture.com", default_card=CONNECTOR,
+    read=_return_state, finish=_finish_return, cards=lambda: (CONNECTOR,))
+oauth_flow.declare_return(RETURN)

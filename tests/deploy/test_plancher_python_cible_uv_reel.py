@@ -1,0 +1,218 @@
+"""Le changement de plancher Python, avec le VRAI uv (`uv venv`, `uv python install`,
+`uv sync --frozen` sous `UV_PYTHON_DOWNLOADS=never`) : ce que les doublures ne peuvent pas
+dire, c'est QUEL interpréteur uv retient. Ici : le venv recréé l'est sur l'interpréteur
+géré du rôle (`/opt/<i>/python`), jamais un Python du système, et `uv sync` le garde ; à
+plancher égal, `uv sync` ne recrée rien.
+
+Le passage 3.10 → 3.12 est rejoué en 3.11 → 3.12 sur deux interpréteurs gérés par uv déjà
+présents sur la machine (aucun téléchargement : sans eux, le module est ignoré — sauf sous
+`OTO_BANC_UV_REEL_EXIGE=1`, où leur absence est un échec : le job CI
+`plancher-python-uv-reel` les pose et l'exige). Le tag est
+un projet minimal sans dépendance, pour que `uv sync` reste hors réseau ; le reste de la
+chaîne est celui de `_banc_cible.py` (root simulé, racine jetable).
+"""
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+
+import pytest
+
+from _banc_cible import DECLARATION, Banc
+
+UV = shutil.which("uv")  # un chemin, pas un travail
+ANCIEN, NOUVEAU = "3.11", "3.12"
+
+
+def _gere(version: str) -> bool:
+    if not UV:
+        return False
+    fini = subprocess.run([UV, "python", "find", "--managed-python", "--no-config", version],
+                          capture_output=True, text=True,
+                          env={**os.environ, "UV_PYTHON_DOWNLOADS": "never"})
+    return fini.returncode == 0
+
+
+@pytest.fixture
+def uv_reel():
+    """Sondé au test, jamais à l'import (un import définit, il ne travaille pas).
+
+    ⚠️ CI SEULEMENT (`OTO_BANC_UV_REEL_EXIGE=1`) : ce banc lance le vrai `uv python install`
+    sur des interpréteurs de la machine. Sur un poste partagé, la moindre fuite hors de la
+    racine jetable touche le dossier uv de tout le monde (liens de version mineure) — le banc
+    ne tourne donc que sur un runner jetable."""
+    if os.environ.get("OTO_BANC_UV_REEL_EXIGE") != "1":
+        pytest.skip("vrai uv : CI seulement (OTO_BANC_UV_REEL_EXIGE=1), jamais sur un poste partagé")
+    if not (_gere(ANCIEN) and _gere(NOUVEAU)):
+        motif = f"uv et ses interpréteurs gérés {ANCIEN} et {NOUVEAU} requis (aucun téléchargement)"
+        if os.environ.get("OTO_BANC_UV_REEL_EXIGE") == "1":
+            pytest.fail(motif)
+        pytest.skip(motif)
+
+
+def _plancher(banc: Banc, version: str) -> None:
+    """Un tag minimal : son plancher, et le verrou qui va avec (hors réseau)."""
+    (banc.tag / "pyproject.toml").write_text(
+        '[project]\nname = "banc-plancher"\nversion = "0"\n'
+        f'requires-python = ">={version}"\ndependencies = []\n\n[tool.uv]\npackage = false\n',
+        encoding="utf-8")
+    subprocess.run([UV, "lock", "--quiet", "--offline", "--no-config"], cwd=banc.tag, check=True,
+                   env={**os.environ, "UV_PYTHON_DOWNLOADS": "never"})
+
+
+@pytest.fixture
+def banc(tmp_path, uv_reel):
+    banc = Banc(tmp_path)
+    # uv : le vrai, journalisé.
+    (banc.bin / "uv").write_text(
+        f'#!/bin/bash\necho "uv $*" >> "$BANC_TRACE"\nexec {UV} --no-config "$@"\n')
+    # Les interpréteurs gérés du rôle sont ceux déjà posés par uv sur la machine : l'amorce
+    # les y « installe » sans rien télécharger.
+    # Un VRAI dossier jetable, où les interpréteurs du banc sont COPIÉS : uv y écrit ses
+    # liens de version mineure (`cpython-3.12-…`), jamais dans le dossier uv de la machine.
+    # Relier le dossier entier y faisait écrire `uv python install` (liens mineurs réécrits
+    # vers la racine jetable, effacée ensuite : tous les venvs de la machine cassés) ; un lien
+    # par interpréteur n'est pas reconnu comme installé, et uv voudrait télécharger.
+    pythons = pathlib.Path(subprocess.run([UV, "python", "dir"], capture_output=True,
+                                          text=True, check=True).stdout.strip())
+    dossier = banc.racine / "opt/exemple/python"
+    dossier.mkdir(parents=True)
+    for installe in pythons.iterdir():
+        serie = installe.name.split("-")[1] if installe.name.startswith("cpython-") else ""
+        if (serie.rsplit(".", 1)[0] in (ANCIEN, NOUVEAU) and serie.count(".") == 2
+                and installe.is_dir() and not installe.is_symlink()):
+            shutil.copytree(installe, dossier / installe.name, symlinks=True)
+    _plancher(banc, ANCIEN)
+    return banc
+
+
+def _monter(banc: Banc, tag: str, **options) -> subprocess.CompletedProcess:
+    banc.trace.write_text("")
+    fini = banc.lancer("deployer.sh", "deployer", "prod", tag, UV_PYTHON_DOWNLOADS="never",
+                       HOME=str(banc.racine), **options)
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    return fini
+
+
+def _venv(banc: Banc, couleur: str) -> pathlib.Path:
+    return banc.racine / f"opt/exemple/prod-{couleur}/.venv"
+
+
+def _version(banc: Banc, couleur: str) -> str:
+    return subprocess.run([str(_venv(banc, couleur) / "bin/python"), "-c",
+                           'import sys; print("%d.%d" % sys.version_info[:2])'],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _home(banc: Banc, couleur: str) -> pathlib.Path:
+    for ligne in (_venv(banc, couleur) / "pyvenv.cfg").read_text().splitlines():
+        cle, _, valeur = ligne.partition("=")
+        if cle.strip() == "home":
+            return pathlib.Path(valeur.strip()).resolve()
+    raise AssertionError("pyvenv.cfg sans home")
+
+
+def test_plancher_qui_monte_sur_le_vrai_uv(banc):
+    pythons = (banc.racine / "opt/exemple/python").resolve()
+    _monter(banc, "v1.0.0")                       # naissance : bleue sert, verte installée
+    _monter(banc, "v1.1.0")                       # la bleue sert de nouveau
+    for c in ("blue", "green"):
+        assert _version(banc, c) == ANCIEN
+        (_venv(banc, c) / "temoin").write_text(c)
+    cfg_avant = {c: (_venv(banc, c) / "pyvenv.cfg").read_text() for c in ("blue", "green")}
+
+    # plancher égal : `uv sync --frozen` (et son environnement) ne recrée aucun venv
+    _monter(banc, "v1.2.0")
+    for c in ("blue", "green"):
+        assert (_venv(banc, c) / "temoin").exists()
+        assert (_venv(banc, c) / "pyvenv.cfg").read_text() == cfg_avant[c]
+    assert not [c for c in banc.commandes() if c.startswith("uv venv")]
+    assert banc.lire("/etc/exemple/prod/active") == "green\n"
+
+    # plancher relevé : la bleue (inactive) est recréée sur l'interpréteur géré du rôle
+    _plancher(banc, NOUVEAU)
+    fini = _monter(banc, "v2.0.0")
+    assert f"venv {ANCIEN} → {NOUVEAU} recréé" in fini.stdout
+    assert _version(banc, "blue") == NOUVEAU and not (_venv(banc, "blue") / "temoin").exists()
+    assert _home(banc, "blue").is_relative_to(pythons)
+    assert "uv sync --frozen --quiet" in banc.commandes()
+    # la verte, qui servait, n'a pas bougé : c'est le retour arrière
+    assert _version(banc, "green") == ANCIEN and (_venv(banc, "green") / "temoin").exists()
+    assert (_venv(banc, "green") / "pyvenv.cfg").read_text() == cfg_avant["green"]
+
+    # retour arrière : la verte repart sur son venv d'avant
+    banc.trace.write_text("")
+    fini = banc.lancer("deployer.sh", "retour", "prod", "v2.0.0", UV_PYTHON_DOWNLOADS="never",
+                       HOME=str(banc.racine))
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    assert banc.lire("/etc/exemple/prod/active") == "green\n"
+    assert _version(banc, "green") == ANCIEN and _version(banc, "blue") == NOUVEAU
+
+    # la montée suivante (bleue de nouveau) : déjà au plancher, rien n'est recréé
+    (_venv(banc, "blue") / "temoin").write_text("blue")
+    _monter(banc, "v2.1.0")
+    assert (_venv(banc, "blue") / "temoin").exists()
+    assert not [c for c in banc.commandes() if c.startswith("uv venv")]
+    # et celle d'après migre enfin la verte
+    _monter(banc, "v2.2.0")
+    assert _version(banc, "green") == NOUVEAU and _home(banc, "green").is_relative_to(pythons)
+
+
+def test_choix_de_l_instance_sur_le_vrai_uv(banc, tmp_path):
+    """Plancher 3.11, l'instance choisit 3.12 : la couleur installée passe en 3.12 sur
+    l'interpréteur géré du rôle, et `uv sync --frozen` le garde (3.12 satisfait `>=3.11`) ;
+    la montée suivante, au même choix, ne recrée rien."""
+    pythons = (banc.racine / "opt/exemple/python").resolve()
+    _monter(banc, "v1.0.0")
+    _monter(banc, "v1.1.0")
+    doc = json.loads(DECLARATION.read_text())
+    doc["python"] = NOUVEAU
+    declaration = tmp_path / "declaration_python.json"
+    declaration.write_text(json.dumps(doc))
+    fini = _monter(banc, "v2.0.0", declaration=declaration)
+    assert f"venv {ANCIEN} → {NOUVEAU} recréé" in fini.stdout
+    assert _version(banc, "green") == NOUVEAU and _home(banc, "green").is_relative_to(pythons)
+    assert _version(banc, "blue") == ANCIEN                 # en service pendant la montée
+    (_venv(banc, "green") / "temoin").write_text("green")
+    _monter(banc, "v2.1.0", declaration=declaration)       # la bleue
+    assert _version(banc, "blue") == NOUVEAU
+    _monter(banc, "v2.2.0", declaration=declaration)       # la verte, déjà au choix : rien
+    assert (_venv(banc, "green") / "temoin").exists()
+    assert not [c for c in banc.commandes() if c.startswith("uv venv")]
+
+
+def _patch(python: str) -> str:
+    return subprocess.run([python, "-c", 'import sys; print("%d.%d.%d" % sys.version_info[:3])'],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_choix_au_patch_sur_le_vrai_uv(banc, tmp_path):
+    """L'instance fige l'interpréteur au patch (celui du 3.12 géré présent, sans
+    téléchargement) : la couleur installée est recréée sur CETTE version exacte, lue par
+    son interpréteur ; au même choix, la montée suivante ne recrée rien. Deux patchs d'une
+    même série ne sont pas éprouvés ici : il faudrait télécharger le second (les doublures
+    le couvrent, tests/deploy/test_plancher_python_cible.py)."""
+    # Le patch est celui que la fixture a copié dans les interpréteurs du rôle — pas ce que
+    # `uv python find` trouverait sur la machine (un Python du runner peut avoir un autre patch).
+    poses = sorted(d.name.split("-")[1] for d in (banc.racine / "opt/exemple/python").iterdir()
+                   if d.name.startswith(f"cpython-{NOUVEAU}.") and not d.is_symlink())
+    assert len(poses) == 1, poses
+    exacte = poses[0]
+    _monter(banc, "v1.0.0")
+    _monter(banc, "v1.1.0")
+    doc = json.loads(DECLARATION.read_text())
+    doc["python"] = exacte
+    declaration = tmp_path / "declaration_patch.json"
+    declaration.write_text(json.dumps(doc))
+    fini = _monter(banc, "v2.0.0", declaration=declaration)
+    assert f"--python {exacte} --python-preference only-managed" in " ".join(banc.commandes())
+    assert f"→ {exacte} recréé" in fini.stdout
+    assert _patch(str(_venv(banc, "green") / "bin/python")) == exacte
+    _monter(banc, "v2.1.0", declaration=declaration)       # la bleue
+    (_venv(banc, "green") / "temoin").write_text("green")
+    _monter(banc, "v2.2.0", declaration=declaration)       # la verte, déjà au patch : rien
+    assert (_venv(banc, "green") / "temoin").exists()
+    assert not [c for c in banc.commandes() if c.startswith("uv venv")]

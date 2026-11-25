@@ -21,6 +21,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 from ...connectors import kit as connector_kit
+from .._org_du_service import org_ou_404
 from .._types import AuthzDenied, ResolvedCtx
 
 
@@ -153,6 +154,13 @@ def _bulk_select(ctx: ResolvedCtx, inp: BulkSelectInput) -> dict:
     return {"org_id": inp.org_id, "connector": inp.name,
             "activated": ch["installed"] if ch else 0, "skipped": laisses,
             "added_to_org_defaults": ch is not None, **out}
+
+
+def _bulk_select_service(ctx: ResolvedCtx, inp: BulkSelectInput) -> dict:
+    """[service commerce] `_bulk_select`, the org first checked: the service has no
+    membership that proves the org exists, nor that it is not archived."""
+    org_ou_404(inp.org_id)
+    return _bulk_select(ctx, inp)
 
 
 def _unset_default(ctx: ResolvedCtx, inp: UnsetDefaultInput) -> dict:

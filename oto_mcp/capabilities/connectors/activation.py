@@ -22,8 +22,10 @@ from pydantic import BaseModel
 
 from ... import access, group_store, org_store, providers
 from ...connectors import activation as connector_activation
-from .._authz import GROUP_ADMIN_OF, GROUP_MEMBER_OF, ORG_ADMIN_OF, ORG_MEMBER_OF
-from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from .._authz import (COMMERCE_SERVICE, GROUP_ADMIN_OF, GROUP_MEMBER_OF, ORG_ADMIN_OF,
+                      ORG_MEMBER_OF)
+from .._org_du_service import ORG_INCONNUE, org_ou_404
+from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
 
 _ID = {"id": "org_id"}      # placeholder {id} → Input field org_id
@@ -249,6 +251,14 @@ def _org_set(ctx: ResolvedCtx, inp: OrgActivationSetInput) -> dict:
             **_signal_kit(inp.org_id, inp.name)}
 
 
+def _org_set_service(ctx: ResolvedCtx, inp: OrgActivationSetInput) -> dict:
+    """[service commerce] `_org_set`, the org first checked: the service has no
+    membership that proves the org exists, nor that it is not archived. The override
+    is written under the service's name (`set_by = service:<client_id>`)."""
+    org_ou_404(inp.org_id)
+    return _org_set(ctx, inp)
+
+
 def _org_clear(ctx: ResolvedCtx, inp: OrgActivationClearInput) -> dict:
     """Deletes the org override → the connector falls back to the global master."""
     if inp.name not in providers.REGISTRY:
@@ -387,6 +397,25 @@ CAPABILITIES += [
                     "`kit_note`): cutting it keeps it in the kit and installed, hidden for "
                     "everyone, and it comes back on its own when reopened.",
         rest=RestBinding("PUT", "/api/orgs/{id}/connectors/{name}/activation", _ID),
+    ),
+    # The same gesture for the COMMERCE service, under `/api/service/` like all its face.
+    # No `refresh_visibility`: it re-pushes onto the CALLER's MCP session, and a service
+    # has none — the members see the change at their next session, as for the org admin.
+    Capability(
+        key="service.org.connectors.activation.set", handler=_org_set_service,
+        Input=OrgActivationSetInput, Output=ActivationOverrideSet,
+        authz=COMMERCE_SERVICE, mcp=None,
+        description="[service commerce] Force a connector ON or OFF for a whole org, as "
+                    "`connectors.activation.set_org` does for an org admin. Enabling "
+                    "requires the platform and the org's host to expose it; disabling "
+                    "always works. Takes effect for members on their next session.",
+        errors=(ORG_INCONNUE,
+                DeclaredError(404, "unknown_connector", "name unknown to the registry"),
+                DeclaredError(409, "platform_disabled",
+                              "enabling a connector the platform has cut"),
+                DeclaredError(409, "tenant_disabled",
+                              "enabling a connector the org's host has cut")),
+        rest=RestBinding("PUT", "/api/service/orgs/{id}/connectors/{name}/activation", _ID),
     ),
     Capability(
         key="connectors.activation.clear_org", handler=_org_clear, Input=OrgActivationClearInput,

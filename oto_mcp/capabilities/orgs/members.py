@@ -20,6 +20,7 @@ from .._authz import ORG_ADMIN_OF, ORG_ADMIN_OF_OR_OPERATOR, SUB_ONLY
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding,
                       cap_limit)
 from ..registry import CAPABILITIES
+from .._session_exigee import exiger_session
 from .core import refuser_maison_sous_verrou
 
 _ID = {"id": "org_id"}  # placeholder de route {id} → champ Input org_id
@@ -76,28 +77,44 @@ def _require_org_exists(org_id: int) -> None:
 
 
 class MemberWritten(BaseModel):
-    """Écho d'un ajout de membre ou d'un changement de rôle.
+    """Écho d'un changement de rôle.
 
     ⚠️ `sub` est le sub **RÉSOLU** : l'entrée accepte un email, la réponse ne le
     renvoie jamais — un client qui a envoyé un email doit garder sa propre trace
-    pour rapprocher requête et réponse.
-
-    ⚠️ **L'ajout est un UPSERT, pas une création** : ajouter quelqu'un qui est déjà
-    membre ne rend pas de conflit, ça écrase son rôle. `POST /members` sur un membre
-    existant est donc un changement de rôle déguisé — et il porte le MÊME anti-lockout
-    que `POST /members/{sub}` (409 `last_org_admin` sur le dernier org_admin) depuis
-    #273 ; avant ce correctif il était la route par laquelle on rétrogradait ce que
-    l'autre refusait.
-
-    ⚠️ Effet de bord invisible dans la réponse : une **première** adhésion peut
-    devenir l'org MAISON de la personne (si elle n'avait que son espace personnel) —
-    on change donc son contexte de travail par défaut, pas seulement son
-    appartenance."""
+    pour rapprocher requête et réponse."""
     ok: bool
     org_id: int
     sub: str
     # Le rôle EFFECTIF après écriture (validé contre `org_store.ORG_ROLES`).
     role: str
+
+
+class MemberAdded(BaseModel):
+    """Réponse de l'ajout d'un membre. **Lire `status` avant tout** : il dit si une
+    personne est membre, ou seulement invitée.
+
+    - `status: "member"` — la cible était DÉJÀ membre (ou c'est l'appelant lui-même) :
+      son rôle est écrit tout de suite, avec le MÊME anti-lockout que
+      `POST /members/{sub}` (409 `last_org_admin` sur le dernier org_admin). `sub` =
+      le sub résolu.
+    - `status: "invited"` — la cible n'était pas membre : on n'entre dans une org que
+      par une invitation qu'on accepte. Une invitation est émise à l'adresse donnée
+      (même geste que `org.invite.create` : `email`, `invite_url`, `emailed`, mêmes 409
+      `already_invited`) ; la personne n'est PAS membre tant qu'elle ne l'a pas
+      acceptée, et son org active ne bouge pas. `sub` vaut null.
+
+    Un non-membre désigné par un `sub` (sans adresse) est refusé en 400
+    `invite_by_email` : une invitation vise une adresse."""
+    ok: bool
+    org_id: int
+    status: Literal["member", "invited"]
+    # Rôle écrit (`member`) ou rôle que l'invitation donnera (`invited`).
+    role: str
+    sub: Optional[str] = None
+    # `invited` seulement — voir `InvitationEmitted` (`invite_url` est un secret porteur).
+    email: Optional[str] = None
+    invite_url: Optional[str] = None
+    emailed: Optional[bool] = None
 
 
 class MemberRemoved(BaseModel):
@@ -145,11 +162,16 @@ def _write_member_role(org_id: int, sub: str, role: str, *, require_member: bool
     de passage unique : toute nouvelle surface d'écriture de rôle passe par ici.
 
     `require_member` = la SEULE divergence légitime entre les deux : `set_role` exige une
-    appartenance préexistante (404 sinon), `add` l'accepte absente — c'est son objet.
+    appartenance préexistante (404 sinon) ; `add` ne l'accepte absente que pour
+    l'appelant lui-même (`_add_member` : un tiers non-membre reçoit une invitation).
     """
     current = org_store.get_org_role(org_id, sub)
     if current is None and require_member:
         raise AuthzDenied(404, "not_a_member", "Cible non-membre de l'org.")
+    # `_session_exigee` : CHANGER un rôle, ou donner le rang d'admin, demande
+    # une session — jamais un jeton. Ajouter un simple membre reste ouvert au jeton.
+    if role == "org_admin" or (current is not None and current != role):
+        exiger_session("Changer le rôle d'un membre ou nommer un admin")
     # Anti-lockout : ne pas rétrograder le dernier org_admin, par quelque route que ce soit.
     if current == "org_admin" and role != "org_admin" and _count_org_admins(org_id) <= 1:
         raise AuthzDenied(409, "last_org_admin", "Impossible de rétrograder le dernier org_admin.")
@@ -157,12 +179,49 @@ def _write_member_role(org_id: int, sub: str, role: str, *, require_member: bool
     return {"ok": True, "org_id": org_id, "sub": sub, "role": role}
 
 
+def _membre_vise(org_id: int, target: str) -> Optional[str]:
+    """Le sub du MEMBRE de l'org que `target` (email ou sub) désigne, None si la cible
+    n'en est pas membre. Une adresse portée par deux membres se refuse, comme
+    `_resolve_target`."""
+    if "@" not in target:
+        return target if org_store.get_org_role(org_id, target) is not None else None
+    subs = org_store.membres_par_email(org_id, target)
+    if len(subs) > 1:
+        raise AuthzDenied(
+            400, "ambiguous_email",
+            f"L'email `{target}` désigne {len(subs)} membres : "
+            f"{', '.join(f'`{s}`' for s in subs)}. Reprends avec le `sub` de celui que tu vises.")
+    return subs[0] if subs else None
+
+
 def _add_member(ctx: ResolvedCtx, inp: AddMemberInput) -> dict:
+    """Ajouter quelqu'un à une org, c'est l'INVITER : on n'entre dans une org que par
+    une invitation qu'on accepte (`orgs/invites.py`). Seuls deux cas s'écrivent tout de
+    suite : un membre existant (changement de rôle) et l'appelant lui-même (un
+    opérateur plateforme qui rejoint une org par escalade `ORG_ADMIN_OF`)."""
     _require_org_exists(inp.org_id)
     role = _check_role(inp.role)
-    target_sub = _resolve_target(inp.target)
-    return _write_member_role(inp.org_id, target_sub, role, require_member=False,
-                              actor=ctx.sub)
+    target = (inp.target or "").strip()
+    if not target:
+        raise AuthzDenied(400, "missing_target", "Cible (email ou sub) requise.")
+    sub = _membre_vise(inp.org_id, target)
+    if sub is None and target == ctx.sub:
+        sub = ctx.sub
+    if sub is not None:
+        return {**_write_member_role(inp.org_id, sub, role, require_member=False,
+                                     actor=ctx.sub), "status": "member"}
+    if "@" not in target:
+        raise AuthzDenied(
+            400, "invite_by_email",
+            "Ce compte n'est pas membre de l'org : on y entre par une invitation qu'on "
+            "accepte. Reprends avec son adresse email pour l'inviter.")
+    # Import paresseux : l'ordre d'import des modules fixe celui de la table de routes.
+    from . import invites
+    emise = invites._invite_create(ctx, invites.InviteCreateInput(
+        org_id=inp.org_id, email=target, role=role, send_email=True))
+    return {"ok": True, "org_id": inp.org_id, "status": "invited", "role": emise["role"],
+            "sub": None, "email": emise["email"], "invite_url": emise["invite_url"],
+            "emailed": emise["emailed"]}
 
 
 def _set_member_role(ctx: ResolvedCtx, inp: SetMemberRoleInput) -> dict:
@@ -185,6 +244,7 @@ def _rendre_un_espace(sub: str) -> None:
 
 
 def _remove_member(ctx: ResolvedCtx, inp: RemoveMemberInput) -> dict:
+    exiger_session("Retirer un membre d'une org")  # `_session_exigee`
     target_sub = _resolve_target(inp.target)
     # Anti-lockout : ne pas retirer le dernier org_admin.
     if org_store.get_org_role(inp.org_id, target_sub) == "org_admin" and _count_org_admins(inp.org_id) <= 1:
@@ -296,8 +356,11 @@ def _member_events(ctx: ResolvedCtx, inp: MemberEventsInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="org.member.add", handler=_add_member, Input=AddMemberInput,
-        authz=ORG_ADMIN_OF("org_id"), Output=MemberWritten,
-        description="Add a member (by email or sub) to an org you administer. role: org_member|org_admin.",
+        authz=ORG_ADMIN_OF("org_id"), Output=MemberAdded,
+        description=("Add someone to an org you administer (role: org_member|org_admin). "
+                     "A person who is not yet a member is INVITED (by email): they join "
+                     "only once they accept, and the answer says `status: invited`. An "
+                     "existing member gets the role right away (`status: member`)."),
         # MCP fusionné dans oto_admin_org_member(op=add). REST conservé (dashboard).
         rest=(RestBinding("POST", "/api/orgs/{id}/members", _ID),
               RestBinding("POST", "/api/admin/orgs/{id}/members", _ID)),
@@ -306,16 +369,23 @@ CAPABILITIES += [
         key="org.member.set_role", handler=_set_member_role, Input=SetMemberRoleInput,
         authz=ORG_ADMIN_OF("org_id"), Output=MemberWritten,
         description="Change a member's role in an org you administer (org_member|org_admin).",
-        rest=(RestBinding("POST", "/api/orgs/{id}/members/{sub}", _ID),
-              RestBinding("POST", "/api/admin/orgs/{id}/members/{sub}", _ID)),
+        # Session interactive seule (`_session_exigee`) sur les DEUX paliers.
+        # `org.member.add` reste ouvert au jeton : sa garde de handler ne refuse que le
+        # rang d'admin et le changement de rôle d'un membre existant.
+        rest=(RestBinding("POST", "/api/orgs/{id}/members/{sub}", _ID, allow_api_token=False),
+              RestBinding("POST", "/api/admin/orgs/{id}/members/{sub}", _ID,
+                          allow_api_token=False)),
     ),
     Capability(
         key="org.member.remove", handler=_remove_member, Input=RemoveMemberInput,
         authz=ORG_ADMIN_OF("org_id"), Output=MemberRemoved,
         description="Remove a member (by email or sub) from an org you administer.",
         # MCP fusionné dans oto_admin_org_member(op=remove). REST conservé (dashboard).
-        rest=(RestBinding("DELETE", "/api/orgs/{id}/members/{sub}", {"id": "org_id", "sub": "target"}),
-              RestBinding("DELETE", "/api/admin/orgs/{id}/members/{sub}", {"id": "org_id", "sub": "target"})),
+        # Session interactive seule (`_session_exigee`) sur les DEUX paliers.
+        rest=(RestBinding("DELETE", "/api/orgs/{id}/members/{sub}",
+                          {"id": "org_id", "sub": "target"}, allow_api_token=False),
+              RestBinding("DELETE", "/api/admin/orgs/{id}/members/{sub}",
+                          {"id": "org_id", "sub": "target"}, allow_api_token=False)),
     ),
     Capability(
         key="me.leave_org", handler=_leave_org, Input=LeaveOrgInput,

@@ -5,6 +5,8 @@ révoquer, élire le compte par défaut.
 - `GET    /api/google/oauth/status`  → l'état du consentement (multi-compte)
 - `DELETE /api/google/oauth`         → révoque
 - `POST   /api/google/oauth/default` → élit le compte Google par défaut
+- `POST   /api/google/oauth/complete` → termine un consentement, AVEC le jeton de qui l'a
+  démarré (le callback ne range plus rien, cf. `_google_complete`)
 
 ⚠️ **Ce module a porté `atlassian` et `folkmcp` jusqu'au 2026-09-09** — d'où son nom
 et les clés de capacité `me.federation.google.*`, gardés tels quels : ce sont des
@@ -30,7 +32,8 @@ from pydantic import BaseModel
 
 from .. import access, db
 from ._authz import SUB_ONLY
-from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .connectors import complete as connector_complete
 from .registry import CAPABILITIES
 
 
@@ -54,6 +57,13 @@ class GoogleRevokeInput(BaseModel):
 class GoogleDefaultInput(BaseModel):
     account: str = ""
     scope: Optional[str] = None             # `org` / `group` : le défaut PARTAGÉ
+
+
+class GoogleCompleteInput(BaseModel):
+    """Ce que le callback a remis au front dans le FRAGMENT de l'URL de retour
+    (`#code=…&state=…`), tel quel."""
+    code: str
+    state: str
 
 
 # --- Sorties ----------------------------------------------------------------
@@ -115,6 +125,16 @@ class GoogleDefaultSet(BaseModel):
     default: str
 
 
+class GoogleConsentCompleted(BaseModel):
+    """Le compte Google est rangé : `account` = l'adresse qui a consenti, `connector` =
+    la carte qui l'a demandé (le compte, ou l'un de ses services), `scope` = à qui il
+    est confié (`member`, ou `org`/`group` pour un compte partagé)."""
+    ok: bool
+    connector: str
+    account: str
+    scope: str
+
+
 # --- Google (multi-compte) --------------------------------------------------
 
 def _google_start(ctx: ResolvedCtx, inp: OAuthStartInput) -> dict:
@@ -125,6 +145,16 @@ def _google_start(ctx: ResolvedCtx, inp: OAuthStartInput) -> dict:
         # Forme historique EXACTE, espace compris : le code machine porte la cause.
         raise AuthzDenied(500, f"oauth_misconfigured: {e}")
     return {"auth_url": url}
+
+
+def _google_complete(ctx: ResolvedCtx, inp: GoogleCompleteInput) -> dict:
+    """Termine un consentement Google — la complétion commune à tous les retours
+    (`auth/flow.py::complete`, cf. `capabilities/connectors/complete.py`), sous le chemin
+    et la forme de réponse de Google. L'ordre : state lu, `sub` du porteur, state
+    consommé, puis échange et rangement pour l'org et la carte que le state porte."""
+    from ..auth import google as google_oauth
+    return connector_complete.complete_for(google_oauth.RETURN, ctx.sub, inp.code,
+                                           inp.state)
 
 
 def _google_status(ctx: ResolvedCtx, inp: OAuthStatusInput) -> dict:
@@ -216,6 +246,19 @@ _DOC_G_DEFAULT = (
     "outils quand aucun compte n'est nommé à l'appel."
 )
 
+_DOC_G_COMPLETE = (
+    "Termine un consentement Google : le front poste le `code` et le `state` que le "
+    "callback lui a remis dans le fragment (`connect=confirm`). Le state doit avoir été "
+    "émis pour le PORTEUR du jeton (`state_not_yours` sinon), il ne sert qu'une fois "
+    "(`state_used`), puis le code est échangé et le compte rangé."
+)
+_ERREURS_G_COMPLETE = (
+    DeclaredError(400, "invalid_state", "state illisible, altéré, expiré ou d'un autre flux"),
+    DeclaredError(403, "state_not_yours", "state émis pour une autre personne que le porteur"),
+    DeclaredError(409, "state_used", "state déjà consommé (rejeu)"),
+    DeclaredError(502, "exchange_failed", "Google a refusé l'échange du code, ou le rangement a échoué"),
+)
+
 CAPABILITIES += [
         Capability(
             key="me.federation.google.start", handler=_google_start,
@@ -240,5 +283,12 @@ CAPABILITIES += [
             Input=GoogleDefaultInput, authz=SUB_ONLY, Output=GoogleDefaultSet, mcp=None,
             description=_DOC_G_DEFAULT,
             rest=RestBinding("POST", "/api/google/oauth/default"),
+        ),
+        Capability(
+            key="me.federation.google.complete", handler=_google_complete,
+            Input=GoogleCompleteInput, authz=SUB_ONLY, Output=GoogleConsentCompleted,
+            errors=_ERREURS_G_COMPLETE, mcp=None,
+            description=_DOC_G_COMPLETE,
+            rest=RestBinding("POST", "/api/google/oauth/complete"),
         ),
 ]

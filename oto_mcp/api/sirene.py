@@ -33,7 +33,7 @@ AuthFn = Callable[..., Awaitable[tuple[str | None, JSONResponse | None]]]
 # called the FOD client (SYNC httpx, `fod/http.py`) bare: a slow FOD scan held
 # the loop until its 100s read timeout (shared by ALL FOD clients, not
 # changed here — a legitimate SIRENE scan may need it). `_fod` takes the call off
-# the loop (`run_in_threadpool`, same primitive as `api/zoho.py:85`) and bounds it to a
+# the loop (`run_in_threadpool`, same primitive as `api/oauth_returns.py`) and bounds it to a
 # defensible REST delay, shorter than this shared timeout:
 # - `_FICHE_S` (single record — siege/siret/etablissements/info): never scans more
 #   than one SIREN, must answer in a fraction of a second in normal operation.

@@ -74,6 +74,7 @@ from . import guide_library  # noqa: F401 — library.{list,get,publish,fork,unp
 import oto_mcp.capabilities.connectors.selection  # noqa: F401 — connectors.{me,select,pause,unselect}
 import oto_mcp.capabilities.connectors.identities  # noqa: F401 — connectors.{identities,set_default_identity} (ADR 0024)
 import oto_mcp.capabilities.connectors.connect  # noqa: F401 — me.connector_connect (POST /api/me/connectors/{name}/connect, chemin FIXE)
+import oto_mcp.capabilities.connectors.complete  # noqa: F401 — me.connector_complete (POST /api/me/connectors/{name}/complete)
 from . import microsoft_admin_consent  # noqa: F401 — me.microsoft_admin_consent (POST /api/me/connectors/microsoft/admin-consent ; outil microsoft_admin_consent)
 from . import salesforce_connect  # noqa: F401 — me.salesforce_connect (oto_salesforce_connect ; REST = le chemin fixe /connect)
 from . import zoho_connect  # noqa: F401 — me.zoho_connect (oto_zoho_connect + GET /api/zoho/oauth/{start,modes})
@@ -234,5 +235,6 @@ from . import runner_workers  # noqa: F401 — platform.runner.worker (REST seul
 from . import functions  # noqa: F401 — me.function (MCP oto_function + REST) — ADR 0073, code pur exécuté par Oto
 from . import recipes  # noqa: F401 — me.recipe (MCP oto_recipe) — recettes connecteur → tableau, sans modèle
 import oto_mcp.capabilities.copilot.routes  # noqa: F401 — copilot.{turn,client_result,approval,revert} (REST seule) — l'agent intégré
+from . import org_erasure  # noqa: F401 — org.erasure{,_confirm} + service.org.erasure{s,_ack} (REST seule) — effacer une org, RGPD art. 17
 
 __all__ = ["registry", "_mcp_adapter", "_rest_adapter"]

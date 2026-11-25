@@ -49,7 +49,8 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 | `POST /api/me/projects/{id}/transcriptions/upload` (audio à transcrire) | `api/transcription.py` | **multipart** → hors du moule (classé `NATURE`) ; la forme par référence est une capacité |
 | `/api/upload/{token}` (PUT/POST/GET) | `api/uploads.py` | **pas de JWT** : le jeton de l'URL fait foi |
 | `POST /api/logto/webhook` | `api/logto_webhook.py` | **pas de JWT** : HMAC-SHA256 du corps brut (`logto-signature-sha-256`, clé `OTO_LOGTO_WEBHOOK_SIGNING_KEY`) ; un mot de passe changé révoque les jetons `oto_` et ferme les sessions Logto (classé `NATURE`, `docs/auth-logto.md` §Mot de passe changé) |
-| SIRENE (`api/sirene.py`), accords (`api/accords.py`), webhook Mollie (`api/billing.py`), **callbacks OAuth** zoho/google/salesforce (`api/{zoho,datastore,salesforce}.py`) | `api/<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres. ⚠️ `api/atlassian.py` et `api/folk.py` ont porté les deux callbacks fédérés jusqu'au **2026-09-09** : partis avec la fédération MCP (**ADR 0069**). ⚠️ **Le datastore n'y est plus** depuis le 2026-08-12 (#302) : ses 24 chemins sont des capacités (bloc ci-dessous) ; `api/datastore.py` est un nom vestige qui ne porte QUE le callback Google |
+| SIRENE (`api/sirene.py`), accords (`api/accords.py`), webhook Mollie (`api/billing.py`) | `api/<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres. ⚠️ `api/atlassian.py` et `api/folk.py` ont porté les deux callbacks fédérés jusqu'au **2026-09-09** : partis avec la fédération MCP (**ADR 0069**). ⚠️ **Le datastore n'y est plus** depuis le 2026-08-12 (#302) : ses 24 chemins sont des capacités (bloc ci-dessous) |
+| **callbacks OAuth** des connecteurs (`…/oauth/callback`, `/api/wordpress/connect/callback`) | `api/oauth_returns.py` | une route par fournisseur, un seul code (`auth/flow.py::callback_url`), déclarée par chaque `auth/<x>.py` (`oauth_flow.declare_return`) depuis oto-backend#1908 ; les modules `api/{datastore,zoho,salesforce,microsoft,hubspot,meta_ads,instagram_meta,ubersuggest,jefacture,linkedin_ads,wordpress}.py` ont disparu avec |
 
 - `GET /api/me` + `GET /api/me/calls` + `GET /api/me/activity-summary` — **le compte**,
   capacités `me.{get,calls,activity_summary}` depuis le 2026-08-27
@@ -247,7 +248,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 - `PUT|POST|GET /api/upload/{token}` — **réception d'un upload signé out-of-bande** (issue #105), **pas de JWT** : le `{token}` est un jeton HMAC scellant `(sub, org, cible)` + TTL court + usage unique (émis par `POST /api/me/upload-url` ou `oto_upload_url`, module `upload_tokens.py`). ⚠️ **Route de NATURE à contrat déclaré** (oto#106) : `api/uploads.py` pose un `ContratDeRoute` sur ses handlers (description, corps par verbe, accusé `AccuseDeDepot`, refus `DeclaredError` jugés atteignables par `tests/test_capability_declared_errors.py`) et `/openapi.json` le publie (`security: []`, tag `_nature`) au lieu de la souche « écrite à la main ». ⚠️ **Compatible avec les contrats épinglés d'avant** : les en-têtes `X-Oto-Org`/`X-Oto-Group` restent déclarés (le middleware précède la route) et le corps est décrit `required: false` — le retrait des uns et un corps devenu obligatoire avaient rougi le contrôle « Contrat avant déploiement » d'un front consommateur. Les refus de la cible portent désormais leur phrase dans `detail` (« ligne NDJSON N invalide »). **PUT** = un agent avec shell y pousse le corps brut (`curl --data-binary @fichier`) ; **POST** multipart `file` = le formulaire humain ; **GET** = page HTML d'upload autoportée (fallback quand l'agent n'a pas de shell, ex. claude.ai : il transmet le lien à l'humain — le jeton n'est PAS consommé au GET). Le backend matérialise dans la cible en **réappliquant** son autz, consomme le jeton (anti-rejeu), renvoie un **accusé léger** (id + compteurs), jamais le body. Cibles : page Documents (`doc`), fichier brut de projet (`project_file`, autz `ownership.can_access(project, write)`), lot de lignes datastore (`datastore` — NDJSON/CSV batch-upsert sur clé, autz `ownership.can_access(datastore_namespace, write)`, ns_id scellé au mint). Évite de faire transiter du gros contenu par le contexte du LLM. ⚠️ **Le plafond (`upload_tokens.max_bytes()`, 25 Mo) se tient PENDANT la lecture** depuis #562 : le corps se lit en flux et la lecture s'arrête au premier octet au-delà (`413 content_too_large`), un `Content-Length` annoncé au-delà est refusé sans rien lire, et le POST ne confie au parseur multipart qu'un corps déjà borné (plafond + 64 Kio d'enveloppe, une seule partie `file`, aucun autre champ). Avant, `request.body()`/`request.form()` prenaient tout, puis on comptait. ⚠️ **Le type SERVI d'un `project_file` se décide sur le contenu** (#562, `media_store.type_servi`) : une signature de format reconnue fait foi (le type déclaré — au mint, sinon l'en-tête — ne départage qu'une famille : docx/xlsx dans un zip, m4a/mp4 dans un `ftyp`) ; un texte UTF-8 déclaré passif (`text/plain`, `text/csv`, `text/markdown`, `application/json`…) garde son type s'il ne porte pas de balisage actif ; tout le reste — non reconnu, ou actif (HTML, SVG, XML, JavaScript, quel que soit le type déclaré) — est écrit en `application/octet-stream` avec `Content-Disposition: attachment`. Rien n'est refusé. La ligne du fichier (`mime`) enregistre le type servi ; les objets écrits avant le 23/09/2026 gardent le leur. ⚠️ **Le payload du jeton est LISIBLE, et c'est accepté** (#562, 23/09/2026) : signé HMAC mais pas chiffré, il porte `sub` (compte émetteur), `org`, la cible complète (kind, `project_id`/`doc_id`/`ns_id`, nom de fichier, titre, type déclaré), `jti` et `exp`. Rien de cela n'est un secret — sans la signature il n'ouvre rien, les identifiants n'authentifient pas seuls, et la cible est réautorisée à la réception — et le jeton vit **15 min**, à **usage unique**. Qui émet un lien le confie à un tiers : ne pas y sceller un titre ou un nom de fichier confidentiel. ⚠️ **`project_file` ne rend QUE `filename` + `bytes` depuis oto#86** : l'accusé servait la ligne de base entière (id, `created_by` — le compte DÉPOSANT — état de publication…) à un tiers anonyme porteur du lien, allow-list `redaction.champs_autorises` désormais. Le libellé de la page GET (`target_label`) ne porte plus non plus `doc_id`/`project_id` (cf. `docs/redaction.md` §Face REST).
 - `POST /api/datastores/{ns}/rows` — **UNE ligne** : le corps EST la ligne (un objet, une clé par colonne ; capacité `me.datastore.append_row`, 201). Pas de lot sur cette route : un corps dont l'unique clé porte une liste d'objets — ou dont la clé `rows` en porte une, quelles que soient les autres (oto#151) — est refusé `400 batch_body` — sans schéma il faisait une ligne imbriquée en 201 muet, sous `strict: true` une ligne imbriquée avec relevé `hors_schema` (oto#48, mesuré le 04/09/2026) ; une colonne DÉCLARÉE sous ce nom reste écrivable. Garde : `tests/datastore/test_lot_dans_ligne_oto48.py`.
 - `POST /api/datastores/{ns}/rows/batch` — **le lot JSON** (oto#151, capacité `me.datastore.write_rows`, 200) : corps `{"rows": [{…}, …], "key": "<colonne>", "upsert": true, "donnees_d_origine": true}`, `key` (défaut : la clé métier déclarée), `upsert` et `donnees_d_origine` facultatifs, `readonly_override`/`force`/`origine_override` comme sur l'ajout d'une ligne. Le moteur est celui de `data_write(rows=…)` : `key` NOMMÉ désigne (une ligne dont la clé existe la modifie, une neuve est créée) ; omis, le lot AJOUTE sur la clé déclarée, et une clé déjà en base ne fusionne qu'avec `upsert=true` (oto#141 — sans lui, lot refusé ENTIER avant sa première ligne, `409 business_key_exists`, `details.doublons`/`details.existantes`) ; deux lignes du lot à la même clé suivent cette dernière règle dans les deux cas ; refus qui nomment la ligne et disent où reprendre (le lot n'est pas atomique), `@keep`/`@clear` jugés sur le lot entier avant la première ligne, notices cumulées. Réponse `{datastore, ns_id, inserted, updated, count, key, ids, fusions?, …relevés}` — `ids` un par ligne envoyée, rang pour rang ; `fusions` = `[{rang, dans_rang, id, cle}]` les lignes qui ont fusionné (`dans_rang` : la ligne du même lot qui a posé la ligne visée, `null` si elle était en base). `POST …/rows` (une ligne) prend en query `?key=` (la clé déclarée : désigne la ligne, sans `upsert`) et `?upsert=true`, et rend le même `409 business_key_exists` sur un ajout (`details` : `key`, `valeur`, `id` de la ligne en place). La frappe d'un upload signé (`POST /api/me/upload-url`) prend `key` (désigne) et `upsert`, SCELLÉS dans le jeton (`400 upsert_without_key` sans clé) ; la réception rend `fusions` sans `id` et `409 business_key_exists` sans nommer de ligne par son identifiant. Avant elle, un client REST pur n'avait que le `PATCH` ligne à ligne (8 907 appels mesurés). Pour les volumes, l'upload signé ci-dessus. Garde : `tests/api/test_rest_lot_oto151_live.py`.
-- **Datastore — les 24 chemins sous `/api/datastores`** (= `NS` ; relevés le 2026-09-05 depuis l'`openapi.json` **servi** : `curl -s https://mcp.oto.ninja/api/openapi.json`), tous capacités `me.datastore.*` de `capabilities/datastore/` — aucune route écrite à la main depuis le 2026-08-12 (#302). `{datastore}` = le **numéro** du tableau (`ns_id` ; son nom résout encore jusqu'au 08/11/2026, puis sera refusé — la réponse porte alors `Deprecation: true` et `Sunset`, cf. `docs/datastore.md`), `slot:<nom>` compris (même résolution que la face agent, sinon `400 jeton_mal_place` — qui porte aussi le refus du pronom `@claimed`, retiré le 07/09/2026) ; un tableau d'une autre de mes orgs rend `404 datastore_not_found` **avec l'org où il vit** (rejouer avec `X-Oto-Org`).
+- **Datastore — les 24 chemins sous `/api/datastores`** (= `NS` ; relevés le 2026-09-05 depuis l'`openapi.json` **servi** : `curl -s https://mcp.oto.ninja/api/openapi.json`), tous capacités `me.datastore.*` de `capabilities/datastore/` — aucune route écrite à la main depuis le 2026-08-12 (#302). `{datastore}` = le **numéro** du tableau (`ns_id` ; son nom résout encore jusqu'au 08/11/2026, puis sera refusé — la réponse porte alors `Deprecation: true`, sans `Sunset`, cf. `docs/datastore.md`), `slot:<nom>` compris (même résolution que la face agent, sinon `400 jeton_mal_place` — qui porte aussi le refus du pronom `@claimed`, retiré le 07/09/2026) ; un tableau d'une autre de mes orgs rend `404 datastore_not_found` **avec l'org où il vit** (rejouer avec `X-Oto-Org`).
   - **tableaux** : `GET NS` (possédés + partagés ; seule réponse *filtrée* par la portée d'un jeton porté) · `POST NS` (créer) · `PATCH NS/{datastore}` (renommer — id, URL et partages stables) · `DELETE NS/{datastore}` (gouvernance) · `GET NS/{datastore}/url` (deep-link dashboard) ;
   - **lignes** : `GET NS/{datastore}/rows` (page `offset` + `limit` ≤ 1000, `total` du jeu filtré, **pas de curseur** — la fin se calcule, un `offset` au-delà rend `rows: []` en 200 ; `filter`/`filters` = JSON dans UNE chaîne de query ; **pas de `fields`**, la ligne entière) · `POST …/rows` (UNE ligne, 201, ci-dessus) · `GET|PATCH|DELETE …/rows/{row_id}` (`?readonly_override=true` sur `POST`/`PATCH`, propriétaire ou gouvernant, journalisé ; `?expected_revision=` sur `PATCH` **et sur `DELETE`** (oto#217), en query et jamais dans le corps, avec le `_revision` que porte chaque ligne lue : précondition d'un geste décidé d'après cette lecture — la révision avance quand les données ou le bail changent ; si elle a bougé, rien n'est écrit ni supprimé, `409 revision_conflict` avec `details.current_revision` ; un bail d'un autre reste `409 row_locked`, y compris sur la suppression, qui est désormais jugée SOUS le verrou de la ligne — bail, révision, puis suppression) ;
   - **schéma** : `GET|PUT|PATCH NS/{datastore}/schema` (`PUT` pose, ou retire avec `schema: null` ; `PATCH` par clé) · `POST NS/{datastore}/drop_column` (destructif, `confirm=true`) ;
@@ -280,7 +281,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   (`POST /api/me/connectors/{name}/connect`), qui **supersède** `…/unipile/connect` —
   celui-ci vit jusqu'à la bascule du front.
 - `GET /api/google/oauth/start` + `…/oauth/status` + `DELETE /api/google/oauth` +
-  `POST /api/google/oauth/default` —
+  `POST /api/google/oauth/default` + `POST /api/google/oauth/complete` —
   **les VERBES du consentement OAuth per-user**, capacités
   `me.federation.google.*` depuis le 2026-08-27
   (`capabilities/federated_oauth.py`). Les **callbacks** (`…/oauth/callback`, un par
@@ -310,6 +311,31 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   bougeait pas) ; ils ne servaient AUCUNE distinction succès/échec avant ce lot (le
   repli cassé rendait toujours la même destination), donc rien n'y avait de lecteur à
   préserver — et ils sont partis le 2026-09-09.
+  ⚠️ **Google ajoute `connect=confirm` (22/11/2026)** : le
+  callback ne range plus rien, il remet `#code=…&state=…` au front (FRAGMENT), qui
+  termine par `POST /api/google/oauth/complete` avec son jeton — le `sub` du state
+  doit être celui du porteur, le state ne sert qu'une fois. Un front qui ne lit pas
+  `confirm` ne connecte plus Google : les fronts passent AVANT le tag backend.
+  ⚠️ **Tous les connecteurs suivent la même règle depuis oto-backend#1908** : Zoho,
+  Salesforce, Microsoft, HubSpot, Meta Ads, Instagram, Ubersuggest, jefacture.com,
+  LinkedIn Ads, Slack, WordPress. Le callback renvoie
+  `?connector=<carte>&connect=confirm#code=…&state=…` ; le front termine par
+  `POST /api/me/connectors/{name}/complete` `{code, state}` (capacité
+  `me.connector_complete`, `{name}` = la carte lue dans `connector=`), avec son jeton.
+  200 `{ok, connector, account, scope, warning?, details?}` ; refus 400
+  `invalid_state` (state illisible, expiré, d'un autre flux ou d'une autre carte), 403
+  `state_not_yours`, 403 `not_allowed` (plus le droit d'écrire au niveau demandé au
+  départ — l'ancien `connect=forbidden`), 403 `admin_required` (Microsoft : l'organisation
+  exige l'approbation d'un administrateur), 404 `unknown_connector`, 409 `state_used`,
+  409 `org_mismatch` (Zoho : `details.consented_org`), 502 `exchange_failed`. Le
+  callback ne sert plus que `confirm`, `error` (state illisible), `denied` (refus du
+  fournisseur) et, chez Microsoft, `admin_required` ; `connected`, `forbidden` et
+  `zoho_org_mismatch` deviennent des réponses de la complétion. WordPress n'a pas de
+  code : le callback scelle le credential reçu dans un `code` opaque, lié au state et
+  valable dix minutes. L'approbation d'un administrateur Microsoft reste tranchée au
+  callback (`admin_approved` / `admin_refused`, rien n'est rangé), son lien ne sert
+  qu'une fois. Une carte Google peut aussi terminer par la route générique ;
+  `POST /api/google/oauth/complete` reste servi tel quel.
   ⚠️ **Un échec, un mot** (oto-app#11) : `denied` = le fournisseur a refusé
   l'autorisation (`error=access_denied`, ou son équivalent documenté — `success=false`
   chez WordPress), tranché une fois par `auth.flow.etat_sans_code` ; `forbidden` = c'est
@@ -407,8 +433,10 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 - `GET /api/admin/users` + `POST /api/admin/users/{sub}/role` — admin only
 - `POST /api/admin/users/{sub}/reset-mfa` — super admin only ; efface TOUS les facteurs de
   double authentification d'un compte (récupération : appli ET codes de secours perdus,
-  aucun autre moyen de rentrer). La politique MFA de son org, si mandatoire, continue de
-  s'appliquer — il configurera un facteur neuf à sa prochaine connexion.
+  aucun autre moyen de rentrer). Toutes ses sessions et tous ses jetons `oto_` sont
+  fermés (`docs/auth-logto.md` §Double authentification changée). La politique MFA de son
+  org, si mandatoire, continue de s'appliquer — il configurera un facteur neuf à sa
+  prochaine connexion.
 - `POST /api/admin/users/{sub}/grants/{key_id}` body `{daily_quota}` — set/update quota par grant (admin only)
 - `GET|POST /api/me/tokens` + `DELETE …/{token_id}`, `GET|POST /api/admin/users/{sub}/tokens`
   + `DELETE …/{token_id}`, `GET|POST /api/admin/platform-keys` + `DELETE …/{provider}/{label}`
@@ -486,13 +514,14 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   fermée : les trois Zoho), `400 invalid_oauth_app` (app incomplète ou région inconnue).
   Lue par le consentement seul, jamais servie comme clé d'appel.
 - **Palier org** (100 % en CAPACITÉS — `capabilities/orgs*.py` ; ⚠️ cette ligne renvoyait à `api_routes_orgs.py` jusqu'au 2026-08-27, fichier **supprimé** lors de la migration : projection 1:1 des meta-tools `oto_admin_*org*` / `oto_list_orgs`) :
-  - self-service : `GET|POST /api/me/orgs` (**`POST` = `org.create` self-serve**, créateur→org_admin, cap `OTO_MCP_MAX_ORGS_PER_USER`) ; `GET /api/orgs/{id}` ; `POST|DELETE /api/orgs/{id}/members[/{sub}]` + `GET /api/orgs/{id}/members/events` (journal des entrées, sorties et changements de rôle, le plus récent d'abord, `limit`/`before_id` ; oto#145) + `PUT|DELETE /api/orgs/{id}/secrets/{provider}` (org_admin)
+  - self-service : `GET|POST /api/me/orgs` (**`POST` = `org.create` self-serve**, créateur→org_admin, cap `OTO_MCP_MAX_ORGS_PER_USER`) ; `GET /api/orgs/{id}` ; `POST|DELETE /api/orgs/{id}/members[/{sub}]` (`POST /members` sur un non-membre = une invitation à son adresse, `status: invited` ; il n'est membre qu'après l'avoir acceptée) + `GET /api/orgs/{id}/members/events` (journal des entrées, sorties et changements de rôle, le plus récent d'abord, `limit`/`before_id` ; oto#145) + `PUT|DELETE /api/orgs/{id}/secrets/{provider}` (org_admin)
   - **invitations — feature cascade plateforme/org/équipe** (le scope est DÉRIVÉ des cibles : org_id NULL = plateforme, org_id seul = org, org_id+group_id = équipe). Trois faces émettrices, une seule acceptation :
+    - **échéance : réglage d'instance** `OTO_MCP_INVITATION_TTL_HOURS` (en heures, 168 = 7 jours par défaut ; `config.invitation_ttl_hours`). Il remplace `OTO_MCP_INVITE_TTL_DAYS` le 22/11/2026 : l'ancien réglage encore défini, ou une valeur illisible, refuse le démarrage. Le lien de connexion Logto joint au mail et le partage en attente d'un objet ont la même échéance. Le mail dit la durée. Une invitation échue sort de la file : réinviter la même adresse n'est pas un doublon (pas de 409) et émet un jeton NEUF ; une invitation encore valide se révoque puis se réémet. Celles émises avant le déploiement gardent leurs 7 jours.
     - **org** : `POST|GET /api/orgs/{id}/invitations` + `DELETE …/{inv}` (org_admin ; `oto_org` op=invite). Le POST refuse en 409 une adresse déjà membre (`already_member`) ou déjà invitée avec une invitation valide (`already_invited`, l'existante dans `details`) — #622, 29/08/2026.
     - **équipe** : `POST|GET /api/groups/{id}/invitations` + `DELETE …/{inv}` (group_admin ; `oto_group` op=invite). L'invité rejoint l'org parente PUIS l'équipe à l'acceptation.
     - **plateforme** : `POST|GET /api/admin/invitations` + `DELETE …/{inv}` (platform_admin ; `oto_admin_invite` op=create/list/revoke). `org_id` optionnel (vide = onboarding pur, sinon rattachement direct). Porter une org est réservé au super admin (règle `PLATFORM_INVITE`, 403 `forbidden` sinon, quel que soit le rôle) ; sans org, un admin plateforme suffit. L'acceptation rejuge la règle sur l'émetteur : une invitation plateforme qui porte une org sans avoir été émise par un super admin n'est honorée par aucun chemin (403 `platform_invite_not_allowed` sur le lien, 404 `no_pending_invitation` sur la réclamation par l'adresse, ignorée au signup).
     - **acceptation commune** : `POST /api/me/invitations/accept` (`SUB_ONLY`, `token` + expiry). ⚠️ **Modèle BEARER** : le secret suffit, l'identité de l'accepteur n'est PAS confrontée à l'email invité — cette ligne a longtemps dit « match email vérifié », ce qui était faux du code servi (corrigé le 2026-09-01, cf. le commentaire de `_invite_accept`). Email via `oto_mcp/email.py` (otomata-mailer `mailer.oto.zone/api/send`, env `OTO_MAILER_SEND_BEARER`, best-effort → `invite_url` en repli ; **plus de Resend**).
-    - **réclamation par l'adresse** : `POST /api/me/orgs/{id}/invitations/claim` (`SUB_ONLY`, sans token), depuis le 2026-10-29. Rejoint l'org `{id}` par l'invitation en attente adressée à l'adresse **vérifiée** du compte appelant — pour l'invité **déjà inscrit** qui ouvre un lien vers l'org au lieu du lien du mail (la reprise par email, `reconcile_signup_with_invitation`, ne joue qu'au signup). Bornée à cette org ; même réponse que l'acceptation. Refus, dans l'ordre des gardes : 403 `org_suspended` (l'org `{id}` elle-même est suspendue — jugée sur `{id}`, pas sur l'org de l'appel) ; déjà membre = succès ; 403 `tenant_mismatch` (compte d'un autre tenant que l'org) ; 403 `email_not_verified` (l'adresse n'est pas garantie par l'annuaire du compte — l'email primaire de notre annuaire, posé après vérification ; jamais le claim `email` du jeton : un compte d'un tenant tiers n'a donc pas de juge chez nous et passe par le lien du mail) ; 404 `no_pending_invitation` (invitation absente, expirée, refusée, révoquée, déjà consommée, ou adressée à une autre adresse). La consommation est atomique (`UPDATE … WHERE <en attente> RETURNING`, dans la transaction de l'adhésion) : de deux réclamations simultanées une seule l'emporte — le même compte reçoit le succès idempotent. Même garde, depuis le même jour, sur l'acceptation par token (org, équipe, partage d'un objet).
+    - **réclamation par l'adresse** : `POST /api/me/orgs/{id}/invitations/claim` (`SUB_ONLY`, sans token), depuis le 2026-10-29. Rejoint l'org `{id}` par l'invitation en attente adressée à l'adresse **vérifiée** du compte appelant — pour l'invité **déjà inscrit** qui ouvre un lien vers l'org au lieu du lien du mail (la reprise par email, `reconcile_signup_with_invitation`, ne joue qu'au signup, et seulement si le jeton dit l'adresse vérifiée — claim `email_verified` — et que l'invitation relève du tenant du compte ; sinon tout reste en attente, partages d'objets compris). Bornée à cette org ; même réponse que l'acceptation. Refus, dans l'ordre des gardes : 403 `org_suspended` (l'org `{id}` elle-même est suspendue — jugée sur `{id}`, pas sur l'org de l'appel) ; déjà membre = succès ; 403 `tenant_mismatch` (compte d'un autre tenant que l'org) ; 403 `email_not_verified` (l'adresse n'est pas garantie par l'annuaire du compte — l'email primaire de notre annuaire, posé après vérification ; jamais le claim `email` du jeton : un compte d'un tenant tiers n'a donc pas de juge chez nous et passe par le lien du mail) ; 404 `no_pending_invitation` (invitation absente, expirée, refusée, révoquée, déjà consommée, ou adressée à une autre adresse). La consommation est atomique (`UPDATE … WHERE <en attente> RETURNING`, dans la transaction de l'adhésion) : de deux réclamations simultanées une seule l'emporte — le même compte reçoit le succès idempotent. Même garde, depuis le même jour, sur l'acceptation par token (org, équipe, partage d'un objet).
     - **refus commun** : `POST /api/me/invitations/reject` (`SUB_ONLY`, `token` — même entrée que l'acceptation ; `oto_org` op=reject_invite), depuis le 2026-09-01 (#654). Ferme l'invitation (`org_invitations.declined_at`/`.declined_sub`) **sans créer ni retirer aucune appartenance** : elle quitte la file de l'émetteur, et plus rien ne peut la consommer — ni `accept`, ni la reprise automatique au signup par l'email (`reconcile_signup_with_invitation`). ⚠️ **Le refus n'est PAS bearer, contrairement à l'acceptation** : l'invitation doit être adressée à l'email du compte appelant (403 `not_the_invitee` sinon, invitation anonyme comprise) — accepter avec un secret qu'on détient est un geste sur soi, refuser détruirait l'invitation d'un tiers. Le refus **ne notifie pas** l'émetteur (aucune préférence de notification n'existe encore) et **ne bloque pas** une réinvitation : le 409 `already_invited` de #622 ne voit plus une invitation refusée.
     - **aperçu PUBLIC, sans auth** : `GET /api/invitations/{token}` (`api/public.py::invite_preview` → `org_store.preview_invitation`), le jeton EST le secret — alimente l'accueil « vous êtes invité·e » avant création de compte (`email`, `inviter`, `org_name`/`group_name`, `scope`). ⚠️ **Le repli de l'inviteur vers son email a été retiré (oto#86)** : `_PREVIEW_SELECT` projetait `COALESCE(nom, email)` — un compte invitant sans nom déclaré servait son adresse à l'anonyme. `inviter` reste `string | null` (le dashboard dégrade déjà vers un message générique). Écrite à la main, hors de l'adaptateur des capacités qui authentifie toujours : son seul frein est la classe `sensible` de la limite de débit applicative (par adresse, 60/min par défaut, et le budget d'échecs que consomme chaque 404 ; mode `report` par défaut — §Limite de débit applicative).
     - ⚠️ **Le CODE COURT d'invitation (7 caractères, ~34 bits, lien `/invitation/<code>` +
@@ -540,8 +569,8 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   servie survivait au nettoyage du dépôt. La face authentifiée `/api/me/guide-library`
   sert la ligne entière — `library.fork`/`library.unpublish` visent une entrée par `id`.
   ⚠️ Les chemins `/api/me/guide-library…` s'appelaient `/api/me/doctrines/…` jusqu'au
-  2026-08-28 (#519) ; les anciens répondent **308** jusqu'au retrait — cf.
-  `docs/alias-deprecies.md`.
+  2026-08-28 (#519) ; les anciens ont répondu **308** jusqu'à leur retrait le
+  23/11/2026 (lot D) et rendent désormais 404 — cf. `docs/alias-deprecies.md`.
   **`visibility`** : `public` (dans le catalogue) vs `unlisted` = **lien non listé** (style
   YouTube) — servie par `library.get` (slug exact, tout user authentifié) mais **jamais**
   listée (`list` force `include_unlisted=False`) ni servie en anonyme. Partage par lien, pas
@@ -710,6 +739,40 @@ celui qu'il coiffait, et rien n'échouait. Les trois refus sont **déclarés**
 (`Capability.errors`), donc publiés dans `/openapi.json` : trois gestes différents derrière
 un même 400, et un client ne devrait pas avoir à les distinguer en lisant une phrase.
 
+## Routes d'administration ouvertes au service (`SERVICE_OU`)
+
+Ces routes `/api/admin/*` acceptent, en plus de leur règle de compte, l'identité de
+service de rôle `commerce` (`docs/auth-logto.md` §Identité de service). Même chemin, même
+handler, même forme de réponse : le consommateur change de jeton, pas d'adresse. Sans
+identité de service, la règle d'origine décide seule — le jeton `oto_` et la session
+passent comme avant. Un service qui ne porte pas le rôle est refusé
+(`403 service_role_missing`).
+
+| Route | Règle de compte (inchangée) |
+|---|---|
+| `GET /api/admin/tenants/{slug}` | `TENANT_ADMIN_OF(platform=PLATFORM_ADMIN)` |
+| `GET /api/admin/tenants/{slug}/keys` | `TENANT_ADMIN_OF(platform=PLATFORM_ADMIN)` |
+| `GET /api/admin/tenants/{slug}/keys/{provider}/grants` | `TENANT_ADMIN_OF(platform=PLATFORM_ADMIN)` |
+| `PUT\|DELETE /api/admin/tenants/{slug}/keys/{provider}/grants/{org_id}` | `TENANT_ADMIN_OF(platform=SUPER_ADMIN)` |
+| `GET /api/admin/platform-keys` | `SUPER_ADMIN` |
+| `GET /api/admin/connectors/{provider}/platform-access` | `PLATFORM_ADMIN` |
+| `POST\|DELETE /api/admin/orgs/{id}/grants/{provider}` | `SUPER_ADMIN` |
+| `GET /api/admin/orgs/{id}/unipile-limit` | `PLATFORM_ADMIN` |
+| `PUT /api/admin/orgs/{id}/unipile-limit` | `SUPER_ADMIN` |
+| `GET /api/admin/usage/first-calls` | `PLATFORM_ADMIN` |
+| `GET /api/admin/orgs` | `PLATFORM_ADMIN` |
+| `GET /api/admin/orgs/{id}` | `PLATFORM_ADMIN` |
+| `GET /api/admin/unipile/seats` | `SUPER_ADMIN` |
+| `DELETE /api/admin/unipile/seats/{account_id}` | `SUPER_ADMIN` |
+
+Le service n'a pas de borne : il voit tous les tenants et toutes les orgs de l'instance.
+Ce qu'il écrit porte son nom (`created_by` d'un octroi de tenant, journal d'un siège
+repris : `service:<client_id>`). La fiche `GET /api/admin/orgs/{id}` lui sert
+`members[].is_platform_operator` comme à l'opérateur. La suspension et la fin d'essai
+restent servies au service sous `/api/service/orgs/{id}/suspension|trial` ; la suspension
+d'administration (`POST /api/admin/orgs/{id}/suspension`) reste au super admin.
+Banc : `tests/test_admin_ouvert_au_service.py`.
+
 ## Renommer un chemin servi : on double, on date, on retire
 
 Un chemin `/api/*` est un contrat avec des appelants qui vivent **hors de ce dépôt**.
@@ -720,13 +783,16 @@ sans trace. La forme retenue (#519, lot B) :
 2. l'**ancien** reste monté et répond **308** — même méthode, même corps, query string
    reportée. Ni 301 ni 302 : ils autorisent le client à retomber en `GET`, ce qui
    transforme un `POST` en no-op silencieux ;
-3. il porte les en-têtes `Deprecation` / `Sunset`, est marqué `deprecated: true` dans
-   `/openapi.json` avec son remplaçant et sa date, et **s'en va à une date écrite** ;
+3. il porte l'en-tête `Deprecation: true` (sans `Sunset`), est marqué `deprecated: true`
+   dans `/openapi.json` avec son remplaçant, sans date, et **reste servi tant que son
+   usage compté n'est pas nul** — chaque 308 laisse sa ligne `kind='rest'` au journal
+   (`args.deprecated_name` = l'ancien gabarit) ; la PR de retrait pose seule une date
+   ferme (décision du 23/11/2026, `docs/alias-deprecies.md`) ;
 4. il est monté **en dernier** — un alias ne capture que ce que rien d'autre ne sert ;
 5. le préflight `OPTIONS` n'est **jamais** redirigé, et la 308 porte les en-têtes CORS :
    un navigateur vérifie CORS sur chaque réponse d'une chaîne de redirections.
 
-Déclaration unique : `oto_mcp/deprecations.REST` (montage `api/alias_routes.py`,
+Déclaration unique : `oto_mcp/deprecations.alias_rest_derives` (montage `api/alias_routes.py`,
 document `openapi._alias_deprecies`, garde `tests/api/test_alias_deprecies_rest.py`).
 **Table des alias en cours et de leur date : `docs/alias-deprecies.md`.**
 
@@ -1226,6 +1292,56 @@ déploiement : **`docs/version-servie.md`**.
   enfant porte le verrou d'org. `kind='org'`, `created_by` = l'admin émetteur (révision
   Alembic `0047_cles_d_org`) ; la liste rend aussi les enfants (`parent_id`). L'archivage
   de l'org révoque ses clés ; la désactivation de son tenant aussi, par le préfixe du sub.
+- **Les gestes sensibles demandent une session de connexion complète** (22/11/2026,
+  `capabilities/_session_exigee.py`). Un jeton `oto_` — d'une personne, d'un agent hébergé,
+  une clé d'org — et un secret de worker en sont refusés en `403 api_token_forbidden`, à
+  l'authentification (`allow_api_token=False`, la route entière) :
+  `DELETE /api/orgs/{id}` et `DELETE /api/admin/orgs/{id}` (archiver une org),
+  `POST|DELETE /api/orgs/{id}/members/{sub}` et leurs miroirs `/api/admin/…` (rôle,
+  retrait), `POST|DELETE /api/groups/{id}/members/{sub}`, `PUT /api/orgs/{id}/mfa`,
+  `POST /api/admin/users/{sub}/role`, `POST /api/admin/users/{sub}/reset-mfa`, les six
+  gestes de paiement `POST /api/me/billing/{subscribe,confirm,cancel,resume,method,method/confirm}`
+  — en plus des jetons et clés ci-dessus. **Sur la face MCP** (qui accepte un jeton `oto_`
+  non porté) et pour les gestes CONDITIONNELS, la même garde vit dans le handler, même code :
+  `oto_org op=archive`, `oto_admin_org op=archive`, `oto_admin_org_member op=remove|set_role`,
+  `oto_group op=remove_member`, `oto_org_settings` (mfa), `oto_admin_user op=set_role` ; une
+  invitation (org, équipe, plateforme) qui donne le rang d'admin ; `org.member.add` /
+  `group.member.add` qui nomment un admin ou changent le rôle d'un membre existant ;
+  `op=transfer` d'`oto_resource` et de `POST /api/resources`. Ajouter un simple membre,
+  inviter un simple membre, partager restent ouverts au jeton. Une session OAuth Logto
+  (le tableau de bord, un client MCP connecté par OAuth) n'est pas un jeton : elle passe.
+  ⚠️ `GET /api/orgs/{id}` reste ouvert au jeton (lecture générale) : un service tiers qui y
+  lit `my_role` pour autoriser une dépense doit refuser lui-même un porteur `oto_`/`otow_`.
+- **Gestes d'administration réservés à une session** (#1913), même mécanisme, même code
+  `403 api_token_forbidden`. Route entière (`allow_api_token=False`) :
+  `POST /api/admin/tenants/{slug}/admins` et `DELETE …/admins/{sub}` (admin de tenant),
+  `POST /api/admin/users/{sub}/suspension` (pause d'un compte et sa levée),
+  `POST /api/admin/tenants/{slug}/disablement`, `PUT|DELETE /api/admin/tenants/{slug}/keys/{provider}`
+  (le sous-chemin `…/grants` n'est pas concerné), `PUT|DELETE /api/admin/tenants/{slug}/apps/{connector}`,
+  `POST /api/admin/editor-apps` et `DELETE /api/admin/editor-apps/{connector}/{data_center}`,
+  `POST /api/admin/platform-keys` et `DELETE /api/admin/platform-keys/{provider}/{label}`,
+  `POST /api/admin/runner/workers`, `POST /api/admin/option-comps`,
+  `POST /api/admin/orgs/{id}/plan`, `PUT /api/admin/orgs/{id}/contract`,
+  `POST /api/admin/orgs/{id}/contract/cancel`, `PUT /api/admin/orgs/{id}/billing-identity`.
+  Garde de handler, face MCP comprise : `oto_admin_tenant op=admin_add|admin_remove|disable|enable|key_clear`,
+  `oto_admin_account`, `oto_admin_set_option`, `oto_admin_set_plan`,
+  `oto_admin_set_contract`, `oto_admin_cancel_contract`. Création d'org par l'admin
+  plateforme, qui nomme un org_admin : `POST /api/admin/orgs` et `oto_admin_org op=create`
+  (la création en libre-service `POST /api/me/orgs` reste ouverte). Clé plateforme d'une
+  équipe et accès plateforme à un connecteur : `POST|DELETE /api/admin/groups/{id}/grants/{provider}`
+  et `oto_admin_key_grant op=grant|revoke scope=group`,
+  `POST /api/admin/connectors/{provider}/platform-access`. **Restent ouvertes au jeton**,
+  appelées sous jeton par un service d'instance (liste nominative tenue par
+  `tests/test_session_exigee.py`) : `GET /api/admin/tenants/{slug}`, `GET …/keys`,
+  `GET|PUT|DELETE …/keys/{provider}/grants[/{org_id}]` (et `oto_admin_tenant
+  op=org_grant|org_revoke`), `GET /api/admin/platform-keys`,
+  `GET /api/admin/connectors/{provider}/platform-access`,
+  `POST|DELETE /api/admin/orgs/{id}/grants/{provider}`, `GET|PUT /api/admin/orgs/{id}/unipile-limit`,
+  `GET /api/admin/usage/first-calls`, `POST /api/admin/orgs/{id}/suspension`,
+  `POST /api/admin/orgs/{id}/trial`, `GET /api/admin/orgs[/{id}]`,
+  `GET /api/admin/unipile/seats`, `DELETE /api/admin/unipile/seats/{account_id}`. Ouvertes
+  aussi, en attente de décision : `POST|DELETE /api/admin/users/{sub}/grants/{provider}`,
+  `PUT|DELETE /api/orgs/{id}/secrets/{provider}` et leur miroir `/api/admin/…`.
 - **Portée opt-in** (`auth/token_scopes.py`, colonne `user_api_tokens.scopes` JSONB) : à la
   création, `POST /api/me/tokens {"label":"scout", "scopes":{"datastores":{"leads":"read"}}}`
   rend un jeton **porté** — deny-by-default, il n'ouvre QUE les tableaux nommés, en `read`

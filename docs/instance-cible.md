@@ -104,7 +104,7 @@ rien et réécrit seulement ce qui se dérive de la déclaration.
 | Ce qu'elle pose | Où (dérivé du nom d'instance `<i>` et du rôle `<r>`) |
 |---|---|
 | Utilisateur de service, système, sans shell — **jamais root** | `oto-<i>` |
-| Python du plancher du `pyproject` (3.10), via uv | `/opt/<i>/python` |
+| Python du plancher du `pyproject` du tag et, s'il est déclaré, celui que l'instance choisit (`python`), via uv (gérés, jamais celui du système) | `/opt/<i>/python` |
 | Deux arbres (clone du tronc) et leur venv | `/opt/<i>/<r>-blue`, `/opt/<i>/<r>-green` |
 | Environnement du rôle : `app.env` (non-secret), `lanceur.env`, ports | `/etc/<i>/<r>/` (0700, root) |
 | Pointeur de couleur, posé à la naissance seulement (bleu : le 1er déploiement installe la verte) | `/etc/<i>/<r>/active` |
@@ -132,6 +132,128 @@ import /etc/caddy/upstream-<i>-<r>.conf          # en tête, avant le bloc globa
 
 Le service ne peut pas réécrire son code (les arbres sont à root), n'a d'état que dans
 son `StateDirectory`, et ne voit sa clé d'API que par `LoadCredential`.
+
+## Changer de Python, sans coupure
+
+Le `requires-python` du tag dit quels Python conviennent ; la déclaration de l'instance
+peut en choisir un (`python`, ci-dessous). Les deux couleurs ne changent **jamais ensemble**
+de Python : la couleur en service garde le sien tant qu'elle sert, et la couleur inactive
+**est le retour arrière** jusqu'à la montée suivante.
+
+**La règle.** À la montée, le venv de la couleur qu'on installe est recréé si, et seulement
+si :
+
+- sa version **ne satisfait pas** le `requires-python` du tag (une vraie évaluation de
+  spécification, intervalles compris : `deploy/cible/plancher_python.py`, bibliothèque
+  standard seule, exécutée par le `python3` du système — `packaging` n'y est pas
+  forcément) ;
+- **ou** l'instance a choisi un Python (`python`) et la version du venv en diffère, au
+  niveau de détail du choix : au patch près pour `"3.12.8"`, à MAJEUR.MINEUR pour `"3.12"`.
+
+La version visée est le choix de l'instance, à défaut **le plancher** du tag (la clause
+`>=` ou `~=` du `requires-python`, MAJEUR.MINEUR, qui doit elle-même le satisfaire). Ce
+n'est pas une égalité avec le plancher : un venv 3.12 sous un tag `>=3.10`, sans choix,
+reste tel quel ; un venv 3.10 sous un tag `>=3.12` est recréé en 3.12.
+
+**Le choix de l'instance.** Champ facultatif de la déclaration, au premier niveau :
+`"python": "3.12.8"` ou `"3.12"` (MAJEUR.MINEUR.PATCH ou MAJEUR.MINEUR, validé par
+`declaration.py` ; tout autre format est refusé). **Recommandé : le patch**, qui fige
+l'interpréteur — l'amorce installe exactement cette version (`uv python install 3.12.8`,
+sous `/opt/<i>/python`) et la montée y recrée le venv (`uv venv --python 3.12.8`,
+interpréteurs gérés seuls, sans téléchargement) ; sans patch, la 3.12.x que uv retient
+convient et peut changer d'une machine à l'autre. Un choix au patch est jugé sur cette
+version exacte ; un choix MAJEUR.MINEUR est admis s'il existe une version de cette série
+qui satisfait le `requires-python` (`"3.12"` sous `>=3.12.4` : admis). La version d'un
+venv se lit toujours par son interpréteur (`.venv/bin/python -V`), jamais par son chemin ni
+par `pyvenv.cfg` ; après la recréation, la montée vérifie que le venv rend bien la version
+visée (au patch près si le choix en porte un), sinon elle refuse et remet l'ancien.
+
+⚠️ **Ne jamais poser un autre patch dans `/opt/<i>/python` sans l'avoir prévu.** uv y crée,
+à côté de `cpython-3.12.14-…`, un lien de version mineure `cpython-3.12-…`, et c'est lui
+qu'un venv inscrit comme `home` dans son `pyvenv.cfg`. Un `uv python install 3.12.15`
+déplace ce lien, et avec lui **tous** les venvs de la série, sans rien signaler : le patch
+« figé » change sous les deux couleurs à la fois. Changer de patch, c'est changer le choix
+de la déclaration et monter, comme pour tout changement de Python (§ Changer de Python, sans coupure) ; puis
+vérifier chaque couleur par `<arbre>/.venv/bin/python -V`.
+
+Un choix que le
+`requires-python` du tag n'admet pas est **refusé net**, avant l'amorce et avant toute
+action, en le nommant (« l'instance choisit Python 3.9 […] que le requires-python de
+<tag> n'admet pas »). Le choix ne s'évalue qu'à la montée : le retour ne le lit pas. Sans
+choix, seule la première condition s'applique.
+
+Qui fait quoi :
+
+- **l'amorce dit l'écart et ne touche à rien.** Elle tourne à chaque montée, à chaque retour et
+  avant la maintenance ; un venv que le `requires-python` du tag n'admet pas y est journalisé
+  (« laissé tel quel »), jamais refusé ni recréé. Elle installe (`uv python install`) le
+  plancher et, s'il est déclaré, l'interpréteur choisi. Elle ne crée un venv qu'à la
+  naissance d'un arbre, au plancher ;
+- **la montée recrée le venv de la couleur qu'elle installe, et d'elle seule**
+  (`bg_avant_installation`, `deploy/cible/deployer.sh`, appelée par la bibliothèque bleu/vert
+  après l'attente de vidange et l'arrêt de cette couleur, avant `git reset` et `uv sync`).
+  Le neuf naît comme à la naissance (`uv venv --seed --python <visée>
+  --python-preference only-managed`, sous `UV_PYTHON_DOWNLOADS=never`, interpréteurs gérés
+  du rôle : `UV_PYTHON_INSTALL_DIR=/opt/<i>/python`, `UV_PYTHON_PREFERENCE=only-managed`,
+  posés seulement quand le venv change, et alors aussi pour le `uv sync` qui suit),
+  « venv <ancien> → <visée> recréé » au journal, puis l'installation par le verrou.
+  **Refus sans rien toucher** si l'unité de cette couleur tourne, ou si le pointeur est
+  illisible ou la désigne ;
+- **l'ancien venv est gardé** (`.venv.avant-plancher`) jusqu'à ce que l'installation
+  (`bg_install` : fetch, `git reset --hard`, `uv sync`, bac à sable) réussisse ; il est alors
+  retiré (`bg_apres_installation`). Si elle échoue, à n'importe quelle étape, la couleur
+  reprend **ensemble** son code et son venv d'avant : si le `git reset --hard` était passé,
+  l'arbre est remis sur sa tête d'avant (`git reset --hard <tête>`), puis l'ancien venv
+  revient. La couleur reste donc un retour arrière valable. Ce qui n'est pas remis : un
+  bac à sable (`.bac-a-sable`) que l'installation du tag aurait déjà reposé avant d'échouer
+  (versions épinglées par tag). Si la tête d'avant ne peut pas être remise, le venv d'avant
+  ne l'est pas non plus (code neuf et venv ancien ne vont pas ensemble) : il reste dans
+  `.venv.avant-plancher`, et le journal dit que cette couleur **n'est pas** un retour
+  valable. Création du venv neuf en échec : l'ancien est remis, rien n'est installé ;
+- le retour arrière ne recrée jamais rien (la bibliothèque n'appelle pas ces fonctions au
+  `--rollback`) : la couleur d'avant repart sur son venv d'avant.
+
+Un changement de Python prend donc **deux montées** par rôle (une couleur chacune) ; entre
+les deux, le retour arrière reste ouvert.
+
+⚠️ **L'ordre des tags.** Le retour (`action=retour <rôle> <tag>`) exécute l'amorce **du tag
+nommé dans la commande** (la porte extrait son `deploy/`), pas celle du tag en service. Les
+amorces de **v1.395.0 à v1.882.0 (488 tags)** sont strictes : elles refusent tout venv dont
+la version n'est pas **égale** au plancher de LEUR tag. Nommée au retour, ou montée, après
+qu'une couleur a changé de Python, une telle amorce bloque. Au jour d'un changement RÉEL
+(plancher relevé, ou choix posé dans la déclaration) :
+
+1. le **premier tag qui contient cette reprise** (T_tol) est monté **partout** (préprod et
+   prod de chaque cible), plancher et déclaration inchangés ;
+2. seulement ensuite : le tag qui relève le plancher (T_bump), ou le choix `python` posé
+   dans la déclaration ;
+3. dès qu'une couleur a migré, les tags v1.395.0…v1.882.0 sont **exclus** sur ce rôle : ni
+   montés, ni nommés au retour. Le tag nommé au retour doit être **au moins T_tol**.
+
+⚠️ **Les timers de maintenance et d'archive du journal** (`<i>-<r>-maintenance`,
+`<i>-<r>-journal-archive`, gabarits `deploy/cible/maintenance.service` et
+`journal-archive.service`) appellent `<arbre>/.venv/bin/python` de l'arbre qu'ils nomment.
+L'amorce les rend sur la couleur **en service** après chaque bascule, et la montée ne recrée
+que le venv de la couleur **inactive** : en régime normal, ils ne touchent jamais le venv en
+cours de recréation. Ces unités sont rendues et validées **avant** la bascule, pour la couleur
+qui va servir (montée comme retour) : un gabarit ou un timer qui ne se rend pas arrête le
+déploiement, rien n'a basculé. Leur pose, **après** la bascule (écriture, `daemon-reload`,
+activation des timers, relecture), fait échouer le déploiement si elle échoue : le service a
+basculé, et le message dit l'arbre que chaque unité vise encore et la commande qui les repose
+(`<arbre en service>/deploy/cible/amorcer.sh <déclaration> <rôle> maintenance`). Avant une
+migration, vérifier quand même que leurs `ExecStart` nomment la couleur en service
+(`systemctl cat`) ; sinon, ils échouent pendant la recréation et, si elle échoue, jusqu'à la
+restauration du venv d'avant.
+Migrer de préférence hors de leurs créneaux (`systemctl list-timers`), puis vérifier qu'ils
+passent sur le venv recréé (`systemctl start` de chaque service, puis son journal).
+
+Bancs : `tests/deploy/test_plancher_python_cible.py` (doublures : la règle dans les deux sens,
+l'intervalle, quelle couleur est recréée, le retour, la maintenance, la montée suivante, les
+refus, l'échec du fetch et celui du `uv sync` après le reset, le choix de l'instance,
+l'amorce d'avant qui bloque le retour) et `tests/deploy/test_plancher_python_cible_uv_reel.py`
+(le vrai uv, deux interpréteurs gérés : le venv recréé l'est sur l'interpréteur géré du rôle,
+et `uv sync --frozen` ne recrée rien à version admise ; joué en CI par le job
+`plancher-python-uv-reel`, ignoré ailleurs sans ces interpréteurs).
 
 ## Les migrations, jouées par la montée (#1163, #1195)
 
@@ -311,6 +433,12 @@ code du tag qu'on montera :
 ```
 python3 deploy/cible/declaration.py verifier declaration.json
 ```
+
+Champ facultatif, au premier niveau : `"python": "<MAJEUR.MINEUR[.PATCH]>"` (le patch est
+recommandé : il fige l'interpréteur), l'interpréteur des venvs
+de l'instance (sinon le plancher du `requires-python` du tag). Il doit satisfaire le
+`requires-python` des tags qu'on monte ; le poser suit une séquence (§ Changer de Python,
+sans coupure).
 
 Un test (`tests/deploy/test_gabarit_cible_967.py`) garde le gabarit en phase avec
 l'inventaire : une variable qui devient exigée y apparaît, ou le test rougit.

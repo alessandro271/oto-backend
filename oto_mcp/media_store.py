@@ -352,19 +352,23 @@ def upload_private(prefix: str, owner_id: str, data: bytes, content_type: str,
     `tmp/`, expiration 1 jour) qui purge ces objets — l'URL signée n'expire qu'à
     `presign_expiry()` (déf. 1 h), bien avant. Pas de fallback : stockage non
     configuré ⟹ `MediaError`.
+
+    Le `ContentType` posé est le type SERVI (`type_servi`), jamais le déclaré seul :
+    un contenu actif ou non reconnu part en `application/octet-stream` avec
+    `Content-Disposition: attachment`.
     """
     if not data:
         raise MediaError(400, "missing_file", "Contenu vide.")
     digest = hashlib.sha256(data).hexdigest()[:32]
     key = f"{cle_transit(prefix, owner_id, digest)}/{nom_sur(filename)}"
+    # Le type SERVI, comme pour un blob durable (`type_servi`, #562) : le type que le
+    # connecteur DÉCLARE est celui d'un tiers (expéditeur d'un e-mail, auteur d'un
+    # fichier partagé). Repris tel quel, un `text/html` ou un `image/svg+xml` s'affichait
+    # dans le navigateur qui ouvre l'URL signée. Neutralisé, il se télécharge.
+    entetes = _entetes_durables(data, content_type, quote(filename or "file", safe=""))
     try:
         client = _get_client()
-        client.put_object(
-            Bucket=_bucket(),
-            Key=key,
-            Body=data,
-            ContentType=content_type or "application/octet-stream",
-        )
+        client.put_object(Bucket=_bucket(), Key=key, Body=data, **entetes)
         return client.generate_presigned_url(
             "get_object",
             Params={"Bucket": _bucket(), "Key": key},
@@ -597,6 +601,28 @@ def delete_by_key(key: str) -> None:
     # noqa: SILENT — best-effort : un orphelin S3 ne casse jamais la requête user
     except Exception:
         pass
+
+
+def client_et_seau():
+    """(client S3, seau) de l'instance — pour un travail de fond qui lit et réécrit des
+    objets privés hors des gestes ci-dessus (la réécriture des archives du journal par
+    l'effacement d'une org)."""
+    return _get_client(), _bucket()
+
+
+def supprimer_objet(key: str) -> None:
+    """Supprime un objet par sa clé et LÈVE (`MediaError`) s'il n'est pas supprimé —
+    le pendant strict de `delete_by_key`, pour l'effacement d'une org : un objet resté
+    est une donnée que l'effacement promettait d'avoir retirée. Un objet déjà absent
+    n'est pas un refus (S3 rend 204 sur une clé inconnue)."""
+    if not key:
+        return
+    try:
+        _get_client().delete_object(Bucket=_bucket(), Key=key)
+    except MediaError:
+        raise
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "delete_failed", str(e))
 
 
 def make_public(key: str) -> str:

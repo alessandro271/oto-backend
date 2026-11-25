@@ -7,7 +7,7 @@ are brought here, and gain a **MCP face** along the way: the agent can build the
 consent link and hand it to the user, which is precisely the useful gesture
 in conversation.
 
-What REMAINS a hand-written route (`api/zoho.py`): the **callback**.
+What REMAINS a hand-written route (`api/oauth_returns.py`): the **callback**.
 Zoho redirects the BROWSER there — with no auth header, with a 302 response — which
 a capability contract (JSON + authz) cannot express. This is declared as
 such in `test_rest_modules_are_capabilities.py`.

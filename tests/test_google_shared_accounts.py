@@ -31,6 +31,14 @@ pytestmark = pytest.mark.usefixtures("connecteurs_tous_disponibles")
 ORG, GROUP = 7, 9
 ALL = " ".join(G.SCOPES)
 
+def _lu(state):
+    """Le state Google lu (`read_state`), en tuple (sub, org, app, carte, scope, équipe)."""
+    from oto_mcp.auth import google as _g
+    d = _g.read_state(state)
+    return None if d is None else (d["sub"], d["org"], d["app"], d["connector"],
+                                   d["scope"], d["group"])
+
+
 
 @pytest.fixture(autouse=True)
 def _ctx(monkeypatch):
@@ -56,12 +64,12 @@ def _q(url):
 
 def test_le_state_porte_le_scope_et_lequipe():
     etat = G.make_state("u", ORG, "", "gmail", "group", GROUP)
-    assert G.verify_state(etat) == ("u", ORG, "", "gmail", "group", GROUP)
-    assert G.verify_state(G.make_state("u", ORG, "", "drive", "org"))[4:] == ("org", None)
+    assert _lu(etat) == ("u", ORG, "", "gmail", "group", GROUP)
+    assert _lu(G.make_state("u", ORG, "", "drive", "org"))[4:] == ("org", None)
     # Un state d'avant les comptes partagés : le membre, comme alors.
-    assert G.verify_state(G.make_state("u", ORG))[4:] == ("member", None)
+    assert _lu(G.make_state("u", ORG))[4:] == ("member", None)
     # Une équipe sans identifiant ne passe pas, même bien signée.
-    assert G.verify_state(G.make_state("u", ORG, "", "gmail", "group", None)) is None
+    assert _lu(G.make_state("u", ORG, "", "gmail", "group", None)) is None
 
 
 def test_seul_un_admin_de_lorg_connecte_un_compte_de_lorg(monkeypatch):
@@ -70,7 +78,7 @@ def test_seul_un_admin_de_lorg_connecte_un_compte_de_lorg(monkeypatch):
         G.build_auth_url("u", connector="gmail", scope="org")
     _admins(monkeypatch, org=True)
     etat = _q(G.build_auth_url("u", connector="gmail", scope="org"))["state"]
-    assert G.verify_state(etat)[4:] == ("org", None)
+    assert _lu(etat)[4:] == ("org", None)
 
 
 def test_seul_un_chef_dequipe_connecte_un_compte_dequipe(monkeypatch):
@@ -79,7 +87,7 @@ def test_seul_un_chef_dequipe_connecte_un_compte_dequipe(monkeypatch):
         G.build_auth_url("u", connector="calendar", scope="group")
     _admins(monkeypatch, group=True)
     etat = _q(G.build_auth_url("u", connector="calendar", scope="group"))["state"]
-    assert G.verify_state(etat)[4:] == ("group", GROUP)
+    assert _lu(etat)[4:] == ("group", GROUP)
     monkeypatch.setattr(access, "current_group", lambda sub: None)
     with pytest.raises(PermissionError):
         G.build_auth_url("u", connector="calendar", scope="group")

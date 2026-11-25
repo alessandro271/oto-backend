@@ -183,6 +183,8 @@ EMPTY_MESSAGE_DEFAULT = "Aucun résultat pour cette recherche."
 # chemin chaud de CHAQUE appel, et un outil n'a pas à savoir comment on le rend.
 EMPTY_MESSAGES: dict[str, str] = {
     "fr_accords_search": "Aucun accord déposé pour ce SIREN.",
+    "sheets_spreadsheet": "La plage lue est vide : aucune cellule renseignée (0 ligne).",
+    "sheets_chart": "Ce classeur ne contient aucun graphique.",
 }
 
 # Clés de COLLECTION reconnues — liste FERMÉE, et c'est tout l'intérêt : « toute clé

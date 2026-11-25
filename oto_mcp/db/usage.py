@@ -19,7 +19,6 @@ import psycopg
 
 logger = logging.getLogger(__name__)
 
-from .. import deprecations
 from ..journal_secrets import masquer_urls, masquer_urls_des_valeurs
 from . import journal_calls, journal_jour
 from ._conn import _connect
@@ -2935,7 +2934,7 @@ def _ds_activity_entry(r: dict) -> dict:
     """
     args = r.get("args") if isinstance(r.get("args"), dict) else {}
     fields = args.get("fields")
-    return deprecations.avec_les_deux_noms({
+    return {
         "created_at": r.get("created_at"),
         "kind": r.get("kind") or "mcp",
         "tool": r.get("tool"),
@@ -2945,7 +2944,8 @@ def _ds_activity_entry(r: dict) -> dict:
         "email": r.get("email"),
         "run_id": r.get("run_id"),
         "run_label": r.get("run_label"),
-        "doctrine": r.get("doctrine"),
+        # La colonne `runs` garde son nom d'avant #519 ; le contrat sert `guide`.
+        "guide": r.get("doctrine"),
         "outcome": r.get("outcome"),
         "row_id": args.get("id"),
         "row_title": None,
@@ -2961,7 +2961,7 @@ def _ds_activity_entry(r: dict) -> dict:
         "source": None,
         "acteur": None,
         "revisions": [],
-    })
+    }
 
 
 #: L'axe « clé métier » ne retrouve QUE l'écriture qui a créé la ligne (append/batch :
