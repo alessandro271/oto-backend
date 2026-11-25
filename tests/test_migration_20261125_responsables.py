@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 RACINE = Path(__file__).resolve().parent.parent
-_PRECEDENTE = "20261124_1200_empreintes_2fa"
+_PRECEDENTE = "20261125_1103_revocations"
 _REVISION = "20261125_1700_responsables"
 
 

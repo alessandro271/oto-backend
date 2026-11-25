@@ -19,7 +19,7 @@ Retour arrière : retire les deux colonnes (les responsables posés se perdent :
 page et chaque procédure revient à son auteur).
 
 Révision : 20261125_1700_responsables
-Précédente : 20261124_1200_empreintes_2fa
+Précédente : 20261125_1103_revocations
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from alembic import op
 from oto_mcp.db.responsables import COLONNE, DDL_COLONNE_PAGES, DDL_COLONNE_PROCEDURES
 
 revision = "20261125_1700_responsables"
-down_revision = "20261124_1200_empreintes_2fa"
+down_revision = "20261125_1103_revocations"
 branch_labels = None
 depends_on = None
 
