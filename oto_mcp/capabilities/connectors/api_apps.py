@@ -332,8 +332,10 @@ def _connect(ctx: ResolvedCtx, inp: ConnectInput) -> dict:
     try:
         url = api_oauth.authorize_url(app, ctx.sub, inp.app or "")
     except api_oauth.ApiOAuthRefused as e:
-        if e.code in ("api_app_not_oauth_user", "api_app_origin_mixed"):
-            raise AuthzDenied(409, e.code, e.message)
+        if e.code == "api_app_not_oauth_user":
+            raise AuthzDenied(409, "api_app_not_oauth_user", e.message)
+        if e.code == "api_app_origin_mixed":
+            raise AuthzDenied(409, "api_app_origin_mixed", e.message)
         raise AuthzDenied(409, "api_app_incomplete", e.message)
     return {"auth_url": url, "redirect_uri": api_oauth.redirect(), **api_oauth.hotes(app)}
 

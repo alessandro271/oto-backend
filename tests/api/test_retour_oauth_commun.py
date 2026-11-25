@@ -78,8 +78,15 @@ def test_un_code_part_au_front_dans_le_fragment(lu, audience):
     assert "code" not in q and "state" not in q, "jamais en query : le fragment seul"
     remis = urllib.parse.parse_qs(urllib.parse.urlsplit(url).fragment)
     assert remis["state"] == ["s"] and remis["code"]
-    if audience != "wordpress":
+    if audience not in SCELLES:
         assert remis["code"] == ["c/1"]
+    else:   # sealed for this state, never the provider's code in clear
+        assert remis["code"] != ["c/1"]
+
+
+#: The returns whose callback hands the front a SEALED code: WordPress (a credential
+#: with no code), the Custom API (the code with the return's `iss`, RFC 9207).
+SCELLES = {"wordpress", "custom_api"}
 
 
 @pytest.mark.parametrize("audience", sorted(set(CHEMINS) - {"wordpress"}))
