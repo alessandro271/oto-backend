@@ -154,6 +154,14 @@ class CallsInput(BaseModel):
     def _cap_limit(cls, v):
         return cap_limit(v, db.CALLS_LIMITE_MAX)
 
+    # Écrêté à [1, 365] comme les agrégats du store, AVANT le plancher (`_horizon`) :
+    # `timedelta(days=…)` y déborde dès un million de jours, et la phrase du plancher
+    # doit dire la fenêtre réellement lue.
+    @field_validator("days")
+    @classmethod
+    def _cap_days(cls, v):
+        return None if v is None else max(1, min(int(v), 365))
+
 
 class CallInput(BaseModel):
     call_id: int
