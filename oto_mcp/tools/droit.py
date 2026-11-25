@@ -203,6 +203,9 @@ def register(mcp: FastMCP) -> None:
           When the register cannot be relied on, the tool raises an error: that
           is NEVER "no match", do not conclude the name is clear.
 
+        Rupture fields (date_entree … anciennete_cadre_mois) are required by
+        op="check_mutual_termination" as documented above.
+
         Args:
             op: The check to run.
             date_entree: Hiring date, YYYY-MM-DD.
@@ -237,8 +240,6 @@ def register(mcp: FastMCP) -> None:
                 max 50); the counts stay whole.
             full: op="screen_asset_freeze" — keep each match's `fondement`.
 
-        Rupture fields (date_entree … anciennete_cadre_mois) are required by
-        op="check_mutual_termination" as documented above.
         """
         if op == "screen_asset_freeze":
             from ..fod import vigilance as fod_vigilance
