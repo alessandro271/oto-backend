@@ -655,6 +655,19 @@ _REGLAGES: tuple[Variable, ...] = (
              "hygiène mémoire, pas un refus) ; `0` désarme ; "
              "illisible : refus de démarrer.",
              ("oto_mcp/bornes_processus.py:122",)),
+    Variable("OTO_BORNE_CORPS_MCP_OCTETS", Classe.REGLAGE, "33554432",
+             "Transport de l'SDK `mcp` 1.30 : taille max (octets) du corps d'une requête "
+             "`/mcp` acceptée par l'SDK (`max_request_body_size`, `413` au-delà), posée "
+             "dans TOUS les modes. 32 MiB par défaut, au-dessus du proxy (32 Mo) ; la "
+             "borne `OTO_BORNE_CORPS_OCTETS` reste en dessous. `0` ou illisible : refus "
+             "de démarrer.",
+             ("oto_mcp/bornes_processus.py:171",)),
+    Variable("OTO_BORNE_SESSIONS_MCP_MAX", Classe.REGLAGE, "10000",
+             "Transport de l'SDK `mcp` 1.30 : nombre max de sessions MCP ouvertes à la "
+             "fois, par gestionnaire (`max_sessions`, `503` sur une ouverture de plus), "
+             "posé dans TOUS les modes. Global au processus, sans état par principal. "
+             "`0` ou illisible : refus de démarrer.",
+             ("oto_mcp/bornes_processus.py:174",)),
     Variable("OTO_DEBIT_ADRESSES_EXEMPTEES", Classe.REGLAGE, "",
              "Adresses ou CIDR (séparés par des virgules) de NOS machines, exemptés des "
              "classes de débit par adresse et du budget d'échecs ; leurs jetons paient "

@@ -39,9 +39,17 @@ dependencies = [
     # étrangère → refusé des deux côtés. `auth.oto.cx/oidc/jwks` ne sert aujourd'hui
     # qu'une clé (EC/ES384) : la panne d'authentification est LATENTE, elle part le
     # jour où le fournisseur d'identité publie une clé EdDSA. Ce plancher ne touche
-    # PAS `mcp` (non déclarée, tirée par fastmcp en `>=1.24,<2.0`) : aucun des
-    # comportements de transport de mcp 1.30.0 n'arrive avec lui.
+    # pas `mcp`, déclarée juste en dessous.
     "fastmcp[apps]>=3.4.7,<3.5",
+    # `mcp` — le SDK sous fastmcp (qui l'accepte en `>=1.24,<2.0`), déclaré parce que
+    # `oto_mcp/sessions_mcp.py` et `oto_mcp/borne_session.py` l'importent et
+    # s'accrochent à son gestionnaire de session. 1.30.0 — plancher monté le
+    # 25/11/2026 : CVE-2026-59951 et quatre autres avis sur 1.28.1 (pip-audit : 0 sur
+    # 1.30.0). Ses nouveaux défauts de transport (corps 4 MiB → 413, inactivité 30 min,
+    # 10 000 sessions → 503) sont REPRIS par nos réglages au démarrage
+    # (`borne_session.plafonner`) : corps 32 MiB (au-dessus du proxy), inactivité
+    # inchangée, plafond de sessions gardé. Plafond `<2.0` : 2.x est une autre API.
+    "mcp>=1.30.0,<2.0",
     # lib connecteurs (oto.tools) — PLUS de dép à la CLI (otomata#13). PINNÉ sur un
     # tag git (≠ @main flottant) : une version déployée = une coordonnée reproductible
     # (SHA backend + ce pin). PyPI ne reçoit pas chaque merge (publish manuel, lag) →

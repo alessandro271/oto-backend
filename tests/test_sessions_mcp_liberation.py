@@ -4,6 +4,8 @@ Streamable HTTP, le vrai routeur du transport.
 Chaque correctif a son TÉMOIN, qui joue la même scène sans l'enveloppe et constate le
 défaut : le jour où l'SDK le corrige lui-même, le témoin rougit et l'enveloppe est à
 retirer ; le jour où l'SDK déplace ce sur quoi elle s'accroche, le banc équipé rougit.
+Le second défaut (session `DELETE` jamais retirée) est corrigé par l'SDK 1.30 : son
+témoin, retourné, prouve désormais que l'SDK la retire seul.
 La libération se prouve par une référence faible, jamais par une mesure de mémoire."""
 from __future__ import annotations
 
@@ -162,14 +164,16 @@ async def _delete(b, entetes):
     return sid, transport
 
 
-def test_temoin_sans_enveloppe_une_session_delete_reste_au_gestionnaire():
+def test_temoin_sans_enveloppe_l_sdk_retire_seul_une_session_delete():
+    """Témoin retourné le 25/11/2026 (mcp 1.30.0) : l'SDK retire la session que `DELETE`
+    a terminée, et l'enveloppe ne la retire plus. S'il rougit, l'SDK a perdu ce
+    correctif : remettre le retrait dans `_ServeurLiberateur._fin_de_session`."""
     async def scene():
         async with _banc(equiper=False) as b:
-            sid, _ = await _delete(b, await _ouvrir(b))
-            assert sid in b.g._server_instances, (
-                "l'SDK retire maintenant la session terminée : retirer ce retrait de "
-                "`_ServeurLiberateur._fin_de_session`")
-            assert b.g._server_instances[sid].is_terminated
+            sid, transport = await _delete(b, await _ouvrir(b))
+            assert sid not in b.g._server_instances
+            assert sid not in b.g._session_owners
+            assert transport() is None
     anyio.run(scene)
 
 
@@ -194,6 +198,22 @@ def test_equipee_une_session_inactive_est_comptee_a_part():
             assert entetes["mcp-session-id"] not in b.g._server_instances
             (e,) = b.equipes
             assert (e.inactivite, e.delete) == (1, 0)
+    anyio.run(scene)
+
+
+def test_equipee_une_ouverture_refusee_est_comptee_avec_les_delete():
+    """L'SDK 1.30 ouvre une session pour toute requête sans identifiant, et la termine si
+    ce n'est pas un `initialize` réussi : elle compte dans `fermees_delete` (documenté,
+    `docs/monitoring.md`), et rien n'est retenu."""
+    async def scene():
+        async with _banc(equiper=True) as b:
+            r = await b.client.post("/mcp", headers=_ENTETES, json={
+                "jsonrpc": "2.0", "id": 1, "method": "ping"})
+            assert r.status_code >= 400
+            await _laisser_passer()
+            assert b.g._server_instances == {}
+            (e,) = b.equipes
+            assert (e.inactivite, e.delete) == (0, 1)
     anyio.run(scene)
 
 
@@ -244,7 +264,7 @@ def _factice(**champs):
 
 
 def test_un_gestionnaire_sans_ses_accroches_refuse():
-    for manque in ("_server_instances", "_session_owners", "app"):
+    for manque in ("_server_instances", "app"):
         face = _factice()
         delattr(face.session_manager, manque)
         with pytest.raises(sessions_mcp.AccrocheSdkAbsente):

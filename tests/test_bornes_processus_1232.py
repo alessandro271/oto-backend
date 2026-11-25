@@ -53,12 +53,14 @@ def _lignes(palmares, limiteur):
 def test_les_defauts_sont_ceux_decides_et_le_mode_est_celui_du_debit(monkeypatch):
     for nom in ("OTO_DEBIT_MODE", "OTO_BORNE_CORPS_OCTETS", "OTO_BORNE_CORPS_UPLOAD_OCTETS",
                 "OTO_BORNE_OUTIL_S", "OTO_MCP_DB_STATEMENT_TIMEOUT_MS",
-                "OTO_BORNE_SESSION_INACTIVE_S"):
+                "OTO_BORNE_SESSION_INACTIVE_S", "OTO_BORNE_CORPS_MCP_OCTETS",
+                "OTO_BORNE_SESSIONS_MCP_MAX"):
         monkeypatch.delenv(nom, raising=False)
     r = bp.lire()
     assert r == bp.Reglages(mode="report", corps_octets=4 * 1024 * 1024,
                             corps_upload_octets=110 * 1024 * 1024, outil_s=120,
-                            sql_ms=30_000, session_inactive_s=1800)
+                            sql_ms=30_000, session_inactive_s=1800,
+                            corps_mcp_octets=32 * 1024 * 1024, sessions_max=10_000)
     assert not r.applique and r.actif
     monkeypatch.setenv("OTO_DEBIT_MODE", "enforce")
     monkeypatch.setenv("OTO_BORNE_OUTIL_S", "0")
@@ -68,10 +70,26 @@ def test_les_defauts_sont_ceux_decides_et_le_mode_est_celui_du_debit(monkeypatch
 
 @pytest.mark.parametrize("nom", ["OTO_BORNE_CORPS_OCTETS", "OTO_BORNE_CORPS_UPLOAD_OCTETS",
                                  "OTO_BORNE_OUTIL_S", "OTO_MCP_DB_STATEMENT_TIMEOUT_MS",
-                                 "OTO_BORNE_SESSION_INACTIVE_S"])
+                                 "OTO_BORNE_SESSION_INACTIVE_S",
+                                 "OTO_BORNE_CORPS_MCP_OCTETS",
+                                 "OTO_BORNE_SESSIONS_MCP_MAX"])
 @pytest.mark.parametrize("brut", ["4Mo", "-1", "1.5"])
 def test_un_reglage_illisible_leve_au_demarrage(monkeypatch, nom, brut):
     monkeypatch.setenv(nom, brut)
+    bp.reglages.cache_clear()
+    try:
+        with pytest.raises(bp.ReglageBorneInvalide, match=nom):
+            bp.verifier_configuration()
+    finally:
+        bp.reglages.cache_clear()
+
+
+@pytest.mark.parametrize("nom", ["OTO_BORNE_CORPS_MCP_OCTETS", "OTO_BORNE_SESSIONS_MCP_MAX"])
+def test_les_reglages_du_transport_mcp_ne_se_desarment_pas(monkeypatch, nom):
+    """`0` refuserait toute requête `/mcp` (corps) ou toute ouverture de session : ces
+    deux réglages de l'SDK ne se désarment pas, et le plafond de sessions ne se retire
+    pas (jamais `None`)."""
+    monkeypatch.setenv(nom, "0")
     bp.reglages.cache_clear()
     try:
         with pytest.raises(bp.ReglageBorneInvalide, match=nom):
@@ -518,19 +536,34 @@ def _cycle_interne():
     return app
 
 
-def _face_factice():
-    """Un gestionnaire de session à la forme de l'SDK : la borne l'arme, `sessions_mcp`
-    l'équipe (dans tous les modes)."""
-    return types.SimpleNamespace(session_manager=types.SimpleNamespace(
-        stateless=False, session_idle_timeout=None, event_store=None,
+def _gestionnaire_factice(**champs):
+    """Un gestionnaire de session à la forme de l'SDK 1.30 : `plafonner` le plafonne, la
+    borne l'arme, `sessions_mcp` l'équipe (dans tous les modes)."""
+    from mcp.server.transport_security import RequestBodyLimitMiddleware
+
+    async def _handle_request(scope, receive, send):
+        pass
+
+    g = types.SimpleNamespace(
+        stateless=False, session_idle_timeout=1800.0, event_store=None,
         app=types.SimpleNamespace(run=lambda *a, **k: None),
-        _server_instances={}, _session_owners={}))
+        _server_instances={}, _session_owners={},
+        max_request_body_size=4 * 1024 * 1024, max_sessions=99,
+        _handle_request=_handle_request)
+    g.asgi_app = RequestBodyLimitMiddleware(_handle_request, 4 * 1024 * 1024)
+    for nom, valeur in champs.items():
+        setattr(g, nom, valeur)
+    return g
+
+
+def _face_factice(**champs):
+    return types.SimpleNamespace(session_manager=_gestionnaire_factice(**champs))
 
 
 @pytest.mark.asyncio
 async def test_en_application_le_gestionnaire_de_session_de_chaque_face_est_arme():
     from oto_mcp.borne_session import BorneSession
-    faces = [_face_factice() for _ in range(2)]
+    faces = [_face_factice(session_idle_timeout=None) for _ in range(2)]
     garde = BorneSession(_cycle_interne(), faces=faces,
                          reglages=_reglages(bp.ENFORCE, session_inactive_s=1800))
     assert "lifespan.startup.complete" in await _demarrer(garde)
@@ -543,21 +576,36 @@ async def test_en_mesure_la_borne_de_session_est_armee_aussi():
     redémarrage. La borne de session est l'hygiène mémoire du processus, pas un refus :
     elle s'arme hors `off`."""
     from oto_mcp.borne_session import BorneSession
-    face = _face_factice()
+    face = _face_factice(session_idle_timeout=None)
     await _demarrer(BorneSession(_cycle_interne(), faces=[face], reglages=_reglages()))
     assert face.session_manager.session_idle_timeout == 1800.0
 
 
 @pytest.mark.asyncio
-async def test_en_off_le_gestionnaire_n_est_pas_touche():
+async def test_en_off_l_inactivite_est_desarmee_le_reste_pose():
+    """En `off`, l'inactivité n'est pas armée — l'SDK 1.30 l'armerait de lui-même à
+    30 min : `plafonner` la remet à `None`. Le corps, le plafond de sessions et la
+    libération ne dépendent pas du mode."""
     from oto_mcp.borne_session import BorneSession
     face = _face_factice()
     await _demarrer(BorneSession(_cycle_interne(), faces=[face],
                                  reglages=_reglages(bp.OFF)))
-    assert face.session_manager.session_idle_timeout is None
+    g = face.session_manager
+    assert g.session_idle_timeout is None
+    assert (g.max_request_body_size, g.asgi_app.max_body_size, g.max_sessions) == (
+        32 * 1024 * 1024, 32 * 1024 * 1024, 10_000)
     from oto_mcp.sessions_mcp import _ServeurLiberateur
-    assert isinstance(face.session_manager.app, _ServeurLiberateur), \
+    assert isinstance(g.app, _ServeurLiberateur), \
         "la libération des sessions ne dépend pas du mode"
+
+
+@pytest.mark.asyncio
+async def test_une_borne_d_inactivite_a_zero_est_desarmee_aussi():
+    from oto_mcp.borne_session import BorneSession
+    face = _face_factice()
+    await _demarrer(BorneSession(_cycle_interne(), faces=[face],
+                                 reglages=_reglages(bp.ENFORCE, session_inactive_s=0)))
+    assert face.session_manager.session_idle_timeout is None
 
 
 def test_armer_trouve_le_gestionnaire_de_la_vraie_face_fastmcp():
@@ -680,6 +728,234 @@ def test_le_sdk_servi_porte_la_borne_de_session():
     from fastmcp.server.http import FastMCPStreamableHTTPSessionManager
     g = FastMCPStreamableHTTPSessionManager(app=None)
     assert hasattr(g, "session_idle_timeout")
+
+
+# ── le transport de l'SDK `mcp` 1.30 : corps et plafond de sessions ─────────
+
+_MIB = 1024 * 1024
+
+
+def _initialize_de(taille: int) -> bytes:
+    """Un `initialize` VALIDE d'environ `taille` octets (bourré dans `clientInfo`) : ce
+    que l'SDK sert quand il ne refuse pas le corps."""
+    import json as _json
+    corps = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {},
+        "clientInfo": {"name": "banc", "version": "0", "bourre": ""}}}
+    vide = len(_json.dumps(corps).encode())
+    corps["params"]["clientInfo"]["bourre"] = "x" * max(0, taille - vide)
+    return _json.dumps(corps).encode()
+
+
+_ENTETES_MCP = {"accept": "application/json, text/event-stream",
+                "content-type": "application/json"}
+
+
+def _servir_la_vraie_face(reglages, corps: bytes, equiper: bool = True):
+    """Une VRAIE face fastmcp, démarrée par le cycle de vie de `BorneSession` (comme en
+    production, `server.build_root_app`) ; un POST `/mcp` de `corps`. Rend (statut,
+    texte, gestionnaire)."""
+    import anyio
+    import httpx
+    from fastmcp import FastMCP
+    from oto_mcp.borne_session import BorneSession, gestionnaires
+    face = FastMCP("banc").http_app(path="/mcp")
+    garde = BorneSession(face, faces=[face], reglages=reglages) if equiper else face
+
+    async def scene():
+        envoyes, file = [], [{"type": "lifespan.startup"}]
+        demarre, arreter = anyio.Event(), anyio.Event()
+
+        async def receive():
+            if file:
+                return file.pop(0)
+            await arreter.wait()
+            return {"type": "lifespan.shutdown"}
+
+        async def send(m):
+            envoyes.append(m["type"])
+            if m["type"] == "lifespan.startup.complete":
+                demarre.set()
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(garde, {"type": "lifespan"}, receive, send)
+            await demarre.wait()
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=face),
+                                         base_url="http://localhost") as client:
+                r = await client.post("/mcp", headers=_ENTETES_MCP, content=corps)
+            arreter.set()
+        (g,) = gestionnaires(face)
+        return r.status_code, r.text, g
+
+    return anyio.run(scene)
+
+
+def test_temoin_sans_plafonner_l_sdk_refuse_un_corps_de_5_mib_en_413():
+    """Le défaut que `plafonner` reprend : l'SDK 1.30 refuse seul tout corps `/mcp` de
+    plus de 4 MiB. Le jour où ce témoin rougit, l'SDK a changé ce défaut : relire
+    `plafonner`."""
+    statut, texte, _ = _servir_la_vraie_face(None, _initialize_de(5 * _MIB), equiper=False)
+    assert (statut, texte) == (413, "Request body too large")
+
+
+def test_un_corps_de_5_mib_traverse_la_vraie_face():
+    """Avec le cycle de vie de production, un `initialize` de 5 MiB n'est PAS refusé par
+    l'SDK : la borne de l'SDK est montée à 32 MiB, au-dessus du proxy. (En `report`,
+    `BorneCorps` — qui n'est pas dans ce banc — le mesure sans le refuser.)"""
+    statut, texte, g = _servir_la_vraie_face(_reglages(), _initialize_de(5 * _MIB))
+    assert statut != 413 and "Request body too large" not in texte
+    assert statut == 200, texte[:200]
+    assert g.max_request_body_size == 32 * _MIB
+
+
+def test_le_reglage_du_corps_est_celui_que_l_sdk_applique():
+    """La valeur posée est celle que sert `asgi_app` (et non un attribut que l'SDK ne
+    relirait pas) : réglée à 6 MiB, 5 MiB passe et 7 MiB est refusé."""
+    r = _reglages(corps_mcp_octets=6 * _MIB)
+    assert _servir_la_vraie_face(r, _initialize_de(5 * _MIB))[0] == 200
+    statut, texte, _ = _servir_la_vraie_face(r, _initialize_de(7 * _MIB))
+    assert (statut, texte) == (413, "Request body too large")
+
+
+def test_les_defauts_du_transport_sont_poses_sur_la_vraie_face_authentifiee(monkeypatch):
+    """Les réglages par défaut, lus de l'environnement, atteignent le gestionnaire de la
+    face authentifiée (sous `RequireAuthMiddleware`) : corps 32 MiB (réglage ET
+    enveloppe servie), plafond de sessions 10 000, inactivité 30 min."""
+    import anyio
+    from fastmcp import FastMCP
+    from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+    from oto_mcp.borne_session import gestionnaires, plafonner
+    for nom in ("OTO_DEBIT_MODE", "OTO_BORNE_CORPS_MCP_OCTETS", "OTO_BORNE_SESSIONS_MCP_MAX",
+                "OTO_BORNE_SESSION_INACTIVE_S"):
+        monkeypatch.delenv(nom, raising=False)
+    app = FastMCP("banc", auth=StaticTokenVerifier(
+        tokens={"t": {"client_id": "c", "scopes": []}})).http_app(path="/mcp")
+
+    async def demarrer_puis_plafonner():
+        async with app.router.lifespan_context(app):
+            n = plafonner([app], bp.lire())
+            (g,) = gestionnaires(app)
+            return n, g
+
+    n, g = anyio.run(demarrer_puis_plafonner)
+    assert n == 1
+    assert g.max_request_body_size == 32 * _MIB
+    assert g.asgi_app.max_body_size == 32 * _MIB
+    assert g.asgi_app.app == g._handle_request
+    assert g.max_sessions == 10_000
+    assert g.session_idle_timeout == 1800
+
+
+def test_le_plafond_de_sessions_pose_est_celui_que_l_sdk_applique():
+    """Plafond réglé à 2 sur une VRAIE face : la troisième ouverture reçoit `503`, une
+    session ouverte sert toujours, et un `DELETE` rend la place."""
+    import anyio
+    import httpx
+    from fastmcp import FastMCP
+    from oto_mcp.borne_session import BorneSession
+    face = FastMCP("banc").http_app(path="/mcp")
+    garde = BorneSession(face, faces=[face], reglages=_reglages(sessions_max=2))
+
+    async def scene():
+        file = [{"type": "lifespan.startup"}]
+        demarre, arreter = anyio.Event(), anyio.Event()
+
+        async def receive():
+            if file:
+                return file.pop(0)
+            await arreter.wait()
+            return {"type": "lifespan.shutdown"}
+
+        async def send(m):
+            if m["type"] == "lifespan.startup.complete":
+                demarre.set()
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(garde, {"type": "lifespan"}, receive, send)
+            await demarre.wait()
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=face),
+                                         base_url="http://localhost") as client:
+                async def ouvrir():
+                    return await client.post("/mcp", headers=_ENTETES_MCP,
+                                             content=_initialize_de(0))
+                premiere, seconde, troisieme = await ouvrir(), await ouvrir(), await ouvrir()
+                entetes = dict(_ENTETES_MCP, **{"mcp-session-id":
+                                                premiere.headers["mcp-session-id"]})
+                ping = await client.post("/mcp", headers=entetes, json={
+                    "jsonrpc": "2.0", "id": 9, "method": "ping"})
+                ferme = await client.delete("/mcp", headers=entetes)
+                quatrieme = await ouvrir()
+            arreter.set()
+        return premiere, seconde, troisieme, ping, ferme, quatrieme
+
+    premiere, seconde, troisieme, ping, ferme, quatrieme = anyio.run(scene)
+    assert (premiere.status_code, seconde.status_code) == (200, 200)
+    assert troisieme.status_code == 503 and "Too many open sessions" in troisieme.text
+    assert ping.status_code == 200, "une session ouverte n'est pas touchée"
+    assert ferme.status_code == 200
+    assert quatrieme.status_code == 200, "un DELETE rend la place"
+
+
+@pytest.mark.parametrize("manque", ["max_request_body_size", "asgi_app", "_handle_request",
+                                    "max_sessions", "session_idle_timeout"])
+def test_un_gestionnaire_sans_les_reglages_du_transport_refuse(manque):
+    from oto_mcp.borne_session import SdkSansBorneDeSession, plafonner
+    face = _face_factice()
+    delattr(face.session_manager, manque)
+    with pytest.raises(SdkSansBorneDeSession):
+        plafonner([face], _reglages())
+
+
+def test_une_enveloppe_de_corps_qui_ne_sert_plus_handle_request_refuse():
+    """Reconstruire `asgi_app` autour d'autre chose que ce qu'elle servait perdrait une
+    couche que l'SDK aurait ajoutée : refus, jamais une reconstruction à l'aveugle."""
+    from mcp.server.transport_security import RequestBodyLimitMiddleware
+    from oto_mcp.borne_session import SdkSansBorneDeSession, plafonner
+    face = _face_factice()
+    g = face.session_manager
+
+    async def autre(scope, receive, send):
+        pass
+
+    g.asgi_app = RequestBodyLimitMiddleware(autre, 4 * _MIB)
+    with pytest.raises(SdkSansBorneDeSession, match="asgi_app"):
+        plafonner([face], _reglages())
+    g.asgi_app = autre
+    with pytest.raises(SdkSansBorneDeSession, match="asgi_app"):
+        plafonner([face], _reglages())
+
+
+@pytest.mark.asyncio
+async def test_un_sdk_sans_les_reglages_du_transport_refuse_le_demarrage_en_off():
+    """Le refus vaut dans TOUS les modes (l'SDK applique ses défauts quel que soit
+    notre interrupteur), et uvicorn le voit (`lifespan.startup.failed`)."""
+    from oto_mcp.borne_session import BorneSession, SdkSansBorneDeSession
+    face = _face_factice()
+    del face.session_manager.max_sessions
+    garde = BorneSession(_cycle_interne(), faces=[face], reglages=_reglages(bp.OFF))
+    envoyes = []
+    file = [{"type": "lifespan.startup"}]
+
+    async def receive():
+        return file.pop(0)
+
+    async def send(m):
+        envoyes.append(m["type"])
+
+    with pytest.raises(SdkSansBorneDeSession):
+        await garde({"type": "lifespan"}, receive, send)
+    assert envoyes == ["lifespan.startup.failed"]
+
+
+def test_plafonner_est_idempotent():
+    from oto_mcp.borne_session import plafonner
+    face = _face_factice()
+    plafonner([face], _reglages())
+    premiere = face.session_manager.asgi_app
+    plafonner([face], _reglages())
+    assert face.session_manager.asgi_app is not premiere
+    assert face.session_manager.asgi_app.app == premiere.app
+    assert face.session_manager.asgi_app.max_body_size == 32 * _MIB
 
 
 # ── la minute close part avec celles de la limite de débit ───────────────────
