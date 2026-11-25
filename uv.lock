@@ -1547,6 +1547,7 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "starlette" },
     { name = "tomli", marker = "python_full_version < '3.11'" },
+    { name = "urllib3" },
     { name = "uvicorn" },
 ]
 
@@ -1592,6 +1593,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "starlette", specifier = ">=0.37" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
+    { name = "urllib3", specifier = ">=2.0,<3" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 provides-extras = ["dev"]

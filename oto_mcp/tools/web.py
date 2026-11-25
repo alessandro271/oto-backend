@@ -49,7 +49,8 @@ from oto.tools.common.errors import UpstreamHTTPError
 
 from . import cesures
 
-from .. import access, browserbase, egress, session_org, url_perimeter
+from .. import (access, browserbase, egress, egress_transport, session_org,
+                url_perimeter)
 from ..file_content import image_format
 from .lecture import LECTURE
 from ..connectors import health as connector_health
@@ -210,6 +211,15 @@ def extract_text(html_str: str) -> tuple:
     return texte.strip(), p.title.strip()
 
 
+def _session_gardee() -> requests.Session:
+    """The pinned session of an agent-chosen URL (`egress_transport`): the guard
+    decides at CONNECTION time, on the very addresses the socket opens to — a DNS
+    answer that changes between the check and the connection (rebinding) is refused
+    there, and so is every redirect hop, which opens its own connection."""
+    return egress_transport.session(connector="web_read", field="url",
+                                    exceptions_declarees=False)
+
+
 # ── tier ①: bare HTTP fetch, streamed, guarded ───────────────────────────────
 def _fetch_http(url: str, deadline_s: float = _DEADLINE_S) -> dict:
     """{verdict, ok, status?, html?, final_url?} — redirects are walked
@@ -241,54 +251,57 @@ def _fetch_http(url: str, deadline_s: float = _DEADLINE_S) -> dict:
                             "followed, last target: {}"
                             .format(ecoule, ou, sauts, courante))}
 
-    for _ in range(_MAX_REDIRECTS + 1):
-        reste = budget - (_now() - t0)
-        if reste <= 0:
-            return _delai("before the next hop")
-        check_url_public(courante)
-        try:
-            r = requests.get(courante, stream=True, allow_redirects=False,
-                             timeout=(min(_TIMEOUT[0], reste), min(_TIMEOUT[1], reste)),
-                             headers={"User-Agent": _UA})
-        except requests.Timeout:
-            return {"ok": False,
-                    "verdict": "timeout after {} redirect(s), on {}".format(
-                        sauts, courante)}
-        except requests.RequestException as e:
-            return {"ok": False, "verdict": f"network: {type(e).__name__}"}
-        try:
-            if r.is_redirect or r.is_permanent_redirect:
-                cible = r.headers.get("Location")
-                if not cible:
-                    return {"ok": False, "verdict": "redirect without a target"}
-                courante = urljoin(courante, cible)
-                sauts += 1
-                continue
-            if r.status_code >= 400:
-                return {"ok": False, "verdict": f"HTTP {r.status_code}",
-                        "status": r.status_code}
-            # STREAMED read, cap on DECOMPRESSED bytes, stop DURING.
-            # The budget is rechecked on every chunk: this is where a slow
-            # server held the read for 57 s (#491).
-            morceaux, total = [], 0
-            for chunk in r.iter_content(chunk_size=65536, decode_unicode=False):
-                morceaux.append(chunk)
-                total += len(chunk)
-                if total >= _MAX_FETCH_BYTES:
-                    break
-                if _now() - t0 >= budget:
-                    return _delai("while reading the body")
-            brut = b"".join(morceaux)
-            html_str = brut.decode(r.encoding or "utf-8", errors="replace")
-            # `body`/`content_type`/`capped` serve `web_image`: an image is read as
-            # bytes, and one that reached the cap is REFUSED there, never served cut.
-            return {"ok": True, "status": r.status_code, "html": html_str,
-                    "body": brut, "content_type": r.headers.get("Content-Type", ""),
-                    "capped": total >= _MAX_FETCH_BYTES,
-                    "final_url": courante, "verdict": "read"}
-        finally:
-            r.close()
-    return {"ok": False, "verdict": f"more than {_MAX_REDIRECTS} redirects"}
+    with _session_gardee() as s:
+        for _ in range(_MAX_REDIRECTS + 1):
+            reste = budget - (_now() - t0)
+            if reste <= 0:
+                return _delai("before the next hop")
+            check_url_public(courante)
+            try:
+                r = s.get(courante, stream=True, allow_redirects=False,
+                          timeout=(min(_TIMEOUT[0], reste), min(_TIMEOUT[1], reste)),
+                          headers={"User-Agent": _UA})
+            except egress.EgressRefused as e:     # refused at connection time
+                raise _bad(str(e)) from None
+            except requests.Timeout:
+                return {"ok": False,
+                        "verdict": "timeout after {} redirect(s), on {}".format(
+                            sauts, courante)}
+            except requests.RequestException as e:
+                return {"ok": False, "verdict": f"network: {type(e).__name__}"}
+            try:
+                if r.is_redirect or r.is_permanent_redirect:
+                    cible = r.headers.get("Location")
+                    if not cible:
+                        return {"ok": False, "verdict": "redirect without a target"}
+                    courante = urljoin(courante, cible)
+                    sauts += 1
+                    continue
+                if r.status_code >= 400:
+                    return {"ok": False, "verdict": f"HTTP {r.status_code}",
+                            "status": r.status_code}
+                # STREAMED read, cap on DECOMPRESSED bytes, stop DURING.
+                # The budget is rechecked on every chunk: this is where a slow
+                # server held the read for 57 s (#491).
+                morceaux, total = [], 0
+                for chunk in r.iter_content(chunk_size=65536, decode_unicode=False):
+                    morceaux.append(chunk)
+                    total += len(chunk)
+                    if total >= _MAX_FETCH_BYTES:
+                        break
+                    if _now() - t0 >= budget:
+                        return _delai("while reading the body")
+                brut = b"".join(morceaux)
+                html_str = brut.decode(r.encoding or "utf-8", errors="replace")
+                # `body`/`content_type`/`capped` serve `web_image`: an image is read as
+                # bytes, and one that reached the cap is REFUSED there, never served cut.
+                return {"ok": True, "status": r.status_code, "html": html_str,
+                        "body": brut, "content_type": r.headers.get("Content-Type", ""),
+                        "capped": total >= _MAX_FETCH_BYTES,
+                        "final_url": courante, "verdict": "read"}
+            finally:
+                r.close()
+        return {"ok": False, "verdict": f"more than {_MAX_REDIRECTS} redirects"}
 
 
 def register(mcp: FastMCP) -> None:

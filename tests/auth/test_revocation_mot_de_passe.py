@@ -76,6 +76,9 @@ def monde(monkeypatch):
     monkeypatch.setattr(rmp.annuaire, "fermer_sessions",
                         lambda sub: vus.append(("logto", sub))
                         or {"sessions": 2, "grants": 1})
+    # L'instant « révoqué avant » (`db/revocations_comptes.py`), relevé à chaque pose.
+    monkeypatch.setattr(rmp.revocations_comptes, "poser",
+                        lambda sub, motif: vus.append(("revoque_avant", sub)))
     # La double authentification : les facteurs du moment chez Logto, et l'empreinte
     # posée — par défaut celle de ces mêmes facteurs (rien n'a changé).
     etat = {"facteurs": [dict(f) for f in FACTEURS],
@@ -223,13 +226,26 @@ def test_evenement_qui_ne_dit_pas_un_mot_de_passe_change_est_ignore(monde, evt):
 
 def test_revocation_passe_par_le_geste_unique_avec_sa_trace(monde):
     _poste(_reinit_pwd())
-    assert monde[0] == ("list", SUB, ("user", "delegation"))
+    assert monde[0] == ("revoque_avant", SUB), "l'instant est posé avant tout"
+    assert monde[1] == ("list", SUB, ("user", "delegation"))
     revoques = [e for e in monde if e[0] == "revoke"]
     assert [e[2] for e in revoques] == [2, 1, 3], "l'enfant avant son émetteur"
     assert {e[3] for e in revoques} == {rmp.REVOQUE_PAR}
     assert all("mot de passe" in e[4] for e in revoques)
     # Les jetons d'abord : si Logto tombe, ils sont déjà coupés.
     assert monde.index(("logto", SUB)) > monde.index(revoques[-1])
+    # Puis l'instant, reposé APRÈS la fermeture chez Logto.
+    assert monde[-1] == ("revoque_avant", SUB)
+    assert [e for e in monde if e[0] == "revoque_avant"] == [("revoque_avant", SUB)] * 2
+
+
+def test_logto_en_echec_laisse_l_instant_pose(monde, monkeypatch):
+    """Logto tombe : l'instant posé avant tient déjà les jetons émis avant."""
+    def _tombe(sub):
+        raise annuaire.FermetureInachevee("Logto injoignable")
+    monkeypatch.setattr(rmp.annuaire, "fermer_sessions", _tombe)
+    assert _poste(_reinit_pwd()).status_code == 502
+    assert monde[0] == ("revoque_avant", SUB)
 
 
 def test_logto_en_echec_rend_502_jetons_deja_coupes(monde, monkeypatch):
@@ -334,10 +350,6 @@ def _fermes(monde) -> bool:
     return ("logto", SUB) in monde and any(e[0] == "revoke" for e in monde)
 
 
-def _il_y_a(secondes: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(seconds=secondes)).isoformat()
-
-
 # --- La double authentification sur le webhook ----------------------------------
 
 def test_facteur_ajoute_ferme_tout_puis_pose_l_empreinte(monde):
@@ -400,41 +412,149 @@ def test_empreinte_sans_facteur_puis_premier_facteur_ferme_tout(monde):
     assert _fermes(monde)
 
 
-def test_premier_passage_pose_sans_fermer(monde):
+def test_premier_passage_ferme_puis_pose(monde):
+    """Aucune empreinte posée : la livraison ne dit rien de l'état d'avant — fermer."""
     monde.etat["posees"].clear()
     r = _poste(_profil())
-    assert r.status_code == 200 and r.json()["ignored"] is True
-    assert not _fermes(monde)
+    assert r.status_code == 200 and r.json()["reason"] == "mfa_changed"
+    assert _fermes(monde)
     assert monde.etat["posees"][SUB] == revocation_2fa.empreinte(FACTEURS)
+    assert monde.index(("empreinte", SUB)) > monde.index(("logto", SUB))
 
 
-def test_premier_passage_sans_facteur_pose_l_empreinte_vide(monde):
+def test_premier_passage_facteur_retire_ferme(monde):
+    """Le cas que l'ancienne règle laissait passer : un facteur ancien (enrôlé il y a des
+    mois) RETIRÉ au premier passage. Il ne reste que des facteurs anciens, ou aucun."""
     monde.etat["posees"].clear()
-    monde.etat["facteurs"] = []
-    r = _poste(_profil())
-    assert r.status_code == 200 and r.json()["ignored"] is True
-    assert monde.etat["posees"][SUB] == revocation_2fa.empreinte([])
-
-
-@pytest.mark.parametrize("forme", ["iso", "millisecondes"])
-def test_premier_passage_avec_facteur_recent_ferme_tout(monde, forme):
-    """Logto rend un instant en ISO 8601 ou en millisecondes."""
-    cree = (_il_y_a(120) if forme == "iso" else
-            int((datetime.now(timezone.utc) - timedelta(minutes=5)).timestamp() * 1000))
-    monde.etat["posees"].clear()
-    monde.etat["facteurs"].append({"id": "totp-2", "type": "Totp", "createdAt": cree})
+    monde.etat["facteurs"] = [f for f in monde.etat["facteurs"] if f["type"] != "Totp"]
     r = _poste(_profil())
     assert r.status_code == 200 and r.json()["reason"] == "mfa_changed"
     assert _fermes(monde)
 
 
-def test_premier_passage_facteur_de_plus_d_une_heure_ne_ferme_rien(monde):
+def test_premier_passage_sans_facteur_ferme_et_pose_l_empreinte_vide(monde):
     monde.etat["posees"].clear()
-    monde.etat["facteurs"].append({"id": "totp-2", "type": "Totp",
-                                   "createdAt": _il_y_a(revocation_2fa.RECENT_S + 60)})
+    monde.etat["facteurs"] = []
     r = _poste(_profil())
-    assert r.status_code == 200 and r.json()["ignored"] is True
+    assert r.status_code == 200 and r.json()["reason"] == "mfa_changed"
+    assert _fermes(monde)
+    assert monde.etat["posees"][SUB] == revocation_2fa.empreinte([])
+
+
+def _ms_il_y_a(**delta) -> int:
+    return int((datetime.now(timezone.utc) - timedelta(**delta)).timestamp() * 1000)
+
+
+@pytest.mark.parametrize("cree", [
+    lambda: "2026-01-02T10:00:00",       # sans fuseau
+    lambda: "pas une date",               # illisible
+    lambda: None,                         # absent
+    lambda: _ms_il_y_a(days=200),         # ancien
+    lambda: _ms_il_y_a(minutes=5),        # récent
+], ids=["sans-fuseau", "illisible", "absent", "ancien", "recent"])
+def test_premier_passage_ferme_quelle_que_soit_la_date_des_facteurs(monde, cree):
+    """La date de création d'un facteur n'entre plus dans la règle : sans fuseau,
+    illisible, ancienne ou récente, le premier passage ferme."""
+    cree = cree()
+    monde.etat["posees"].clear()
+    monde.etat["facteurs"] = [{"id": "totp-2", "type": "Totp", "createdAt": cree}]
+    r = _poste(_profil())
+    assert r.status_code == 200 and r.json()["reason"] == "mfa_changed"
+    assert _fermes(monde)
+
+
+def test_deux_livraisons_concurrentes_ferment_et_posent_la_meme_empreinte(monde,
+                                                                         monkeypatch):
+    """Deux livraisons du même changement, traitées en même temps : toutes deux lisent
+    l'empreinte d'avant AVANT que l'une ne pose la neuve. Les deux ferment (fermer deux
+    fois est sans effet) ; aucune ne prend l'autre pour un « rien n'a changé » ; la
+    neuve est posée."""
+    import threading
+    monde.etat["facteurs"].append({"id": "cle-1", "type": "WebAuthn",
+                                   "createdAt": _maintenant()})
+    barriere = threading.Barrier(2, timeout=10)
+    lire = revocation_2fa.empreintes_2fa.lire
+
+    def _lire_ensemble(sub):
+        valeur = lire(sub)
+        barriere.wait()        # les deux lectures sont faites avant toute pose
+        return valeur
+    monkeypatch.setattr(revocation_2fa.empreintes_2fa, "lire", _lire_ensemble)
+    corps = json.dumps(_profil()).encode()
+    rendus: list = []
+
+    def _livrer():
+        rendus.append(rmp.traiter(corps, json.loads(corps), _signe(corps)))
+    fils = [threading.Thread(target=_livrer) for _ in range(2)]
+    for f in fils:
+        f.start()
+    for f in fils:
+        f.join(15)
+    assert [r["reason"] for r in rendus] == ["mfa_changed", "mfa_changed"]
+    assert len([e for e in monde if e[0] == "logto"]) == 2
+    assert monde.etat["posees"][SUB] == revocation_2fa.empreinte(monde.etat["facteurs"])
+
+
+# --- Les livraisons de connexion : PostSignIn, PostRegister ----------------------
+
+def _connexion(event: str, forme: str = "userId") -> dict:
+    evt = {"hookId": "h1", "event": event, "createdAt": _maintenant(),
+           "interactionEvent": "SignIn" if event == "PostSignIn" else "Register",
+           "sessionId": "sess-1", "applicationId": "app-1"}
+    if forme == "userId":
+        evt["userId"] = SUB
+    else:
+        evt["user"] = {"id": SUB}
+    return evt
+
+
+@pytest.mark.parametrize("forme", ["userId", "user.id"])
+def test_post_sign_in_avec_un_facteur_enrole_ferme_tout(monde, forme):
+    """Un facteur enrôlé pendant la connexion : aucun `User.Data.Updated`, la livraison
+    de connexion le voit — et ferme les sessions de qui n'avait que le mot de passe."""
+    monde.etat["posees"][SUB] = revocation_2fa.empreinte([])
+    r = _poste(_connexion("PostSignIn", forme))
+    assert r.status_code == 200, r.text
+    assert r.json()["reason"] == "mfa_changed" and r.json()["event"] == "PostSignIn"
+    assert _fermes(monde)
+    assert monde.etat["posees"][SUB] == revocation_2fa.empreinte(FACTEURS)
+
+
+def test_post_sign_in_sans_changement_ne_ferme_rien(monde):
+    r = _poste(_connexion("PostSignIn"))
+    assert r.status_code == 200 and r.json() == {"ignored": True, "event": "PostSignIn"}
     assert not _fermes(monde)
+
+
+def test_post_sign_in_premier_passage_ferme(monde):
+    monde.etat["posees"].clear()
+    r = _poste(_connexion("PostSignIn"))
+    assert r.json()["reason"] == "mfa_changed" and _fermes(monde)
+
+
+def test_post_register_sans_facteur_ne_ferme_rien_et_pose(monde):
+    monde.etat["posees"].clear()
+    monde.etat["facteurs"] = []
+    r = _poste(_connexion("PostRegister"))
+    assert r.status_code == 200 and r.json() == {"ignored": True, "event": "PostRegister"}
+    assert not _fermes(monde) and not [e for e in monde if e[0] == "revoque_avant"]
+    assert monde.etat["posees"][SUB] == revocation_2fa.empreinte([])
+
+
+def test_post_register_avec_facteur_au_premier_passage_ne_ferme_rien(monde):
+    """Un compte qui vient de naître n'a aucune session d'avant à fermer."""
+    monde.etat["posees"].clear()
+    r = _poste(_connexion("PostRegister"))
+    assert r.json()["ignored"] is True and not _fermes(monde)
+    assert monde.etat["posees"][SUB] == revocation_2fa.empreinte(FACTEURS)
+
+
+def test_livraison_de_connexion_sans_compte_est_ignoree(monde):
+    evt = _connexion("PostSignIn")
+    del evt["userId"]
+    r = _poste(evt)
+    assert r.status_code == 200 and r.json() == {"ignored": True, "event": "PostSignIn"}
+    assert list(monde) == []
 
 
 def test_facteurs_illisibles_rendent_502_sans_rien_fermer_ni_poser(monde, monkeypatch):

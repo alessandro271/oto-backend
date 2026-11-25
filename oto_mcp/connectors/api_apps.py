@@ -47,11 +47,86 @@ CONNECTOR = store.CONNECTOR
 #: Ce que l'application fixe pour toutes ses clés : l'adresse et la façon de s'y
 #: authentifier, jamais un secret.
 CONNECTION_FIELDS = ("base_url", "auth_mode", "header_name", "query_param", "doc_path",
-                     "token_url", "scope", "session")
+                     "token_url", "scope", "session", "authorize_url", "oauth_client_id",
+                     "resource", "protocol")
 #: Ce qu'une clé apporte : ses secrets, et l'identifiant qui va avec (le login d'un
-#: couple basic, le client d'un oauth2 client-credentials).
-KEY_FIELDS = ("token", "username", "password", "client_id", "client_secret")
+#: couple basic, le client d'un oauth2 client-credentials). En `oauth2_user`, le jeton de
+#: renouvellement du MEMBRE, posé par le flux « Connecter » (`auth/api_oauth.py`).
+KEY_FIELDS = ("token", "username", "password", "client_id", "client_secret",
+              "refresh_token")
+#: Le mode où chaque membre se connecte lui-même au serveur d'autorisation de l'API.
+OAUTH_USER = "oauth2_user"
+#: Dans la connexion d'une application : les champs que la découverte MCP a remplis
+#: (`auth/mcp_discovery.complete_app`), donc annoncés par le serveur distant et non
+#: saisis par l'admin. Posé par la découverte seule (hors `CONNECTION_FIELDS`, aucune
+#: route ne l'écrit) ; un champ que l'admin change ou vide en sort.
+DECOUVERTS = "discovered"
+#: Dans la connexion, posés par la découverte MCP seule (comme `DECOUVERTS`) : l'émetteur
+#: annoncé par le serveur d'autorisation (RFC 8414 `issuer`) et s'il renvoie `iss` au
+#: retour (RFC 9207). Ils tombent dès que l'adresse du serveur ou un point OAuth change.
+ISSUER = "issuer"
+ISS_ANNONCE = "iss_parameter_supported"
+_DECOUVERTE_AS = (ISSUER, ISS_ANNONCE)
+
+
+def est_decouvert(conn: dict, name: str) -> bool:
+    """`name` de cette connexion a été annoncé par le serveur distant."""
+    return name in (conn.get(DECOUVERTS) or [])
+
+
 _ACCOUNT_MAX = 80
+
+
+def ressource_canonique(url: str) -> str:
+    """L'URI canonique d'un serveur MCP comme ressource (RFC 8707, spécification
+    d'autorisation MCP) : schéma et hôte en minuscules, port omis quand c'est celui du
+    schéma, chemin sans `/` final, ni requête ni fragment."""
+    p = urlsplit((url or "").strip())
+    schema, hote = (p.scheme or "").lower(), (p.hostname or "").lower()
+    if ":" in hote:
+        hote = f"[{hote}]"
+    port = p.port
+    if port is not None and port != {"https": 443, "http": 80}.get(schema):
+        hote = f"{hote}:{port}"
+    return f"{schema}://{hote}{p.path.rstrip('/')}"
+
+
+def est_mcp_par_membre(conn: dict) -> bool:
+    return (conn.get("protocol") or "") == "mcp" and \
+        (conn.get("auth_mode") or "") == OAUTH_USER
+
+
+def refus_d_origine(conn: dict) -> Optional[str]:
+    """Pourquoi les points OAuth de cette connexion ne sont pas sur UNE origine — ou None.
+
+    Le navigateur du membre va à `authorize_url`, son code et son verifier partent à
+    `token_url`, son jeton de renouvellement aussi : les deux doivent être le même service
+    d'autorisation (schéma, hôte, port), celui de l'émetteur découvert quand la découverte
+    l'a lu (`ISSUER`), sinon celui que l'admin a déclaré par `authorize_url`. Une
+    `resource` déclarée désigne l'API elle-même : en mode MCP l'adresse du serveur
+    (`ressource_canonique`), en http une URI de l'origine de `base_url`."""
+    a, t = (conn.get("authorize_url") or "").strip(), (conn.get("token_url") or "").strip()
+    if a and t and _origine(a) != _origine(t):
+        return (f"`authorize_url` ({_origine(a)}) and `token_url` ({_origine(t)}) must be "
+                "on the same origin (scheme, host, port): one sign-in server.")
+    emetteur = (conn.get(ISSUER) or "").strip()
+    if emetteur:
+        for name, v in (("authorize_url", a), ("token_url", t)):
+            if v and _origine(v) != _origine(emetteur):
+                return (f"`{name}` ({_origine(v)}) is not on the origin of the sign-in "
+                        f"server's issuer ({_origine(emetteur)}).")
+    ressource = (conn.get("resource") or "").strip()
+    if ressource and est_mcp_par_membre(conn) and ressource_canonique(ressource) != \
+            ressource_canonique(conn.get("base_url") or ""):
+        return ("`resource` of an MCP server is its own address "
+                f"({ressource_canonique(conn.get('base_url') or '')}): another value is "
+                "refused.")
+    if ressource and not est_mcp_par_membre(conn) and \
+            _origine(ressource) != _origine(conn.get("base_url") or ""):
+        return (f"`resource` ({_origine(ressource)}) must be on the API's own origin "
+                f"({_origine(conn.get('base_url') or '')}): a token is asked for the API "
+                "it is sent to, never for another one.")
+    return None
 
 
 class AppRefused(ValueError):
@@ -81,6 +156,7 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
                          f"unknown connection field(s): {', '.join(unknown)} — an app "
                          f"holds {', '.join(CONNECTION_FIELDS)}; keys hold the secrets.")
     out = dict(base or {})
+    avant = dict(base or {})
     for k, v in given.items():
         v = "" if v is None else str(v)
         if k != "session":
@@ -89,17 +165,32 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
             out[k] = v.rstrip("/") if k == "base_url" else v
         else:
             out.pop(k, None)
+    garde = [k for k in (avant.get(DECOUVERTS) or [])
+             if out.get(k) and out.get(k) == avant.get(k)]
+    if garde:
+        out[DECOUVERTS] = garde
+    else:
+        out.pop(DECOUVERTS, None)
+    # L'émetteur découvert ne vaut que pour l'adresse et les points d'où il a été lu.
+    if any((out.get(k) or "") != (avant.get(k) or "")
+           for k in ("base_url", "authorize_url", "token_url")):
+        for k in _DECOUVERTE_AS:
+            out.pop(k, None)
     mode = out.get("auth_mode", "")
     if mode not in api_card.AUTH_MODES:
         raise AppRefused(400, "invalid_app_connection",
                          f"`auth_mode` must be one of {', '.join(api_card.AUTH_MODES)}.")
     champs = _champs()
+    # An MCP server in `oauth2_user` mode SAYS where to sign in: what discovery finds
+    # (`auth/mcp_discovery.py`) may be left empty here, filled at the first Connect.
+    decouvrable = (set(("authorize_url", "token_url", "oauth_client_id"))
+                   if mode == OAUTH_USER and out.get("protocol") == "mcp" else set())
     for name in CONNECTION_FIELDS:
         f = champs[name]
         relevant = not f.when or mode in f.when
         if not relevant:
             out.pop(name, None)
-        elif f.required and not out.get(name):
+        elif f.required and not out.get(name) and name not in decouvrable:
             raise AppRefused(400, "invalid_app_connection",
                              f"`{name}` is required in `{mode}` mode.")
     p = urlsplit(out["base_url"])
@@ -108,6 +199,24 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
         raise AppRefused(400, "invalid_app_connection",
                          "`base_url` is the API root (https://host/path): no user, no "
                          "`?query`, no `#`.")
+    if mode == OAUTH_USER:
+        for name in ("authorize_url", "token_url"):
+            if name in decouvrable and not out.get(name):
+                continue
+            q = urlsplit(out.get(name, ""))
+            if q.scheme != "https" or not q.hostname or q.username or q.password \
+                    or q.fragment:
+                raise AppRefused(400, "invalid_app_connection",
+                                 f"`{name}` must be an https address of the sign-in "
+                                 "server (no user, no `#`).")
+        if out.get("resource") and "://" not in out["resource"] \
+                and not out["resource"].startswith("urn:"):
+            raise AppRefused(400, "invalid_app_connection",
+                             "`resource` is an absolute URI (RFC 8707), e.g. "
+                             "https://api.example.com.")
+        refus = refus_d_origine(out)
+        if refus:
+            raise AppRefused(400, "invalid_app_connection", refus)
     for name in ("base_url", "token_url"):
         if out.get(name):
             try:
@@ -158,6 +267,17 @@ def org_de(entity_type: str, entity_id: str) -> Optional[int]:
     return None
 
 
+def refuser_le_jeton_hors_membre(entity_type: str, fields: Optional[dict]) -> None:
+    """Le `refresh_token` du mode `oauth2_user` est la connexion d'UNE personne : il ne
+    se pose qu'au palier membre. Une clé d'équipe ou d'org qui le porterait ferait
+    parler toute l'équipe sous le nom de qui l'a obtenu."""
+    if entity_type != credentials_store.MEMBER and \
+            str((fields or {}).get("refresh_token") or "").strip():
+        raise AppRefused(400, "refresh_token_member_only", (
+            "`refresh_token` is a member's own sign-in (`oauth2_user` mode): it is set "
+            "by that member's « Connect », never on a team or org key."))
+
+
 def completer_la_pose(entity_type: str, entity_id: str, connector: str, account: str,
                       api_key: Optional[str],
                       fields: Optional[dict]) -> tuple[Optional[str], Optional[dict], dict]:
@@ -173,6 +293,8 @@ def completer_la_pose(entity_type: str, entity_id: str, connector: str, account:
     l'empêcherait de faire tourner une clé peut-être compromise. Pour rejoindre
     l'application, son porteur retire sa carte puis pose sa clé sur celle de
     l'application."""
+    if connector == CONNECTOR:
+        refuser_le_jeton_hors_membre(entity_type, fields)
     if connector != CONNECTOR or not (account or "").strip():
         return api_key, fields, {}
     org = org_de(entity_type, entity_id)
@@ -232,7 +354,7 @@ def destination(conn: dict) -> tuple:
     sinon la clé posée pour l'une ne part pas vers l'autre."""
     mode = (conn.get("auth_mode") or "").strip()
     return (_origine(conn.get("base_url", "")), mode,
-            _origine(conn.get("token_url", "")) if mode == "oauth2" else "",
+            _origine(conn.get("token_url", "")) if mode in ("oauth2", OAUTH_USER) else "",
             (conn.get("session") or "") if mode in ("session", "visitor") else "")
 
 
@@ -270,7 +392,8 @@ def definition(app: dict) -> dict:
     return {"label": _label(app), "description": d.get("description"),
             "logo_domain": d.get("logo_domain"), "headers": d.get("headers") or {},
             "variables": d.get("variables") or {},
-            "operations": ops if isinstance(ops, list) else []}
+            "operations": ops if isinstance(ops, list) else [],
+            "mcp_tools": d.get("mcp_tools") or []}
 
 
 def _label(app: dict) -> str:

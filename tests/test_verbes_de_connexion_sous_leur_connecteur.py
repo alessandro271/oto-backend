@@ -13,10 +13,12 @@ correcte : c'est la VISIBILITÉ qui débordait, pas le droit.
 ne vivait pas dans le code du verbe, il vivait dans son nom. Un test qui exercerait la
 connexion ne l'aurait jamais vu.
 
-⚠️ **Et l'ancien nom reste servi** — une procédure d'org le référence encore (mesuré en
-base le 2026-09-02, pas supposé). Il est déclaré déprécié : le middleware d'alias le
-sert À CÔTÉ du canonique, en héritant de sa visibilité. Un compte sans le connecteur ne
-le voit donc réapparaître ni sous l'un ni sous l'autre nom.
+⚠️ **Le 24/11/2026, les deux verbes par connecteur sont RETIRÉS** (`zoho_connect`,
+`salesforce_connect`, et leurs anciens noms `oto_…`) : un seul verbe transverse,
+`oto_connector_connect`, rend pour TOUT connecteur la page où la personne se connecte
+(contrat `refus-de-connexion.md` de la lib connectors). Il est transverse par nature — il
+sert justement quand le connecteur n'est pas encore dans la boîte à outils — et ne nomme
+aucun connecteur : il n'est pas de la classe gardée ici, et le test de classe le dit.
 
 Éprouvé rouge le 2026-09-02 : `mcp="oto_salesforce_connect"` rétabli ⟹ le premier test
 nomme le namespace fautif.
@@ -29,35 +31,29 @@ from oto_mcp import deprecations, providers, tool_visibility
 from oto_mcp.capabilities import _authz
 from oto_mcp.capabilities.registry import CAPABILITIES
 
-# clé de capacité → connecteur auquel le verbe appartient
-VERBES = {"me.salesforce_connect": "salesforce", "me.zoho_connect": "zoho"}
+#: Le verbe TRANSVERSE de connexion : la page d'un connecteur quelconque, servie à tous.
+TRANSVERSE = "oto_connector_connect"
+
+RETIRES = {"zoho_connect": "zoho", "oto_zoho_connect": "zoho",
+           "salesforce_connect": "salesforce", "oto_salesforce_connect": "salesforce"}
 
 
-def _mcp_de(cle: str) -> str:
-    trouvees = [c for c in CAPABILITIES if c.key == cle]
-    assert trouvees, f"capacité {cle} introuvable"
-    return trouvees[0].mcp
+@pytest.mark.parametrize("ancien, connecteur", sorted(RETIRES.items()))
+def test_les_verbes_par_connecteur_sont_retires_et_nomment_le_transverse(ancien, connecteur):
+    """Plus aucune capacité ne les sert, aucun alias ne les traduit, et leur nom REFUSE en
+    nommant l'appel qui aboutit."""
+    from oto_mcp import outils_retires
+    assert ancien not in {c.mcp for c in CAPABILITIES}
+    assert ancien not in deprecations.TOOLS
+    refus = outils_retires.retrait(ancien)
+    assert refus is not None
+    assert f'{TRANSVERSE}(connector="{connecteur}")' in refus.message
+    assert TRANSVERSE in refus.hint
 
 
-@pytest.mark.parametrize("cle, connecteur", sorted(VERBES.items()))
-def test_le_verbe_est_rattache_a_SON_connecteur(cle, connecteur):
-    """Le rattachement se lit sur le nom : c'est lui qui décide du gate, pas la
-    déclaration de la capacité."""
-    nom = _mcp_de(cle)
-    assert tool_visibility.namespace_of(nom) == connecteur, (
-        f"`{nom}` tombe dans le namespace « {tool_visibility.namespace_of(nom)} » : "
-        f"aucun gate de connecteur ne le touche, il est servi à tout le monde")
-
-
-@pytest.mark.parametrize("cle, connecteur", sorted(VERBES.items()))
-def test_l_ancien_nom_reste_servi_et_pointe_vers_le_bon(cle, connecteur):
-    """Une procédure d'org référence encore l'ancien nom. Le retirer sec la casserait —
-    et une procédure cassée ne se manifeste qu'à son prochain déroulé, chez quelqu'un
-    d'autre."""
-    nom = _mcp_de(cle)
-    ancien = f"oto_{connecteur}_connect"
-    assert deprecations.tool_canonique(ancien) == nom
-    assert ancien in deprecations.tools_deprecies_de(nom)
+def test_le_verbe_transverse_ne_porte_aucun_connecteur():
+    assert TRANSVERSE in {c.mcp for c in CAPABILITIES}
+    assert _connecteur_porte_par(TRANSVERSE) is None
 
 
 def test_aucun_autre_verbe_de_connexion_ne_traine_sous_le_prefixe_transverse():
@@ -73,6 +69,7 @@ def test_aucun_autre_verbe_de_connexion_ne_traine_sous_le_prefixe_transverse():
         if c.mcp and c.mcp.startswith("oto_")
         and (c.mcp.endswith("_connect") or c.mcp.endswith("_connect_start"))
         and c.mcp not in deprecations.TOOLS
+        and c.mcp != TRANSVERSE
     ]
     assert not fautifs, (
         f"verbes de connexion encore sous le préfixe transverse : {sorted(fautifs)} — "

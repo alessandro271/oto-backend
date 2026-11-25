@@ -155,8 +155,8 @@ def _pending_action_for(connector: str):
 # The 3 Zoho connectors share this connection mode — registered here, this
 # module being loaded unconditionally by `register_all`.
 def _start_flow(ctx, connector: str, values: dict) -> dict:
-    """Entry point of the generic flow — same body as the `me.zoho_connect` capability,
-    whose handler it shares so that there is only ONE way to start."""
+    """Entry point of the generic flow (`me.connector_connect`, the card's Connect
+    button) — `zoho_connect.start_for`, the ONE way to start a Zoho consent."""
     from ..auth import flow as oauth_flow
     from ..capabilities import zoho_connect
     # `app` is a HIDDEN key, not a declared `FlowParam`: the front passes it outside the

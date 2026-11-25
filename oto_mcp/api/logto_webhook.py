@@ -1,6 +1,7 @@
 """La route que Logto appelle quand un compte change — `POST /api/logto/webhook`. Un mot
-de passe changé, ou un changement de double authentification, ferme toutes les sessions
-et tous les jetons du compte.
+de passe changé, ou un changement de double authentification (constaté sur
+`User.Data.Updated`, `PostSignIn` et `PostRegister`), ferme toutes les sessions et tous
+les jetons du compte.
 
 Écrite à la main, hors de la couche capacité, pour la raison du webhook Mollie et de
 celui des agents : la preuve est un HMAC du CORPS BRUT (`logto-signature-sha-256`), que

@@ -41,7 +41,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, egress
+from .. import access, egress, egress_transport
 from ..connectors import verify as connector_verify
 
 
@@ -97,7 +97,9 @@ def _verify(fields: dict, config: dict | None = None) -> None:
 
     egress.check_url(_base_url(fields["domain"]), connector="lucca")
     try:
-        LuccaClient(api_key=fields["api_key"], domain=fields["domain"]).list_departments()
+        egress_transport.pinned(
+            LuccaClient(api_key=fields["api_key"], domain=fields["domain"]),
+            connector="lucca").list_departments()
     except UpstreamHTTPError as e:
         if e.status_code in (401, 403):
             raise connector_verify.NonAutorise(f"Lucca HTTP {e.status_code}: {e.body}")
@@ -117,7 +119,9 @@ def register(mcp: FastMCP) -> None:
         # hence a no-op — redaction for the backend goes through
         # `FieldRedactionMiddleware` (see module docstring), not here.
         egress.check_url(_base_url(creds.get("domain") or ""), connector="lucca")
-        return LuccaClient(api_key=creds.get("api_key"), domain=creds.get("domain"))
+        return egress_transport.pinned(
+            LuccaClient(api_key=creds.get("api_key"), domain=creds.get("domain")),
+            connector="lucca")
 
     def _run(fn):
         try:

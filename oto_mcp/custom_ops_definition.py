@@ -22,7 +22,12 @@ from typing import Any, Optional
 
 from . import custom_ops
 
-KEYS = ("label", "description", "logo_domain", "headers", "variables", "operations")
+KEYS = ("label", "description", "logo_domain", "headers", "variables", "operations",
+        "mcp_tools")
+#: `mcp_tools`: on a card whose protocol is `mcp`, the remote tools open to agents (an
+#: allowlist of names; empty = all). The remote server's own rights still apply.
+MAX_MCP_TOOLS = 200
+_MCP_TOOL_RE = re.compile(r"^[A-Za-z0-9_.\-/]{1,128}$")
 MAX_LABEL = 80
 MAX_DESCRIPTION = 2000
 MAX_HEADERS = 20
@@ -114,6 +119,14 @@ def validate_definition(definition: Any, *, auth_header: Optional[str] = None) -
                                 "description": v.get("description", "")}
                             for k, v in (definition["variables"] or {}).items()
                             if isinstance(v, dict)}
+    if "mcp_tools" in definition:
+        names = definition["mcp_tools"] or []
+        if not isinstance(names, list) or len(names) > MAX_MCP_TOOLS or any(
+                not isinstance(n, str) or not _MCP_TOOL_RE.match(n) for n in names):
+            errs.append(f"`mcp_tools` must be a list of remote tool names "
+                        f"({MAX_MCP_TOOLS} max), or [] for all")
+        else:
+            out["mcp_tools"] = list(dict.fromkeys(names))
     if "operations" in definition:
         try:
             out["operations"] = custom_ops.validate_operations(definition["operations"])

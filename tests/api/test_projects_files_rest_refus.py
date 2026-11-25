@@ -66,7 +66,9 @@ def journal():
 def monde(monkeypatch, journal):
     """Le monde par défaut : le projet existe, il est DANS l'org de consultation, et
     l'acteur y a l'écriture. Chaque test ne débranche que ce qu'il éprouve."""
-    monkeypatch.setattr("oto_mcp.account_suspension.refus", lambda sub: None)
+    # Compte vivant, jamais fermé : la lecture d'entrée de la garde (pause et
+    # instant « révoqué avant », `db.get_suspension`) ne rend rien.
+    monkeypatch.setattr("oto_mcp.db.get_suspension", lambda sub: None)
     monkeypatch.setattr(base, "alias_drain_armed", lambda: False)
     monkeypatch.setattr(db, "upsert_user", lambda *a, **k: None)
 

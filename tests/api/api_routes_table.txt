@@ -42,6 +42,7 @@ GET,HEAD /api/me/projects/{id}/export -> me_project_export
 OPTIONS /api/me/projects/{id}/export -> options_handler
 GET,HEAD /api/datastores/{datastore}/rows/export.csv -> export_csv
 OPTIONS /api/datastores/{datastore}/rows/export.csv -> options_handler
+GET,HEAD /api/custom-api/oauth/callback -> callback
 GET,HEAD /api/google/oauth/callback -> callback
 GET,HEAD /api/hubspot/oauth/callback -> callback
 GET,HEAD /api/instagram_meta/oauth/callback -> callback
@@ -54,6 +55,7 @@ GET,HEAD /api/slack/oauth/callback -> callback
 GET,HEAD /api/ubersuggest/oauth/callback -> callback
 GET,HEAD /api/wordpress/connect/callback -> callback
 GET,HEAD /api/zoho/oauth/callback -> callback
+GET,HEAD /api/custom-api/oauth/client.json -> custom_api_client_document
 POST /api/sirene/headquarters -> headquarters
 OPTIONS /api/sirene/headquarters -> options_handler
 GET,HEAD /api/sirene/siege -> siege
@@ -676,6 +678,8 @@ PATCH /api/orgs/{id}/connectors/api/apps/{account} -> _handler
 OPTIONS /api/orgs/{id}/connectors/api/apps/{account} -> options_handler
 POST /api/orgs/{id}/connectors/api/apps/{account}/import -> _handler
 OPTIONS /api/orgs/{id}/connectors/api/apps/{account}/import -> options_handler
+POST /api/orgs/{id}/connectors/api/apps/{account}/connect -> _handler
+OPTIONS /api/orgs/{id}/connectors/api/apps/{account}/connect -> options_handler
 DELETE /api/orgs/{id}/connectors/api/apps/{account} -> _handler
 OPTIONS /api/orgs/{id}/connectors/api/apps/{account} -> options_handler
 GET,HEAD /api/me/instructions/{slug}/share -> _handler

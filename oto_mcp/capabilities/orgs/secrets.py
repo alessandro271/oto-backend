@@ -133,6 +133,9 @@ CAPABILITIES += [
                               "la clé d'une application de Custom API ne porte que ses "
                               "secrets : un champ de connexion qui diffère de "
                               "l'application est refusé"),
+                DeclaredError(400, "refresh_token_member_only",
+                              "Custom API : le `refresh_token` du mode `oauth2_user` ne "
+                              "se pose qu'au palier membre, par « Connecter »"),
                 DeclaredError(400, "single_account_connector",
                               "un `account` nommé sur un connecteur qui n'en gère "
                               "qu'un — la clé écraserait l'unique"),

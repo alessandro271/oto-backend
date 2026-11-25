@@ -57,9 +57,7 @@ me.doc
 me.guide
 me.project
 me.project_files
-me.salesforce_connect
 me.use_project
-me.zoho_connect
 monitoring.call
 monitoring.calls
 monitoring.connectors

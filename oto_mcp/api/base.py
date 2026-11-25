@@ -430,8 +430,12 @@ async def _authenticate(
         # Même garde, même place : le compte d'un TENANT DÉSACTIVÉ (#1165). Son jeton
         # `oto_` ne passe jamais par l'émetteur du tenant — retirer celui-ci du
         # registre ne le coupait pas.
-        if (coupe := await run_in_threadpool(garde_identite.refus, row["sub"])):
-            return None, _json_error(request, 403, *coupe)
+        #
+        # Et le jeton créé AVANT la fermeture des sessions du compte (`session_revoquee`) :
+        # sa date de création sort de la vérification même, sans lecture de plus.
+        if (coupe := await run_in_threadpool(garde_identite.refus, row["sub"],
+                                             row.get("cree_le"))):
+            return None, _json_error(request, garde_identite.statut(coupe[0]), *coupe)
         # Jeton d'un TRAVAIL HÉBERGÉ, APRÈS la coupure d'identité (pause, tenant désactivé :
         # elle dit la vraie cause) : la face MCP seule tient sa liste d'outils. Hors des
         # routes que le worker appelle avec lui (`ROUTES_DE_LA_DELEGATION`), refusé.
@@ -489,6 +493,19 @@ async def _authenticate(
     sub = access_token.claims.get("sub")
     if not sub:
         return None, _json_error(request, 401, "missing_sub")
+    # Le JWT émis AVANT la fermeture des sessions du compte (`session_revoquee`) : jugé
+    # sur le sub du jeton TEL QUE VÉRIFIÉ, AVANT le drain d'alias, car c'est sous cet
+    # identifiant Logto que `fermer_tout` pose l'instant ; après le drain, un ancien
+    # identifiant redirigé garderait son jeton jusqu'à son terme. Même jugement que la face
+    # MCP (`auth.entree_mcp.BackendOto`). Il est vérifié hors ligne, son `iat` est jugé
+    # ici contre l'instant joint à la lecture d'entrée. Sans `iat`, 0 : refusé dès qu'une
+    # fermeture a eu lieu. L'état lu est repris plus bas, sans relecture, si le drain ne
+    # change pas le sub.
+    emis_le = float(access_token.claims.get("iat") or 0)
+    sub_du_jeton = sub
+    lue, revoque = await run_in_threadpool(garde_identite.entree_du_jeton, sub, emis_le)
+    if revoque:
+        return None, _json_error(request, garde_identite.statut(revoque[0]), *revoque)
     # Drain d'alias (B1) : canonicaliser le sub AVANT l'upsert. ⚠️ L'`upsert_user` qui
     # suit n'est PAS sous commande : un vieux sub non redirigé n'échoue pas ici, il
     # RECRÉE le compte supprimé par la fusion. Le drain est donc porteur — il ne
@@ -505,8 +522,9 @@ async def _authenticate(
     # dont l'ancien identifiant a été redirigé vers un compte du tenant arrive ici
     # qualifié par le drain — c'est la session de tableau de bord qui survivait au retrait
     # de l'émetteur du tenant. Vérifier avant le drain ne la verrait pas.
-    if (coupe := await run_in_threadpool(garde_identite.refus, sub)):
-        return None, _json_error(request, 403, *coupe)
+    if (coupe := await run_in_threadpool(garde_identite.refus, sub, emis_le,
+                                         garde_identite.reprise(lue, sub_du_jeton, sub))):
+        return None, _json_error(request, garde_identite.statut(coupe[0]), *coupe)
     # upsert_user = DB à CHAQUE requête REST → threadpool (jamais dans la loop) ; une
     # LECTURE quand rien ne change (cf. son docstring), une écriture sinon.
     # locale (#701) : signal déduit de l'en-tête, jamais un choix — `upsert_user`

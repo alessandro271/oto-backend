@@ -14,7 +14,7 @@ from typing import Any, Literal, Optional
 from fastmcp import FastMCP
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, egress
+from .. import access, egress, egress_transport
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from .lecture import ACTE
@@ -73,9 +73,9 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     from oto.tools.n8n import N8nClient
 
     egress.check_url(fields["base_url"], connector="n8n")
-    N8nClient(
+    egress_transport.pinned(N8nClient(
         api_key=fields["api_key"], base_url=fields["base_url"],
-    ).list_workflows(limit=1)
+    ), connector="n8n").list_workflows(limit=1)
 
 
 def register(mcp: FastMCP) -> None:
@@ -89,8 +89,9 @@ def register(mcp: FastMCP) -> None:
         # network is exactly the case the guard must refuse without a
         # declared exception (`oto_mcp/egress.py`).
         egress.check_url(creds.get("base_url") or "", connector="n8n")
-        return N8nClient(api_key=creds.get("api_key"),
-                         base_url=creds.get("base_url"))
+        return egress_transport.pinned(
+            N8nClient(api_key=creds.get("api_key"), base_url=creds.get("base_url")),
+            connector="n8n")
 
     @mcp.tool()
     def n8n_list_workflows(

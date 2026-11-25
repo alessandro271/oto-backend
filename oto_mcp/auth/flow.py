@@ -378,7 +378,7 @@ def declare_return(retour: OAuthReturn) -> None:
 def load_returns() -> dict[str, OAuthReturn]:
     """Les retours déclarés, une fois chargés les modules qui les déclarent — quel que
     soit l'ordre d'import du processus (serveur, test, script)."""
-    from . import (google, hubspot, instagram_meta, jefacture,  # noqa: F401
+    from . import (api_oauth, google, hubspot, instagram_meta, jefacture,  # noqa: F401
                    linkedin_ads, meta_ads, microsoft, salesforce, slack,
                    ubersuggest, wordpress, zoho)
     return dict(_RETURNS)
@@ -516,8 +516,13 @@ def unseal_code(audience: str, jti: str, code: str) -> Optional[dict]:
 
 def exchange_code(token_url: str, *, code: str, client_id: str, client_secret: str,
                   redirect: str, extra: Optional[dict] = None,
-                  timeout: int = 30) -> dict:
+                  timeout: int = 30, session: Optional[requests.Session] = None) -> dict:
     """Code éphémère → tokens.
+
+    `session` : la session par laquelle l'échange sort. Un fournisseur dont le serveur
+    de jetons vient d'un CREDENTIAL (Salesforce et son `login_url`) passe une session
+    gardée (`egress_transport`) : la garde d'egress tient alors à la connexion. Absent,
+    `requests` nu, comme avant — les autres fournisseurs ont un hôte fixe.
 
     ⚠️ Les credentials partent en **`data=`** (corps form-encodé, RFC 6749 §2.3.1),
     JAMAIS en `params=` : en query string ils entrent dans l'URL, donc dans le
@@ -528,7 +533,7 @@ def exchange_code(token_url: str, *, code: str, client_id: str, client_secret: s
     payload = {"grant_type": "authorization_code", "code": code,
                "client_id": client_id, "client_secret": client_secret,
                "redirect_uri": redirect, **(extra or {})}
-    r = requests.post(token_url, data=payload, timeout=timeout)
+    r = (session or requests).post(token_url, data=payload, timeout=timeout)
     host = (token_url or "").split("//")[-1].split("/")[0]
     try:
         body = r.json()

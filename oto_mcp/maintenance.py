@@ -99,6 +99,12 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                             agents : aperçu par org (lecture seule),
                                             passage en lecture, retour arrière — un
                                             GESTE sur décision, PAS un travail
+    oto-mcp maintenance empreintes-2fa [--appliquer]
+                                            pose l'empreinte de double authentification
+                                            des comptes qui n'en ont pas, lue chez
+                                            Logto, sans jamais fermer de session —
+                                            À BLANC par défaut — PAS un travail : voir
+                                            plus bas
     oto-mcp maintenance key-index-rebuild   (#421 — voir plus bas, PAS dans `all`)
     oto-mcp maintenance journal-tokens      purge rétroactive des jetons écrits en
                                             clair dans le journal (#558) — À BLANC
@@ -1279,6 +1285,43 @@ def partages_office(argv: list[str]) -> int:
     return PARTAGES_OFFICE_FAIT
 
 
+# Codes de sortie d'`empreintes-2fa` — ceux d'`orphelins`. Un geste d'exploitant joué
+# une fois depuis le commit, hors `all` et hors timer.
+EMPREINTES_FAIT = 0
+EMPREINTES_ERREUR = 2  # base injoignable, écriture en échec (les empreintes déjà posées
+                       # le restent : la commande est idempotente)
+EMPREINTES_RESTE = 3   # à blanc : il y a des empreintes à poser ; dans les deux cas : un
+                       # compte dont Logto n'a pas rendu les facteurs (relancer, ou
+                       # constater qu'il n'existe plus dans l'annuaire)
+
+
+def empreintes_2fa(argv: list[str]) -> int:
+    """`oto-mcp maintenance empreintes-2fa` : pose l'empreinte de double authentification
+    des comptes qui n'en ont pas (`auth/empreintes_2fa_pose.py`), sans jamais fermer de
+    session. À blanc par défaut."""
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance empreintes-2fa",
+        description=("Pose l'empreinte des facteurs de double authentification des "
+                     "comptes de l'annuaire primaire qui n'en ont pas encore, lue par la "
+                     "Management API de Logto. Ne ferme aucune session, n'écrase aucune "
+                     "empreinte posée. À blanc par défaut ; n'imprime que des nombres."))
+    p.add_argument("--appliquer", action="store_true",
+                   help="écrit ; sans lui, lit et compte, sans rien écrire")
+    args = p.parse_args(argv)
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from .auth import empreintes_2fa_pose as pose
+    try:
+        rapport = pose.poser_les_absentes(appliquer=args.appliquer)
+    except Exception:
+        logger.error("empreintes-2fa : ERREUR — les empreintes déjà posées le restent ; "
+                     "relancer à blanc pour voir ce qui reste", exc_info=True)
+        return EMPREINTES_ERREUR
+    print("\n".join(pose.lignes_du_rapport(rapport)))
+    return EMPREINTES_RESTE if pose.reste(rapport) else EMPREINTES_FAIT
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "index-concurrents":
@@ -1297,6 +1340,8 @@ def main(argv: list[str] | None = None) -> int:
         return apps_lecteurs_actifs(argv[1:])
     if argv and argv[0] == "partages-office":
         return partages_office(argv[1:])
+    if argv and argv[0] == "empreintes-2fa":
+        return empreintes_2fa(argv[1:])
     p = argparse.ArgumentParser(
         prog="oto-mcp maintenance",
         description="Les travaux de maintenance du backend (ADR 0065, lot 0).")

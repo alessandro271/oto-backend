@@ -160,14 +160,6 @@ def annonce_connecteur_api_du_jour(aujourd_hui: Optional[datetime.date] = None
 # `<tool:slug>` continuent de voir un seul nom pour un seul outil.
 TOOLS: dict = {
     # (L'ancien nom du lot #519 est RETIRÉ, lot D, #526 : il est inconnu.)
-    # Deux verbes de CONNEXION rangés sous le préfixe transverse (02/09/2026) : le
-    # gate par connecteur résout au namespace du NOM, donc `oto_…` les servait à
-    # tous les comptes — y compris ceux qui n'ont ni Salesforce ni Zoho. C'est ce
-    # qu'Alexis a repéré en trouvant dans ses outils un connecteur qu'il n'utilise
-    # pas. Renommés sous leur connecteur ; l'ancien nom reste appelable parce
-    # qu'une procédure d'org le référence (mesuré, pas supposé).
-    "oto_salesforce_connect": "salesforce_connect",
-    "oto_zoho_connect": "zoho_connect",
     **OUTILS_CONNECTEUR_API,
 }
 
