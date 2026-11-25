@@ -139,6 +139,16 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
                 request, 400, "invalid_query",
                 f"Octet NUL refusé dans le(s) paramètre(s) : "
                 f"{', '.join(repr(c) for c in avec_nul)}.")
+        # Même refus pour un paramètre de CHEMIN (`/rows/%00/claim`) : la valeur part au
+        # SQL comme celle d'un filtre — et avant le tampon `deprecations`, qui lit la
+        # base avec l'adresse du chemin. Le corps, lui, est jugé par `read_json_body`.
+        chemin_nul = sorted(ph for ph, v in request.path_params.items()
+                            if isinstance(v, str) and "\x00" in v)
+        if chemin_nul:
+            return json_error(
+                request, 400, "invalid_path",
+                f"Octet NUL refusé dans le chemin : "
+                f"{', '.join(repr(c) for c in chemin_nul)}.")
         if request.method in ("POST", "PUT", "PATCH") or binding.reads_body:
             # Un corps illisible est REFUSÉ, jamais ignoré — c'est le même principe
             # que la garde des champs inconnus vingt lignes plus bas, et il lui
