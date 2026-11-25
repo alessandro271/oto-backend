@@ -138,10 +138,11 @@ def refus_preteur(sub: str, quoi: str) -> Optional[PreteurEnPause]:
     return PreteurEnPause(user.get("email") or sub, quoi)
 
 
-_A_LIRE = object()
+#: « Pas encore lu » : la garde lit elle-même (`refus`, `garde_identite.refus`).
+A_LIRE = object()
 
 
-def refus(sub: str, lue=_A_LIRE) -> Optional[tuple[str, dict]]:
+def refus(sub: str, lue=A_LIRE) -> Optional[tuple[str, dict]]:
     """`(message, état)` si le compte est en pause, `None` sinon. `lue` : l'état
     d'entrée déjà lu par l'appelant (`entree`), pour ne pas le relire.
 
@@ -150,7 +151,7 @@ def refus(sub: str, lue=_A_LIRE) -> Optional[tuple[str, dict]]:
     compte en pause qui continue de frapper à la porte est un fait d'exploitation qu'on
     veut voir — c'est ce qui dira si la pause a été comprise, ou si une automatisation
     tourne encore sous cette identité."""
-    pause = etat(sub) if lue is _A_LIRE else pause_de(lue)
+    pause = etat(sub) if lue is A_LIRE else pause_de(lue)
     if not pause:
         return None
     logger.warning("compte en pause refusé à l'entrée : sub=%s depuis=%s",

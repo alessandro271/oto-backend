@@ -11,11 +11,13 @@ ses sessions et autorisations Logto. Deux choses lui échappaient :
 **La règle.** `fermer_tout` pose pour le compte un instant « révoqué avant »
 (`db/revocations_comptes.py`), jamais reculé. Tout jeton présenté ensuite est jugé sur
 sa date d'émission : l'`iat` d'un JWT, la création d'un jeton `oto_`. Émis AVANT
-l'instant : refusé (`CODE`), à chaque requête, sur les deux faces. Émis après — la
-reconnexion qui suit — : servi.
+l'instant : refusé (`CODE`), à chaque requête, par un 401 HTTP sur les deux faces (face
+MCP : `auth/entree_mcp.py`, avant le transport). Émis après — la reconnexion qui suit — :
+servi.
 
-**Coût.** Aucune requête de plus : l'instant est joint à la lecture que la garde
-d'identité fait déjà à chaque requête (`db.get_suspension`), et la date d'un jeton `oto_`
+**Coût.** Aucune requête de plus : l'instant est joint à la lecture d'entrée du compte
+(`db.get_suspension`, la pause avec), faite une fois par requête — sur la face MCP par la
+porte HTTP, dont la garde reprend le résultat —, et la date d'un jeton `oto_`
 sort de l'`UPDATE … RETURNING` qui le vérifie (`db.verify_api_token`). Aucun cache, donc
 aucune fenêtre de retard entre processus : une fermeture mord à la requête suivante,
 quel que soit le processus qui la sert.
@@ -45,6 +47,17 @@ MESSAGE = ("Cette session a été fermée : toutes les sessions et tous les jeto
            "compte ont été fermés après un changement de mot de passe ou de double "
            "authentification. Reconnecte-toi ; un jeton d'API se réémet depuis le "
            "tableau de bord.")
+
+
+def emis_le_du_jeton(jeton) -> float:
+    """La date d'émission d'un jeton vérifié (`AccessToken`), en secondes depuis l'époque :
+    la création d'un jeton `oto_` (`cree_le`, posé par `server._verify_api_token`), l'`iat`
+    d'un JWT. 0 quand elle manque : refusé dès qu'une fermeture a eu lieu (fail-closed)."""
+    claims = getattr(jeton, "claims", None) or {}
+    if getattr(jeton, "client_id", None) == "oto_api_token":
+        cree = claims.get("cree_le")
+        return float(cree) if cree is not None else 0.0
+    return float(claims.get("iat") or 0)
 
 
 def refus(sub: Optional[str], entree: Optional[dict],

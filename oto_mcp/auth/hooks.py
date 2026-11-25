@@ -192,11 +192,8 @@ def current_token_emis_le() -> Optional[float]:
         return None
     if token is None:
         return None
-    claims = getattr(token, "claims", None) or {}
-    if getattr(token, "client_id", None) == "oto_api_token":
-        cree = claims.get("cree_le")
-        return float(cree) if cree is not None else 0.0
-    return float(claims.get("iat") or 0)
+    from ..session_revoquee import emis_le_du_jeton
+    return emis_le_du_jeton(token)
 
 
 def current_user_sub_from_token() -> Optional[str]:

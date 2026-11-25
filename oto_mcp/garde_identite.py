@@ -14,7 +14,9 @@ Trois refus, dans cet ordre : le **tenant désactivé** (`tenant_desactive`, l'e
 puis le **compte en pause** (`account_suspension`, la personne), puis le **jeton émis avant
 la fermeture des sessions du compte** (`session_revoquee`, seulement quand la porte passe
 la date d'émission du jeton : REST et MCP). La pause et la date de révocation sortent
-d'UNE lecture (`account_suspension.entree`). Les prédicats ne s'appellent nulle part ailleurs — `tests/test_garde_identite_chemins.py` énumère les
+d'UNE lecture (`account_suspension.entree`). Sur la face MCP, cette lecture est faite par
+la porte HTTP (`auth.entree_mcp`), qui rend le 401 d'un jeton émis avant la fermeture ;
+la garde reprend l'état lu au lieu de le relire. Les prédicats ne s'appellent nulle part ailleurs — `tests/test_garde_identite_chemins.py` énumère les
 chemins et fige les appelants.
 
 Ce qui n'y passe pas, et pourquoi : les secrets de MACHINE (worker `otow_`, identité de
@@ -28,18 +30,21 @@ from typing import Optional
 from . import account_suspension, session_revoquee, tenant_desactive
 
 
-def refus(sub: Optional[str], emis_le: Optional[float] = None
-          ) -> Optional[tuple[str, str]]:
+def refus(sub: Optional[str], emis_le: Optional[float] = None,
+          lue=account_suspension.A_LIRE) -> Optional[tuple[str, str]]:
     """`(code, message)` si l'identité `sub` ne doit plus être servie, `None` sinon.
 
     `emis_le` : la date d'émission du jeton présenté (secondes depuis l'époque — `iat`
     d'un JWT, création d'un jeton `oto_`), None quand la porte n'a pas de jeton daté.
+    `lue` : l'état d'entrée déjà lu pour CE sub par la porte HTTP de la face MCP
+    (`auth.entree_mcp`), pour ne pas le relire ; par défaut, la garde le lit.
 
     Ne rattrape rien : une panne de lecture REMONTE (fail-closed), comme les
     prédicats qu'elle compose."""
     if (coupe := tenant_desactive.refus(sub)):
         return tenant_desactive.CODE, coupe[0]
-    lue = account_suspension.entree(sub)
+    if lue is account_suspension.A_LIRE:
+        lue = account_suspension.entree(sub)
     if (pause := account_suspension.refus(sub, lue)):
         return account_suspension.CODE, pause[0]
     if (revoque := session_revoquee.refus(sub, lue, emis_le)):

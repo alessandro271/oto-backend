@@ -1,10 +1,14 @@
-"""`AccountSuspendedMiddleware` — un compte en pause, ou d'un tenant désactivé, ou un jeton
-émis avant la fermeture des sessions de son compte, n'atteint aucun
-outil. La garde est `garde_identite.refus` ; ce middleware en est la porte MCP.
+"""`AccountSuspendedMiddleware` — un compte en pause, ou d'un tenant désactivé, n'atteint
+aucun outil. La garde est `garde_identite.refus` ; ce middleware en est la porte MCP.
 
-Sur la face MCP, un refus est une erreur du protocole (`McpError`, code `-32003`, `data.code`
-nommé) dans la réponse JSON-RPC, pas un statut HTTP : ce middleware tourne une fois
-le jeton admis par la couche HTTP."""
+Sur la face MCP, ces refus sont des erreurs du protocole (`McpError`, code `-32003`,
+`data.code` nommé) dans la réponse JSON-RPC, pas un statut HTTP : ce middleware tourne
+une fois le jeton admis par la couche HTTP.
+
+Le jeton émis avant la fermeture des sessions de son compte, lui, est refusé AVANT, par
+un 401 HTTP (`auth.entree_mcp`) : c'est ce qui fait relancer l'OAuth au client. Cette
+porte HTTP a déjà lu l'état d'entrée du compte ; ce middleware le reprend
+(`entree_mcp.entree_lue`) au lieu de le relire."""
 from __future__ import annotations
 
 import logging
@@ -13,6 +17,7 @@ from fastmcp.server.middleware import Middleware
 from starlette.concurrency import run_in_threadpool
 
 from .. import garde_identite
+from ..auth import entree_mcp
 from ..auth.hooks import current_token_emis_le, current_user_sub_from_token
 from ..db import CompteEnPause, TenantDesactive
 from ..mcp_errors import McpError
@@ -49,7 +54,8 @@ class AccountSuspendedMiddleware(Middleware):
 
     ⚠️ **Pas de cache.** Une pause doit mordre à la requête suivante, pas à la
     prochaine expiration d'un cache : c'est toute la différence entre neutraliser et
-    demander poliment. Le coût est une lecture sur clé primaire par requête MCP.
+    demander poliment. Le coût est une lecture sur clé primaire par requête MCP, faite
+    par la porte HTTP (`auth.entree_mcp`) et reprise ici.
 
     Pas de sub identifiable (dev local sans Logto, discovery non authentifié) : on ne
     refuse rien — il n'y a pas de compte à neutraliser, et fermer là couperait le run
@@ -71,8 +77,10 @@ class AccountSuspendedMiddleware(Middleware):
         if sub:
             # La date d'émission du jeton : un jeton émis avant la fermeture des sessions
             # du compte est refusé (`session_revoquee`, code `session_revoked`).
+            # L'état d'entrée déjà lu par la porte HTTP pour ce sub : pas de relecture.
             refus = await run_in_threadpool(garde_identite.refus, sub,
-                                            current_token_emis_le())
+                                            current_token_emis_le(),
+                                            entree_mcp.entree_lue(sub))
             if refus:
                 raise McpError(_erreur(*refus))
         return await call_next(context)

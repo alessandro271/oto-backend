@@ -280,24 +280,44 @@ authentification changée ou remise à zéro) pose donc pour le compte un instan
 reculé), une fois avant de fermer et une fois après la fermeture chez Logto (un jeton
 rafraîchi pendant la fermeture est couvert).
 
-À chaque requête authentifiée, la garde d'identité (`garde_identite.refus`, REST et MCP)
-compare la date d'émission du jeton à cet instant : l'`iat` d'un JWT (absent : 0), la
-création d'un jeton `oto_`. Émis avant → refusé, code `session_revoked`
-(`session_revoquee.py`) : **`401`** sur la face REST, erreur du protocole (`-32003`,
-`data.code = session_revoked`) sur la face MCP, comme la pause. Émis après — la
-reconnexion — → servi.
+À chaque requête authentifiée, la date d'émission du jeton est comparée à cet instant :
+l'`iat` d'un JWT (absent : 0), la création d'un jeton `oto_`. Émis avant → refusé, code
+`session_revoked` (`session_revoquee.py`), par un **`401` HTTP sur les deux faces**. Émis
+après — la reconnexion — → servi.
+
+- **Face REST** : la garde d'identité (`garde_identite.refus`, dans `api.base._authenticate`)
+  rend `401 {"error": "session_revoked", "detail": …}`.
+- **Face MCP** : le refus tombe dans la couche HTTP, au backend d'authentification que
+  fastmcp pose devant l'app (`auth/entree_mcp.py`, `FournisseurOto` → `BackendOto`), juste
+  après la vérification du jeton, sur `POST /mcp`. Réponse : `401` avec
+  `WWW-Authenticate: Bearer error="invalid_token", error_description="…",
+  resource_metadata="…"` (RFC 6750 §3.1 ; le même `resource_metadata` que les autres 401
+  de `/mcp`), et le corps `{"error": "invalid_token", "error_description", "code":
+  "session_revoked", "detail"}`. Un client MCP relance ainsi son OAuth tout de suite ; une
+  erreur JSON-RPC dans une réponse 200 le laissait réessayer le même jeton jusqu'à son terme.
+  La pause et le tenant désactivé, eux, restent des erreurs du protocole (`-32003`) servies
+  par `AccountSuspendedMiddleware`.
 
 **Coût : aucune requête de plus.** L'instant est joint (deux clés primaires, une jointure)
-à la lecture que la garde fait déjà à chaque requête (`db.get_suspension`) ; la date d'un
-jeton `oto_` sort de l'`UPDATE … RETURNING` qui le vérifie. Aucun cache : une fermeture
+à la lecture d'entrée du compte (`db.get_suspension`, la pause avec) ; la date d'un
+jeton `oto_` sort de l'`UPDATE … RETURNING` qui le vérifie. Sur la face MCP, cette
+lecture est faite UNE fois par `POST /mcp`, par le backend, et posée dans le `scope` de la
+requête : la garde (`AccountSuspendedMiddleware`) la reprend (`entree_mcp.entree_lue`) au
+lieu de la relire. Un `GET`/`DELETE /mcp` ne la paie pas (pas de message, pas de garde),
+la face REST non plus (sa porte lit elle-même). Seul écart : un `POST` qui ne porte
+qu'une notification (`notifications/initialized`, une fois par session) la paie aussi,
+alors que la garde, qui ne voit que les requêtes, ne la faisait pas. Aucun cache : une fermeture
 mord à la requête suivante, sur tous les processus, sans fenêtre de retard. Grain : l'`iat`
 est en secondes, l'instant en microsecondes — un jeton émis dans la seconde même de la
 fermeture, après elle, est refusé (il se réémet) ; l'instant vient de l'horloge de la base,
 l'`iat` de celle de Logto.
 
-Limite connue : l'instant est posé sous le sub que nomme le webhook (l'identifiant Logto)
-et lu sous le sub CANONIQUE de la requête. Ils coïncident, sauf pour un ancien identifiant
-redirigé par une bascule de tenant (`sub_aliases`).
+Sub jugé : l'instant est posé sous le sub que nomme le webhook (l'identifiant Logto). La
+face MCP le lit sous le sub du jeton tel que vérifié, avant le drain d'alias : c'est ce
+même identifiant. Pour un ancien identifiant redirigé par une bascule de tenant
+(`sub_aliases`), la garde lit en plus l'état du sub CANONIQUE (pause, et révocation en
+`-32003`) : une lecture de plus, pour ce seul cas. La face REST juge le sub canonique
+seulement : un ancien identifiant redirigé y reste une limite connue.
 
 ## Identité de service — un client machine, pas un compte (#1068, 24/09/2026)
 
