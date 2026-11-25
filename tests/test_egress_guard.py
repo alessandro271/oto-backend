@@ -458,7 +458,9 @@ def _carte(fields: dict) -> SimpleNamespace:
 
 def test_api_refuse_la_carte_et_le_dit_en_McpError(monkeypatch):
     """Le vecteur le plus large, de bout en bout : credential résolu → refus
-    traduit pour l'appelant, sans qu'aucun client ne soit construit."""
+    traduit pour l'appelant, sans qu'aucun client ne soit construit. La carte est
+    celle d'une org : les exceptions de l'opérateur ne la concernent pas, le refus ne
+    les propose donc pas comme remède."""
     from oto_mcp.mcp_errors import McpError
     from oto_mcp.tools import api as tool_http
 
@@ -471,7 +473,8 @@ def test_api_refuse_la_carte_et_le_dit_en_McpError(monkeypatch):
     monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
     with pytest.raises(McpError) as pris:
         tool_http._client()
-    assert egress.ALLOW_VAR in str(pris.value)
+    assert "destination refusée" in str(pris.value)
+    assert "base_url" in str(pris.value)
 
 
 def test_api_garde_aussi_le_serveur_de_jetons_oauth2(monkeypatch):

@@ -25,22 +25,25 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from oto.tools.common.errors import UpstreamHTTPError
 
-from .. import access, egress, file_source
+from .. import access, egress, egress_transport, file_source
 from ..connectors import verify as connector_verify
 
 
-def _check_base_url(base_url) -> None:
+def _check_base_url(base_url, *, exceptions_declarees: bool) -> None:
     """Egress guard on the private-instance URL, when set.
 
     Empty = the SaaS, a constant of the lib. Filled in, it designates a
     self-hosted instance — hence potentially a host on the platform's internal
-    network (`oto_mcp/egress.py`)."""
+    network (`oto_mcp/egress.py`). `exceptions_declarees` = the policy of the
+    credential's origin (`egress_transport.exceptions_pour`)."""
     valeur = (base_url or "").strip()
     if valeur:
-        egress.check_url(valeur, connector="lighton")
+        egress.check_url(valeur, connector="lighton", field="base_url",
+                         exceptions_declarees=exceptions_declarees)
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
+def _verify(fields: dict, config: dict | None = None,
+            instance: tuple | None = None) -> None:  # noqa: ARG001 (config: probe contract)
     """"Test the connection" probe — otomata-tech/oto#69. Covers `auth` ONLY.
 
     `GET workspaces` (already in the client — `list_workspaces`): LightOn
@@ -57,7 +60,11 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.lighton import LightOnClient
 
-    _check_base_url(fields.get("base_url"))
+    # `instance` = the probed vault row: its tier decides the policy (a key being
+    # set, with no row yet, is never the operator's — no exception).
+    _check_base_url(fields.get("base_url"),
+                    exceptions_declarees=egress_transport.exceptions_pour(
+                        instance[0] if instance else None))
     LightOnClient(
         api_key=fields["api_key"], base_url=fields.get("base_url"),
     ).list_workspaces()
@@ -72,7 +79,9 @@ def register(mcp: FastMCP) -> None:
         return access.resolve_credential_fields("lighton")
 
     def _client(creds: dict) -> LightOnClient:
-        _check_base_url(creds.get("base_url"))
+        # `resolve_credential_fields` is byo-only (never the platform tier): the
+        # operator's named exceptions never apply here.
+        _check_base_url(creds.get("base_url"), exceptions_declarees=False)
         return LightOnClient(api_key=creds.get("api_key"),
                              base_url=creds.get("base_url") or None)
 

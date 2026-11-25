@@ -72,10 +72,14 @@ def check_site(site_url: str) -> bool:
     as the egress guard — never a per-connector setting.
 
     Returns `allow_http` to pass to the client (which refuses `http` by default): True
-    only for this declared exception."""
+    only for this declared exception.
+
+    This flow sets a member's, a team's or an org's credential, never a platform one:
+    the operator's named exceptions do not apply (`egress_transport.exceptions_pour`)."""
     from .. import egress
 
-    egress.check_url(site_url, connector="wordpress", field="site_url")
+    egress.check_url(site_url, connector="wordpress", field="site_url",
+                     exceptions_declarees=False)
     return http_allowed(site_url)
 
 

@@ -177,6 +177,17 @@ class AdaptateurEpingle(HTTPAdapter):
             f"ne verrait plus l'adresse jointe. (Champ `{p.field}`.)")
 
 
+def exceptions_pour(entity_type: str | None) -> bool:
+    """La politique d'un credential d'après son ORIGINE : les exceptions nommées
+    (`OTO_EGRESS_ALLOW`) sont déclarées par l'opérateur pour ses propres
+    destinations, donc ne valent que pour un credential du palier plateforme. Celui
+    d'un membre, d'une équipe, d'une org ou d'un tenant n'en hérite jamais.
+    `entity_type` = le palier de la ligne du coffre (`ResolvedCredential.entity_type`,
+    `instance[0]` d'une sonde) ; inconnu = aucune exception."""
+    from .credentials_store import PLATFORM
+    return entity_type == PLATFORM
+
+
 def harden(s: requests.Session, *, connector: str, field: str = "base_url",
            exceptions_declarees: bool = True) -> requests.Session:
     """Monte le transport épinglé sur `s` (http:// et https://) et coupe les

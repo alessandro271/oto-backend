@@ -247,10 +247,16 @@ def client_for(fields: dict, headers: dict | None = None, *,
     if not base_url or not mode:
         raise ValueError("`api` connector not configured: `base_url` and `auth_mode` "
                          "are required on the Custom API card")
-    egress.check_url(base_url, connector="api", field="base_url")
+    # The operator's named exceptions apply to a platform row only, never to a
+    # member's, a team's, an org's or a tenant's card, nor without a row
+    # (`egress_transport.exceptions_pour`).
+    exceptions = egress_transport.exceptions_pour(row[0] if row else None)
+    egress.check_url(base_url, connector="api", field="base_url",
+                     exceptions_declarees=exceptions)
     token_url = (fields.get("token_url") or "").strip()
     if mode.lower() in ("oauth2", "oauth2_user") and token_url:
-        egress.check_url(token_url, connector="api", field="token_url")
+        egress.check_url(token_url, connector="api", field="token_url",
+                         exceptions_declarees=exceptions)
     if mode.lower() == "oauth2_user":
         # Per-member sign-in (`auth/api_oauth.py`): the HOST turns the person's refresh
         # token into an access token, and oto-core calls as a plain `bearer`.

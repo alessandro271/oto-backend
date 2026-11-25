@@ -37,7 +37,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from oto.tools.common.errors import UpstreamHTTPError
 
-from .. import access, egress
+from .. import access, egress, egress_transport
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from . import wordpress_blocks
@@ -180,16 +180,19 @@ def _diff(current: dict, changes: dict) -> dict:
     return out
 
 
-def _guard(site_url: str) -> bool:
+def _guard(site_url: str, *, exceptions_declarees: bool) -> bool:
     """Before any client is built: egress guard, then HTTPS
-    (`auth.wordpress.http_allowed`). Returns `allow_http` for the client."""
+    (`auth.wordpress.http_allowed`), under the policy of the credential's origin
+    (`egress_transport.exceptions_pour`). Returns `allow_http` for the client."""
     from ..auth.wordpress import http_allowed
 
-    egress.check_url(site_url, connector="wordpress", field="site_url")
+    egress.check_url(site_url, connector="wordpress", field="site_url",
+                     exceptions_declarees=exceptions_declarees)
     return http_allowed(site_url)
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
+def _verify(fields: dict, config: dict | None = None,
+            instance: tuple | None = None) -> None:  # noqa: ARG001 (config: probe contract)
     """"Test the connection" probe — `GET wp/v2/users/me?context=edit`.
 
     Authenticated, no side effects, free. `context=edit` is only served to an
@@ -198,7 +201,11 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     site side), never a limit of the probe."""
     from oto.tools.wordpress import WordPressClient
 
-    allow_http = _guard(fields.get("site_url") or "")
+    # `instance` = the probed vault row: its tier decides the policy (a key being
+    # set, with no row yet, is never the operator's — no exception).
+    allow_http = _guard(fields.get("site_url") or "",
+                        exceptions_declarees=egress_transport.exceptions_pour(
+                            instance[0] if instance else None))
     try:
         me = WordPressClient(fields["site_url"], fields["username"],
                              fields["application_password"], allow_http=allow_http).me()
@@ -216,7 +223,9 @@ def _client(account: Optional[str] = None) -> WordPressClient:
     creds = access.resolve_credential_fields("wordpress", account)
     site = creds.get("site_url") or ""
     try:
-        allow_http = _guard(site)
+        # `resolve_credential_fields` is byo-only (never the platform tier): the
+        # operator's named exceptions never apply here.
+        allow_http = _guard(site, exceptions_declarees=False)
         return WordPressClient(site, creds.get("username") or "",
                                creds.get("application_password") or "",
                                allow_http=allow_http)
