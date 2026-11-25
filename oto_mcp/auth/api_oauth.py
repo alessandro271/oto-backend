@@ -260,10 +260,10 @@ def _corps_borne(r: requests.Response, host: str) -> bytes:
     return bytes(corps)
 
 
-def _session(annoncee: bool) -> requests.Session:
+def _session(titulaire: tuple) -> requests.Session:
     """A session pinned by the egress guard (checked at each connection)."""
     return egress_transport.session(connector=CONNECTOR, field="token_url",
-                                    exceptions_declarees=not annoncee)
+                                    titulaire=titulaire)
 
 
 def _detail_d_erreur(body, status: int) -> str:
@@ -279,21 +279,32 @@ def _detail_d_erreur(body, status: int) -> str:
                    origine="Error written by the sign-in server", lecture="a diagnostic")
 
 
-def _token_request(token_url: str, data: dict, *, annoncee: bool) -> dict:
+def _titulaire_du_jeton(app: Optional[dict], ligne: Optional[tuple]) -> tuple:
+    """On whose behalf the token URL is called: the app's org when the key belongs to
+    an app (its `token_url` is the app's, typed by an admin of that org), else the
+    key's own vault row (`egress.titulaire_de`) — none without either."""
+    if app and app.get("org_id") is not None:
+        return egress.titulaire_de("org", app["org_id"])
+    return egress.titulaire_de(*(ligne or (None, None))[:2])
+
+
+def _token_request(token_url: str, data: dict, *, annoncee: bool,
+                   titulaire: tuple) -> dict:
     """POST form to the token endpoint; refusals built by us (never `raise_for_status`,
     whose message carries the URL). The token URL is the final address: a redirect is
     refused, never followed, and the answer read is bounded. `annoncee` = the remote
     MCP server announced this URL (discovery): it is checked with no declared egress
-    exception, at every exchange and every renewal; one the admin typed keeps the
-    platform's policy."""
+    exception (`egress.AGENT`), at every exchange and every renewal; one the admin
+    typed gets the named exceptions that name the key's holder (`titulaire`)."""
+    titulaire = egress.AGENT if annoncee else titulaire
     try:
         egress.check_url(token_url, connector=CONNECTOR, field="token_url",
-                         exceptions_declarees=not annoncee)
+                         titulaire=titulaire)
     except egress.EgressRefused as e:
         raise oauth_flow.OAuthExchangeRefused(str(e)) from None
     host = urlsplit(token_url).hostname or "?"
     try:
-        r = _session(annoncee).post(token_url, data=data, timeout=_TIMEOUT,
+        r = _session(titulaire).post(token_url, data=data, timeout=_TIMEOUT,
                                     allow_redirects=False, stream=True,
                                     headers={"Accept": "application/json"})
     except egress.EgressRefused as e:
@@ -387,7 +398,10 @@ def exchange_and_persist(d: dict, code: str, *, iss: Optional[str] = None) -> di
             "code_verifier": d["v"]}
     if c["resource"]:
         data["resource"] = c["resource"]
-    tokens = _token_request(c["token_url"], data, annoncee=_annoncee(app, c["token_url"]))
+    # The token URL is the APP's, set by an admin of its org: the named exceptions
+    # that name that org apply (`_titulaire_du_jeton`).
+    tokens = _token_request(c["token_url"], data, annoncee=_annoncee(app, c["token_url"]),
+                            titulaire=_titulaire_du_jeton(app, None))
     rt = tokens.get("refresh_token")
     if not rt:
         raise oauth_flow.CompletionRefused(
@@ -451,7 +465,8 @@ def _renouveler_seul(ligne: tuple, fields: dict, *, reprise: bool) -> str:
     # The request goes out with NO transaction open: only the write below locks.
     try:
         tokens = _token_request(c["token_url"], data,
-                                annoncee=_annoncee(app, c["token_url"]))
+                                annoncee=_annoncee(app, c["token_url"]),
+                                titulaire=_titulaire_du_jeton(app, ligne))
     except oauth_flow.OAuthExchangeRefused as e:
         if not oauth_flow.grant_is_dead(getattr(e, "status_code", 0),
                                         getattr(e, "body_text", "")):

@@ -69,7 +69,7 @@ def _need(value, name: str, op: str):
     return value
 
 
-def _login_url(login_url: Optional[str]) -> str:
+def _login_url(login_url: Optional[str], *, titulaire: tuple) -> str:
     """The auth server to call — the SINGLE crossing point of both paths
     (probe and tools), hence the place where the egress guard bites exactly once.
 
@@ -80,22 +80,24 @@ def _login_url(login_url: Optional[str]) -> str:
     valeur = (login_url or "").strip().rstrip("/")
     if not valeur:
         return "https://login.salesforce.com"
-    egress.check_url(valeur, connector="salesforce", field="login_url")
+    egress.check_url(valeur, connector="salesforce", field="login_url",
+                     titulaire=titulaire)
     return valeur
 
 
-def _session(login_url: str):
+def _session(login_url: str, *, titulaire: tuple):
     """The session EVERY request of the client goes out through — the refresh-token
     exchange on `login_url` AND the API calls on the `instance_url` Salesforce
     returns — pinned by the egress guard at connection time (`egress_transport`),
-    under the policy of a credential's destination (that of `_login_url`'s early
-    check). The refusal names the field it concerns: `instance_url` by default, and
+    on behalf of the same holder as `_login_url`'s early check (`titulaire`). The refusal
+    names the field it concerns: `instance_url` by default, and
     `login_url` for what goes to the authorization server (the longer prefix wins in
     `requests`)."""
     s = egress_transport.session(connector="salesforce", field="instance_url",
-                                 exceptions_declarees=True)
+                                 titulaire=titulaire)
     s.mount(f"{login_url.rstrip('/')}/", egress_transport.AdaptateurEpingle(
-        egress_transport.Politique("salesforce", "login_url", True)))
+        egress_transport.Politique("salesforce", "login_url",
+                                   egress._valider(titulaire))))
     return s
 
 
@@ -277,7 +279,11 @@ def _verify(fields: dict, config: dict | None = None,
     """
     from oto.tools.salesforce.client import SalesforceClient
 
-    login_url = _login_url(fields.get("login_url"))
+    # `instance` = the probed vault row: its holder decides the exceptions (a key
+    # being set, with no row yet, has none).
+    titulaire = egress.titulaire_d_instance(instance)
+    login_url = _login_url(fields.get("login_url"), titulaire=titulaire)
+    session = _session(login_url, titulaire=titulaire)
     client = SalesforceClient(
         client_id=fields.get("client_id"),
         client_secret=fields.get("client_secret"),
@@ -289,12 +295,14 @@ def _verify(fields: dict, config: dict | None = None,
         # compared the org token to the personal token, didn't recognize it, persisted
         # nothing, and thus killed the org token by refreshing it. Lived 03/08.
         on_refresh=_rotation_writer_for(fields.get("refresh_token") or "", instance),
-        session=_session(login_url),
+        session=session,
     )
     try:
         client.query("SELECT Id FROM Contact LIMIT 1")
     except Exception as e:  # noqa: BLE001 — the provider error IS the probe's return
         raise ValueError(_sf_error_hint(e)) from e
+    finally:
+        session.close()
 
 
 class _Cible:
@@ -456,14 +464,15 @@ def register(mcp: FastMCP) -> None:
         # also serves to mark a rejected row (oto#25 lot b2, `rc` returned to the caller).
         rc = access.resolve_credential("salesforce")
         creds = rc.fields
-        login_url = _login_url(creds.get("login_url"))
+        titulaire = egress.titulaire_de(rc.entity_type, rc.entity_id)
+        login_url = _login_url(creds.get("login_url"), titulaire=titulaire)
         client = SalesforceClient(
             client_id=creds.get("client_id"),
             client_secret=creds.get("client_secret"),
             refresh_token=creds.get("refresh_token"),
             login_url=login_url,
             on_refresh=_rotation_writer(rc, creds.get("refresh_token") or ""),
-            session=_session(login_url),
+            session=_session(login_url, titulaire=titulaire),
         )
         return client, rc
 

@@ -374,10 +374,21 @@ _REGLAGES: tuple[Variable, ...] = (
              "Absente = la carte Prefab, inchangée.",
              ("oto_mcp/tools/datastore_table_app.py:51",)),
     Variable("OTO_EGRESS_ALLOW", Classe.REGLAGE, "",
-             "Destinations internes autorisées en egress (`nom=adresse:port`, "
-             "virgules). Absente = aucune exception : fail-closed, jamais un défaut "
-             "qui ouvre la machine.",
-             ("oto_mcp/egress.py:155",)),
+             "Destinations internes autorisées en egress, chacune liée à son "
+             "titulaire (`nom=adresse:port[@palier:id[,palier:id]]`, palier group, "
+             "org ou tenant ; sans `@` = la plateforme seule ; virgules). Absente = "
+             "aucune exception : fail-closed. Une entrée mal formée refuse le "
+             "démarrage.",
+             ("oto_mcp/egress.py:297",)),
+    Variable("REQUESTS_CA_BUNDLE", Classe.REGLAGE, None,
+             "Magasin de certificats (fichier PEM) que les sessions gardées par la garde "
+             "d'egress reprennent pour VÉRIFIER le TLS, comme `requests` le ferait : une "
+             "autorité de certification privée d'une installation. N'ajoute aucune "
+             "destination. Absente = magasin par défaut (`certifi`).",
+             ("oto_mcp/egress_transport.py:209",)),
+    Variable("CURL_CA_BUNDLE", Classe.REGLAGE, None,
+             "Même rôle que `REQUESTS_CA_BUNDLE`, lue après elle (l'ordre de `requests`).",
+             ("oto_mcp/egress_transport.py:209",)),
     Variable("OTO_EGRESS_IP", Classe.REGLAGE, "",
              "Adresse IP sortante de l'instance, servie par le marqueur `{{egress_ip}}` "
              "des docs connecteur (liste blanche d'IP chez le fournisseur, ex. "

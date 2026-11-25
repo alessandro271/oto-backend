@@ -208,7 +208,7 @@ def _adresse_de_photo(url: str) -> None:
         raise AuthzDenied(400, "url_not_allowed")
     try:
         egress.check_url(url, connector="avatar_import", field="url",
-                         exceptions_declarees=False)
+                         titulaire=egress.AGENT)
     except egress.EgressRefused:
         raise AuthzDenied(400, "url_not_allowed") from None
 
@@ -223,7 +223,7 @@ def _telecharger_photo(url: str) -> bytes:
     courante = url
     # Session épinglée : la garde tient à la connexion, sur l'adresse jointe.
     with egress_transport.session(connector="avatar_import", field="url",
-                                  exceptions_declarees=False) as s:
+                                  titulaire=egress.AGENT) as s:
         for _ in range(_REDIRECTIONS_PHOTO + 1):
             _adresse_de_photo(courante)
             try:

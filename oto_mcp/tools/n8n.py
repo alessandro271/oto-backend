@@ -54,7 +54,8 @@ def _summary(workflow: Any, ignored: list[str]) -> Any:
     return out
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
+def _verify(fields: dict, config: dict | None = None,
+            instance: tuple | None = None) -> None:
     """"Test the connection" probe — otomata-tech/oto#69. Covers `auth` ALONE.
 
     `GET /workflows` (already in the client — `list_workflows`), `limit=1` — the
@@ -72,10 +73,11 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.n8n import N8nClient
 
-    egress.check_url(fields["base_url"], connector="n8n")
+    titulaire = egress.titulaire_d_instance(instance)
+    egress.check_url(fields["base_url"], connector="n8n", titulaire=titulaire)
     egress_transport.pinned(N8nClient(
         api_key=fields["api_key"], base_url=fields["base_url"],
-    ), connector="n8n").list_workflows(limit=1)
+    ), connector="n8n", titulaire=titulaire).list_workflows(limit=1)
 
 
 def register(mcp: FastMCP) -> None:
@@ -88,10 +90,11 @@ def register(mcp: FastMCP) -> None:
         # n8n is self-hosted: an instance on the platform's internal
         # network is exactly the case the guard must refuse without a
         # declared exception (`oto_mcp/egress.py`).
-        egress.check_url(creds.get("base_url") or "", connector="n8n")
+        titulaire = egress.titulaire_des_champs(creds)
+        egress.check_url(creds.get("base_url") or "", connector="n8n", titulaire=titulaire)
         return egress_transport.pinned(
             N8nClient(api_key=creds.get("api_key"), base_url=creds.get("base_url")),
-            connector="n8n")
+            connector="n8n", titulaire=titulaire)
 
     @mcp.tool()
     def n8n_list_workflows(

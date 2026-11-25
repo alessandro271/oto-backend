@@ -265,9 +265,18 @@ def test_http_allowed_only_for_a_declared_internal_destination(monkeypatch):
     monkeypatch.setattr(egress, "check_url", lambda *a, **k: None)
     monkeypatch.setattr(egress, "resolved_addresses", lambda host, port: {"127.0.0.1"})
     monkeypatch.setenv(egress.ALLOW_VAR, "wp-local=127.0.0.1:9400")
-    assert wp_auth.check_site("http://127.0.0.1:9400") is True     # allow_http du client
+    # `http` seulement vers une destination déclarée POUR le titulaire de l'identifiant
+    # (sans `@` : la plateforme seule).
+    assert wp_auth.http_allowed("http://127.0.0.1:9400", titulaire=egress.PLATEFORME)
     with pytest.raises(wp_auth.ConnectRefused):
-        wp_auth.check_site("http://127.0.0.1:9401")
+        wp_auth.http_allowed("http://127.0.0.1:9401", titulaire=egress.PLATEFORME)
+    for titulaire in (("org", "1"), egress.AUCUN):
+        with pytest.raises(wp_auth.ConnectRefused):
+            wp_auth.http_allowed("http://127.0.0.1:9400", titulaire=titulaire)
+    # La connexion pose l'identifiant d'un membre, d'une équipe ou d'une org : jamais
+    # en `http`, même vers une destination déclarée.
+    with pytest.raises(wp_auth.ConnectRefused):
+        wp_auth.check_site("http://127.0.0.1:9400")
 
 
 def test_finish_refuses_http(monkeypatch):

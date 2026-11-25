@@ -46,7 +46,7 @@ def construits(monkeypatch):
 def egress_vu(monkeypatch):
     vus = []
     monkeypatch.setattr("oto_mcp.egress.check_url",
-                        lambda url, connector=None: vus.append((url, connector)))
+                        lambda url, connector=None, **kw: vus.append((url, connector)))
     return vus
 
 

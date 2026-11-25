@@ -92,7 +92,8 @@ def test_une_exception_declaree_ouvre_le_connecteur_mais_PAS_web_read(monkeypatc
     """Le cœur de la décision : le pont déclaré pour une organisation reste
     joignable par SON credential, et par rien d'autre."""
     monkeypatch.setenv(egress.ALLOW_VAR, "pont=127.0.0.1:80")
-    egress.check_url("http://127.0.0.1/", connector="api")      # passe
+    egress.check_url("http://127.0.0.1/", connector="api",
+                     titulaire=egress.PLATEFORME)               # passe
     with pytest.raises(McpError) as e:
         W.check_url_public("http://127.0.0.1/")
     assert "boucle locale" in str(e.value)
@@ -115,7 +116,8 @@ def test_le_refus_d_une_url_d_agent_dit_SON_geste_pas_celui_d_un_operateur():
 
 def test_le_refus_d_un_credential_garde_le_geste_de_l_operateur():
     with pytest.raises(egress.EgressRefused) as e:
-        egress.check_url("http://192.168.1.10/", connector="api")
+        egress.check_url("http://192.168.1.10/", connector="api",
+                         titulaire=egress.PLATEFORME)
     assert egress.ALLOW_VAR in str(e.value)
 
 

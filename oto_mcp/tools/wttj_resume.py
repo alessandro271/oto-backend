@@ -214,14 +214,14 @@ def resume_text(url: str) -> dict:
         raise ValueError("Welcome to the Jungle returned an unusable resume address.")
     try:
         egress.check_url(url, connector="wttj", field="resume_url",
-                         exceptions_declarees=False)
+                         titulaire=egress.AGENT)
     except egress.EgressRefused as e:
         raise ValueError(str(e)) from e
     try:
         # Pinned session (`egress_transport`): the guard holds at connection time,
         # on the addresses actually joined — redirect hops included.
         with egress_transport.session(connector="wttj", field="resume_url",
-                                      exceptions_declarees=False) as s, \
+                                      titulaire=egress.AGENT) as s, \
                 s.get(url, timeout=(10, 30), stream=True) as r:
             if r.status_code != 200:
                 raise ValueError(f"the resume could not be downloaded (HTTP "

@@ -86,7 +86,11 @@ def _session(fields: dict, row) -> requests.Session:
                          f"A Custom API in `{mode}` mode cannot reach an MCP server: use "
                          "a token, a header key, OAuth2 or the per-member sign-in "
                          "(`oauth2_user`).")
-    s = egress_transport.harden(requests.Session(), connector="api", field="base_url")
+    # On behalf of the card's holder (its vault row, `egress.titulaire_de`): only the
+    # operator's named exceptions that name it apply; none without a row.
+    titulaire = egress.titulaire_de(*(row or (None, None))[:2])
+    s = egress_transport.harden(requests.Session(), connector="api", field="base_url",
+                                titulaire=titulaire)
     s.max_redirects = 0
     if mode == "oauth2_user":
         from ..auth import api_oauth
@@ -100,10 +104,12 @@ def _session(fields: dict, row) -> requests.Session:
         s.headers["Authorization"] = f"Bearer {token}"
         return s
     if mode == "oauth2":
-        egress.check_url(fields.get("token_url") or "", connector="api", field="token_url")
-    auth = build_auth(mode, fields, token_session=egress_transport.session(
-        connector="api", field="token_url", exceptions_declarees=True))
-    auth.configure(s)
+        egress.check_url(fields.get("token_url") or "", connector="api", field="token_url",
+                         titulaire=titulaire)
+    with egress_transport.session(connector="api", field="token_url",
+                                  titulaire=titulaire) as jeton:
+        auth = build_auth(mode, fields, token_session=jeton)
+        auth.configure(s)
     q = auth.query_params()
     if q:
         s.params = q          # query mode: the key rides as its parameter
@@ -240,7 +246,8 @@ def _ouvrir(fields: dict, row) -> _Client:
     url = (fields.get("base_url") or "").strip()
     if not url:
         raise McpRefused("mcp_no_url", "The Custom API card has no base URL.")
-    egress.check_url(url, connector="api", field="base_url")
+    egress.check_url(url, connector="api", field="base_url",
+                     titulaire=egress.titulaire_de(*(row or (None, None))[:2]))
     c = _Client(url, _session(fields, row))
     c.request("initialize", {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
                              "clientInfo": {"name": "oto-custom-api", "version": "1"}})

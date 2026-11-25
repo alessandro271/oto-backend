@@ -145,7 +145,8 @@ def _champs() -> dict:
     return {f.name: f for f in api_card.CONNECTOR.credential_fields}
 
 
-def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
+def valider_connexion(given: dict, *, titulaire: tuple,
+                      base: Optional[dict] = None) -> dict:
     """La connexion normalisée (`base` complétée par `given`, un champ vide l'efface),
     ou `AppRefused` nommant le premier problème. Mêmes règles que la carte : un mode du
     jeu fermé, les champs que le mode rend pertinents et requis, `base_url` et
@@ -220,7 +221,8 @@ def valider_connexion(given: dict, *, base: Optional[dict] = None) -> dict:
     for name in ("base_url", "token_url"):
         if out.get(name):
             try:
-                egress.check_url(out[name], connector=CONNECTOR, field=name)
+                egress.check_url(out[name], connector=CONNECTOR, field=name,
+                                 titulaire=titulaire)
             except egress.EgressRefused as e:
                 raise AppRefused(400, "egress_refused", str(e))
     return out

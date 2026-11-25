@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlencode, urlsplit
 
+from .. import egress
 from . import flow as oauth_flow
 
 logger = logging.getLogger(__name__)
@@ -65,33 +66,33 @@ def _host(url: str) -> str:
 
 
 def check_site(site_url: str) -> bool:
-    """The guard of EVERY path that sends the password to the site: egress, then
-    HTTPS. The application password goes out in HTTP Basic — in clear text over `http`.
-    Only exception: an internal destination DECLARED by the operator
-    (`OTO_EGRESS_ALLOW`, a local development WordPress), the same named list
-    as the egress guard — never a per-connector setting.
+    """The guard of EVERY path of THIS flow that sends the password to the site:
+    egress, then HTTPS. The application password goes out in HTTP Basic — in clear
+    text over `http`. The flow checks the site BEFORE its vault row exists: no holder
+    (`egress.AUCUN`), so no named exception (`OTO_EGRESS_ALLOW`) applies, and neither
+    an internal destination nor `http` passes here.
 
-    Returns `allow_http` to pass to the client (which refuses `http` by default): True
-    only for this declared exception."""
-    from .. import egress
+    Returns `allow_http` to pass to the client (which refuses `http` by default)."""
 
-    egress.check_url(site_url, connector="wordpress", field="site_url")
-    return http_allowed(site_url)
+    egress.check_url(site_url, connector="wordpress", field="site_url",
+                     titulaire=egress.AUCUN)
+    return http_allowed(site_url, titulaire=egress.AUCUN)
 
 
-def http_allowed(site_url: str) -> bool:
+def http_allowed(site_url: str, *, titulaire: tuple) -> bool:
     """The "scheme" half of `check_site`, for a caller that sets the egress guard
     itself (the tools, which `tests/test_egress_guard.py` reads): False over
-    HTTPS, True for an internal destination declared over HTTP, refusal otherwise."""
-    from .. import egress
+    HTTPS, True over HTTP only for an internal destination declared by the operator
+    for the credential's holder (`titulaire`, `egress.titulaire_de` — a local
+    development WordPress), refusal otherwise."""
 
     parts = urlsplit((site_url or "").strip())
     if parts.scheme == "https":
         return False
     port = parts.port or 80
-    declared = egress.declared_exceptions()
-    if any((a, port) in declared
-           for a in egress.resolved_addresses(parts.hostname or "", port)):
+    declared = egress.declared_exceptions(titulaire=titulaire)
+    if declared and any((a, port) in declared
+                        for a in egress.resolved_addresses(parts.hostname or "", port)):
         return True
     raise ConnectRefused(
         f"{site_url} is on HTTP: the application password would go out in "
@@ -99,15 +100,15 @@ def http_allowed(site_url: str) -> bool:
         "passwords outside HTTPS, except in a local environment).")
 
 
-def site_session():
+def site_session(*, titulaire: tuple):
     """The session EVERY request to the site goes out through (probe, public index,
-    authenticated calls): pinned by the egress guard at connection time, under the
-    policy of a credential's destination — the same as `check_site`'s early check
-    (`egress_transport`)."""
+    authenticated calls): pinned by the egress guard at connection time
+    (`egress_transport`), under the SAME policy as the early check of its caller —
+    the named exceptions of the credential's holder only (`titulaire`)."""
     from .. import egress_transport
 
     return egress_transport.session(connector="wordpress", field="site_url",
-                                    exceptions_declarees=True)
+                                    titulaire=titulaire)
 
 
 def still_allowed(parsed: dict) -> bool:
@@ -154,10 +155,10 @@ def _authorization_endpoint(site_url: str, *, allow_http: bool = False) -> str:
     # credentials on ANY REST route, index included — a dummy credential
     # would return a 401 there (`rest_application_password_check_errors`). The two
     # constructor values are never sent.
-    c = WordPressClient(site_url, "-", "-", allow_http=allow_http,
-                        session=site_session())
     try:
-        index = c.public_index()
+        with site_session(titulaire=egress.AUCUN) as s:
+            index = WordPressClient(site_url, "-", "-", allow_http=allow_http,
+                                    session=s).public_index()
     except ValueError as e:
         raise ConnectRefused(str(e)) from e
     except Exception as e:  # noqa: BLE001 — any network failure is told to the user
@@ -276,8 +277,9 @@ def finish(parsed: dict, site_url: str, user_login: str, password: str) -> str:
         raise ConnectRefused("WordPress returned neither a username nor a password.")
     allow_http = check_site(asked)
 
-    me = WordPressClient(asked, user_login, password, allow_http=allow_http,
-                         session=site_session()).me()
+    with site_session(titulaire=egress.AUCUN) as s:
+        me = WordPressClient(asked, user_login, password, allow_http=allow_http,
+                             session=s).me()
     if not me.get("id"):
         raise ConnectRefused("the received password does not authenticate (empty users/me).")
 

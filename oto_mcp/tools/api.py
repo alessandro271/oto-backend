@@ -241,17 +241,22 @@ def client_for(fields: dict, headers: dict | None = None, *,
     In `session` mode, every hop of the login is also checked as it goes
     (`api_session.guard`), and `row` — the vault row of these fields, required in that
     mode and in `visitor` mode — keeps the cookie jar (`api_session`). `headers` = the saved
-    definition's constant headers. Raises `egress.EgressRefused` or `ValueError`
-    (incomplete or invalid config): each caller translates them for its face."""
+    definition's constant headers. Every call goes out on behalf of the row's HOLDER
+    (`egress.titulaire_de(row)`): only the operator's named exceptions that name it
+    apply — none for a member's card, nor without a row. Raises `egress.EgressRefused` or `ValueError` (incomplete or
+    invalid config): each caller translates them for its face."""
+    titulaire = egress.titulaire_de(*(row or (None, None))[:2])
     base_url = (fields.get("base_url") or "").strip()
     mode = (fields.get("auth_mode") or "").strip()
     if not base_url or not mode:
         raise ValueError("`api` connector not configured: `base_url` and `auth_mode` "
                          "are required on the Custom API card")
-    egress.check_url(base_url, connector="api", field="base_url")
+    egress.check_url(base_url, connector="api", field="base_url",
+                     titulaire=titulaire)
     token_url = (fields.get("token_url") or "").strip()
     if mode.lower() in ("oauth2", "oauth2_user") and token_url:
-        egress.check_url(token_url, connector="api", field="token_url")
+        egress.check_url(token_url, connector="api", field="token_url",
+                         titulaire=titulaire)
     if mode.lower() == "oauth2_user":
         # Per-member sign-in (`auth/api_oauth.py`): the HOST turns the person's refresh
         # token into an access token, and oto-core calls as a plain `bearer`.
@@ -265,29 +270,29 @@ def client_for(fields: dict, headers: dict | None = None, *,
             raise ValueError(e.message) from None
         return api_operations.with_constant_headers(
             HttpConnectorClient(base_url, "bearer", {**fields, "token": token},
-                                timeout=TIMEOUT, session=_session("base_url")), headers)
+                                timeout=TIMEOUT,
+                                session=_session("base_url", titulaire)), headers)
     session = {}
     if api_session.keeps_jar(fields):
         if row is None:
             raise ValueError(f"the {mode.lower()} mode keeps its cookies in the card's "
                              "vault row, and none was given for this call")
-        session = {"guard": api_session.guard(base_url),
+        session = {"guard": api_session.guard(base_url, titulaire=titulaire),
                    "jar": api_session.read_jar(row, fields),
                    "on_jar": api_session.jar_writer(row, fields)}
     client = HttpConnectorClient(base_url, mode, fields, timeout=TIMEOUT,
-                                 session=_session("base_url"),
-                                 token_session=_session("token_url"), **session)
+                                 session=_session("base_url", titulaire),
+                                 token_session=_session("token_url", titulaire), **session)
     return api_operations.with_constant_headers(client, headers)
 
 
-def _session(field: str) -> requests.Session:
-    """A session pinned by the egress guard (`egress_transport`), under the policy of a
-    credential's destination: the guard holds at CONNECTION time, on the addresses
-    actually joined — a resolution that changes after `check_url` (DNS rebinding) is
-    refused there, and so is every redirect hop. `field` = the card's field this
-    session goes to (`base_url`, `token_url`), named in the refusal."""
-    return egress_transport.session(connector="api", field=field,
-                                    exceptions_declarees=True)
+def _session(field: str, titulaire: tuple) -> requests.Session:
+    """A session pinned by the egress guard (`egress_transport`): the guard holds at
+    CONNECTION time, on the addresses actually joined — a resolution that changes
+    after `check_url` (DNS rebinding) is refused there, and so is every redirect hop.
+    `field` = the card's field this session goes to (`base_url`, `token_url`), named
+    in the refusal; `titulaire` = on whose behalf (the card's row holder)."""
+    return egress_transport.session(connector="api", field=field, titulaire=titulaire)
 
 
 def client_from_fields(f: dict, headers: dict | None = None, *,

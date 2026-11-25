@@ -35,6 +35,7 @@ it only reads public metadata and writes what was found on the app, admissible a
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -62,6 +63,17 @@ class DiscoveryRefused(RuntimeError):
         self.code, self.message = code, message
 
 
+#: The holder of the app being discovered (`egress.titulaire_de`): the operator's
+#: named exceptions that name it apply to the addresses the admin typed, never to
+#: those the remote server announced (`egress.AGENT`). Set by `discover`.
+_TITULAIRE: contextvars.ContextVar = contextvars.ContextVar(
+    "mcp_discovery_titulaire", default=egress.AUCUN)
+
+
+def _titulaire(annonce: bool) -> tuple:
+    return egress.AGENT if annonce else _TITULAIRE.get()
+
+
 def _https(url: str, what: str, *, annonce: bool = True) -> str:
     """`url` if https and allowed by the egress guard. `annonce` = the remote server
     named it: no declared egress exception applies (`egress.check_url`)."""
@@ -71,7 +83,7 @@ def _https(url: str, what: str, *, annonce: bool = True) -> str:
                                f"The {what} the MCP server announced is not an https "
                                "address: nothing was followed.")
     egress.check_url(url, connector="api", field=what.replace(" ", "_"),
-                     exceptions_declarees=not annonce)
+                     titulaire=_titulaire(annonce))
     return url
 
 
@@ -79,7 +91,7 @@ def _session(what: str, *, annonce: bool) -> requests.Session:
     """A session pinned by the egress guard: the destination is checked at each
     connection, on the very address joined (`egress_transport`)."""
     return egress_transport.session(connector="api", field=what.replace(" ", "_"),
-                                    exceptions_declarees=not annonce)
+                                    titulaire=_titulaire(annonce))
 
 
 def _lire_borne(r: requests.Response) -> Optional[bytes]:
@@ -167,10 +179,18 @@ def _origine_commune(asm: dict) -> bool:
         for k in ("authorization_endpoint", "token_endpoint"))
 
 
-def discover(mcp_url: str) -> dict:
+def discover(mcp_url: str, *, titulaire: tuple) -> dict:
     """`{resource, issuer, iss_parameter_supported, authorize_url, token_url, scope,
     registration_endpoint, cimd}` of an MCP server, or `DiscoveryRefused` naming the
-    step that failed."""
+    step that failed. `titulaire` = the holder of the app (`egress.titulaire_de`)."""
+    jeton = _TITULAIRE.set(titulaire)
+    try:
+        return _discover(mcp_url)
+    finally:
+        _TITULAIRE.reset(jeton)
+
+
+def _discover(mcp_url: str) -> dict:
     from ..connectors import api_apps
     _https(mcp_url, "base url", annonce=False)
     prm = None
@@ -306,7 +326,9 @@ def complete_app(app: dict, by: Optional[str]) -> dict:
     conn = dict(app.get("connection") or {})
     if all(conn.get(k) for k in ("authorize_url", "token_url", "oauth_client_id")):
         return app
-    meta = discover(conn.get("base_url") or "")
+    # An app belongs to its org: the named exceptions that name that org apply.
+    meta = discover(conn.get("base_url") or "",
+                    titulaire=egress.titulaire_de("org", app.get("org_id")))
     found = {"authorize_url": meta["authorize_url"], "token_url": meta["token_url"],
              "scope": meta["scope"], "resource": meta["resource"]}
     remplis = [k for k, v in found.items() if v and not conn.get(k)]

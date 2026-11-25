@@ -84,6 +84,10 @@ class _Gestionnaire(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(corps)
 
+    def do_POST(self):  # noqa: N802 — une demande de jeton : même réponse, corps lu
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.do_GET()
+
     def log_message(self, *a):
         pass
 
@@ -103,12 +107,12 @@ def serveur_local():
 
 def _agent():
     return egress_transport.session(connector="web_read", field="url",
-                                    exceptions_declarees=False)
+                                    titulaire=egress.AGENT)
 
 
 def _connecteur():
     return egress_transport.session(connector="api", field="base_url",
-                                    exceptions_declarees=True)
+                                    titulaire=egress.PLATEFORME)
 
 
 # ── 1. rebinding ─────────────────────────────────────────────────────────────
@@ -119,7 +123,7 @@ def test_une_resolution_qui_change_apres_le_controle_est_refusee(monkeypatch, au
     resolveur = _Resolveur([PUBLIQUE], ["127.0.0.1"])
     monkeypatch.setattr(egress, "resolved_addresses", resolveur)
     url = "https://rebond.exemple.test/"
-    egress.check_url(url, connector="web_read", field="url", exceptions_declarees=False)
+    egress.check_url(url, connector="web_read", field="url", titulaire=egress.AGENT)
     with pytest.raises(egress.EgressRefused, match="boucle locale"):
         _agent().get(url, timeout=5)
     assert resolveur.appels == 2, "le transport résout lui-même, une fois"
@@ -450,14 +454,14 @@ def test_la_sonde_salesforce_sort_par_la_session_gardee(monkeypatch, aucune_sock
 
 def test_la_session_salesforce_nomme_le_champ_de_chaque_destination():
     """Une session, deux destinations : le refus dit `login_url` pour le serveur
-    d'autorisation, `instance_url` pour les appels d'API — même politique."""
+    d'autorisation, `instance_url` pour les appels d'API — même titulaire."""
     from oto_mcp.tools import salesforce
-    s = salesforce._session("https://login.salesforce.com")
+    s = salesforce._session("https://login.salesforce.com", titulaire=("org", "1"))
     assert _monte(s)
     vers_login = s.get_adapter("https://login.salesforce.com/services/oauth2/token")
     vers_api = s.get_adapter("https://acme.my.salesforce.com/services/data/v60.0/query")
-    assert vers_login._politique == egress_transport.Politique("salesforce", "login_url", True)
-    assert vers_api._politique == egress_transport.Politique("salesforce", "instance_url", True)
+    assert vers_login._politique == egress_transport.Politique("salesforce", "login_url", ("org", "1"))
+    assert vers_api._politique == egress_transport.Politique("salesforce", "instance_url", ("org", "1"))
 
 
 def test_l_index_public_wordpress_de_la_connexion_sort_par_la_session_gardee(
@@ -519,3 +523,266 @@ def test_l_echange_partage_n_utilise_la_session_que_si_on_la_donne(monkeypatch):
     oauth_flow.exchange_code("https://ex.test/token", **args)
     oauth_flow.exchange_code("https://ex.test/token", session=_Session(), **args)
     assert vus == ["module", "session"]
+
+
+# ── 6. la politique suit l'ORIGINE du credential ─────────────────────────────
+#
+# Une exception nommée SANS `@` (`OTO_EGRESS_ALLOW`) vaut pour un credential du palier
+# plateforme, jamais pour celui d'un membre, d'une équipe, d'une org ou d'un tenant
+# (les titulaires : `tests/test_egress_titulaires.py`).
+
+
+def _sans_garde_de_la_lib_3cx(monkeypatch):
+    """Le contrôle propre de la lib 3CX résout par le DNS de la machine : neutralisé,
+    ce banc éprouve le nôtre."""
+    from oto.tools.threecx import auth as threecx_auth, client as threecx_client
+    for module in (threecx_auth, threecx_client):
+        monkeypatch.setattr(module, "assert_public_https_url", lambda url: None)
+    monkeypatch.setattr(threecx_auth, "_TOKEN_CACHE", {})
+
+
+def _sans_cache_salesforce(monkeypatch):
+    from oto.tools.salesforce import client as sf_client
+    monkeypatch.setattr(sf_client, "_TOKEN_CACHE", {})
+
+
+def _sonde(connecteur: str, hote: str, schema: str = "https", port: int | None = None):
+    """La sonde d'un connecteur, vers `hote`, pour une ligne du coffre `instance`."""
+    base = f"{schema}://{hote}" + (f":{port}" if port else "")
+    from oto_mcp.tools import api as tool_api, lighton, salesforce, threecx, wordpress
+    sondes = {
+        "wordpress": lambda inst: wordpress._verify(
+            {"site_url": base, "username": "u", "application_password": "p"},
+            instance=inst),
+        "lighton": lambda inst: lighton._verify({"api_key": "k", "base_url": base},
+                                                instance=inst),
+        "threecx": lambda inst: threecx._verify(
+            {"base_url": base, "auth_mode": "api_client", "client_id": "c",
+             "client_secret": "s"}, instance=inst),
+        "salesforce": lambda inst: salesforce._verify(
+            {"client_id": "i", "client_secret": "s", "refresh_token": "r",
+             "login_url": base}, instance=inst),
+        "api": lambda inst: tool_api.client_for(
+            {"base_url": base, "auth_mode": "bearer", "token": "t"},
+            row=inst).get("/v1/x"),
+    }
+    return sondes[connecteur]
+
+
+_HOTES = {"wordpress": "wp.exemple.test", "lighton": "lighton.exemple.test",
+          "threecx": "pbx.exemple.test", "salesforce": "acme.my.salesforce.com",
+          "api": "api.exemple.test"}
+
+
+@pytest.mark.parametrize("connecteur", sorted(_HOTES))
+def test_une_exception_declaree_vaut_pour_la_plateforme_jamais_pour_un_membre(
+        monkeypatch, connecteur):
+    """La MÊME destination interne déclarée par l'opérateur : jointe pour un credential
+    de plateforme (la socket s'ouvre sur l'adresse déclarée), refusée pour celui d'un
+    membre ou d'une org — avant toute socket."""
+    _sans_garde_de_la_lib_3cx(monkeypatch)
+    _sans_cache_salesforce(monkeypatch)
+    hote = _HOTES[connecteur]
+    # WordPress n'envoie son mot de passe en `http` que vers une exception déclarée :
+    # c'est ce chemin-là qu'on éprouve, sur le port déclaré.
+    schema, port = ("http", 8080) if connecteur == "wordpress" else ("https", 443)
+    monkeypatch.setenv(egress.ALLOW_VAR, f"pont-local=127.0.0.1:{port}")
+    monkeypatch.setattr(egress, "resolved_addresses", _Resolveur(["127.0.0.1"]))
+    ouvertes = []
+
+    def ouvrir(adresse, port, *a, **k):
+        ouvertes.append((adresse, port))
+        raise OSError("banc : la garde a laissé passer, on s'arrête là")
+    monkeypatch.setattr(egress_transport, "_ouvrir", ouvrir)
+    sonde = _sonde(connecteur, hote, schema, port if schema == "http" else None)
+
+    for palier in (("user", "u", ""), ("org", "1", ""), None):
+        with pytest.raises(ValueError, match="destination refusée"):
+            sonde(palier)
+    assert ouvertes == [], "aucune socket pour un membre ni une org"
+
+    with pytest.raises(Exception) as e:
+        sonde(("platform", "pont", ""))
+    assert "destination refusée" not in str(e.value)
+    assert ouvertes and ouvertes[0] == ("127.0.0.1", port)
+
+
+@pytest.mark.parametrize("adresse,raison", [("169.254.169.254", "lien-local"),
+                                            ("::ffff:127.0.0.1", "boucle locale")])
+@pytest.mark.parametrize("connecteur", sorted(_HOTES))
+def test_metadonnees_et_ipv4_ecrite_en_ipv6_refusees_a_la_connexion(
+        monkeypatch, aucune_socket, connecteur, adresse, raison):
+    """Publique au contrôle, puis les métadonnées d'infrastructure ou la boucle locale
+    écrite en IPv6 à la connexion : refusé par le transport, sans socket."""
+    _sans_garde_de_la_lib_3cx(monkeypatch)
+    _sans_cache_salesforce(monkeypatch)
+    monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
+    monkeypatch.setattr(egress, "resolved_addresses", _Resolveur([PUBLIQUE], [adresse]))
+    with pytest.raises(ValueError, match="destination refusée"):
+        _sonde(connecteur, _HOTES[connecteur])(("org", "1", ""))
+
+
+# ── 7. au niveau de l'OUTIL ──────────────────────────────────────────────────
+
+def _creds_membre(monkeypatch, fields):
+    """La cascade rend un credential de MEMBRE portant ces champs."""
+    from types import SimpleNamespace
+    from oto_mcp import access
+    monkeypatch.setattr(access, "resolve_credential_fields",
+                        lambda provider, account=None: dict(fields))
+    monkeypatch.setattr(access, "resolve_credential",
+                        lambda provider, *a, **k: SimpleNamespace(
+                            fields=dict(fields), entity_type="user", entity_id="u",
+                            account="", is_platform=False, mode="user"))
+
+
+def _outil(module, nom):
+    import asyncio
+    from fastmcp import FastMCP
+    m = FastMCP("t")
+    module.register(m)
+    return asyncio.run(m.get_tool(nom)).fn
+
+
+@pytest.mark.parametrize("connecteur", sorted(_HOTES))
+def test_l_outil_refuse_une_destination_interne_meme_declaree(monkeypatch, aucune_socket,
+                                                              connecteur):
+    """Le chemin des OUTILS, pas la sonde : un credential de membre dont l'hôte résout
+    vers une adresse interne — déclarée par l'opérateur, ce qui ne vaut pas pour un
+    membre — est refusé, sans socket, et le refus nomme la garde."""
+    from oto_mcp.mcp_errors import McpError
+    from oto_mcp.tools import api as tool_api, lighton, salesforce, threecx, wordpress
+    _sans_garde_de_la_lib_3cx(monkeypatch)
+    monkeypatch.setenv(egress.ALLOW_VAR, "pont-local=127.0.0.1:443")
+    monkeypatch.setattr(egress, "resolved_addresses", _Resolveur(["127.0.0.1"]))
+    base = f"https://{_HOTES[connecteur]}"
+    fields = {
+        "wordpress": {"site_url": base, "username": "u", "application_password": "p"},
+        "lighton": {"api_key": "k", "base_url": base},
+        "threecx": {"base_url": base, "auth_mode": "api_client", "client_id": "c",
+                    "client_secret": "s"},
+        "salesforce": {"client_id": "i", "client_secret": "s", "refresh_token": "r",
+                       "login_url": base},
+        "api": {"base_url": base, "auth_mode": "bearer", "token": "t"},
+    }[connecteur]
+    _creds_membre(monkeypatch, fields)
+    appel = {
+        "wordpress": lambda: wordpress._client(),
+        "lighton": lambda: _outil(lighton, "lighton_search")(query="x"),
+        "threecx": lambda: _outil(threecx, "threecx_call")("2026-09-01", "2026-09-02"),
+        "salesforce": lambda: _outil(salesforce, "salesforce_describe")("Account"),
+        "api": lambda: tool_api._client_of(
+            __import__("oto_mcp.access", fromlist=["x"]).resolve_credential("api")),
+    }[connecteur]
+    with pytest.raises((McpError, ValueError)) as e:
+        appel()
+    assert "boucle locale" in str(e.value)
+
+
+# ── 8. Salesforce : les appels vers l'`instance_url` rendue par l'échange ────
+
+class _ReponseJeton(requests.adapters.BaseAdapter):
+    """Le serveur d'autorisation, simulé : rend un jeton et l'`instance_url`."""
+    def __init__(self, instance_url):
+        super().__init__()
+        self.instance_url, self.vus = instance_url, []
+
+    def send(self, request, **kw):
+        self.vus.append(request.url)
+        r = requests.Response()
+        r.status_code, r.url, r.request = 200, request.url, request
+        r._content = (b'{"access_token": "a", "instance_url": "'
+                      + self.instance_url.encode() + b'"}')
+        r.headers["Content-Type"] = "application/json"
+        return r
+
+    def close(self):
+        pass
+
+
+def test_les_appels_salesforce_vers_l_instance_url_rendue_sont_gardes(monkeypatch,
+                                                                      aucune_socket):
+    """L'`instance_url` n'est écrite par personne chez nous : Salesforce la rend à
+    l'échange du jeton. Si elle résout vers l'intérieur, l'appel d'API est refusé par
+    le transport, sans socket, et le refus nomme `instance_url`."""
+    from oto.tools.salesforce.client import SalesforceClient
+    from oto_mcp.tools import salesforce
+    _sans_cache_salesforce(monkeypatch)
+    monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _table(**{"acme.my.salesforce.com": ["127.0.0.1"]}))
+    s = salesforce._session("https://login.salesforce.com", titulaire=egress.AUCUN)
+    jeton = _ReponseJeton("https://acme.my.salesforce.com")
+    s.mount("https://login.salesforce.com/", jeton)
+    client = SalesforceClient(client_id="i", client_secret="s", refresh_token="r",
+                              session=s)
+    with pytest.raises(egress.EgressRefused, match="boucle locale(.|\\n)*instance_url"):
+        client.query("SELECT Id FROM Contact LIMIT 1")
+    assert jeton.vus == ["https://login.salesforce.com/services/oauth2/token"]
+
+
+# ── 9. redirections : LightOn et le jeton oauth2 de la carte API ─────────────
+
+def test_une_redirection_de_lighton_vers_l_interieur_est_refusee(monkeypatch, serveur_local):
+    """Premier saut : un pont déclaré, joint pour un credential de PLATEFORME. Son 302
+    vise la boucle locale sur un port non déclaré : refusé à la connexion du saut."""
+    from oto_mcp.tools import lighton
+    port, srv = serveur_local
+    srv.redirection = "http://127.0.0.1:9/admin"
+    monkeypatch.setenv(egress.ALLOW_VAR, f"pont-local=127.0.0.1:{port}")
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _table(**{"pont.exemple.test": ["127.0.0.1"],
+                                  "127.0.0.1": ["127.0.0.1"]}))
+    with pytest.raises(egress.EgressRefused, match="boucle locale"):
+        lighton._verify({"api_key": "k", "base_url": f"http://pont.exemple.test:{port}"},
+                        instance=("platform", "pont", ""))
+    assert srv.hotes == [f"pont.exemple.test:{port}"], "seul le premier saut est parti"
+
+
+def test_une_redirection_du_jeton_oauth2_de_la_carte_api_est_refusee(monkeypatch,
+                                                                    serveur_local):
+    from oto_mcp.tools import api as tool_api
+    port, srv = serveur_local
+    srv.redirection = "http://deguise.exemple.test/"
+    monkeypatch.setenv(egress.ALLOW_VAR, f"pont-local=127.0.0.1:{port}")
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _table(**{"api.exemple.test": [PUBLIQUE],
+                                  "jeton.exemple.test": ["127.0.0.1"],
+                                  "deguise.exemple.test": ["169.254.169.254"]}))
+    client = tool_api.client_for(
+        {"base_url": "https://api.exemple.test", "auth_mode": "oauth2",
+         "token_url": f"http://jeton.exemple.test:{port}/token",
+         "client_id": "i", "client_secret": "s"}, row=("platform", "pont", ""))
+    with pytest.raises(egress.EgressRefused, match="lien-local(.|\\n)*token_url"):
+        client.get("/v1/x")
+    assert srv.hotes == [f"jeton.exemple.test:{port}"]
+
+
+# ── 10. le magasin de certificats de l'environnement ─────────────────────────
+
+@pytest.mark.parametrize("variable", ["REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"])
+def test_le_magasin_de_certificats_de_l_environnement_est_repris(monkeypatch, tmp_path,
+                                                                variable):
+    """Une autorité de certification privée posée par l'environnement vérifie le TLS
+    des sessions gardées, comme `requests` le ferait — sans rouvrir ni les proxies ni
+    aucune destination."""
+    from oto_mcp.tools import lighton, threecx
+    magasin = tmp_path / "ca.pem"
+    magasin.write_text("-----BEGIN CERTIFICATE-----\n")
+    for v in ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv(variable, str(magasin))
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.exemple.test:3128")
+    for s in (lighton._session(titulaire=egress.AUCUN),
+              threecx._session(titulaire=egress.AUCUN)):
+        assert _monte(s)
+        reglages = s.merge_environment_settings("https://pbx.exemple.test/", {}, None,
+                                                None, None)
+        assert reglages["verify"] == str(magasin)
+        assert reglages["proxies"] == {}
+
+
+def test_sans_magasin_dans_l_environnement_le_defaut_reste(monkeypatch):
+    for v in ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        monkeypatch.delenv(v, raising=False)
+    assert _connecteur().verify is True

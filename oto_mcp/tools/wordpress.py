@@ -37,7 +37,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from oto.tools.common.errors import UpstreamHTTPError
 
-from .. import access, egress
+from .. import access, egress, egress_transport
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from . import wordpress_blocks
@@ -180,16 +180,19 @@ def _diff(current: dict, changes: dict) -> dict:
     return out
 
 
-def _guard(site_url: str) -> bool:
+def _guard(site_url: str, *, titulaire: tuple) -> bool:
     """Before any client is built: egress guard, then HTTPS
-    (`auth.wordpress.http_allowed`). Returns `allow_http` for the client."""
+    (`auth.wordpress.http_allowed`), on behalf of the credential's holder
+    (`titulaire`, `egress.titulaire_de`). Returns `allow_http` for the client."""
     from ..auth.wordpress import http_allowed
 
-    egress.check_url(site_url, connector="wordpress", field="site_url")
-    return http_allowed(site_url)
+    egress.check_url(site_url, connector="wordpress", field="site_url",
+                     titulaire=titulaire)
+    return http_allowed(site_url, titulaire=titulaire)
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
+def _verify(fields: dict, config: dict | None = None,
+            instance: tuple | None = None) -> None:  # noqa: ARG001 (config: probe contract)
     """"Test the connection" probe — `GET wp/v2/users/me?context=edit`.
 
     Authenticated, no side effects, free. `context=edit` is only served to an
@@ -200,11 +203,15 @@ def _verify(fields: dict, config: dict | None = None) -> None:
 
     from ..auth.wordpress import site_session
 
-    allow_http = _guard(fields.get("site_url") or "")
+    # `instance` = the probed vault row: its holder decides the exceptions (a key
+    # being set, with no row yet, has none).
+    titulaire = egress.titulaire_d_instance(instance)
+    allow_http = _guard(fields.get("site_url") or "", titulaire=titulaire)
     try:
-        me = WordPressClient(fields["site_url"], fields["username"],
-                             fields["application_password"], allow_http=allow_http,
-                             session=site_session()).me()
+        with site_session(titulaire=titulaire) as s:
+            me = WordPressClient(fields["site_url"], fields["username"],
+                                 fields["application_password"], allow_http=allow_http,
+                                 session=s).me()
     except UpstreamHTTPError as e:
         if e.status_code == 401:
             raise connector_verify.NonAutorise(_translate(e).error.message) from e
@@ -218,13 +225,16 @@ def _client(account: Optional[str] = None) -> WordPressClient:
 
     from ..auth.wordpress import site_session
 
+    # On behalf of the resolved row's holder (`egress.titulaire_des_champs`).
     creds = access.resolve_credential_fields("wordpress", account)
+    titulaire = egress.titulaire_des_champs(creds)
     site = creds.get("site_url") or ""
     try:
-        allow_http = _guard(site)
+        allow_http = _guard(site, titulaire=titulaire)
         return WordPressClient(site, creds.get("username") or "",
                                creds.get("application_password") or "",
-                               allow_http=allow_http, session=site_session())
+                               allow_http=allow_http,
+                               session=site_session(titulaire=titulaire))
     except ValueError as e:   # egress guard, HTTP, URL or credentials missing
         raise _bad(f"unusable WordPress credential: {e}") from e
 

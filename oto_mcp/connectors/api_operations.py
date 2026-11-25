@@ -274,7 +274,7 @@ def fetch_public_document(url: str) -> Any:
     no redirect followed, size and time bounded."""
     try:
         egress.check_url(url, connector=CONNECTOR, field="url",
-                         exceptions_declarees=False)
+                         titulaire=egress.AGENT)
     except egress.EgressRefused as e:
         raise ImportFailed(str(e)) from None
     # The pinned session (`egress_transport`) is the guard that holds: it decides on
@@ -282,7 +282,7 @@ def fetch_public_document(url: str) -> Any:
     # `check_url` (DNS rebinding) is refused there too.
     try:
         with egress_transport.session(connector=CONNECTOR, field="url",
-                                      exceptions_declarees=False) as s, \
+                                      titulaire=egress.AGENT) as s, \
                 s.get(url, stream=True, timeout=URL_TIMEOUT, allow_redirects=False,
                       headers={"Accept": "application/json"}) as r:
             if 300 <= r.status_code < 400:

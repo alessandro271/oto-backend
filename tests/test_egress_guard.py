@@ -106,14 +106,14 @@ def test_le_deballage_v4_dans_v6_precise_la_RAISON():
 def test_une_destination_publique_passe(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"api.acme.test": ["93.184.216.34"]}))
-    egress.check_url("https://api.acme.test/v1", connector="api")
+    egress.check_url("https://api.acme.test/v1", connector="api", titulaire=egress.PLATEFORME)
 
 
 def test_une_adresse_interne_ecrite_en_clair_est_refusee(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"127.0.0.1": ["127.0.0.1"]}))
     with pytest.raises(egress.EgressRefused):
-        egress.check_url("http://127.0.0.1:9001/config", connector="api")
+        egress.check_url("http://127.0.0.1:9001/config", connector="api", titulaire=egress.PLATEFORME)
 
 
 def test_le_deguisement_par_nom_de_domaine_est_refuse(monkeypatch):
@@ -122,7 +122,7 @@ def test_le_deguisement_par_nom_de_domaine_est_refuse(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"interne.acme.test": ["127.0.0.1"]}))
     with pytest.raises(egress.EgressRefused) as pris:
-        egress.check_url("https://interne.acme.test/", connector="api")
+        egress.check_url("https://interne.acme.test/", connector="api", titulaire=egress.PLATEFORME)
     message = str(pris.value)
     # Le refus doit montrer les DEUX : le nom saisi ET l'adresse jointe. Sans le
     # nom, il paraît absurde ; sans l'adresse, il ne dit pas ce qui cloche.
@@ -144,7 +144,7 @@ def test_un_hote_qui_resout_public_ET_interne_est_refuse(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"double.acme.test": ["1.1.1.1", "192.168.1.10"]}))
     with pytest.raises(egress.EgressRefused) as pris:
-        egress.check_url("https://double.acme.test/", connector="n8n")
+        egress.check_url("https://double.acme.test/", connector="n8n", titulaire=egress.PLATEFORME)
     assert "192.168.1.10" in str(pris.value)
 
 
@@ -161,7 +161,7 @@ def test_un_schema_hors_http_est_refuse(monkeypatch, url):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"api.acme.test": ["93.184.216.34"]}))
     with pytest.raises(egress.EgressRefused):
-        egress.check_url(url, connector="api")
+        egress.check_url(url, connector="api", titulaire=egress.PLATEFORME)
 
 
 def test_un_hote_qui_ne_resout_pas_n_est_pas_appele(monkeypatch):
@@ -170,7 +170,7 @@ def test_un_hote_qui_ne_resout_pas_n_est_pas_appele(monkeypatch):
         raise OSError("Name or service not known")
     monkeypatch.setattr(egress, "resolved_addresses", casse)
     with pytest.raises(egress.EgressRefused):
-        egress.check_url("https://nulle-part.acme.test/", connector="make")
+        egress.check_url("https://nulle-part.acme.test/", connector="make", titulaire=egress.PLATEFORME)
 
 
 def test_le_refus_nomme_sa_destination(monkeypatch):
@@ -181,7 +181,7 @@ def test_le_refus_nomme_sa_destination(monkeypatch):
                         _resolution(**{"pont.acme.test": ["127.0.0.1"]}))
     with pytest.raises(egress.EgressRefused) as pris:
         egress.check_url("http://pont.acme.test:9000/healthz",
-                         connector="api", field="base_url")
+                         connector="api", field="base_url", titulaire=egress.PLATEFORME)
     message = str(pris.value)
     assert egress.ALLOW_VAR in message
     assert "nom=adresse:port" in message
@@ -197,7 +197,7 @@ def test_une_destination_interne_declaree_passe(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"127.0.0.1": ["127.0.0.1"]}))
     monkeypatch.setenv(egress.ALLOW_VAR, "pont-local=127.0.0.1:9000")
-    egress.check_url("http://127.0.0.1:9000/healthz", connector="api")
+    egress.check_url("http://127.0.0.1:9000/healthz", connector="api", titulaire=egress.PLATEFORME)
 
 
 def test_une_exception_n_ouvre_QUE_son_port(monkeypatch):
@@ -207,7 +207,7 @@ def test_une_exception_n_ouvre_QUE_son_port(monkeypatch):
                         _resolution(**{"127.0.0.1": ["127.0.0.1"]}))
     monkeypatch.setenv(egress.ALLOW_VAR, "pont-local=127.0.0.1:9000")
     with pytest.raises(egress.EgressRefused):
-        egress.check_url("http://127.0.0.1:9001/config", connector="api")
+        egress.check_url("http://127.0.0.1:9001/config", connector="api", titulaire=egress.PLATEFORME)
 
 
 def test_une_exception_ne_vaut_pas_pour_une_autre_adresse(monkeypatch):
@@ -215,19 +215,20 @@ def test_une_exception_ne_vaut_pas_pour_une_autre_adresse(monkeypatch):
                         _resolution(**{"10.0.0.7": ["10.0.0.7"]}))
     monkeypatch.setenv(egress.ALLOW_VAR, "pont-local=127.0.0.1:9000")
     with pytest.raises(egress.EgressRefused):
-        egress.check_url("http://10.0.0.7:9000/", connector="api")
+        egress.check_url("http://10.0.0.7:9000/", connector="api", titulaire=egress.PLATEFORME)
 
 
 def test_le_defaut_est_vide():
     """Aucune destination réelle n'est écrite dans ce dépôt public : la liste se
     déclare au déploiement. Un défaut non vide ferait de ce fichier l'inventaire
     des services internes de la plateforme."""
-    assert egress.declared_exceptions("") == {}
+    assert egress.declared_exceptions("", titulaire=egress.PLATEFORME) == {}
 
 
 def test_la_liste_accepte_plusieurs_entrees_nommees():
     lue = egress.declared_exceptions(
-        "pont-local=127.0.0.1:9000,\n service-interne=10.0.0.5:9002")
+        "pont-local=127.0.0.1:9000,\n service-interne=10.0.0.5:9002",
+        titulaire=egress.PLATEFORME)
     assert lue == {("127.0.0.1", 9000): "pont-local",
                    ("10.0.0.5", 9002): "service-interne"}
 
@@ -242,7 +243,7 @@ def test_la_liste_accepte_plusieurs_entrees_nommees():
 def test_une_declaration_illisible_leve_au_lieu_d_etre_lue_comme_vide(brut):
     """Une politique de sécurité qu'on ne sait pas lire ne s'interprète pas."""
     with pytest.raises(ValueError) as pris:
-        egress.declared_exceptions(brut)
+        egress.declared_exceptions(brut, titulaire=egress.PLATEFORME)
     assert egress.ALLOW_VAR in str(pris.value), "le refus doit nommer la variable"
 
 
@@ -252,7 +253,7 @@ def test_une_declaration_illisible_n_atteint_pas_le_trafic_public(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"api.acme.test": ["93.184.216.34"]}))
     monkeypatch.setenv(egress.ALLOW_VAR, "n'importe quoi")
-    egress.check_url("https://api.acme.test/", connector="api")
+    egress.check_url("https://api.acme.test/", connector="api", titulaire=egress.PLATEFORME)
 
 
 # ── 4. le câblage, cran 1 : l'inventaire DÉRIVÉ du registre ──────────────────
@@ -444,10 +445,12 @@ def test_salesforce_garde_son_serveur_d_auth(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"10.0.0.7": ["10.0.0.7"]}))
     monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
-    with pytest.raises(egress.EgressRefused):
-        salesforce._login_url("http://10.0.0.7/services/oauth2")
+    for titulaire in (egress.PLATEFORME, ("org", "1"), egress.AUCUN):
+        with pytest.raises(egress.EgressRefused):
+            salesforce._login_url("http://10.0.0.7/services/oauth2", titulaire=titulaire)
     # Le défaut, lui, est une constante du module : rien à contrôler.
-    assert salesforce._login_url("") == "https://login.salesforce.com"
+    assert salesforce._login_url("", titulaire=egress.AUCUN) == \
+        "https://login.salesforce.com"
 
 
 def _carte(fields: dict) -> SimpleNamespace:
@@ -458,7 +461,9 @@ def _carte(fields: dict) -> SimpleNamespace:
 
 def test_api_refuse_la_carte_et_le_dit_en_McpError(monkeypatch):
     """Le vecteur le plus large, de bout en bout : credential résolu → refus
-    traduit pour l'appelant, sans qu'aucun client ne soit construit."""
+    traduit pour l'appelant, sans qu'aucun client ne soit construit. La carte est
+    celle d'une org : les exceptions de l'opérateur ne la concernent pas, le refus ne
+    les propose donc pas comme remède."""
     from oto_mcp.mcp_errors import McpError
     from oto_mcp.tools import api as tool_http
 
@@ -471,7 +476,8 @@ def test_api_refuse_la_carte_et_le_dit_en_McpError(monkeypatch):
     monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
     with pytest.raises(McpError) as pris:
         tool_http._client()
-    assert egress.ALLOW_VAR in str(pris.value)
+    assert "destination refusée" in str(pris.value)
+    assert "base_url" in str(pris.value)
 
 
 def test_api_garde_aussi_le_serveur_de_jetons_oauth2(monkeypatch):
@@ -519,22 +525,21 @@ def test_api_laisse_passer_une_carte_publique(monkeypatch):
     "https://acme.mcp.exemple.test/api/hooks/h_abc",
     "https://acme--mcp.exemple.test/mcp",
 ])
-@pytest.mark.parametrize("exceptions_declarees", [True, False])
-def test_l_instance_elle_meme_est_refusee(monkeypatch, url, exceptions_declarees):
+@pytest.mark.parametrize("titulaire", [egress.PLATEFORME, ("org", "1"), egress.AGENT])
+def test_l_instance_elle_meme_est_refusee(monkeypatch, url, titulaire):
     """Un agent n'appelle pas oto par un connecteur : `api_post` sur une carte dont la
     `base_url` vise l'instance joignait `/api/hooks/…` avec un porteur obtenu ailleurs, et
     réveillait un agent hors de toute liste d'outils."""
     monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
     with pytest.raises(egress.EgressRefused) as pris:
-        egress.check_url(url, connector="api",
-                         exceptions_declarees=exceptions_declarees)
+        egress.check_url(url, connector="api", titulaire=titulaire)
     assert "OTO_MCP_PUBLIC_URL" in str(pris.value)
 
 
 def test_un_hote_qui_ne_fait_que_ressembler_a_l_instance_passe(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
-    egress.check_url("https://xmcp.exemple.test/v1", connector="api")
-    egress.check_url("https://exemple.test/v1", connector="api")
+    egress.check_url("https://xmcp.exemple.test/v1", connector="api", titulaire=egress.PLATEFORME)
+    egress.check_url("https://exemple.test/v1", connector="api", titulaire=egress.PLATEFORME)
 
 
 def test_sans_adresse_publique_declaree_la_garde_leve(monkeypatch):
@@ -543,7 +548,7 @@ def test_sans_adresse_publique_declaree_la_garde_leve(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
     monkeypatch.delenv("OTO_MCP_PUBLIC_URL", raising=False)
     with pytest.raises(RuntimeError, match="OTO_MCP_PUBLIC_URL"):
-        egress.check_url("https://api.acme.test/v1", connector="api")
+        egress.check_url("https://api.acme.test/v1", connector="api", titulaire=egress.PLATEFORME)
 
 
 def test_api_refuse_une_carte_qui_vise_l_instance(monkeypatch):

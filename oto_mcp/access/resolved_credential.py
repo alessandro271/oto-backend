@@ -11,8 +11,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .. import credentials_store, providers
+from .. import credentials_store, egress, providers
 from . import secret_repr
+
+
+class ChampsResolus(dict):
+    """The unpacked fields of a resolved credential, carrying its egress holder
+    (`titulaire`, `egress.titulaire_de` of the winning vault row): a caller that only
+    reads fields still says on whose behalf a destination it holds is called. A plain
+    dict (a copy, a test stub) has none: `egress.titulaire_des_champs` reads it as
+    `egress.AUCUN`, no named exception."""
+
+    titulaire: tuple = egress.AUCUN
 
 
 @dataclass(frozen=True)
@@ -41,6 +51,12 @@ class ResolvedCredential:
     def __repr__(self) -> str:
         # The key NEVER leaks through repr (#564) — see `secret_repr`.
         return secret_repr.expurge(self, "secret")
+
+    @property
+    def titulaire(self) -> tuple:
+        """On whose behalf this credential goes out (`egress.titulaire_de`): only the
+        operator's named exceptions that name it apply."""
+        return egress.titulaire_de(self.entity_type, self.entity_id)
 
     @property
     def key(self) -> str:

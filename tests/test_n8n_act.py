@@ -33,7 +33,8 @@ def client(monkeypatch):
     monkeypatch.setattr("oto.tools.n8n.N8nClient", fabrique)
     monkeypatch.setattr("oto_mcp.access.resolve_credential_fields",
                         lambda provider, account=None: dict(_CREDS))
-    monkeypatch.setattr("oto_mcp.egress.check_url", lambda url, connector=None: None)
+    monkeypatch.setattr("oto_mcp.egress.check_url",
+                        lambda url, connector=None, titulaire=None: None)
     inst.built = built
     return inst
 

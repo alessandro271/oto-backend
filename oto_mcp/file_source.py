@@ -102,7 +102,7 @@ def _assert_public_host(host: str) -> None:
     hote = f"[{host}]" if ":" in host else host
     try:
         egress.check_url(f"http://{hote}/", connector="source url", field="url",
-                         exceptions_declarees=False)
+                         titulaire=egress.AGENT)
     except egress.EgressRefused as e:
         raise FileSourceError(str(e)) from None
 
@@ -176,7 +176,7 @@ def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False,
     # décide à la connexion, sur les adresses mêmes que la socket joint — une
     # résolution qui change après `_check_url` (DNS rebinding) est refusée là.
     with egress_transport.session(connector="source url", field="url",
-                                  exceptions_declarees=False) as c:
+                                  titulaire=egress.AGENT) as c:
         for _ in range(MAX_REDIRECTS + 1):
             reste = _reste(deadline)
             try:
