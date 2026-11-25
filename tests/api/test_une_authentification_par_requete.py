@@ -43,7 +43,7 @@ def banc(monkeypatch):
     compte = {"garde": 0, "upsert": 0, "jeton": 0, "pause": None,
               "ligne": {"sub": "u-api", "scopes": None, "token_id": 7}}
 
-    def _garde(sub):
+    def _garde(sub, emis_le=None):
         compte["garde"] += 1
         return compte["pause"]
 

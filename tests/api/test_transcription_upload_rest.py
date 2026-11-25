@@ -45,7 +45,9 @@ class _Verifier:
 def depots(monkeypatch):
     """Le projet existe, il est dans l'org de consultation, l'acteur y écrit ; le cœur
     enregistre ce qu'il reçoit."""
-    monkeypatch.setattr("oto_mcp.account_suspension.refus", lambda sub: None)
+    # Compte vivant, jamais fermé : la lecture d'entrée de la garde (pause et
+    # instant « révoqué avant », `db.get_suspension`) ne rend rien.
+    monkeypatch.setattr("oto_mcp.db.get_suspension", lambda sub: None)
     monkeypatch.setattr(base, "alias_drain_armed", lambda: False)
     monkeypatch.setattr(db, "upsert_user", lambda *a, **k: None)
     monkeypatch.setattr(access, "current_org", lambda sub: 3)

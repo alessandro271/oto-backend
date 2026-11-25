@@ -111,7 +111,7 @@ def comptes(monkeypatch):
     monkeypatch.setattr(ab.db, "verify_api_token",
                         lambda token: {"sub": jetons[token], "scopes": None, "token_id": 1,
                                        "token_kind": None} if token in jetons else None)
-    monkeypatch.setattr(ab.garde_identite, "refus", lambda sub: None)
+    monkeypatch.setattr(ab.garde_identite, "refus", lambda sub, emis_le=None: None)
     monkeypatch.setattr(ab, "_maybe_view_as", lambda sub, apply=True: sub)
     monkeypatch.setattr(access, "is_super_admin", lambda sub: False)
     monkeypatch.setattr(access, "is_platform_operator", lambda sub: False)
