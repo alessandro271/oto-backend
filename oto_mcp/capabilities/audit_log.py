@@ -51,6 +51,7 @@ from .. import db
 from ..tool_visibility import namespace_of
 from ._authz import ORG_ADMIN_OF
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding,
+                     vide_en_absent,
                      cap_limit)
 from ._lecture_bornee import bornee
 from .registry import CAPABILITIES
@@ -193,6 +194,18 @@ class AuditExport(BaseModel):
     calls: list[AuditCall]
 
 
+# Une borne horaire que PostgreSQL ne lit pas (`garbage`, `2026-13-45`, `infinity`) :
+# refus NOMMÉ qui dit le paramètre en cause, plus la panne du cast `::timestamptz`.
+# Commun à cet export et aux relevés d'usage (`org_monitoring`), qui le déclarent.
+REFUS_BORNE = DeclaredError(
+    400, "invalid_timestamp",
+    "`since`, `until` ou `before_at` illisible comme instant ISO 8601 fini")
+
+
+def refus_de_borne(e: "db.BorneIllisible") -> AuthzDenied:
+    return AuthzDenied(400, "invalid_timestamp", str(e))
+
+
 class AuditExportInput(BaseModel):
     org_id: int
     since: Optional[str] = None       # borne basse ISO (timestamptz), incluse
@@ -200,6 +213,8 @@ class AuditExportInput(BaseModel):
     limit: int = 1000
     # Opaque : renvoyé TEL QUEL, jamais recomposé. Sa composition est à nous.
     cursor: Optional[str] = None
+
+    _bornes = field_validator("since", "until", mode="before")(vide_en_absent)
 
     # C'est la lentille la plus exposée : sur un EXPORT, un grand nombre paraît
     # légitime, donc rien ne le rendait suspect. Écrête au défaut servi (#300).
@@ -224,8 +239,11 @@ def _export(ctx: ResolvedCtx, inp: AuditExportInput) -> dict:
                 "`cursor`.")
         since, until, before = _decode_cursor(inp.cursor, inp.org_id)
 
-    page = db.export_tool_calls_for_org(inp.org_id, since=since, until=until,
-                                        limit=inp.limit, before=before)
+    try:
+        page = db.export_tool_calls_for_org(inp.org_id, since=since, until=until,
+                                            limit=inp.limit, before=before)
+    except db.BorneIllisible as e:
+        raise refus_de_borne(e) from e
     calls = page["calls"]
     for c in calls:
         c["namespace"] = namespace_of(c["tool"]) if c.get("tool") else None
@@ -260,6 +278,7 @@ CAPABILITIES += [
             DeclaredError(400, "window_with_cursor",
                           "`since`/`until` repassés avec un `cursor`, qui porte "
                           "déjà la fenêtre"),
+            REFUS_BORNE,
         ),
         description="Org audit log of tool calls (org_admin): timestamp, user, tool, "
                     "namespace, duration, ok/error — never args or secrets. Scoped to "
