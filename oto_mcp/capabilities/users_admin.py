@@ -18,7 +18,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, StrictInt
 
 from .. import (access, billing_grants, providers, credentials_store, db,
-                entitlements_catalogue as catalogue, group_store, org_store)
+                entitlements_catalogue as catalogue, garde_admin, group_store, org_store)
 from . import _facturation_externe as facturation_externe
 from . import _quota_d_octroi as quota_d_octroi
 from . import _identite
@@ -221,6 +221,14 @@ def _set_role(ctx: ResolvedCtx, inp: SetRoleInput) -> dict:
     target = _resolve_target(inp.target)
     if not db.get_user(target):
         raise AuthzDenied(404, "unknown_user", f"Compte {target!r} inconnu.")
+    # Nul n'est nommé admin plateforme sans second facteur fort (`OTO_ADMIN_MFA`
+    # `report`/`enforce`) : le seul chemin servi qui écrit `users.role` — la route REST
+    # et `oto_admin_user op=set_role` passent tous deux ici.
+    refus = garde_admin.refus_promotion(target, inp.role)
+    if refus is not None:
+        # Code EN LITTÉRAL (= `garde_admin.CODE_PROMOTION`) : les refus atteignables se
+        # lisent sur les littéraux (`tests/_refus_atteignables.py`).
+        raise AuthzDenied(409, "admin_mfa_required_for_promotion", refus.message)
     db.set_user_role(target, inp.role)
     return {"ok": True, "sub": target, "role": inp.role}
 
@@ -241,6 +249,7 @@ def _reset_mfa(ctx: ResolvedCtx, inp: ResetMfaInput) -> dict:
         raise AuthzDenied(502, "logto_sessions_not_closed",
                           "Second factors were removed and API tokens revoked; closing "
                           "the Logto sessions failed. Retry the reset.") from e
+    revocation_2fa.alerter_si_admin(target, "reset_mfa")
     revocation_2fa.poser_aucun_facteur(target)
     return {"ok": True, "sub": target, "removed": removed}
 

@@ -269,6 +269,18 @@ par la Management API, qui n'émet aucun webhook : elle ferme elle-même (trace
 `revoked_by` = l'opérateur) et pose l'empreinte d'aucun facteur. Fermeture Logto en
 échec → `502 logto_sessions_not_closed`, à rejouer (le geste est idempotent).
 
+**L'alerte d'un compte d'administration** (`revocation_2fa.alerter_si_admin`). Quand le
+compte dont les facteurs ont changé — sur le webhook comme à la remise à zéro — a le rôle
+`admin` ou `super_admin` en base (`OTO_MCP_ADMIN_SUB` compris, lu hors de la garde de
+requête), une alerte part par le canal d'exploitation de la plateforme : une ligne
+WARNING au journal et un message au suivi d'erreurs (Sentry, tag `oto.admin_facteurs` =
+l'événement Logto ou `reset_mfa`), comme les autres anomalies dites hors requête. Elle ne
+porte que le sub, le rôle et la nature du changement : ni facteur, ni identifiant de
+facteur, ni adresse. Elle part quel que soit `OTO_ADMIN_MFA`, après la fermeture et
+AVANT la pose de l'empreinte : un rôle illisible rend `500`, l'écart reste, et la
+relivraison de Logto refait le constat (l'alerte peut alors partir deux fois, jamais
+zéro).
+
 ## Un jeton émis avant la fermeture est refusé (25/11/2026)
 
 Fermer les sessions Logto et révoquer les jetons `oto_` ne coupait ni un JWT d'accès
@@ -517,6 +529,26 @@ CASA AL1 3.3.1 (« le MFA est imposé à tout compte d'administration ») ; code
   (`garde admin (report)`) les opérateurs qui perdraient le rôle ; quand chaque
   `admin`/`super_admin` a enrôlé TOTP ou une clé d'accès ET s'est reconnecté, passer à
   `enforce`.
+- **La nomination** (`garde_admin.refus_promotion`) : sous `report` ou `enforce`, nul
+  n'est NOMMÉ `admin` ou `super_admin` sans facteur fort enrôlé — sinon un compte
+  porterait un rôle qu'il ne peut exercer, et le relevé de `report` le découvrirait après
+  coup. Lecture fraîche chez Logto (le cache n'est pas consulté). `enforce` refuse en
+  `409 admin_mfa_required_for_promotion`, facteurs illisibles compris (fail-closed) ;
+  `report` journalise (`garde admin (report) : … nommé`) et laisse passer ; `off` ne lit
+  rien. Rétrograder vers `member` passe toujours. Les chemins qui écrivent `users.role` :
+  - `platform.user.set_role` (`users_admin._set_role`) — la route
+    `POST /api/admin/users/{sub}/role` et `oto_admin_user op=set_role` partagent ce
+    handler : gardé ;
+  - `scripts/migrate_admin_to_super.py` (maintenance, `admin` → `super_admin`) : chaque
+    compte jugé ; en `enforce`, un seul refus et rien n'est écrit ;
+  - `OTO_MCP_ADMIN_SUB` n'écrit rien en base : c'est un rôle effectif, borné à chaque
+    requête par la garde ci-dessus (le compte d'amorçage n'y échappe pas) ;
+  - la fusion de deux identifiants (`db.users.migrate_sub`, bascule de tenant) reporte
+    le rôle le plus fort sur le nouvel identifiant : elle transporte un rôle existant,
+    elle n'en nomme pas — non gardée, et bornée à la requête comme tout opérateur.
+- **L'alerte** : tout changement de facteur d'un compte `admin`/`super_admin` (webhook
+  Logto, remise à zéro par un opérateur) part au journal et au suivi d'erreurs, quel que
+  soit `OTO_ADMIN_MFA` (§ Double authentification changée).
 
 **Pourquoi « enrôlé » et pas « utilisé dans cette session »** : Logto re-vérifie le
 facteur enrôlé à chaque connexion (§ MFA par org, `guardMfaVerificationStatus`), et le

@@ -188,6 +188,7 @@ def traiter(brut: bytes, evt: Any, signature: Optional[str],
         revocation_2fa.poser(sub, empreinte)
         return {"ignored": True, "event": event}
     rendu = fermer_tout(sub, f"double authentification changée ({event})")
+    revocation_2fa.alerter_si_admin(sub, event)
     # Après la fermeture seulement : en échec, l'écart reste et la relivraison le retrouve.
     revocation_2fa.poser(sub, empreinte)
     return {"ignored": False, "event": event, "reason": "mfa_changed", **rendu}

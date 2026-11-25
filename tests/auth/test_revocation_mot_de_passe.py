@@ -92,6 +92,10 @@ def monde(monkeypatch):
         vus.append(("empreinte", sub))
         etat["posees"][sub] = valeur
     monkeypatch.setattr(revocation_2fa.empreintes_2fa, "poser", _poser)
+    # Le rôle plateforme en base (l'alerte des admins) : `member` sauf test qui le pose.
+    etat["roles"] = {}
+    monkeypatch.setattr(revocation_2fa, "_role_plateforme",
+                        lambda sub: etat["roles"].get(sub, "member"))
     vus.etat = etat
     return vus
 
@@ -629,6 +633,107 @@ def test_remise_a_zero_fermeture_en_echec_rend_502(remise, monkeypatch):
         users_admin._reset_mfa(ResolvedCtx(sub="operateur-1"),
                                users_admin.ResetMfaInput(target=SUB))
     assert e.value.status == 502 and e.value.code == "logto_sessions_not_closed"
+
+
+# --- L'alerte : un facteur d'admin plateforme a changé ---------------------------
+
+@pytest.fixture
+def alertes(monde, monkeypatch):
+    """Le suivi d'erreurs simulé : chaque alerte entre dans le relevé des gestes."""
+    import sentry_sdk
+    messages: list = []
+
+    def _capture(message, level=None):
+        messages.append((message, level))
+        monde.append(("alerte", SUB))
+    monkeypatch.setattr(sentry_sdk, "capture_message", _capture)
+    monde.messages = messages
+    return monde
+
+
+@pytest.mark.parametrize("role", ["admin", "super_admin"])
+@pytest.mark.parametrize("valeur", [None, "off", "report", "enforce"])
+def test_facteur_d_un_admin_change_alerte_quel_que_soit_le_mode(alertes, monkeypatch,
+                                                                role, valeur):
+    if valeur is None:
+        monkeypatch.delenv("OTO_ADMIN_MFA", raising=False)
+    else:
+        monkeypatch.setenv("OTO_ADMIN_MFA", valeur)
+    alertes.etat["roles"][SUB] = role
+    alertes.etat["facteurs"].append({"id": "cle-1", "type": "WebAuthn",
+                                     "createdAt": _maintenant()})
+    r = _poste(_profil())
+    assert r.status_code == 200 and r.json()["reason"] == "mfa_changed"
+    [(message, niveau)] = alertes.messages
+    assert SUB in message and role in message and "User.Data.Updated" in message
+    assert niveau == "warning"
+    # Ni facteur, ni identifiant de facteur, ni adresse.
+    for interdit in ("WebAuthn", "Totp", "cle-1", "totp-1", "@"):
+        assert interdit not in message
+    # Après la fermeture, AVANT la pose de l'empreinte (une panne fait relivrer).
+    assert (alertes.index(("logto", SUB)) < alertes.index(("alerte", SUB))
+            < alertes.index(("empreinte", SUB)))
+
+
+def test_facteur_d_un_membre_change_n_alerte_pas(alertes):
+    alertes.etat["facteurs"].pop()
+    r = _poste(_profil())
+    assert r.json()["reason"] == "mfa_changed"
+    assert alertes.messages == [] and ("alerte", SUB) not in alertes
+
+
+def test_admin_sans_changement_n_alerte_pas(alertes):
+    alertes.etat["roles"][SUB] = "super_admin"
+    r = _poste(_profil())
+    assert r.json()["ignored"] is True and alertes.messages == []
+
+
+def test_connexion_qui_enrole_un_facteur_d_admin_alerte(alertes):
+    alertes.etat["roles"][SUB] = "admin"
+    alertes.etat["facteurs"].append({"id": "totp-2", "type": "Totp",
+                                     "createdAt": _maintenant()})
+    r = _poste({"hookId": "h1", "event": "PostSignIn", "createdAt": _maintenant(),
+                "userId": SUB})
+    assert r.json()["reason"] == "mfa_changed"
+    [(message, _)] = alertes.messages
+    assert "PostSignIn" in message
+
+
+def test_role_illisible_rend_500_et_ne_pose_pas_l_empreinte(alertes, monkeypatch):
+    """L'alerte ne se perd pas : sans rôle lu, l'écart reste et Logto relivre."""
+    def _tombe(sub):
+        raise RuntimeError("base injoignable")
+    monkeypatch.setattr(revocation_2fa, "_role_plateforme", _tombe)
+    alertes.etat["facteurs"].pop()
+    r = _poste(_profil())
+    assert r.status_code == 500 and r.json()["error"] == "logto_webhook_failed"
+    assert ("empreinte", SUB) not in alertes
+
+
+def test_remise_a_zero_d_un_admin_alerte(remise, alertes):
+    remise.etat["roles"][SUB] = "admin"
+    users_admin._reset_mfa(ResolvedCtx(sub="operateur-1"),
+                           users_admin.ResetMfaInput(target=SUB))
+    [(message, _)] = alertes.messages
+    assert SUB in message and "reset_mfa" in message
+    assert alertes.index(("alerte", SUB)) < alertes.index(("empreinte", SUB))
+
+
+def test_remise_a_zero_d_un_membre_n_alerte_pas(remise, alertes):
+    users_admin._reset_mfa(ResolvedCtx(sub="operateur-1"),
+                           users_admin.ResetMfaInput(target=SUB))
+    assert alertes.messages == []
+
+
+def test_le_role_se_lit_en_base_sans_la_garde_amorcage_compris(monkeypatch):
+    """`_role_plateforme` lit le rôle hors garde de requête : le compte d'amorçage
+    `OTO_MCP_ADMIN_SUB` est admin, un membre ne l'est pas."""
+    from oto_mcp.access import scope
+    monkeypatch.setattr(scope.db, "get_user",
+                        lambda sub: {"sub": sub, "role": "member"})
+    monkeypatch.setenv("OTO_MCP_ADMIN_SUB", "amorce")
+    assert revocation_2fa._role_plateforme("amorce") == "super_admin"
+    assert revocation_2fa._role_plateforme("quelqu-un") == "member"
 
 
 # --- La lecture des facteurs chez Logto (Management API simulée) -----------------
