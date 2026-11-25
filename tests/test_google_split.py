@@ -37,6 +37,14 @@ POST_SPLIT = ("bigquery", "google_ads", "search_console")
 SERVICES = SPLIT + POST_SPLIT
 EMAIL = "https://www.googleapis.com/auth/userinfo.email"
 
+def _lu(state):
+    """Le state Google lu (`read_state`), en tuple (sub, org, app, carte, scope, équipe)."""
+    from oto_mcp.auth import google as _g
+    d = _g.read_state(state)
+    return None if d is None else (d["sub"], d["org"], d["app"], d["connector"],
+                                   d["scope"], d["group"])
+
+
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
@@ -194,8 +202,12 @@ def test_un_connecteur_inconnu_nobtient_aucun_scope():
 
 def test_services_granted_lit_les_scopes_dun_compte():
     assert G.services_granted("https://www.googleapis.com/auth/drive " + EMAIL) == ["drive"]
-    # Chat a DEUX scopes : un seul ne suffit pas.
+    # Chat a TROIS scopes : un seul ne suffit pas.
     assert G.services_granted("https://www.googleapis.com/auth/chat.messages") == []
+    # L'ancienne paire (avant le 23/11/2026) ne couvre plus Chat : il faut reconsentir.
+    assert G.services_granted(
+        "https://www.googleapis.com/auth/chat.spaces.readonly "
+        "https://www.googleapis.com/auth/chat.messages") == []
     # Le consentement du COMPTE (`SCOPES`) couvre les six du split, pas les suivants.
     assert G.services_granted(" ".join(G.SCOPES)) == [s for s in G.SERVICES if s in SPLIT]
     assert G.services_granted(None) == []
@@ -206,7 +218,7 @@ def test_lurl_de_consentement_dun_service_porte_ses_scopes_et_sa_carte(monkeypat
     p = {k: v[0] for k, v in parse_qs(urlsplit(G.build_auth_url("nu-sub", connector="drive")).query).items()}
     assert set(p["scope"].split()) == set(G.IDENTITY_SCOPES) | {"https://www.googleapis.com/auth/drive"}
     assert p["include_granted_scopes"] == "true"
-    assert G.verify_state(p["state"])[3] == "drive"
+    assert _lu(p["state"])[3] == "drive"
 
 
 # ─── 3. le state ──────────────────────────────────────────────────────────────
@@ -216,15 +228,15 @@ def test_le_state_porte_la_carte_et_un_state_davant_revient_au_compte(monkeypatc
     # Un front de retour fictif : le test ne dépend d'aucun tenant réel.
     monkeypatch.setitem(oauth_flow.RETURN_APPS, "exemple", ("https://app.exemple.test", "/"))
     etat = G.make_state("sub-1", 42, "exemple", "sheets")
-    assert G.verify_state(etat)[:4] == ("sub-1", 42, "exemple", "sheets")
-    assert G.verify_state(G.make_state("sub-1", 42))[3] == "google"
+    assert _lu(etat)[:4] == ("sub-1", 42, "exemple", "sheets")
+    assert _lu(G.make_state("sub-1", 42))[3] == "google"
     # Un state forgé sur un connecteur inconnu ne passe pas, même bien signé.
     import base64, hashlib, hmac, json, time
     payload = json.dumps({"sub": "sub-1", "org": 42, "ts": int(time.time()), "app": "",
                           "c": "hunter"}, separators=(",", ":")).encode()
     sig = hmac.new(b"state-secret-test", payload, hashlib.sha256).digest()
     b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()  # noqa: E731
-    assert G.verify_state(f"{b64(payload)}.{b64(sig)}") is None
+    assert _lu(f"{b64(payload)}.{b64(sig)}") is None
 
 
 @pytest.mark.asyncio

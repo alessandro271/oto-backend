@@ -73,6 +73,8 @@ def test_les_chemins_sont_fixes_et_ne_collisionnent_pas():
         ("DELETE", "/api/me/connectors/{name}"),
         ("POST", "/api/me/connectors/{name}/session/start"),
         ("POST", "/api/me/connectors/{name}/session/finalize"),
+        # La complétion d'un consentement OAuth (oto-backend#1908).
+        ("POST", "/api/me/connectors/{name}/complete"),
     }
     assert (cap_status.rest.verb, cap_status.rest.path) not in existants
     assert (cap_disc.rest.verb, cap_disc.rest.path) not in existants

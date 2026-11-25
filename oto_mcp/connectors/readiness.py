@@ -60,12 +60,6 @@ class Diagnosis:
     next_step: str
 
 
-def _connections_url(sub: Optional[str]) -> str:
-    """Where a hosted account is CONNECTED (hosted-auth) — same tenant rule."""
-    from .. import config
-    return f"{config.dashboard_url_for(sub)}/console/connections"
-
-
 def diagnose(sub: str, connector: str, *, org, group) -> Optional[Diagnosis]:
     """`None` = the three layers are unlocked AND nothing is pending: a call would go
     through. Otherwise the FIRST missing layer, in the order of
@@ -178,11 +172,22 @@ def diagnose(sub: str, connector: str, *, org, group) -> Optional[Diagnosis]:
     return None
 
 
-def no_identity_step(sub: Optional[str], connector: str, noun: str = "compte") -> str:
+def no_identity_step(sub: Optional[str], connector: str, noun: str = "compte", *,
+                     org=None) -> str:
     """The default action when the identity list is empty without any layer
     missing (#504): the connector declares no `status_hints`, but silence is still
     the default to repair — we name the state rather than returning a bare `[]`.
     `noun` = the provider's WORD (`access.account_noun`): saying "account" for a Slack
-    workspace forces the reader to translate."""
+    workspace forces the reader to translate.
+
+    The address is the connector's own connection page in `org` (`connect_link`). It
+    used to be `<dashboard>/console/connections`, a path the dashboard does not route:
+    the person landed on the overview. A product without that page gets the reason,
+    never a guessed address."""
+    from .connect_link import PageDeConnexionAbsente, adresse
+    try:
+        ou = f"from {adresse(connector, sub=sub, org=org)}"
+    except PageDeConnexionAbsente as e:
+        ou = f"from the connector's card (no address can be given here: {e.raison})"
     return (f"No {noun} is linked to `{connector}` yet: the key resolves, one still "
-            f"has to be connected from {_connections_url(sub)}.")
+            f"has to be connected {ou}.")

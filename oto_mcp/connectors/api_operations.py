@@ -20,7 +20,7 @@ from typing import Any, Optional
 import requests
 
 from .. import (credentials_store, custom_ops, custom_ops_definition, custom_ops_openapi,
-               egress, providers)
+               egress, egress_transport, providers)
 from ..db import connector_instances
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,8 @@ def definition_of(config: dict) -> dict:
             "logo_domain": config.get("logo_domain"),
             "headers": config.get("headers") or {},
             "variables": config.get("variables") or {},
-            "operations": ops if isinstance(ops, list) else []}
+            "operations": ops if isinstance(ops, list) else [],
+            "mcp_tools": config.get("mcp_tools") or []}
 
 
 def load_definition(owner_type: str, owner_id: str, account: str = "") -> dict:
@@ -276,9 +277,14 @@ def fetch_public_document(url: str) -> Any:
                          exceptions_declarees=False)
     except egress.EgressRefused as e:
         raise ImportFailed(str(e)) from None
+    # The pinned session (`egress_transport`) is the guard that holds: it decides on
+    # the addresses the socket actually opens to, so a resolution that changes after
+    # `check_url` (DNS rebinding) is refused there too.
     try:
-        with requests.get(url, stream=True, timeout=URL_TIMEOUT, allow_redirects=False,
-                          headers={"Accept": "application/json"}) as r:
+        with egress_transport.session(connector=CONNECTOR, field="url",
+                                      exceptions_declarees=False) as s, \
+                s.get(url, stream=True, timeout=URL_TIMEOUT, allow_redirects=False,
+                      headers={"Accept": "application/json"}) as r:
             if 300 <= r.status_code < 400:
                 raise ImportFailed(f"the URL redirects ({r.status_code}) — give the "
                                    "final address of the document")
@@ -289,6 +295,8 @@ def fetch_public_document(url: str) -> Any:
                 data += chunk
                 if len(data) > MAX_DOC_BYTES:
                     raise ImportFailed(f"the document exceeds {MAX_DOC_BYTES // 1024 // 1024} MB")
+    except egress.EgressRefused as e:
+        raise ImportFailed(str(e)) from None
     except requests.RequestException as e:
         raise ImportFailed(f"the URL could not be read ({type(e).__name__})") from None
     return _parse(bytes(data))

@@ -32,11 +32,12 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from .. import db, deprecations
+from .. import db
 from . import audit_log, monitoring
 from ._authz import COMMERCE_SERVICE, ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._lecture_bornee import bornee
-from ._types import (cap_limit, AuthzDenied, Capability, DeclaredError, ResolvedCtx,
+from ._org_du_service import ORG_INCONNUE, org_ou_404
+from ._types import (cap_limit, vide_en_absent, AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
 from .registry import CAPABILITIES
 
@@ -314,9 +315,6 @@ class RunRow(BaseModel):
     """Un déroulé. `slug` est un alias de compat = `guide` s'il y en a un, sinon
     `label` — pas un troisième identifiant.
 
-    ⚠️ `guide` est servi aussi sous son nom d'hier, `doctrine`, jusqu'au 30/11/2026
-    (#519) — cf. `docs/alias-deprecies.md`.
-
     ⚠️ `finished_at`/`outcome` à `null` = le déroulé n'a **pas été fermé** (`run_finish`
     jamais appelé, ou sa ligne purgée par la rétention). Ce n'est pas « en cours » au
     sens d'un processus vivant : personne ne le clôturera.
@@ -327,7 +325,6 @@ class RunRow(BaseModel):
     slug: Optional[str] = None
     label: Optional[str] = None
     guide: Optional[str] = None
-    doctrine: Optional[str] = None        # ALIAS déprécié (retrait 30/11/2026)
     sub: Optional[str] = None
     email: Optional[str] = None
     name: Optional[str] = None
@@ -598,6 +595,22 @@ def _adoption(ctx: ResolvedCtx, inp: OrgDaysInput) -> dict:
     return db.org_adoption(inp.org_id, active_window_days=inp.days)
 
 
+def _run_servi(r: dict) -> dict:
+    """Une ligne de run sous les noms SERVIS. Ses colonnes portent le nom de la clé du
+    journal d'avant #519 (`db.usage._ARG_PROCEDURE` : une valeur en base se migre, elle
+    ne se renomme pas) ; le contrat sert `guide` et `guide_version`.
+
+    ⚠️ `doctrine_version` reste servie À CÔTÉ de `guide_version`, même valeur : un client
+    la lit encore. C'est la seule clé d'hier gardée au lot D (#526) ; elle part au lot
+    suivant, une fois ce client passé à `guide_version`. Elle n'est pas déclarée dans
+    `RunRow` : `/openapi.json` ne promet que le nom d'aujourd'hui."""
+    hier = db.usage._ARG_PROCEDURE
+    hier_version = f"{hier}_version"
+    servi = {k: v for k, v in r.items() if k not in (hier, hier_version)}
+    return {**servi, "guide": r.get(hier), "guide_version": r.get(hier_version),
+            hier_version: r.get(hier_version)}
+
+
 def _runs(ctx: ResolvedCtx, inp: OrgRunsInput) -> dict:
     """Une page de runs de l'org. `sub`, `days` et `cursor` bornent les OUVERTURES
     examinées ; `errors` ne garde, parmi elles, que les runs clos en échec — cf.
@@ -606,7 +619,7 @@ def _runs(ctx: ResolvedCtx, inp: OrgRunsInput) -> dict:
         inp.limit, org_id=inp.org_id, sub=monitoring._resolve_sub(inp.sub),
         since_days=inp.days, before=_decode_cursor(inp.cursor, "runs", inp.org_id),
         issues=db.ISSUES_EN_ECHEC if inp.errors else None)
-    return {"runs": deprecations.lignes_avec_les_deux_noms(page["runs"]),
+    return {"runs": [_run_servi(r) for r in page["runs"]],
             "scanned": page["scanned"],
             "next_cursor": _encode_cursor("runs", inp.org_id, page["next"])}
 
@@ -711,6 +724,8 @@ class OrgMonitoringInput(BaseModel):
     status: Optional[str] = None          # signals : open|acknowledged|declined|resolved|pending
     since: Optional[str] = None           # export : borne basse ISO
     until: Optional[str] = None           # export : borne haute ISO
+
+    _bornes = field_validator("since", "until", mode="before")(vide_en_absent)
 
     # Console op-aware : plafond du plus large de ses ops (`export`, 1000) — borner
     # plus bas écrêterait un export légitime. Écrête au lieu de refuser (#300).
@@ -913,6 +928,8 @@ class OrgBillableCallsInput(BaseModel):
     before_at: Optional[str] = None
     before_id: Optional[int] = None
 
+    _bornes = field_validator("since", "until", "before_at", mode="before")(vide_en_absent)
+
     @field_validator("run_id", mode="after")
     @classmethod
     def _runs_en_liste(cls, v):
@@ -949,6 +966,11 @@ def _refus_de_fenetre(e: "db.FenetreDeReleveRefusee") -> AuthzDenied:
     return AuthzDenied(400, "window_too_large", str(e))
 
 
+# Une borne horaire illisible : le même refus que l'export d'audit (`audit_log`).
+_REFUS_BORNE = audit_log.REFUS_BORNE
+_refus_de_borne = audit_log.refus_de_borne
+
+
 def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
     return _releve(inp, avec_personne=False)
 
@@ -983,6 +1005,8 @@ def _releve(inp: OrgBillableCallsInput, *, avec_personne: bool) -> dict:
             limit=limit, before=before, avec_personne=avec_personne)
     except db.FenetreDeReleveRefusee as e:
         raise _refus_de_fenetre(e) from e
+    except db.BorneIllisible as e:
+        raise _refus_de_borne(e) from e
     nxt = page["next"]
     return {
         # Projection EXPLICITE, pas un `**row` : la lentille reste étroite même
@@ -1050,6 +1074,8 @@ class OrgBillableToolsInput(BaseModel):
     since: Optional[str] = None
     until: Optional[str] = None
 
+    _bornes = field_validator("since", "until", mode="before")(vide_en_absent)
+
     @field_validator("tool", mode="after")
     @classmethod
     def _outils_en_liste(cls, v):
@@ -1066,6 +1092,8 @@ def _billable_tools(ctx: ResolvedCtx, inp: OrgBillableToolsInput) -> dict:
             inp.org_id, tools=inp.tool, since=inp.since, until=inp.until)
     except db.FenetreDeReleveRefusee as e:
         raise _refus_de_fenetre(e) from e
+    except db.BorneIllisible as e:
+        raise _refus_de_borne(e) from e
 
 
 # ── connexions de messagerie d'une org, lentille MEMBRE ─────────────────────
@@ -1104,6 +1132,7 @@ class OrgConnectionsInput(BaseModel):
     @field_validator("since")
     @classmethod
     def _since_iso(cls, v: Optional[str]) -> Optional[str]:
+        v = vide_en_absent(v)
         if v is None:
             return v
         from datetime import datetime
@@ -1223,6 +1252,26 @@ def _view_as_writes(ctx: ResolvedCtx, inp: OrgViewAsWritesInput) -> dict:
                        for r in rows]}
 
 
+# ── la face du SERVICE commerce ─────────────────────────────────────────────
+# Les mêmes lentilles que celles servies aux comptes, sous `/api/service/` : même
+# handler, même sortie. Le service n'a pas d'org, aucune appartenance ne prouve que
+# l'org existe : elle est vérifiée ici (`org_ou_404`), avant la lecture.
+
+def _billable_tools_service(ctx: ResolvedCtx, inp: OrgBillableToolsInput) -> dict:
+    org_ou_404(inp.org_id)
+    return _billable_tools(ctx, inp)
+
+
+def _connections_service(ctx: ResolvedCtx, inp: OrgConnectionsInput) -> dict:
+    org_ou_404(inp.org_id)
+    return _connections(ctx, inp)
+
+
+def _runs_service(ctx: ResolvedCtx, inp: OrgRunsInput) -> dict:
+    org_ou_404(inp.org_id)
+    return _runs(ctx, inp)
+
+
 _ADMIN_OF = ORG_ADMIN_OF("org_id")
 
 CAPABILITIES += [
@@ -1239,14 +1288,15 @@ CAPABILITIES += [
     # d'agent.
     Capability(key="org.usage.calls", handler=bornee(_billable_calls),
                Input=OrgBillableCallsInput, authz=_MEMBER_OF, mcp=None,
-               Output=OrgBillableCalls, errors=(_REFUS_FENETRE, _REFUS_LIMITE),
+               Output=OrgBillableCalls, errors=(_REFUS_FENETRE, _REFUS_LIMITE, _REFUS_BORNE),
                rest=RestBinding("GET", "/api/orgs/{id}/usage/calls", _ID)),
     # Le même relevé pour le COMMERCE, avec la personne de chaque appel : c'est ce qui
     # lui permet d'appliquer une limite de dépense par personne ou par équipe. REST
     # seule, sous `/api/service/`, comme toute sa face.
     Capability(key="service.org.usage.calls", handler=bornee(_billable_calls_service),
                Input=OrgBillableCallsInput, authz=COMMERCE_SERVICE, mcp=None,
-               Output=ServiceBillableCalls, errors=(_REFUS_FENETRE, _REFUS_LIMITE),
+               Output=ServiceBillableCalls,
+               errors=(_REFUS_FENETRE, _REFUS_LIMITE, _REFUS_BORNE),
                description="[service commerce] The billable calls of an org, as "
                            "`org.usage.calls` serves them to members, plus `sub`: the "
                            "person each call ran for. Same window, page and cursor "
@@ -1256,8 +1306,14 @@ CAPABILITIES += [
     # `usage/calls` par outil. Même lentille membre, `mcp=None` pour la même raison.
     Capability(key="org.usage.tools", handler=bornee(_billable_tools),
                Input=OrgBillableToolsInput, authz=_MEMBER_OF, mcp=None,
-               Output=OrgBillableTools, errors=(_REFUS_FENETRE,),
+               Output=OrgBillableTools, errors=(_REFUS_FENETRE, _REFUS_BORNE),
                rest=RestBinding("GET", "/api/orgs/{id}/usage/tools", _ID)),
+    Capability(key="service.org.usage.tools", handler=bornee(_billable_tools_service),
+               Input=OrgBillableToolsInput, authz=COMMERCE_SERVICE, mcp=None,
+               Output=OrgBillableTools, errors=(ORG_INCONNUE, _REFUS_FENETRE, _REFUS_BORNE),
+               description="[service commerce] The billable calls of an org summed per "
+                           "tool, as `org.usage.tools` serves them to members.",
+               rest=RestBinding("GET", "/api/service/orgs/{id}/usage/tools", _ID)),
     # Même lentille membre, pour les connexions de messagerie d'une org (voir le bloc
     # au-dessus de `OrgConnectionRow`). `mcp=None` : un tuyau de relevé, pas un outil
     # d'agent.
@@ -1265,6 +1321,12 @@ CAPABILITIES += [
                Input=OrgConnectionsInput, authz=_MEMBER_OF, mcp=None,
                Output=OrgConnections,
                rest=RestBinding("GET", "/api/orgs/{id}/usage/connections", _ID)),
+    Capability(key="service.org.usage.connections", handler=_connections_service,
+               Input=OrgConnectionsInput, authz=COMMERCE_SERVICE, mcp=None,
+               Output=OrgConnections, errors=(ORG_INCONNUE,),
+               description="[service commerce] The messaging connections of an org, as "
+                           "`org.usage.connections` serves them to members.",
+               rest=RestBinding("GET", "/api/service/orgs/{id}/usage/connections", _ID)),
     Capability(key="org.usage.tokens", handler=bornee(_tokens), Input=OrgTokensInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgTokens,
                rest=RestBinding("GET", "/api/orgs/{id}/usage/tokens", _ID)),
@@ -1294,6 +1356,13 @@ CAPABILITIES += [
     Capability(key="org.monitoring.runs", handler=bornee(_runs), Input=OrgRunsInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgRuns, errors=(_REFUS_CURSEUR,),
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/runs", _ID)),
+    Capability(key="service.org.monitoring.runs", handler=bornee(_runs_service),
+               Input=OrgRunsInput, authz=COMMERCE_SERVICE, mcp=None, Output=OrgRuns,
+               errors=(ORG_INCONNUE, _REFUS_CURSEUR),
+               description="[service commerce] A page of the org's runs, as "
+                           "`org.monitoring.runs` serves it to an org admin. Same filters, "
+                           "page and cursor contract.",
+               rest=RestBinding("GET", "/api/service/orgs/{id}/monitoring/runs", _ID)),
     Capability(key="org.monitoring.run", handler=_run, Input=OrgRunInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgRun,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/runs/{run_id}", _ID)),
@@ -1305,7 +1374,7 @@ CAPABILITIES += [
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/tool-quality", _ID)),
     Capability(
         key="org.monitoring.console", handler=bornee(_console), Input=OrgMonitoringInput,
-        authz=_ADMIN_OF, errors=(_REFUS_CURSEUR,),
+        authz=_ADMIN_OF, errors=(_REFUS_CURSEUR, _REFUS_BORNE),
         description=(
             "Observability of YOUR org (org admin) — `org_id` required. op=summary "
             "(aggregates over the org: totals, by tool w/ avg+p95 latency, by member, by "

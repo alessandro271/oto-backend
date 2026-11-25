@@ -88,6 +88,9 @@ def _via_token(monkeypatch, inv, sub):
 
 def _via_signup(monkeypatch, inv, sub):
     monkeypatch.setattr(org_store, "_connect", lambda: _RowConn(inv))
+    # Le tenant de l'invitation se lit en base : ce banc sans PG mesure les rôles.
+    from oto_mcp import db
+    monkeypatch.setattr(db, "invitation_du_tenant_de", lambda inv, sub: True)
     return org_store.reconcile_signup_with_invitation(sub, "invitee@x.tld")
 
 

@@ -26,6 +26,7 @@ from ..access import credits as budget
 from ..auth.hooks import current_user_sub_from_token
 from ..connectors import access_level_gate, activation_gate
 from ..connectors import health as connector_health
+from ..middleware import compat
 from ..tool_visibility import namespace_of
 
 # Meta/spine tools not dispatchable via `oto_call` (ADR 0036 §4): already always visible,
@@ -283,6 +284,10 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
         # OUTSIDE the middleware chain (hence outside redaction): we re-apply it further
         # down. This is what makes it possible to reach a hidden tool (the visibility
         # denylist only blocks the `tools/call` protocol path).
+        # The compatibility buffer (`deprecations`), as for a direct call
+        # (`middleware/compat`): an old argument form the instance turned on is
+        # translated here, on the TARGET's record.
+        await compat.traduire(name, args, sub)
         result = await tool.run(args)
     except ValidationError as e:
         ok, err, echec = False, "invalid_arguments", e

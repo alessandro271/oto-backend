@@ -110,13 +110,15 @@ CAPABILITIES += [
     Capability(
         key="platform.editor_app.set", handler=_set, Input=SetInput,
         authz=SUPER_ADMIN, mcp=None,
-        rest=RestBinding("POST", "/api/admin/editor-apps"),
+        # Un secret client : session seule (`_session_exigee`).
+        rest=RestBinding("POST", "/api/admin/editor-apps", allow_api_token=False),
         description="Set/rotate oto's OAuth app for a connector and a region.",
     ),
     Capability(
         key="platform.editor_app.delete", handler=_delete, Input=DeleteInput,
         authz=SUPER_ADMIN, mcp=None,
-        rest=RestBinding("DELETE", "/api/admin/editor-apps/{connector}/{data_center}"),
+        rest=RestBinding("DELETE", "/api/admin/editor-apps/{connector}/{data_center}",
+                         allow_api_token=False),
         description="Remove a connector's publisher OAuth app for a region.",
     ),
 ]

@@ -31,10 +31,11 @@ garde plateforme (`PLATFORM_ADMIN`, `SUPER_ADMIN`, l'escalade `roles.is_platform
 la visibilité des `oto_admin_*`, la gouvernance de `ownership`). Sous un jeton de
 délégation, un agent hébergé n'est pas l'opérateur : `role_plateforme` ramène ces rôles
 à `member` — UN seul point, `access.scope.role_effectif`, d'où tous les prédicats
-plateforme dérivent. Réglage PROPRE, `OTO_VERROU_ROLES_PLATEFORME` : `enforce`,
-`report` (DÉFAUT : journalise ce qui serait retiré, ne retire rien — des agents
-hébergés de comptes admin servent peut-être des outils d'admin, à relever avant de
-mordre) ou `off`. Indépendant du verrou d'org : couper l'un ne coupe pas l'autre.
+plateforme dérivent. Réglage PROPRE, `OTO_VERROU_ROLES_PLATEFORME` : `enforce`
+(DÉFAUT, et la valeur d'une valeur inconnue), `report` (posé explicitement seulement :
+journalise ce qui serait retiré, ne retire rien) ou `off`. Indépendant du verrou
+d'org : couper l'un ne coupe pas l'autre. Un agent d'opérateur qui doit garder des
+outils d'admin les nomme dans sa liste (`platform_tools`, ci-dessous).
 **Les outils d'admin PERMIS à un agent** (19/10/2026, revue de #1274) : sous `enforce`,
 un agent ne garde le rôle plateforme de son porteur QUE pour les `oto_admin_*` que son
 agent nomme (`runner_triggers.outils_plateforme`), et seulement PENDANT l'appel de l'un
@@ -221,10 +222,10 @@ def exiger(sub: Optional[str], org_id: object, *, route: str) -> None:
 
 
 def mode_roles() -> str:
-    """Le mode du verrou des rôles plateforme, lu à chaque appel. Une valeur inconnue
-    vaut `report` — le défaut : on n'a pas encore relevé ce qu'`enforce` couperait."""
-    m = (os.environ.get(_ENV_ROLES) or "report").strip().lower()
-    return m if m in _MODES else "report"
+    """Le mode du verrou des rôles plateforme, lu à chaque appel. Absent, vide ou
+    inconnu, il vaut `enforce` — le mode sûr ; `report` ne vaut que posé explicitement."""
+    m = (os.environ.get(_ENV_ROLES) or "enforce").strip().lower()
+    return m if m in _MODES else "enforce"
 
 
 def poser_outil(name: Optional[str]) -> contextvars.Token:
@@ -259,6 +260,18 @@ def outils_permis(v: Optional[Verrou] = None) -> frozenset:
     permis = outils_d_admin(db.outils_plateforme_du_travail(v.job_id))
     _PERMIS.set((v, permis))
     return permis
+
+
+def outil_admin_permis(sub: Optional[str]) -> bool:
+    """Vrai pendant l'appel d'un `oto_admin_*` que le travail de la requête NOMME, pour
+    son porteur `sub` — le seul cas où un jeton de délégation garde le rôle plateforme
+    sous la garde des administrateurs (`garde_admin`), quel que soit le mode du verrou
+    des rôles. Lit la ContextVar BRUTE, comme `role_plateforme`."""
+    v = _COURANT.get()
+    if v is None or sub is None or str(sub) != v.sub:
+        return False
+    outil = _OUTIL.get()
+    return bool(outil and outil.startswith(PREFIXE_ADMIN) and outil in outils_permis(v))
 
 
 def outils_d_admin(noms) -> frozenset:

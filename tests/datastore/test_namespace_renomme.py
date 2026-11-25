@@ -17,7 +17,7 @@ On ne change pas le verdict : l'appel échouait, il échoue toujours. On change 
 DIT.
 
 ⚠️ **Et `namespace` n'est PAS accepté comme alias.** Les alias de ce renommage sont des
-redirections ANNONCÉES (308 + `Sunset` au 08/11/2026), jamais des acceptations muettes :
+redirections ANNONCÉES (308 + `Deprecation`), jamais des acceptations muettes :
 un paramètre repris en silence laisserait les textes non migrés le rester, sans que
 personne l'apprenne.
 """

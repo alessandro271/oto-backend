@@ -48,13 +48,33 @@ def role_effectif(sub: Optional[str], role: Optional[str]) -> str:
     delegation bound (`verrou_org.role_plateforme`): under a runner job's delegation
     token the bearer is not the operator — `admin`/`super_admin` read `member` in
     `enforce` (`OTO_VERROU_ROLES_PLATEFORME`). The bound comes LAST, so the bootstrap
-    sub does not escape it."""
+    sub does not escape it.
+
+    Then the ADMINISTRATION guard (`garde_admin.borner`, CASA 3.3.1): the bearer of
+    the current request keeps `admin`/`super_admin` only in an interactive Logto
+    session whose account has a second factor enrolled — an `oto_` token, a session
+    without MFA, or an unverifiable one reads `member`. Applied LAST, after the
+    bootstrap override and the delegation bound: nothing escapes it."""
+    from .. import garde_admin
+    return garde_admin.borner(sub, _role_sans_garde(sub, role))
+
+
+def _role_sans_garde(sub: Optional[str], role: Optional[str]) -> str:
     from .. import verrou_org
     admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
     if admin_sub and sub == admin_sub:
         role = SUPER_ADMIN
     role = role if role in ROLES else MEMBER
     return verrou_org.role_plateforme(sub, role)
+
+
+def role_hors_garde(sub: Optional[str]) -> str:
+    """The platform role of `sub` WITHOUT the administration guard — what a rule reads
+    to say WHY it refuses an operator (`garde_admin.motif_brut`). Never an
+    authorization verdict on its own."""
+    admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
+    user = db.get_user(sub) if sub and sub != admin_sub else None
+    return _role_sans_garde(sub, (user or {}).get("role"))
 
 
 def get_user_role(sub: str) -> str:

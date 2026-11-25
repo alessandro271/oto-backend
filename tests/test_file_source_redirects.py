@@ -2,10 +2,12 @@
 no https→http, a hop cap. Default callers still refuse any redirect."""
 from __future__ import annotations
 
-import httpx
 import pytest
+import requests
+from requests.adapters import BaseAdapter
+from requests.structures import CaseInsensitiveDict
 
-from oto_mcp import egress
+from oto_mcp import egress, egress_transport
 from oto_mcp import file_source as fs
 
 PUBLIC = {"93.184.216.34"}
@@ -18,20 +20,62 @@ def reseau(monkeypatch):
     monkeypatch.setattr(fs.url_perimeter, "perimeter_of_call", lambda: None)
 
 
-def _serve(monkeypatch, routes: dict):
-    def handler(request):
-        rep = routes[str(request.url)]
-        return rep if isinstance(rep, httpx.Response) else httpx.Response(200, content=rep)
-    vrai = httpx.Client
+class _Rep:
+    """Une réponse servie par le faux transport : statut, corps (octets ou
+    morceaux), en-têtes."""
+    def __init__(self, status: int = 200, content=b"", headers: dict | None = None):
+        self.status, self.content, self.headers = status, content, headers or {}
 
-    class Client(vrai):
-        def __init__(self, **kw):
-            super().__init__(transport=httpx.MockTransport(handler), **kw)
-    monkeypatch.setattr(httpx, "Client", Client)
+
+class _Brut:
+    """Le `raw` d'une réponse `requests` : un morceau par lecture."""
+    def __init__(self, morceaux):
+        self._it = iter(morceaux)
+
+    def read(self, *a, **k):
+        return next(self._it, b"")
+
+    def close(self):
+        pass
+
+
+class _Faux(BaseAdapter):
+    """Le transport des bancs de ce fichier : aucune socket. Le transport ÉPINGLÉ
+    lui-même s'éprouve dans `tests/test_egress_transport.py`."""
+    def __init__(self, handler):
+        super().__init__()
+        self._handler = handler
+
+    def send(self, request, **kw):
+        rep = self._handler(request)
+        if not isinstance(rep, _Rep):
+            rep = _Rep(200, rep)
+        r = requests.Response()
+        r.status_code, r.url, r.request = rep.status, request.url, request
+        r.headers = CaseInsensitiveDict(rep.headers)
+        corps = rep.content
+        r.raw = _Brut([corps] if isinstance(corps, bytes) else corps)
+        return r
+
+    def close(self):
+        pass
+
+
+def _monter(monkeypatch, handler):
+    def session(**kw):
+        s = requests.Session()
+        s.mount("http://", _Faux(handler))
+        s.mount("https://", _Faux(handler))
+        return s
+    monkeypatch.setattr(egress_transport, "session", session)
+
+
+def _serve(monkeypatch, routes: dict):
+    _monter(monkeypatch, lambda request: routes[request.url])
 
 
 def _go(url):
-    return httpx.Response(302, headers={"location": url})
+    return _Rep(302, headers={"location": url})
 
 
 def test_a_redirect_is_followed_when_asked(monkeypatch):
@@ -106,11 +150,11 @@ def _horloge(monkeypatch, pas: float = 1.0):
 
 
 def test_a_dripping_server_is_cut_at_the_deadline(monkeypatch):
-    """Un octet à la fois : le timeout par phase de httpx ne borne pas le TOTAL."""
+    """Un octet à la fois : le timeout par socket ne borne pas le TOTAL."""
     def goutte():
         for _ in range(1000):
             yield b"a"
-    _serve(monkeypatch, {"https://a.example/f.csv": httpx.Response(200, content=goutte())})
+    _serve(monkeypatch, {"https://a.example/f.csv": _Rep(200, goutte())})
     t = _horloge(monkeypatch)
     with pytest.raises(fs.FileSourceError, match="budget"):
         fs.resolve({"kind": "url", "url": "https://a.example/f.csv"},
@@ -122,13 +166,8 @@ def test_a_past_deadline_fetches_nothing(monkeypatch):
 
     def handler(request):
         vus.append(str(request.url))
-        return httpx.Response(200, content=b"x")
-    vrai = httpx.Client
-
-    class Client(vrai):
-        def __init__(self, **kw):
-            super().__init__(transport=httpx.MockTransport(handler), **kw)
-    monkeypatch.setattr(httpx, "Client", Client)
+        return _Rep(200, b"x")
+    _monter(monkeypatch, handler)
     t = _horloge(monkeypatch)
     with pytest.raises(fs.FileSourceError, match="budget"):
         fs.resolve({"kind": "url", "url": "https://a.example/f.csv"},
@@ -144,7 +183,7 @@ def test_without_deadline_behaviour_is_unchanged(monkeypatch):
 
 @pytest.mark.parametrize("status", [400, 403])
 def test_a_refused_signed_link_says_altered_or_expired(monkeypatch, status):
-    _serve(monkeypatch, {"https://a.example/f": httpx.Response(status)})
+    _serve(monkeypatch, {"https://a.example/f": _Rep(status)})
     with pytest.raises(fs.FileSourceError,
                        match=rf"HTTP {status}\) — link altered or expired: re-read the "
                              "recording / re-fetch the URL"):
@@ -152,7 +191,7 @@ def test_a_refused_signed_link_says_altered_or_expired(monkeypatch, status):
 
 
 def test_another_http_error_is_a_named_refusal(monkeypatch):
-    _serve(monkeypatch, {"https://a.example/f": httpx.Response(500)})
+    _serve(monkeypatch, {"https://a.example/f": _Rep(500)})
     with pytest.raises(fs.FileSourceError, match="HTTP 500"):
         fs.resolve({"kind": "url", "url": "https://a.example/f"})
 
@@ -163,7 +202,7 @@ _CLE_OPAQUE = "https://bucket.example/7f3a9c?X-Amz-Signature=abc"
 
 
 def test_le_nom_servi_par_content_disposition_l_emporte_sur_le_chemin(monkeypatch):
-    _serve(monkeypatch, {_CLE_OPAQUE: httpx.Response(200, content=b"%PDF-1.4", headers={
+    _serve(monkeypatch, {_CLE_OPAQUE: _Rep(200, b"%PDF-1.4", headers={
         "content-type": "application/octet-stream",
         "content-disposition": 'attachment; filename="Devis.pdf"'})})
     rf = fs.resolve({"kind": "url", "url": _CLE_OPAQUE})
@@ -172,14 +211,14 @@ def test_le_nom_servi_par_content_disposition_l_emporte_sur_le_chemin(monkeypatc
 
 
 def test_un_nom_explicite_l_emporte_sur_tout(monkeypatch):
-    _serve(monkeypatch, {_CLE_OPAQUE: httpx.Response(200, content=b"%PDF-1.4", headers={
+    _serve(monkeypatch, {_CLE_OPAQUE: _Rep(200, b"%PDF-1.4", headers={
         "content-disposition": 'attachment; filename="x.bin"'})})
     rf = fs.resolve({"kind": "url", "url": _CLE_OPAQUE, "filename": "../Facture 12.pdf"})
     assert rf.filename == "Facture 12.pdf" and rf.mime == "application/pdf"
 
 
 def test_un_type_servi_precis_n_est_pas_reecrit(monkeypatch):
-    _serve(monkeypatch, {_CLE_OPAQUE: httpx.Response(200, content=b"a,b", headers={
+    _serve(monkeypatch, {_CLE_OPAQUE: _Rep(200, b"a,b", headers={
         "content-type": "text/csv", "content-disposition": 'inline; filename="x.pdf"'})})
     rf = fs.resolve({"kind": "url", "url": _CLE_OPAQUE})
     assert rf.filename == "x.pdf" and rf.mime == "text/csv"
@@ -196,3 +235,75 @@ def test_un_nom_explicite_mal_forme_est_refuse(monkeypatch, nom):
     _serve(monkeypatch, {_CLE_OPAQUE: b"x"})
     with pytest.raises(fs.FileSourceError, match="filename"):
         fs.resolve({"kind": "url", "url": _CLE_OPAQUE, "filename": nom})
+
+
+# ── le budget court sur TOUS les sauts, et le plafond porte sur les octets DÉCODÉS ──
+
+def test_le_budget_court_sur_l_ensemble_des_sauts(monkeypatch):
+    """Le budget est global : un premier saut qui l'entame laisse moins au suivant,
+    et un saut qui part après l'échéance n'est jamais demandé."""
+    vus = []
+
+    def handler(request):
+        vus.append(request.url)
+        if request.url == "https://a.example/f":
+            return _go("https://cdn.example/f.csv")
+        return _Rep(200, b"x")
+    _monter(monkeypatch, handler)
+    t = _horloge(monkeypatch)        # chaque lecture d'horloge avance d'une seconde
+    with pytest.raises(fs.FileSourceError, match="budget"):
+        fs.resolve({"kind": "url", "url": "https://a.example/f"},
+                   follow_redirects=True, deadline=t["now"] + 1.5)
+    assert vus == ["https://a.example/f"], "le second saut part après l'échéance"
+
+
+def test_une_bombe_de_compression_est_coupee_au_plafond(monkeypatch):
+    """Un corps gzip de quelques dizaines de Ko qui se décompresse en 16 Mo, annoncé
+    par un `Content-Length` sous le plafond : le plafond porte sur les octets
+    DÉCODÉS, appliqué PENDANT la lecture, par morceaux bornés — jamais le corps
+    entier décompressé d'un coup. Joué sur le vrai transport épinglé, vers un serveur
+    de la boucle locale (la socket décidée y est routée)."""
+    import gzip
+    import http.server
+    import socket
+    import threading
+
+    bombe = gzip.compress(b"\0" * (16 * 1024 * 1024))
+    plafond = 1024 * 1024
+
+    class Gestion(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(bombe)))
+            self.end_headers()
+            self.wfile.write(bombe)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Gestion)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    monkeypatch.setattr(egress_transport, "_ouvrir",
+                        lambda adresse, p, timeout, *a: socket.create_connection(
+                            ("127.0.0.1", port), timeout))
+    tailles = []
+    vrai = requests.Response.iter_content
+
+    def iter_content(self, *a, **k):
+        for morceau in vrai(self, *a, **k):
+            tailles.append(len(morceau))
+            yield morceau
+    monkeypatch.setattr(requests.Response, "iter_content", iter_content)
+    try:
+        assert len(bombe) < plafond, "la bombe passe le contrôle d'en-tête"
+        with pytest.raises(fs.FileSourceError, match=f"> {plafond}"):
+            fs.resolve({"kind": "url", "url": "http://bombe.example/f.csv"},
+                       max_bytes=plafond)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert max(tailles) <= 65536, "chaque morceau décodé est borné"
+    assert sum(tailles) <= plafond + 65536, "la lecture s'arrête au plafond"

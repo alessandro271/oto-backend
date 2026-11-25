@@ -39,7 +39,7 @@ optionnel **fond membre↔platform-admin** : absent = ton **org active** ; prés
 par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
 (`_resolve_org_read`/`_resolve_org_write`).
 - **Lecture** : `oto_procedure(op='get'[, slug, scope, version, with_history, full])` — sans `slug` =
-  `{doctrine, group_doctrine, doctrines[]}` (base org + base groupe + index), le call de **DÉBUT DE
+  `{guide, group_guide, guides[]}` (base org + base groupe + index), le call de **DÉBUT DE
   SESSION** ; avec `slug` = le markdown d'un guide nommé — **sur la face MCP, sans son dessin ni
   sa description** (§ « Ce que l'agent lit »), `full=true` rend tout. `oto_procedure(op='list'[,
   query, scope, verbose])` = catalogue/recherche — face MCP, la description est un `summary` de

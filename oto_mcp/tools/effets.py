@@ -504,7 +504,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "hithorizons_search_unstructured": "lire",
     "hithorizons_suggestions": "lire",
     # import only proposes candidate actions; call runs a saved action of any verb
-    "api_act": {"lire": "import", "detruire": "call request set_definition"},
+    # call_mcp: a remote tool of any effect — its annotations are the third party's word
+    "api_act": {"lire": "import", "detruire": "call request set_definition call_mcp"},
     "api_doc": "lire",
     "api_post": "envoyer",
     # add_members may also remove (remove_record_ids); copy_from moves up to 100 000 records
@@ -937,7 +938,6 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "resend_contact": {"lire": "list get", "envoyer": "add_to_segment", "detruire": "upsert update delete remove_from_segment"},
     "resend_segment": {"lire": "list get", "ecrire": "create"},
     "routine_fire": "envoyer",
-    "salesforce_connect": {"ecrire": "start"},
     "salesforce_describe": "lire",
     "salesforce_note": {"lire": "list", "ecrire": "create"},
     "salesforce_query": {"lire": "soql sosl"},
@@ -969,9 +969,11 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # conflict='replace' overwrites an existing file or folder
     "sharepoint_file": {"lire": "list get search download", "detruire": "upload create_folder"},
     "sharepoint_site": {"lire": "search get drives"},
+    "sheets_chart": {"lire": "list", "ecrire": "add", "detruire": "delete"},
     "sheets_create": "ecrire",
-    # writing cells is a write (decided), even over existing values; clear empties a range
-    "sheets_spreadsheet": {"lire": "metadata read", "ecrire": "write add_sheet rename_sheet number_format copy_sheet format column_width freeze dropdown", "detruire": "clear delete_sheet delete_rows"},
+    # writing cells is a write (decided), even over existing values; clear empties a range;
+    # merge keeps the top-left value only, the other cells' values are erased
+    "sheets_spreadsheet": {"lire": "metadata read", "ecrire": "write fill add_sheet rename_sheet insert_rows insert_columns hide show number_format copy_sheet format column_width auto_fit freeze dropdown unmerge conditional_format clear_conditional_formats sort filter clear_filter find_replace", "detruire": "clear delete_sheet delete_rows delete_columns merge"},
     "signwell_account": {"lire": "me api_application", "detruire": "delete_api_application"},
     "signwell_act": {"envoyer": "send_document remind_document"},
     # create sends one signature request per CSV row: a mass send with no countable list
@@ -1138,7 +1140,6 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "zerobounce_credits": "lire",
     "zerobounce_verify_batch": "lire",
     "zerobounce_verify_email": "lire",
-    "zoho_connect": {"lire": "modes", "ecrire": "start"},
     "zoho_modules": "lire",
     "zoho_note": {"lire": "list", "ecrire": "create"},
     "zoho_record": {"lire": "list get search", "ecrire": "create update", "detruire": "delete"},
@@ -1236,6 +1237,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_doc": {"lire": "list search get revisions backlinks shared_with_me outline verify", "ecrire": "create update patch move unarchive", "envoyer": "set_public", "detruire": "bulk_create delete revert archive"},
     "oto_doc_app": "lire",
     "oto_connector_app": "lire",
+    "oto_connector_connect": "lire",
     "oto_webhook_app": "lire",
     "oto_enable_tool": "ecrire",
     "oto_fleet": {"lire": "list get state", "ecrire": "create update take beat ack_stop", "envoyer": "launch", "detruire": "stop"},
@@ -1657,7 +1659,7 @@ PAS_UN_LOT: dict[str, str] = {
     "sharepoint_excel_act": "values",
     "sheets_create": "sheets",
     # a grid of cells written in place, not a batch of records
-    "sheets_spreadsheet": "options values",
+    "sheets_spreadsheet": "options values sort_by",
     "signwell_document": "files fields",
     "signwell_template": "template_ids files placeholders template_fields fields",
     "slack_act": "channels",

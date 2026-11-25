@@ -219,7 +219,9 @@ class RestBinding:
     # (révoquer le jeton fuité ne suffit plus, l'attaquant s'en est fait un second, non
     # expirant), émettre un jeton reste donc un acte humain ; et l'agent intégré à
     # l'application (`capabilities/copilot`) — un jeton en ferait un point d'accès au
-    # modèle payé par l'instance, piloté par un script.
+    # modèle payé par l'instance, piloté par un script. Depuis le 22/11/2026, un troisième :
+    # les gestes SENSIBLES (archiver une org, rôles et retraits de membres, MFA, paiement), dont la face MCP et les cas conditionnels sont tenus par la garde de
+    # handler `capabilities/_session_exigee.py`.
     #
     # Le cran vit sur le BINDING et non sur la capacité parce qu'il est propre au
     # transport : côté MCP, la question ne se pose pas (l'appelant est déjà une session).
@@ -317,6 +319,20 @@ def cap_limit(value, maximum: int, *, default: Optional[int] = None) -> int:
     except (TypeError, ValueError):
         value = default if default is not None else maximum
     return max(1, min(value, maximum))
+
+
+def vide_en_absent(value):
+    """Une valeur de query string VIDE (`?since=&until=`) est un paramètre ABSENT.
+
+    C'est ce qu'envoie un formulaire dont le champ n'est pas rempli, et ce que la face
+    REST recevait telle quelle : la chaîne vide partait au SQL en `''::timestamptz` et
+    la lecture tombait en 500 (oto-backend, durcissement CASA 6.2.1). Validateur
+    `mode="before"` des bornes horaires : il NORMALISE seulement — une valeur non vide
+    mais illisible est refusée nommée plus loin, par le store qui la lit
+    (`db.BorneIllisible`)."""
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
 
 
 def apply_flat_signature(fn: Callable, model: type[BaseModel]) -> Callable:

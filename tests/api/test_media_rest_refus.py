@@ -67,7 +67,9 @@ def client(monkeypatch, journal):
     seuls le stockage objet, la base et le rôle sont bouchonnés."""
     # `_authenticate` touche la base à chaque requête JWT : on la neutralise sans
     # toucher au chemin d'authentification lui-même, qui est ce qu'on veut exercer.
-    monkeypatch.setattr("oto_mcp.account_suspension.refus", lambda sub: None)
+    # Compte vivant, jamais fermé : la lecture d'entrée de la garde (pause et
+    # instant « révoqué avant », `db.get_suspension`) ne rend rien.
+    monkeypatch.setattr("oto_mcp.db.get_suspension", lambda sub: None)
     monkeypatch.setattr(base, "alias_drain_armed", lambda: False)
     monkeypatch.setattr(db, "upsert_user", lambda *a, **k: None)
 
@@ -305,3 +307,13 @@ def test_un_avatar_remplace_efface_l_ancien_objet(client, monkeypatch, journal):
     assert journal["suppressions"] == ["https://media.invalid/vieux.png"], (
         "sans cette suppression, chaque changement d'avatar laisse un orphelin payant "
         "dans le stockage")
+
+
+def test_une_image_au_dela_de_la_borne_est_refusee_pendant_la_lecture(client, monkeypatch,
+                                                                     journal):
+    """La borne d'image tient à la LECTURE du corps (`lire_multipart_borne`), avant tout
+    dépôt ; le code de refus reste `image_too_large`."""
+    monkeypatch.setenv("OTO_MCP_S3_MAX_IMAGE_BYTES", "16")
+    r = client.post("/api/me/avatar", files=_fichier(), headers=_en_tant_que("u1"))
+    assert r.status_code == 413 and r.json()["error"] == "image_too_large"
+    assert journal["uploads"] == []

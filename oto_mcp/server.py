@@ -126,7 +126,10 @@ class _IatGatedVerifier(JWTVerifier):
                                                 # posé par `middleware/verrou_org.py`.
                                                 "job_id": row.get("job_id"),
                                                 "verrou_org": row.get("verrou_org"),
-                                                "verrou_org_id": row.get("verrou_org_id")})
+                                                "verrou_org_id": row.get("verrou_org_id"),
+                                                # Sa date de création : la garde
+                                                # d'identité la juge (`session_revoquee`).
+                                                "cree_le": row.get("cree_le")})
 
     def _route(self, token) -> tuple:
         """`(slug du tenant, verifier)` pour ce jeton — sélection par le claim `iss`,
@@ -424,7 +427,11 @@ def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
     routes de PRM sensibles au host masquent celles-ci (montées avant, cf. `main`) ;
     ces valeurs-ci ne restent servies que derrière elles."""
     from .auth import decouverte
-    return RemoteAuthProvider(
+    from .auth.entree_mcp import FournisseurOto
+    # `FournisseurOto` : le `RemoteAuthProvider` de fastmcp, dont le backend lit l'état
+    # d'entrée du compte sur `POST /mcp` et rend le 401 d'un jeton émis avant la
+    # fermeture des sessions de son compte (`auth.entree_mcp`).
+    return FournisseurOto(
         token_verifier=verifier,
         authorization_servers=[AnyHttpUrl(decouverte.emetteur_primaire())],
         base_url=require_env("OTO_MCP_PUBLIC_URL").rstrip("/"),
@@ -949,6 +956,12 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
         ToolCallLogger(_calllog_sink, server="oto", identity=_calllog_identity)
     )
 
+    # Le tampon de compatibilité (`deprecations`) : une ancienne forme d'argument
+    # allumée sur l'instance est traduite ICI — sous le journal (l'appel traduit y a sa
+    # ligne et sa trace), après le contexte de l'appel (org, run). Cf. `middleware/compat`.
+    from .middleware.compat import CompatMiddleware
+    instance.add_middleware(CompatMiddleware())
+
     # 8. Capture des exceptions de tools vers Sentry (no-op si OTO_SENTRY_DSN absent) —
     # INNERMOST des appels d'outil (la visibilité anonyme, sous lui, n'agit qu'au handshake) :
     # au plus près du handler, capture le vrai traceback AVANT le calllog
@@ -1078,6 +1091,11 @@ def main():
         level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Les clients HTTP écrivent une ligne INFO par requête (« HTTP Request: POST … 200 ») :
+    # ~6 300 par heure pour le seul worker d'indexation le 23/11/2026, de quoi faire
+    # tourner le journal système. Leurs avertissements et erreurs restent.
+    for bavard in ("httpx", "httpcore"):
+        logging.getLogger(bavard).setLevel(logging.WARNING)
 
     # Garde-fou (revue de sécurité 2026-08-29, oto-backend#572) : refuse de démarrer
     # si le repli d'identité dev (`OTO_MCP_DEV_SUB`) est posé en même temps qu'un
@@ -1122,6 +1140,10 @@ def main():
     # Exécutions simultanées du bac à sable (`functions/places.py`) : illisible, refus ici.
     from .functions import places
     places.verifier_configuration()
+    # Durée des invitations (réglage d'instance, en heures) : illisible, ou l'ancien
+    # réglage en jours encore défini, refus ici.
+    from .config import verifier_duree_invitation
+    verifier_duree_invitation()
     # Le journal d'accès d'uvicorn n'écrit en clair ni un jeton porté DANS le chemin
     # (`{token}`, `{code}` des routes servies : leur masque), ni la valeur d'une clé de
     # query secrète (`code`/`state` d'un retour OAuth, `*token*`, `key`… : `***`), sur
@@ -1168,6 +1190,11 @@ def main():
     # écrit. Cf. `identite_instance`.
     from . import identite_instance
     identite_instance.verifier()
+
+    # Les réglages du tampon de compatibilité (`OTO_MCP_COMPAT_*`) : une valeur
+    # illisible refuse le démarrage ici. Cf. `deprecations.verifier_reglages`.
+    from . import deprecations
+    deprecations.verifier_reglages()
 
     # Le trousseau du coffre : les modes de clé sont DÉCLARÉS (plate, Key Manager) ; une
     # déclaration incohérente, aucune clé, ou Key Manager injoignable refuse le démarrage

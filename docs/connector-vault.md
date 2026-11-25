@@ -269,15 +269,41 @@ voulu. Avant d'armer sur un déploiement, établir les destinations des instance
 existantes — `GET /api/settings/api-keys/{provider}` rend les champs NON secrets, donc
 `base_url`, sans jamais rendre de secret (scope `org`/`group` = admin du palier).
 
-⚠️ **Deux fenêtres restent ouvertes, et c'est nommé** : le DNS rebinding (le client
-résout une seconde fois après le contrôle) et une redirection 3xx vers l'intérieur — la
-garde tient là où le backend construit le client, pas dans le transport d'oto-core. Les
-fermer demande d'épingler l'adresse résolue dans la lib, donc un bump de pin.
+**La garde fait foi à la CONNEXION (`oto_mcp/egress_transport.py`).** `check_url` reste
+le refus précoce, celui qui explique et nomme la carte. Mais le client HTTP résolvait
+l'hôte une seconde fois pour se connecter : un DNS qui répond « public » au contrôle puis
+« interne » à la connexion (DNS rebinding) passait, et une redirection 3xx vers
+l'intérieur aussi. Une session `requests` gardée (`egress_transport.session`, `.harden`,
+`.pinned`) monte un adaptateur dont chaque connexion — redirections comprises, puisque
+chaque saut ouvre la sienne — résout l'hôte UNE fois, applique la même décision
+(`egress.refuse_instance` + `egress.decide`, exceptions selon la politique) et ouvre la
+socket sur l'une de ces adresses ; le nom d'origine reste celui du SNI, de la
+vérification du certificat et de l'en-tête `Host`. Pas de patch global de la
+résolution : le processus parle légitimement à sa boucle locale. Les proxies
+d'environnement sont ignorés (`trust_env=False`) et un proxy explicite est refusé —
+derrière un proxy, c'est lui qui résout. Le dépôt ne lit aucune variable de proxy ; une instance derrière un proxy d'egress ou un magasin de certificats propre (`REQUESTS_CA_BUNDLE`) voit ces chemins échouer, fermés.
+
+Câblé : `web_read`/`web_image` (`tools/web.py`), une source `url` de fichier
+(`file_source.py`), l'import d'une description publique
+(`api_operations.fetch_public_document`), le CV d'une candidature (`tools/wttj_resume.py`),
+l'import d'avatar, et la session des clients `api` (`tools/api.client_for`, login du mode
+session compris), `n8n`, `make`, `github`, `posthog`, `lucca`, `threecx` et du webhook
+`clay`, et l'échange du code OAuth de Salesforce sur `login_url` (`auth/salesforce.exchange_code`
+passe une session gardée à `auth/flow.exchange_code`, dont le défaut — hôte fixe des
+autres fournisseurs — ne change pas). Banc : `tests/test_egress_transport.py`.
+
+⚠️ **Ce qui reste sous le seul contrôle précoce, nommé** : les appels qu'oto-core fait par
+`requests.<verbe>` au niveau module, sans session à monter — `lighton`, `salesforce`
+(dont l'échange du refresh token sur `login_url`), `wordpress`, le jeton `oauth2` du
+connecteur `api` (`token_url`) et les jetons `threecx`. Les fermer demande un
+paramètre `session=` côté lib, donc un bump de pin.
 
 ⚠️ **Contredit l'ADR 0037 §4**, qui décidait « zéro code SSRF dans le connecteur » et
 renvoyait le blocage des plages privées à un egress proxy « plus tard… si le besoin
 naît ». Ce proxy n'a jamais existé ; le seul filtrage réel est un `IPAddressDeny` du
-lien-local. L'ADR est à amender.
+lien-local. L'ADR (dépôt d'archive, lecture seule) reste à amender : la garde vit dans
+le code, et depuis le transport épinglé elle tient aussi contre le rebinding et les
+redirections, le point sur lequel l'ADR avait raison.
 
 ## Coffre — `connector_credentials` (table unique)
 
@@ -413,7 +439,7 @@ Tables `orgs`/`org_members`(index partiel `org_members_one_active`)/`org_entitle
 ## Folds des secrets de session (cible : coffre unique)
 
 - **LinkedIn / Crunchbase** : cookie chiffré dans `secret_enc`, UA dans `meta` ; `db.set/get/clear_linkedin_cookie`/`crunchbase_session` sur le coffre ; statut /api/me via `credential_status` (sans déchiffrer).
-- **Google OAuth multi-compte** : `connector='google'`, `account=email` ; refresh_token chiffré, scopes/is_default/granted_at/client_id dans `meta`. Les fns db (`set/get/list/set_default/delete_google_oauth`) sur le coffre. **Le jeton d'accès n'est pas rangé dans le coffre** (hygiène du coffre, comme Microsoft, HubSpot, LinkedIn Ads) : chaque processus le tire par refresh au premier usage et le garde en mémoire jusqu'à une minute de son terme (`auth/google._JETONS`, clé = la ligne du compte résolu, quelle que soit son entité, son refresh_token et ses scopes enregistrés — une reconnexion ou un changement de droits en tire un neuf). Coût : un refresh de plus par processus et par heure et par compte servi ; deux refreshs simultanés rendent chacun un jeton valide (Google ne fait pas tourner le refresh_token), le dernier gardé l'emporte. Le jeton d'échange du consentement ne sert qu'à lire l'adresse : il n'est pas gardé, le premier usage en tire un borné aux scopes de la ligne. Le compte d'un appel se choisit par la résolution commune `access.resolve_credential` (`account`/`_account=` > épinglage projet > compte unique > défaut, oto-backend#1160). Les lignes posées avant ce changement portent encore `access_token`/`expires_at` dans `meta` : plus rien ne les lit ; `oto-mcp maintenance jetons-en-meta` retire la clé `access_token`, APRÈS le déploiement du code qui ne l'écrit plus (le code d'avant l'y réécrit à son prochain refresh).
+- **Google OAuth multi-compte** : `connector='google'`, `account=email` ; refresh_token chiffré, scopes/is_default/granted_at/client_id dans `meta`. Les fns db (`set/get/list/set_default/delete_google_oauth`) sur le coffre. **Le jeton d'accès n'est pas rangé dans le coffre** (hygiène du coffre, comme Microsoft, HubSpot, LinkedIn Ads) : chaque processus le tire par refresh au premier usage et le garde en mémoire jusqu'à une minute de son terme (`auth/google._JETONS`, clé = la ligne du compte résolu, quelle que soit son entité, son refresh_token et la borne ENVOYÉE au refresh — une reconnexion ou un changement de droits en tire un neuf). La borne = les scopes enregistrés que le code déclare encore (`_declared_scopes` : un scope retiré, comme l'ancien `chat.messages`, n'est jamais renvoyé) ; si Google la refuse (`invalid_scope`), un seul réessai borné à l'identité + au service appelé (`_service_bound`), jamais sans borne ; les `scopes` de `Credentials` suivent la même borne. Coût : un refresh de plus par processus et par heure et par compte servi ; deux refreshs simultanés rendent chacun un jeton valide (Google ne fait pas tourner le refresh_token), le dernier gardé l'emporte. Le jeton d'échange du consentement ne sert qu'à lire l'adresse : il n'est pas gardé, le premier usage en tire un borné aux scopes de la ligne. Le compte d'un appel se choisit par la résolution commune `access.resolve_credential` (`account`/`_account=` > épinglage projet > compte unique > défaut, oto-backend#1160). Les lignes posées avant ce changement portent encore `access_token`/`expires_at` dans `meta` : plus rien ne les lit ; `oto-mcp maintenance jetons-en-meta` retire la clé `access_token`, APRÈS le déploiement du code qui ne l'écrit plus (le code d'avant l'y réécrit à son prochain refresh).
 
 ## Connecteurs remote — bridges (ADR 0003, pilote : un bridge back-office client)
 
@@ -775,6 +801,123 @@ propriétaire : un agent monté sur une application à droits étendus, partagé
 leur rend ce que son propriétaire voit. Pas d'import GraphQL (l'import lit OpenAPI ; une
 API GraphQL se décrit par une action `POST /graphql`).
 
+### Le mode `oauth2_user` des applications de Custom API : chaque membre se connecte (23/11/2026)
+
+Une API interne qui applique ses droits PAR PERSONNE (un CRM où chaque commercial ne voit
+que ses comptes) n'était joignable qu'avec UNE identité : une clé, un couple basic, un
+client `client_credentials`. Le mode `oauth2_user` donne à chaque membre la sienne
+(`auth/api_oauth.py`) :
+
+- **l'application** porte où se connecter, jamais un secret : `authorize_url`,
+  `token_url`, `oauth_client_id` (un client PUBLIC, PKCE S256, sans secret — type
+  natif / SPA chez le serveur d'autorisation), `scope`, `resource` (RFC 8707, envoyé à
+  l'autorisation, à l'échange et au renouvellement : sans lui, un serveur OpenID qui émet
+  ses jetons par ressource rend un jeton opaque que l'API refuse). `offline_access` dans
+  les scopes fait envoyer `prompt=consent` (sans lui, pas de refresh token) ;
+- **« Connecter »** = `POST /api/orgs/{id}/connectors/api/apps/{account}/connect`
+  (membre de l'org ; refusé si l'org interdit la clé perso du Custom API). Le retour suit
+  la règle commune (`auth/flow.py`) : callback `/api/custom-api/oauth/callback`, carte
+  `api`, complétion par le front avec le jeton de la personne ;
+- **la clé du membre** = une ligne ordinaire du coffre, palier membre, sous le nom de
+  compte de l'application, liée par `meta.api_app` (`completer_la_pose`, comme une clé
+  posée à la main) ; son seul secret est `refresh_token`, qui ne se pose qu'au palier
+  membre : une clé d'équipe ou d'org qui le porte est refusée
+  (`refresh_token_member_only`) ;
+- **à l'appel**, `tools/api.client_for` demande un jeton d'accès à `access_token_for` et
+  appelle en `bearer` : oto-core ne connaît pas ce mode (`HOST_AUTH_MODES`, hors du
+  tripwire `test_api_auth_modes.py`). Renouvellement sous verrou consultatif de la LIGNE,
+  rotation écrite dans la même transaction, grant mort revérifié contre la ligne puis
+  MARQUÉ (`health_ko`), jamais purgé ; le jeton d'accès ne va jamais en base.
+
+Pas de clé d'équipe ni d'org dans ce mode côté produit : l'intérêt est l'identité de la
+personne. Un agent hébergé appelle sous l'identité de son propriétaire, donc avec SA clé.
+
+### Un serveur MCP comme Custom API : `protocol: mcp` (23/11/2026)
+
+Une carte (ou une application) de Custom API peut désigner un SERVEUR MCP distant
+(Streamable HTTP) au lieu d'une API REST : champ `protocol` = `mcp`, `base_url` =
+l'adresse du serveur (`connectors/api_mcp.py`). Ce n'est **pas** la fédération retirée
+(ADR 0069) : rien n'est monté au catalogue, aucun outil distant ne devient un outil
+d'oto. Deux verbes l'atteignent, par la carte :
+
+- `api(op="mcp_tools")` — les outils distants (nom, description, schéma d'entrée) ;
+- `api_act(op="call_mcp", operation=<outil>, args={…})` — un appel, effet `detruire`
+  (les annotations d'un serveur tiers ne sont que sa parole).
+
+L'auth est celle de la carte (tout mode sauf `session` et `visitor`), connexion par
+membre `oauth2_user` comprise — un jeton refusé (401) est oublié et l'appel rejoué une
+fois. Une session courte par verbe (`initialize`, `notifications/initialized`, la
+requête, `DELETE`), réponse JSON ou SSE, corps borné, **aucune redirection suivie**,
+`base_url` et `token_url` sous la garde d'egress. La définition porte une liste blanche
+`mcp_tools` (noms ; vide = tous) que l'admin pose : un outil hors liste est refusé avant
+tout envoi, et n'apparaît pas à la liste. Ce que le serveur distant écrit (descriptions,
+texte, `structuredContent` en JSON indenté, messages d'erreur) arrive à l'agent dans un
+bloc nommé de données tierces (`texte_tiers.cloture`).
+
+### Un serveur MCP en `oauth2_user` se connecte comme Claude : sans clé ni client saisis (24/11/2026)
+
+Pour une application `protocol: mcp` en `oauth2_user`, l'admin ne donne que l'adresse du
+serveur ; le premier « Connecter » d'un membre découvre le reste (`auth/mcp_discovery.py`,
+spec d'autorisation MCP) et l'ÉCRIT sur l'application (seuls les champs vides) :
+
+1. un `initialize` sans jeton → 401 + `WWW-Authenticate: Bearer resource_metadata=…`
+   (sinon les chemins connus de RFC 9728) ; la `resource` annoncée DOIT être l'adresse
+   de l'app, sinon refus (un serveur ne peut pas réclamer les jetons d'un autre) ;
+2. les métadonnées du serveur d'autorisation (RFC 8414, puis OpenID) DOIVENT nommer
+   l'émetteur cherché ; PKCE S256 exigé ;
+3. l'identité du client : notre **Client ID Metadata Document**
+   (`GET /api/custom-api/oauth/client.json`, servi sans authentification, client
+   public, notre callback) si le serveur l'accepte ; sinon une inscription dynamique
+   (RFC 7591, client public) ; sinon refus nommé `mcp_discovery_failed` — l'admin crée
+   un client public et pose son ID.
+
+Les champs remplis par la découverte sont marqués dans la connexion (`discovered`,
+écrit par la découverte seule ; un champ que l'admin change ou vide en sort). Un
+`token_url` ainsi annoncé est revérifié par la garde d'egress **sans exception
+déclarée** à chaque échange de code et à chaque renouvellement ; celui que l'admin a
+saisi garde la politique de la plateforme.
+
+Changer l'adresse d'une telle app vers une autre origine efface ce qui avait été
+découvert (sauf valeurs neuves envoyées par l'admin) : rien n'est reporté d'un serveur à
+l'autre. Le membre qui déclenche la découverte écrit donc la connexion de l'app
+(`updated_by` = lui).
+Tout membre peut ainsi déclencher la découverte : elle ne lit que des métadonnées
+publiques du serveur choisi par l'admin et n'écrit que ce qu'elle a trouvé — admis tel
+quel.
+
+### Un seul service d'autorisation, une seule ressource, `iss` vérifié (25/11/2026)
+
+L'admin d'une org est traité comme non fiable par la garde d'egress ; il ne doit pas
+davantage pouvoir faire partir le code, le verifier ou le jeton d'un membre vers un tiers
+(`connectors/api_apps.refus_d_origine`, relu à l'enregistrement de l'app, à la
+découverte et à chacune des trois demandes — autorisation, échange, renouvellement) :
+
+- `authorize_url` et `token_url` sont sur UNE origine (schéma, hôte, port) : celle de
+  l'émetteur découvert (`issuer`, écrit par la découverte seule) quand il est connu,
+  sinon celle que l'admin a déclarée. Un mélange est refusé (`invalid_app_connection` à
+  l'écriture, `api_app_origin_mixed` à l'usage, `mcp_discovery_failed` à la
+  découverte) ;
+- une `resource` déclarée désigne l'API elle-même : en mode MCP l'adresse canonique du
+  serveur (RFC 8707, `ressource_canonique`), imposée aux trois demandes ; en http une URI
+  de l'origine de `base_url`. Une autre saisie est refusée ;
+- au retour, le callback scelle le code avec le paramètre `iss` (RFC 9207) : exigé et
+  égal à l'émetteur quand le serveur annonce `authorization_response_iss_parameter_supported`,
+  refusé dans tous les cas s'il est présent et différent (`api_oauth_issuer_mismatch`) ;
+- « Connecter » rend `sign_in_host` et `api_host`, pour que l'écran les montre avant
+  le départ ; le document client (CIMD) nomme `oto`.
+
+Toutes les requêtes de ce chemin (découverte, inscription, échange, renouvellement, et
+les quatre requêtes MCP) partent sur une session épinglée (`egress_transport`). Le
+renouvellement fait sa requête HORS transaction ; seule l'écriture du jeton tourné prend
+le verrou de la ligne, et n'écrase pas un jeton changé entretemps. Limite assumée : le
+service d'autorisation et l'API peuvent être sur des domaines différents (un fournisseur
+d'identité devant une API interne), et un service qui ignore `resource` délivre un jeton
+valable pour toute API qui l'accepte ; la confiance dans la configuration d'une app
+repose sur l'admin de l'org, et sur l'attention du membre aux deux hôtes montrés avant
+la connexion (`SECURITY.md` §10). ⚠️ Limite : le mode
+`oauth2` (client credentials) d'une carte MCP obtient son jeton par oto-core, hors de
+ce transport.
+
 ### Le renommage `http` → `api` (12/11/2026)
 
 Décision du propriétaire du produit : le connecteur s'appelle `api`, ses outils `api`, `api_act`, `api_get`,
@@ -797,7 +940,8 @@ repointé vers la copie `api` du même propriétaire et du même compte. Pourquo
 l'id de la copie s'y lit en base, et le démarrage du code neuf précède le tag sur une base partagée avec la
 prod, qui lirait encore ces désignations. Même règle de conflit partout (même sens : le doublon part ; sens
 différent : la révision s'arrête et n'écrit rien). Les lignes `http` du coffre partent plus tard, par
-`oto-mcp maintenance orphelins`.
+`oto-mcp maintenance orphelins` ; d'ici là, le constat (`op=connecteurs_orphelins`) les marque `renomme_en: "api"`
+et les compte à part (`total_renommes`), hors de `total`.
 
 ### La `config` d'une instance — premier écrivain : les opérations d'un « Custom API » (17/10/2026)
 
@@ -1125,14 +1269,15 @@ consentement.
   AVANT de ranger, `check_org` lit l'organisation que le jeton neuf atteint (CRM `GET
   /crm/v7/org` : `id`, `zgid` ou `domain_name` ; Desk `GET /api/v1/organizations` ;
   Analytics, ses orgs) et la compare. Écart : jeton **révoqué** chez Zoho (un échec de
-  révocation se journalise `zoho_revocation_failed`), rien de rangé, retour
-  `connect=zoho_org_mismatch&consented_org=<nom>`. Organisation illisible alors qu'elle est
-  attendue : même refus (`connect=error`). App apportée SANS `zoho_org_id` : le consentement
-  passe, SIGNALÉ (`warning=zoho_org_unverified` au retour, `connect.warnings` sur la carte ;
+  révocation se journalise `zoho_revocation_failed`), rien de rangé : la complétion
+  (`POST /api/me/connectors/{name}/complete`, oto-backend#1908) répond 409 `org_mismatch`,
+  `details.consented_org=<nom>`. Organisation illisible alors qu'elle est attendue : refus
+  (502 `exchange_failed`). App apportée SANS `zoho_org_id` : le consentement passe, SIGNALÉ
+  (`warning: zoho_org_unverified` dans la réponse 200, `connect.warnings` sur la carte ;
   `zoho_org_unverifiable` sur Zoho Sign, dont la carte n'a pas ce champ : `auth/zoho.org_warning`).
   Personne côté admin n'a de compte dans l'org Zoho du membre pour y lire son identifiant :
-  le retour MONTRE donc l'org consentie — `consented_org=<nom>&consented_org_id=<id>`,
-  répétés par org (appariés par position) —, l'identifiant affiché étant celui que l'aide du
+  la réponse MONTRE donc l'org consentie — `details.consented_org` et
+  `details.consented_org_id`, une entrée par org (appariées par position) —, l'identifiant affiché étant celui que l'aide du
   champ fait saisir (CRM : `zgid`, l'« Org ID » de Company Details, le nombre après `org`
   dans l'URL du CRM ; `id` si Zoho n'envoie pas de `zgid` ; Desk : `id` ; Analytics :
   `org_id`). Rien n'en est retenu : l'admin le recopie dans `zoho_org_id` s'il le veut. Cette

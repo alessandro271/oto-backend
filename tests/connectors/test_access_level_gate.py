@@ -291,7 +291,7 @@ def test_une_instance_d_un_autre_connecteur_ne_juge_rien(equipe_restreinte):
 
 # --- visibilité et schéma servi -----------------------------------------------------
 
-NOMS = {"zoho_record", "zoho_note", "zoho_modules", "zoho_connect", "zohodesk_tickets",
+NOMS = {"zoho_record", "zoho_note", "zoho_modules", "zohodesk_tickets",
         "zohodesk_articles", "zohodesk_create_ticket", "serper_search", "oto_doc"}
 
 

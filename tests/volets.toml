@@ -141,6 +141,7 @@ chemins = [
   "oto_mcp/borne_session.py",
   "oto_mcp/sessions_mcp.py",
   "oto_mcp/egress.py",
+  "oto_mcp/egress_transport.py",
   "oto_mcp/crypto.py",
   "oto_mcp/env_inventory.py",
   "oto_mcp/env_secrets.py",
@@ -156,17 +157,24 @@ chemins = [
   "oto_mcp/auth/anon.py",
   "oto_mcp/auth/annuaire.py",
   "oto_mcp/auth/decouverte.py",
+  "oto_mcp/auth/entree_mcp.py",
   "oto_mcp/auth/flow.py",
   "oto_mcp/auth/hooks.py",
   "oto_mcp/auth/inscription_dynamique.py",
   "oto_mcp/auth/pkce.py",
   "oto_mcp/auth/revocation_mot_de_passe.py",
+  "oto_mcp/auth/revocation_2fa.py",
+  "oto_mcp/auth/empreintes_2fa_pose.py",
   "oto_mcp/auth/platform_worker.py",
   "oto_mcp/auth/service_identity.py",
   "oto_mcp/auth/token_scopes.py",
   # lecteur et migration des secrets d'application de l'instance : sept connecteurs
   "oto_mcp/auth/app_instance.py",
   "oto_mcp/auth/app_instance_rangement.py",
+  # La connexion par membre d'une application de Custom API et la découverte MCP : elles
+  # servent `connectors/api_apps.py` et le retour commun (`auth/flow.py`), rangés ici.
+  "oto_mcp/auth/api_oauth.py",
+  "oto_mcp/auth/mcp_discovery.py",
   "oto_mcp/middleware/**",
   "oto_mcp/org_store/**",
   "oto_mcp/org_created_hook.py",
@@ -186,6 +194,7 @@ chemins = [
   "oto_mcp/roles.py",
   "oto_mcp/ownership.py",
   "oto_mcp/verrou_org.py",
+  "oto_mcp/garde_admin.py",  # garde des rôles plateforme : session + MFA (CASA 3.3.1)
   "oto_mcp/outils_du_travail.py",  # liste d'outils du travail hébergé, tenue à chaque appel
   "oto_mcp/url_perimeter.py",
   "oto_mcp/anon_visibility.py",
@@ -195,6 +204,7 @@ chemins = [
   "oto_mcp/entitlements_catalogue.py",
   "oto_mcp/org_origin.py",
   "oto_mcp/account_suspension.py",
+  "oto_mcp/session_revoquee.py",
   "oto_mcp/org_suspension.py",
   "oto_mcp/db/etat_abonnement.py",
   "oto_mcp/project_exposure.py",
@@ -274,6 +284,8 @@ chemins = [
   "oto_mcp/api/erreur_interne.py",
   "oto_mcp/api/hooks.py",
   "oto_mcp/api/logto_webhook.py",
+  # Les retours de consentement de tous les connecteurs OAuth (#1908).
+  "oto_mcp/api/oauth_returns.py",
   "oto_mcp/api/projects.py",
   "oto_mcp/api/public.py",
   "oto_mcp/api/receveurs.py",
@@ -284,6 +296,8 @@ chemins = [
   "oto_mcp/db/_*.py",
   "oto_mcp/db/borne_sql.py",
   "oto_mcp/db/demandes_acces.py",
+  "oto_mcp/db/empreintes_2fa.py",
+  "oto_mcp/db/revocations_comptes.py",
   "oto_mcp/db/migrations/**",
   "oto_mcp/db/schema/__init__.py",
   "oto_mcp/db/schema/alertes.py",
@@ -294,6 +308,7 @@ chemins = [
   "oto_mcp/db/spend_blocks.py",
   "oto_mcp/capabilities/service_credits.py",
   "oto_mcp/credits_echeances.py",
+  "oto_mcp/db/schema/effacements.py",
   "oto_mcp/db/schema/entitlements.py",
   "oto_mcp/db/schema/grants.py",
   "oto_mcp/db/schema/nodes.py",
@@ -525,6 +540,8 @@ sources = [
   "oto_mcp/capabilities/preset_agents.py",
   "oto_mcp/capabilities/me_abonnements.py",
   "oto_mcp/db/runner_*.py",
+  # Les partages d'org posés d'office sur les agents, et leur passage en lecture.
+  "oto_mcp/db/partages_office.py",
   "oto_mcp/db/run_thread.py",
   "oto_mcp/db/user_subscriptions.py",
   "oto_mcp/db/org_subscription_*.py",
@@ -548,6 +565,7 @@ tests = [
   "tests/**/test_temps_gagne*.py",
   "tests/**/test_preset_agents*.py",
   "tests/**/test_partage_agents*.py",
+  "tests/**/test_partages_office_en_lecture.py",
   "tests/**/test_partage_par_defaut.py",
   "tests/**/test_tours_au_cout*.py",
   "tests/**/test_regions_de_modeles*.py",
@@ -582,6 +600,11 @@ tests = ["tests/**/test_transcri*.py"]
 nom = "export de périmètre"
 sources = ["oto_mcp/export_perimetre/**", "oto_mcp/tenant_migration.py"]
 tests = ["tests/export_perimetre/test_*.py", "tests/**/test_export*.py", "tests/**/test_migrate*.py"]
+
+[[volet]]
+nom = "effacement d'org"
+sources = ["oto_mcp/effacement/**", "oto_mcp/capabilities/org_erasure.py"]
+tests = ["tests/effacement/test_*.py", "tests/export_perimetre/test_*.py", "tests/test_org_suspension.py"]
 
 [[volet]]
 nom = "données publiques (fod)"
@@ -752,9 +775,11 @@ sources = [
   "oto_mcp/capabilities/search.py",
   "oto_mcp/db/search.py",
   "oto_mcp/db/aux_embed.py",
+  "oto_mcp/db/embed_file.py",
   "oto_mcp/db/schema/embeddings.py",
 ]
-tests = ["tests/**/test_search*.py", "tests/**/test_recherche*.py", "tests/**/test_rank*.py"]
+tests = ["tests/**/test_search*.py", "tests/**/test_recherche*.py", "tests/**/test_rank*.py",
+         "tests/**/test_embed*.py"]
 
 [[volet]]
 nom = "journal et suivi"

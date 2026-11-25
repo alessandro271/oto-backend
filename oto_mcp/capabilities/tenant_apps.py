@@ -187,12 +187,15 @@ CAPABILITIES += [
                      "then consent under the tenant's brand, and the callback moves to the "
                      "tenant's host. Serves ONLY accounts qualified under this tenant; "
                      "accounts connected under the previous app must reconnect."),
-        rest=RestBinding("PUT", "/api/admin/tenants/{slug}/apps/{connector}"),
+        # Un secret client : session seule (`_session_exigee`).
+        rest=RestBinding("PUT", "/api/admin/tenants/{slug}/apps/{connector}",
+                         allow_api_token=False),
     ),
     Capability(
         key="admin.tenant_app_clear", handler=_clear_app, Input=TenantAppClearInput,
         Output=TenantAppCleared, authz=TENANT_ADMIN_OF("slug", platform=SUPER_ADMIN),
         description="Remove the tenant's OAuth app for a connector (back to the platform's).",
-        rest=RestBinding("DELETE", "/api/admin/tenants/{slug}/apps/{connector}"),
+        rest=RestBinding("DELETE", "/api/admin/tenants/{slug}/apps/{connector}",
+                         allow_api_token=False),
     ),
 ]

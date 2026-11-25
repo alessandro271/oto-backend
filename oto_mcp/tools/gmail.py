@@ -258,6 +258,10 @@ archives or deletes: that is `gmail_act`, the tool your client asks you to confi
   (`reply_to_thread`, or `reply_to`). It does NOT leave the mailbox. Returns `kind: "draft"`, its `id` (the `draft_id`, distinct from
   `message_id`) and `web_link` (the draft opened in Gmail web, to note where it waits): send it with
   `gmail_act(op="send", draft_id=<id>)` once the person agrees.
+  With `draft_id`: REWRITES that existing draft instead — same draft id, same thread
+  (a reply stays filed in its conversation). `body` replaces the whole content,
+  attachments included (resend them); `to`, `subject`, `cc`, `bcc` left out keep the
+  draft's current value. `reply_to`/`reply_to_thread`/`reply_all` do not apply.
   ⚠️ A fresh draft can be MISSING from an already-open Gmail tab for a while (the API has
   it, the client view lags): tell the person to reload or search `in:drafts`.
 - **"accounts"**: the Gmail accounts this call can use — the user's own, then the
@@ -277,6 +281,8 @@ Args:
     sheet: op="attachment" of an .xlsx — sheet name or 0-based index.
     max_rows: op="attachment" of an .xlsx — rows per sheet (default 200, max 5000).
     For op="draft":
+    draft_id: an existing draft to rewrite (its `id` from op="draft"/"drafts") ;
+        omitted, a new draft is written.
 {_COMPOSITION_ARGS}
 """
 
@@ -326,7 +332,7 @@ def _refuse_composition(op: str, **valeurs) -> None:
 
 async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, reply_to_thread,
                     reply_all, cc, bcc, html, from_name, markdown, attachments, sign,
-                    account=None) -> dict:
+                    account=None, draft_id=None) -> dict:
     """Write a draft (`envoyer=False`) or send (`True`) — the ONE composition path of both
     tools: signature, attachments, reply or new message."""
     if reply_to and reply_to_thread:
@@ -334,6 +340,13 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, reply
                    "a thread) are exclusive: pass one. Nothing was written.")
     if not body:
         raise _bad("`body` is required to compose a message. Nothing was written.")
+    if draft_id is not None:
+        donnes = [k for k, v in (("reply_to", reply_to), ("reply_to_thread", reply_to_thread),
+                                 ("reply_all", reply_all), ("from_name", from_name))
+                  if v is not None]
+        if donnes:
+            raise _bad(f"{', '.join(f'`{k}`' for k in donnes)} do not apply when rewriting "
+                       "a draft (`draft_id`): it keeps its thread. Nothing was written.")
     html = _html_du_corps(body, html, markdown)
     signature_etat = "disabled"
     if sign:
@@ -353,7 +366,7 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, reply
     if reply_all is not None and not (reply_to or reply_to_thread):
         raise _bad("`reply_all` only applies to a reply (`reply_to_thread` or `reply_to`). "
                    "Nothing was written.")
-    if not reply_to and not reply_to_thread and not to:
+    if not reply_to and not reply_to_thread and not to and draft_id is None:
         raise _bad("`to` is required for a new message (or provide `reply_to_thread` or "
                    "`reply_to` to reply).")
     try:
@@ -389,6 +402,13 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, reply
         return out
 
     try:
+        if draft_id is not None:
+            return {**_acte(await asyncio.to_thread(
+                lambda: client.update_draft(
+                    draft_id, body=body, html=html, to=to, subject=subject, cc=cc, bcc=bcc,
+                    markdown=markdown, attachments=att_paths,
+                )
+            )), "updated": True}
         if reply_to or reply_to_thread:
             if not envoyer:
                 return _acte(await asyncio.to_thread(
@@ -450,6 +470,7 @@ def register(mcp: FastMCP) -> None:
         markdown: bool = True,
         attachments: Optional[list[dict]] = None,
         sign: bool = True,
+        draft_id: Optional[str] = None,
         account: Optional[str] = None,
     ) -> Union[dict, ToolResult]:
         # Refusal BEFORE any credential resolution: an unknown op never reaches the client.
@@ -458,6 +479,9 @@ def register(mcp: FastMCP) -> None:
         if (sheet is not None or max_rows is not None) and op != "attachment":
             raise _bad(f"`sheet`/`max_rows` only apply to op='attachment' of an "
                        f".xlsx spreadsheet (got op='{op}').")
+        if draft_id is not None and op != "draft":
+            raise _bad(f"`draft_id` only applies to op='draft' (rewrite that draft), not "
+                       f"op='{op}'. Nothing was done.")
         if op != "draft":
             _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
                                 reply_to_thread=reply_to_thread, reply_all=reply_all,
@@ -509,7 +533,8 @@ def register(mcp: FastMCP) -> None:
             client, envoyer=False, body=body, to=to, subject=subject, reply_to=reply_to,
             reply_to_thread=reply_to_thread, reply_all=reply_all, cc=cc, bcc=bcc, html=html,
             from_name=from_name,
-            markdown=markdown, attachments=attachments, sign=sign, account=account)
+            markdown=markdown, attachments=attachments, sign=sign, account=account,
+            draft_id=draft_id)
 
     @mcp.tool(name="gmail_act", annotations=ACTE)
     @documente(_GMAIL_ACT_DOC)

@@ -1,0 +1,82 @@
+"""Les gestes SENSIBLES demandent une session de connexion complète — jamais un jeton.
+
+Exigence : une modification de compte ou une transaction sensible se fait sous une
+session de connexion complète. Un jeton `oto_` (jusqu'à 90 jours, celui d'une personne,
+d'un agent hébergé ou une clé d'org) n'en est pas une. Il ne fait donc pas ces gestes-là
+— archiver une org, retirer un membre ou changer un rôle, donner le rang d'admin
+(invitation, ajout), transférer la propriété d'un objet, régler la sécurité d'une org,
+gérer les jetons et les clés.
+
+Deux crans, parce qu'il y a deux faces et des gestes conditionnels :
+
+- **le binding REST** (`RestBinding.allow_api_token=False`) : la route entière refuse le
+  porteur de jeton à l'authentification, avant toute lecture — 403 `api_token_forbidden`.
+  Il refuse aussi le secret de worker (`otow_`). L'identité de SERVICE, elle, n'est pas
+  un jeton `oto_` et n'atteint aucune de ces routes (aucune règle ne la lit) ;
+- **cette garde**, appelée par le HANDLER de domaine : elle tient la face MCP — qui
+  accepte un jeton `oto_` non porté (`server._verify_api_token`) et sert les mêmes
+  handlers par les consoles `oto_org`, `oto_admin_org_member`, `oto_group`,
+  `oto_resource` — et les gestes qu'un binding ne sait pas dire (une invitation n'est
+  sensible que si elle donne le rang d'admin).
+
+⚠️ **Elle ne refuse que sur un jeton IDENTIFIÉ**, jamais sur « pas de session connue » :
+un appel interne (boucle de fond, maintenance, banc) n'a ni geste REST ni jeton MCP, et
+doit passer — contrairement à la garde de l'agent intégré (`copilot`), fail-closed parce
+que sa seule face est REST. Une session OAuth Logto (dashboard, client MCP connecté par
+OAuth) n'est pas un jeton nommé : elle passe.
+
+**Règle pour l'identité de SERVICE** (décision d'Alexis du 23/11/2026) : un geste réservé
+à une session reste ouvrable à une identité de service DÉCLARÉE qui porte le rôle
+voulu (`_authz.SERVICE_OU(role, …)`, `auth/service_identity.py`) ; seuls les jetons `oto_`
+(et le secret de worker) en restent refusés. Aujourd'hui aucune route réservée n'est
+ouverte à un service. Le jour où l'une l'est, ce refus doit laisser passer l'identité de
+service qui porte le rôle (`_authz.est_service`), sans relâcher le jeton `oto_`, avec un
+test des deux porteurs sur la route.
+"""
+from __future__ import annotations
+
+from .. import geste
+from ..auth import hooks, platform_worker, token_scopes
+from ._types import AuthzDenied
+
+#: Le même code que le refus du binding REST : un client lit UN jeton, quelle que soit
+#: la face qui a refusé.
+CODE = "api_token_forbidden"
+
+
+def _jeton_mcp() -> bool:
+    """La requête MCP en cours porte-t-elle un jeton `oto_` ? `server._verify_api_token`
+    pose `client_id="oto_api_token"` et les axes `token_id`/`token_kind` ; une session
+    OAuth n'a ni l'un ni les autres. Hors requête MCP : False."""
+    if hooks.current_token_axes():
+        return True
+    # Hors requête MCP, `get_access_token` rend None (aucun jeton à juger). Toute autre
+    # erreur se lève : une garde qui la lirait « pas de jeton » laisserait passer.
+    from fastmcp.server.dependencies import get_access_token  # type: ignore
+    return getattr(get_access_token(), "client_id", None) == "oto_api_token"
+
+
+def porteur_de_jeton() -> bool:
+    """Vrai quand l'appel en cours est authentifié par un jeton plutôt que par une
+    session : REST sous un jeton `oto_` (geste `api`, ou l'id de jeton que pose
+    `api.base._authenticate`) ou un secret de worker, MCP sous un jeton `oto_`."""
+    g = geste.courant()
+    if g is not None and g.source == geste.API:
+        return True
+    # Second signal REST, indépendant du geste : l'authentification range l'id de tout
+    # jeton `oto_` (porté ou non) — un `token_kind` absent ne rendrait pas la garde aveugle.
+    if token_scopes.jeton_courant() is not None:
+        return True
+    if platform_worker.current() is not None:
+        return True
+    return _jeton_mcp()
+
+
+def exiger_session(quoi: str) -> None:
+    """Refuse `quoi` (le geste, en clair) sous un jeton : 403 `api_token_forbidden`."""
+    if porteur_de_jeton():
+        # Code EN LITTÉRAL (= `CODE`) : `tests/_refus_atteignables.py` lit les littéraux.
+        raise AuthzDenied(
+            403, "api_token_forbidden",
+            f"{quoi} demande une session de connexion complète (le tableau de bord, ou un "
+            "client connecté par OAuth) : un jeton d'API ne fait pas ce geste.")

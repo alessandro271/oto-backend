@@ -175,6 +175,27 @@ def current_token_axes() -> dict:
     return {k: claims[k] for k in ("token_id", "token_kind") if claims.get(k) is not None}
 
 
+def current_token_emis_le() -> Optional[float]:
+    """La date d'émission du jeton de la requête MCP en cours, en secondes depuis
+    l'époque : la création d'un jeton `oto_` (`cree_le`, posé par
+    `server._verify_api_token`), l'`iat` d'un JWT (0 s'il n'en porte pas : refusé dès
+    qu'une fermeture a eu lieu, `session_revoquee.py`). None sans jeton (hors requête
+    MCP, dev local) et sous l'override REST, dont la porte a déjà jugé le sien. Lecture
+    de contexte, aucune base."""
+    if _sub_override.get():
+        return None
+    try:
+        from fastmcp.server.dependencies import get_access_token  # type: ignore
+        token = get_access_token()
+    # noqa: SILENT — hors contexte de requête MCP : aucun jeton à dater
+    except Exception:  # noqa: BLE001
+        return None
+    if token is None:
+        return None
+    from ..session_revoquee import emis_le_du_jeton
+    return emis_le_du_jeton(token)
+
+
 def current_user_sub_from_token() -> Optional[str]:
     """Sub de l'utilisateur courant depuis le bearer JWT MCP (ou l'override REST)."""
     override = _sub_override.get()
@@ -226,7 +247,8 @@ def current_user_sub_from_token() -> Optional[str]:
     from .. import db
     try:
         canonique = db.resolve_sub(sub)
-        db.upsert_user(canonique, email=claims.get("email"), name=claims.get("name"))
+        db.upsert_user(canonique, email=claims.get("email"), name=claims.get("name"),
+                       email_verified=claims.get("email_verified") is True)
     except Exception as exc:
         # C'est ICI, et nulle part ailleurs, que se dit POURQUOI une requête n'a pas
         # d'identité (oto-backend#464) : les appelants ne rattrapent plus l'échec pour

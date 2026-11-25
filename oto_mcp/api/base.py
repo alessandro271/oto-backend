@@ -14,8 +14,8 @@ sous eux, jamais au-dessus. `api.routes` **ré-exporte** ces noms — `api.route
 et `api.routes._cors_headers` restent valides pour les appelants (et les tests)
 d'avant la découpe.
 
-Les dix modules de routes ANTÉRIEURS à la découpe (`api/datastore.py`,
-`api/sirene.py`, …) reçoivent encore ces mêmes fonctions en PARAMÈTRES de
+Les modules de routes ANTÉRIEURS à la découpe (`api/sirene.py`,
+`api/accords.py`, …) reçoivent encore ces mêmes fonctions en PARAMÈTRES de
 leur `make_routes` — c'est leur patron historique, né du même besoin d'éviter le
 cycle. Il n'a pas été touché : les convertir serait un second lot, sans effet sur
 ce qui est servi.
@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextvars
 import functools
 import logging
+import re
 from typing import Awaitable, Callable, Optional
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -32,13 +33,18 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from .. import config, db
+from .. import config, db, deprecations
 from ..auth import platform_worker, service_identity, token_scopes
 from ..datastore.errors import (CODE_TABLEAU_PAR_NOM, est_un_nom_de_tableau,
                                refus_tableau_par_nom)
 from .. import verrou_org
 from ..tenant_migration import alias_drain_armed
 from .. import garde_identite
+from .. import garde_admin
+
+#: Le tableau d'une route `/api/datastores/{tableau}/…` : là où le tampon de
+#: compatibilité (`deprecations`) remet le numéro à la place d'un nom traduit.
+_PREFIXE_TABLEAU = re.compile(r"^(/api/datastores/)[^/]+")
 
 # Signature de `_authenticate`, telle que la consomment les modules de routes.
 AuthFn = Callable[..., Awaitable["tuple[str | None, JSONResponse | None]"]]
@@ -136,6 +142,12 @@ def _maybe_view_as(real_sub: str, apply_view_as: bool) -> str:
 # de vrai ; il suffisait de ne pas jeter ce qu'elle avait déjà en main.
 CLE_PRINCIPAL = "oto_principal"
 
+# Clé de la redirection d'un ancien chemin REST (`api.alias_routes`), déposée dans le
+# `scope` ASGI par la 308 et relue par le journal des routes (`routes.RestCallLogger`) :
+# `{"tool": "<VERBE> <chemin d'aujourd'hui>", "deprecated_name": "<ancien gabarit>"}`.
+# Même motif que `CLE_PRINCIPAL` : publié dans le scope, relu au `finally`, zéro requête.
+CLE_ALIAS_DEPRECIE = "oto_alias_deprecie"
+
 
 def _publier_principal(request: Request, sub: str, *,
                        token_id: int | None = None,
@@ -177,10 +189,11 @@ CLE_PORTEUR = "oto_porteur_authentifie"
 
 def _memoriser_porteur(request: Request, cle: tuple, sub: str, *, scopes=None,
                        token_id=None, token_kind=None, verrou=None,
-                       email_verified=None) -> None:
+                       email_verified=None, porteur=None) -> None:
     request.scope[CLE_PORTEUR] = {"cle": cle, "sub": sub, "scopes": scopes,
                                   "token_id": token_id, "token_kind": token_kind,
-                                  "verrou": verrou, "email_verified": email_verified}
+                                  "verrou": verrou, "email_verified": email_verified,
+                                  "porteur": porteur}
 
 
 _log = logging.getLogger(__name__)
@@ -269,6 +282,7 @@ async def _authenticate(
         service_identity.set_current(None)
         token_scopes.set_current(deja["scopes"], deja["token_id"])
         verrou_org.poser(deja["verrou"])
+        garde_admin.poser(deja.get("porteur"))
         servi = _maybe_view_as(deja["sub"], apply_view_as)
         if deja["verrou"] is not None and servi != deja["sub"] and verrou_org.courant():
             return None, _json_error(
@@ -301,6 +315,10 @@ async def _authenticate(
     # Le verrou d'org d'un jeton de délégation (`verrou_org.py`) : posé à None
     # d'abord, comme les deux variables ci-dessus — il ne survit à aucune requête.
     verrou_org.poser(None)
+    # Le porteur que lit la garde des administrateurs (`garde_admin`) : posé à None
+    # d'abord, puis POSITIVEMENT par chaque branche qui authentifie — jamais déduit
+    # d'une absence (un jeton nommé absent ne fait pas une session).
+    garde_admin.poser(None)
     if token.startswith(db.WORKER_SECRET_PREFIX):
         token_scopes.set_current(None)
         if not allow_api_token:
@@ -311,6 +329,7 @@ async def _authenticate(
         if not row:
             return None, _json_error(request, 401, "invalid_worker_secret")
         platform_worker.set_current(row)
+        garde_admin.poser(garde_admin.Porteur(garde_admin.MACHINE, row["worker_sub"]))
         _publier_principal(request, row["worker_sub"], token_kind="worker")
         return row["worker_sub"], None
 
@@ -351,12 +370,25 @@ async def _authenticate(
         # Un NOM de tableau dans le chemin est refusé (08/11/2026) — avec le même code
         # et la même phrase que la route elle-même, plutôt qu'un « hors portée » qui
         # enverrait chercher dans le jeton. Rien n'est résolu sous ce nom.
+        #
+        # Tampon de compatibilité allumé sur l'instance (`deprecations`) : le nom est
+        # traduit pour le porteur, et la portée juge le NUMÉRO qu'il désigne — la même
+        # traduction que la route elle-même (`capabilities/_rest_adapter`).
         adresse = token_scopes.tableau_du_chemin(request.method, request.url.path)
+        chemin = request.url.path
         if scopes and est_un_nom_de_tableau(adresse):
-            token_scopes.set_current(None)
-            return None, _json_error(request, 400, CODE_TABLEAU_PAR_NOM,
-                                     refus_tableau_par_nom(adresse))
-        if not token_scopes.authorize(scopes, request.method, request.url.path):
+            if not deprecations.compat_tableau_par_nom_allume():
+                token_scopes.set_current(None)
+                return None, _json_error(request, 400, CODE_TABLEAU_PAR_NOM,
+                                         refus_tableau_par_nom(adresse))
+            ns_id = await run_in_threadpool(deprecations.traduire_tableau, adresse,
+                                            row["sub"])
+            if ns_id is None:
+                token_scopes.set_current(None)
+                return None, _json_error(request, 404, "datastore_not_found",
+                                         f"datastore `{adresse}` unknown")
+            chemin = _PREFIXE_TABLEAU.sub(rf"\g<1>{ns_id}", chemin, count=1)
+        if not token_scopes.authorize(scopes, request.method, chemin):
             granted = []
             if token_scopes.namespaces(scopes):
                 granted.append(f"les tableaux {sorted(token_scopes.namespaces(scopes))}")
@@ -368,7 +400,7 @@ async def _authenticate(
             # cassé. Un refus qui nomme comme autorisé ce qu'il refuse est pire
             # que pas de détail du tout.
             cause, quoi = token_scopes.motif_du_refus(
-                scopes, request.method, request.url.path)
+                scopes, request.method, chemin)
             ouvre = f"Ce jeton ouvre {' et '.join(granted) or 'rien'}."
             if cause == "geste":
                 # La liste RESTE — elle coûte une session de debug à l'intégrateur
@@ -398,8 +430,12 @@ async def _authenticate(
         # Même garde, même place : le compte d'un TENANT DÉSACTIVÉ (#1165). Son jeton
         # `oto_` ne passe jamais par l'émetteur du tenant — retirer celui-ci du
         # registre ne le coupait pas.
-        if (coupe := await run_in_threadpool(garde_identite.refus, row["sub"])):
-            return None, _json_error(request, 403, *coupe)
+        #
+        # Et le jeton créé AVANT la fermeture des sessions du compte (`session_revoquee`) :
+        # sa date de création sort de la vérification même, sans lecture de plus.
+        if (coupe := await run_in_threadpool(garde_identite.refus, row["sub"],
+                                             row.get("cree_le"))):
+            return None, _json_error(request, garde_identite.statut(coupe[0]), *coupe)
         # Jeton d'un TRAVAIL HÉBERGÉ, APRÈS la coupure d'identité (pause, tenant désactivé :
         # elle dit la vraie cause) : la face MCP seule tient sa liste d'outils. Hors des
         # routes que le worker appelle avec lui (`ROUTES_DE_LA_DELEGATION`), refusé.
@@ -411,9 +447,14 @@ async def _authenticate(
                 "A hosted agent's token does not call the REST API: a hosted agent works "
                 "through MCP, where its tool list is enforced.")
         verrou_org.poser(verrou := verrou_org.depuis_ligne(row))
+        porteur = garde_admin.Porteur(
+            garde_admin.DELEGATION if row.get("token_kind") == "delegation"
+            else garde_admin.JETON, row["sub"])
+        garde_admin.poser(porteur)
         _memoriser_porteur(request, cle, row["sub"], scopes=scopes,
                            token_id=row.get("token_id"),
-                           token_kind=row.get("token_kind"), verrou=verrou)
+                           token_kind=row.get("token_kind"), verrou=verrou,
+                           porteur=porteur)
         servi = _maybe_view_as(row["sub"], apply_view_as)
         # Le verrou ne vise que le porteur : « voir en tant que » un autre compte
         # l'éteindrait. Sous un jeton verrouillé, la consultation est refusée.
@@ -442,6 +483,7 @@ async def _authenticate(
         except service_identity.ServiceRefuse as refus:
             return None, _json_error(request, refus.status, refus.code, refus.detail)
         service_identity.set_current(principal)
+        garde_admin.poser(garde_admin.Porteur(garde_admin.MACHINE, principal["sub"]))
         _publier_principal(request, principal["sub"], token_kind="service")
         return principal["sub"], None
 
@@ -451,6 +493,19 @@ async def _authenticate(
     sub = access_token.claims.get("sub")
     if not sub:
         return None, _json_error(request, 401, "missing_sub")
+    # Le JWT émis AVANT la fermeture des sessions du compte (`session_revoquee`) : jugé
+    # sur le sub du jeton TEL QUE VÉRIFIÉ, AVANT le drain d'alias, car c'est sous cet
+    # identifiant Logto que `fermer_tout` pose l'instant ; après le drain, un ancien
+    # identifiant redirigé garderait son jeton jusqu'à son terme. Même jugement que la face
+    # MCP (`auth.entree_mcp.BackendOto`). Il est vérifié hors ligne, son `iat` est jugé
+    # ici contre l'instant joint à la lecture d'entrée. Sans `iat`, 0 : refusé dès qu'une
+    # fermeture a eu lieu. L'état lu est repris plus bas, sans relecture, si le drain ne
+    # change pas le sub.
+    emis_le = float(access_token.claims.get("iat") or 0)
+    sub_du_jeton = sub
+    lue, revoque = await run_in_threadpool(garde_identite.entree_du_jeton, sub, emis_le)
+    if revoque:
+        return None, _json_error(request, garde_identite.statut(revoque[0]), *revoque)
     # Drain d'alias (B1) : canonicaliser le sub AVANT l'upsert. ⚠️ L'`upsert_user` qui
     # suit n'est PAS sous commande : un vieux sub non redirigé n'échoue pas ici, il
     # RECRÉE le compte supprimé par la fusion. Le drain est donc porteur — il ne
@@ -467,18 +522,21 @@ async def _authenticate(
     # dont l'ancien identifiant a été redirigé vers un compte du tenant arrive ici
     # qualifié par le drain — c'est la session de tableau de bord qui survivait au retrait
     # de l'émetteur du tenant. Vérifier avant le drain ne la verrait pas.
-    if (coupe := await run_in_threadpool(garde_identite.refus, sub)):
-        return None, _json_error(request, 403, *coupe)
+    if (coupe := await run_in_threadpool(garde_identite.refus, sub, emis_le,
+                                         garde_identite.reprise(lue, sub_du_jeton, sub))):
+        return None, _json_error(request, garde_identite.statut(coupe[0]), *coupe)
     # upsert_user = DB à CHAQUE requête REST → threadpool (jamais dans la loop) ; une
     # LECTURE quand rien ne change (cf. son docstring), une écriture sinon.
     # locale (#701) : signal déduit de l'en-tête, jamais un choix — `upsert_user`
     # ne le pose que si la ligne n'en porte encore aucun (COALESCE côté SQL).
+    email_verifie = _email_verifie_des_claims(access_token.claims)
     try:
         await run_in_threadpool(
             lambda: db.upsert_user(
                 sub, email=access_token.claims.get("email"),
                 name=access_token.claims.get("name"),
-                locale=_locale_from_accept_language(request.headers.get("accept-language"))))
+                locale=_locale_from_accept_language(request.headers.get("accept-language")),
+                email_verified=email_verifie is True))
     except (db.CompteEnPause, db.TenantDesactive) as refus:
         # L'ANCIEN identifiant d'un compte mis en pause. Il n'a pas de ligne à lui
         # (la fusion l'a supprimée), donc la garde ci-dessus ne l'a pas vu : c'est
@@ -488,9 +546,13 @@ async def _authenticate(
         # la NAISSANCE d'un compte d'un tenant désactivé (#1165) — la garde ci-dessus la
         # précède déjà sur ce chemin ; celle-ci tient si un appelant l'omet.
         return None, _json_error(request, 403, refus.code, str(refus))
-    email_verifie = _email_verifie_des_claims(access_token.claims)
     _EMAIL_VERIFIE.set((sub, email_verifie))
-    _memoriser_porteur(request, cle, sub, email_verified=email_verifie)
+    # Les facteurs se lisent sous l'identité Logto VÉRIFIÉE (le `sub` du jeton, avant le
+    # drain d'alias) : un ancien identifiant redirigé n'a plus de ligne sous le canonique.
+    porteur = garde_admin.Porteur(garde_admin.SESSION, sub,
+                                  sub_logto=access_token.claims.get("sub"))
+    garde_admin.poser(porteur)
+    _memoriser_porteur(request, cle, sub, email_verified=email_verifie, porteur=porteur)
     servi = _maybe_view_as(sub, apply_view_as)
     # Session interactive : pas de jeton nommé, le porteur suffit. Publié quand
     # même — sinon le journal continuerait de le RE-DÉDUIRE de l'en-tête, et une

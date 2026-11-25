@@ -71,8 +71,12 @@ class CompteEnPause(RuntimeError):
 
 
 def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = None,
-                locale: Optional[str] = None) -> None:
+                locale: Optional[str] = None, *, email_verified: bool = False) -> None:
     """Create the user row if missing, refresh email/name if known.
+
+    `email_verified` : le claim OIDC du jeton qui présente `email` (vrai SEULEMENT si
+    le jeton le dit). Il ouvre, à la naissance du compte, l'acceptation automatique des
+    invitations et partages en attente pour cette adresse — fermée sans lui.
 
     ⚠️ **N'écrit que si une colonne posée CHANGE.** Appelée à chaque requête REST
     authentifiée et à chaque message MCP : l'ancien `INSERT … ON CONFLICT DO UPDATE`
@@ -206,11 +210,17 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
     # et B9 de `docs/silences-2026-08-27.md`) — un compte naissait alors à moitié, et
     # tout ce qui en dépendait échouait plus tard, ailleurs, sans cause remontable.
     manques: list = []
-    if row and row.get("inserted") and email:
+    if row and row.get("inserted") and email and not email_verified:
+        # Une adresse que le jeton ne dit pas vérifiée ne désigne pas une invitation :
+        # rien n'est accepté d'office, tout reste en attente (lien du mail, réclamation).
+        logger.info("upsert_user: adresse non vérifiée par le jeton (sub=%s) — aucune "
+                    "invitation ni aucun partage accepté d'office", sub)
+    if row and row.get("inserted") and email and email_verified:
         # Réconciliation invitation↔signup : un invité d'org qui s'inscrit (par
         # n'importe quel chemin, pas seulement le lien /invite) voit son invitation
-        # d'org en attente honorée par l'email vérifié → il rejoint directement
-        # l'org au lieu de rester avec une invitation orpheline. Synchrone (une
+        # d'org en attente honorée par l'email VÉRIFIÉ (claim du jeton) → il rejoint
+        # directement l'org au lieu de rester avec une invitation orpheline — si elle
+        # relève de son tenant (`org_store.tenant_de_l_invitation`). Synchrone (une
         # fois, au 1er insert).
         try:
             from .. import org_store
@@ -1114,17 +1124,30 @@ def set_user_role(sub: str, role: str) -> None:
 
 @lecture_d_appel
 def get_suspension(sub: str) -> Optional[dict]:
-    """L'état de pause d'un compte : `None` s'il est vivant (le cas de tout le monde).
+    """L'état d'ENTRÉE d'un compte — sa pause et son instant « révoqué avant » —, ou
+    `None` s'il n'a ni l'une ni l'autre (le cas de tout le monde).
 
-    Lecture d'un seul champ décisif (`suspended_at`) sur la clé primaire. C'est la
-    SOURCE UNIQUE du prédicat — le seam `account_suspension` est le seul appelant
-    prévu, et les deux faces passent par lui. Ne jamais dériver « en pause » d'autre
-    chose (une absence de ligne, un rôle, une appartenance) : ce sont des faits
+    `{sub, suspended_at, suspended_by, suspended_reason, revoque_avant}` : les trois
+    premiers champs disent la pause (`suspended_at` NULL = pas en pause), le dernier
+    l'instant avant lequel tout jeton du compte est refusé (`revocations_comptes`,
+    `session_revoquee.py`), en secondes depuis l'époque, NULL s'il n'y en a pas. En
+    nombre, pas en date : la fabrique de lignes rend une date en texte à la seconde,
+    et la comparaison veut la microseconde.
+
+    UNE lecture sur deux clés primaires, la seule que la garde d'identité fait par
+    requête : la date de révocation y est jointe pour ne coûter aucun aller-retour de
+    plus sur le chemin de chaque appel. C'est la SOURCE UNIQUE des deux prédicats — le
+    seam `account_suspension` est le seul appelant prévu. Ne jamais dériver « en pause »
+    d'autre chose (une absence de ligne, un rôle, une appartenance) : ce sont des faits
     différents, et le compte en pause a précisément une ligne et un rôle intacts."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT sub, suspended_at, suspended_by, suspended_reason FROM users "
-            "WHERE sub = %s AND suspended_at IS NOT NULL", (sub,)).fetchone()
+            "SELECT k.sub, u.suspended_at, u.suspended_by, u.suspended_reason, "
+            "EXTRACT(EPOCH FROM r.revoque_avant)::float8 AS revoque_avant "
+            "FROM (SELECT %s::text AS sub) k "
+            "LEFT JOIN users u ON u.sub = k.sub AND u.suspended_at IS NOT NULL "
+            "LEFT JOIN revocations_comptes r ON r.sub = k.sub "
+            "WHERE u.sub IS NOT NULL OR r.sub IS NOT NULL", (sub,)).fetchone()
     return dict(row) if row else None
 
 

@@ -38,7 +38,10 @@ attente). Trois causes, une seule racine — **aucun jeu n'était décidé** :
   lancer `uv lock`, versionner les deux **dans le même commit**. `uv lock` ne monte que ce
   que le changement exige ; les autres versions restent.
 - **Monter une dépendance** : `uv lock --upgrade-package <nom>` — un commit daté, qui dit
-  pourquoi. Monter `mcp` (et ses défauts de transport de 1.30) est un de ces commits.
+  pourquoi. Ainsi `mcp` 1.28.1 → 1.30.0 (25/11/2026, CVE-2026-59951 et quatre autres
+  avis) : `mcp` est désormais déclarée (`>=1.30.0,<2.0`), et ses défauts de transport de
+  1.30 (corps 4 MiB, inactivité 30 min, 10 000 sessions) sont posés explicitement au
+  démarrage par `oto_mcp/borne_session.py` (`plafonner`), cf. `docs/monitoring.md`.
 - **Installer un poste** : `uv sync --frozen --extra dev`.
 - **Une PR venue d'un fork** : le mainteneur qui bumpe le pin sur le tronc
   (procédure des PR de fork, `docs/contributions-forks.md` du méta-dépôt) relance `uv lock` dans le même commit.

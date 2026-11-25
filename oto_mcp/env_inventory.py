@@ -377,7 +377,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "Destinations internes autorisées en egress (`nom=adresse:port`, "
              "virgules). Absente = aucune exception : fail-closed, jamais un défaut "
              "qui ouvre la machine.",
-             ("oto_mcp/egress.py:138",)),
+             ("oto_mcp/egress.py:155",)),
     Variable("OTO_EGRESS_IP", Classe.REGLAGE, "",
              "Adresse IP sortante de l'instance, servie par le marqueur `{{egress_ip}}` "
              "des docs connecteur (liste blanche d'IP chez le fournisseur, ex. "
@@ -389,15 +389,25 @@ _REGLAGES: tuple[Variable, ...] = (
              "(défaut) refuse toute résolution du porteur hors de l'org de son travail, "
              "`report` la journalise et la laisse passer, `off` le coupe. Une valeur "
              "inconnue vaut `enforce`.",
-             ("oto_mcp/verrou_org.py:141",)),
-    Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "report",
+             ("oto_mcp/verrou_org.py:142",)),
+    Variable("OTO_ADMIN_MFA", Classe.REGLAGE, "",
+             "Garde des rôles PLATEFORME (`garde_admin.py`, CASA 3.3.1), réglage "
+             "d'instance : non posé = `off` (le tronc inchangé). `enforce` lit `member` "
+             "le porteur `admin`/`super_admin` d'une requête qui n'est pas une session "
+             "Logto interactive avec un second facteur enrôlé (jeton `oto_`, compte sans "
+             "TOTP ni clé d'accès, Logto injoignable) ; `report` journalise ce qui serait "
+             "retiré et ne retire rien (à jouer avant `enforce`). Posée mais inconnue, "
+             "elle vaut `enforce`. Lue à chaque requête.",
+             ("oto_mcp/garde_admin.py:146",)),
+    Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "enforce",
              "Verrou des rôles PLATEFORME des jetons de délégation (`verrou_org.py`) : "
-             "`enforce` lit `member` le porteur `admin`/`super_admin` d'un travail du "
-             "runner (aucune garde plateforme, aucun `oto_admin_*` — sauf, pendant leur "
-             "appel, ceux que son agent nomme : `platform_tools`), `report` (défaut) "
-             "journalise ce qui serait retiré et ne retire rien, `off` le coupe. Une "
-             "valeur inconnue vaut `report`. Indépendant d'`OTO_VERROU_ORG_DELEGATION`.",
-             ("oto_mcp/verrou_org.py:226",)),
+             "`enforce` (défaut) lit `member` le porteur `admin`/`super_admin` d'un "
+             "travail du runner (aucune garde plateforme, aucun `oto_admin_*` — sauf, "
+             "pendant leur appel, ceux que son agent nomme : `platform_tools`), `report` "
+             "(posé explicitement) journalise ce qui serait retiré et ne retire rien, "
+             "`off` le coupe. Une valeur inconnue vaut `enforce`. Indépendant "
+             "d'`OTO_VERROU_ORG_DELEGATION`.",
+             ("oto_mcp/verrou_org.py:227",)),
     Variable("OTO_COPILOT_SUBS", Classe.REGLAGE, "",
              "L'agent intégré à l'application (`capabilities/copilot`, docs/copilot.md) : "
              "les `sub` autorisés, séparés par des virgules. Vide (défaut) = personne — les "
@@ -654,6 +664,19 @@ _REGLAGES: tuple[Variable, ...] = (
              "hygiène mémoire, pas un refus) ; `0` désarme ; "
              "illisible : refus de démarrer.",
              ("oto_mcp/bornes_processus.py:122",)),
+    Variable("OTO_BORNE_CORPS_MCP_OCTETS", Classe.REGLAGE, "33554432",
+             "Transport de l'SDK `mcp` 1.30 : taille max (octets) du corps d'une requête "
+             "`/mcp` acceptée par l'SDK (`max_request_body_size`, `413` au-delà), posée "
+             "dans TOUS les modes. 32 MiB par défaut, au-dessus du proxy (32 Mo) ; la "
+             "borne `OTO_BORNE_CORPS_OCTETS` reste en dessous. `0` ou illisible : refus "
+             "de démarrer.",
+             ("oto_mcp/bornes_processus.py:171",)),
+    Variable("OTO_BORNE_SESSIONS_MCP_MAX", Classe.REGLAGE, "10000",
+             "Transport de l'SDK `mcp` 1.30 : nombre max de sessions MCP ouvertes à la "
+             "fois, par gestionnaire (`max_sessions`, `503` sur une ouverture de plus), "
+             "posé dans TOUS les modes. Global au processus, sans état par principal. "
+             "`0` ou illisible : refus de démarrer.",
+             ("oto_mcp/bornes_processus.py:174",)),
     Variable("OTO_DEBIT_ADRESSES_EXEMPTEES", Classe.REGLAGE, "",
              "Adresses ou CIDR (séparés par des virgules) de NOS machines, exemptés des "
              "classes de débit par adresse et du budget d'échecs ; leurs jetons paient "
@@ -693,9 +716,16 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_MCP_MAX_ORGS_PER_USER", Classe.REGLAGE, "10",
              "Plafond d'orgs créées par un même compte (hors super_admin et admin de son tenant).",
              ("oto_mcp/capabilities/orgs/core.py:19",)),
-    Variable("OTO_MCP_INVITE_TTL_DAYS", Classe.REGLAGE, "7",
-             "Durée de vie (jours) d'une invitation d'org.",
-             ("oto_mcp/capabilities/orgs/invites.py:34",)),
+    Variable("OTO_MCP_INVITATION_TTL_HOURS", Classe.REGLAGE, "168",
+             "Durée de vie, en HEURES, d'une invitation (org, équipe, plateforme), d'un "
+             "partage en attente et du lien de connexion joint au mail ; le mail dit la "
+             "durée. Réglage d'instance, 7 jours par défaut. Pas un entier ≥ 1 : refus "
+             "de démarrer.",
+             ("oto_mcp/config.py:279",)),
+    Variable("OTO_MCP_INVITE_TTL_DAYS", Classe.REGLAGE, "",
+             "RETIRÉE le 22/11/2026, remplacée par `OTO_MCP_INVITATION_TTL_HOURS` (en "
+             "heures). Encore définie : refus de démarrer, jamais ignorée en silence.",
+             ("oto_mcp/config.py:274",)),
     Variable("OTO_MCP_DB_IDLE_TX_TIMEOUT_MS", Classe.REGLAGE, "60000",
              "`idle_in_transaction_session_timeout` du pool applicatif.",
              ("oto_mcp/db/_conn.py:73",)),
@@ -764,6 +794,12 @@ _REGLAGES: tuple[Variable, ...] = (
              "anonyme des projets publiés, séparés par des virgules.",
              ("oto_mcp/auth/anon.py:59",)),
     # -- interrupteurs booléens (défaut neutre = comportement historique) -----
+    Variable("OTO_MCP_COMPAT_TABLEAU_PAR_NOM", Classe.REGLAGE, "0",
+             "Tampon de compatibilité (`deprecations`) : allumé, un tableau désigné "
+             "par son NOM est traduit en numéro au bord (MCP, REST) et tracé "
+             "(`args.ref_kind = 'name'`) ; éteint, il est refusé (`datastore_by_name`). "
+             "Valeur illisible = refus de démarrer. Retrait au compteur zéro.",
+             ("oto_mcp/deprecations.py:477",)),
     Variable("OTO_HANG_WATCH_ENABLED", Classe.REGLAGE, "1",
              "Surveillance des callbacks lents de l'event loop.",
              ("oto_mcp/hang_watch.py:68", "oto_mcp/hang_watch.py:85")),
@@ -773,6 +809,18 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_EMBED_WORKER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : worker d'embeddings.",
              ("oto_mcp/boucles_de_fond.py:152",)),
+    Variable("OTO_EMBED_PLAFOND_TOKENS_JOUR", Classe.REGLAGE, "5000000",
+             "Plafond de tokens d'embedding FACTURÉS (Mistral) par jour UTC et par "
+             "instance, indexation et requêtes de recherche confondues. Atteint : le "
+             "worker d'indexation s'arrête jusqu'à minuit UTC et prévient les admins de "
+             "plateforme ; la recherche passe en lexical seul (journalisé). `0` "
+             "n'embarque rien ; illisible : refus.",
+             ("oto_mcp/embeddings.py:123",)),
+    Variable("OTO_EMBED_STABILITE_S", Classe.REGLAGE, "600",
+             "Secondes sans écriture avant qu'une source (page, brief, couche, ligne) "
+             "soit indexée : une rafale d'écritures se paie une fois. `0` : aussitôt ; "
+             "illisible : refus.",
+             ("oto_mcp/embed_worker.py:75",)),
     Variable("OTO_FILE_EXTRACT_WORKER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : worker d'extraction de fichiers.",
              ("oto_mcp/boucles_de_fond.py:157",)),
@@ -890,6 +938,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "d'une procédure partagée par lien qui a de nouveaux lecteurs visibles. "
              "Absente (ou autre que 1/true/on) : le travail compte ce qu'il enverrait, "
              "n'envoie ni ne marque rien.", ("oto_mcp/digest_lecteurs.py:34",)),
+    Variable("OTO_EFFACEMENTS", Classe.REGLAGE, "",
+             "Ouvre le travail `effacements` (docs/effacement-d-org.md) : la purge des "
+             "orgs dont l'effacement est confirmé et le délai de grâce échu — base, "
+             "stockage, sièges Unipile, comptes Logto, archives du journal. Absente "
+             "(ou autre que 1/true/yes/on) : le travail liste ce qu'il ferait, n'écrit "
+             "rien. Prod seulement : la préprod partage la base.",
+             ("oto_mcp/effacement/travail.py:43",)),
     Variable("OTO_UNIPILE_FIN_DE_DROIT_DELAI_JOURS", Classe.REGLAGE, "7",
              "Jours entre le premier constat de la perte du droit `unipile` et la "
              "suppression du compte chez unipile. Entier ≥ 1, sinon le travail lève.",

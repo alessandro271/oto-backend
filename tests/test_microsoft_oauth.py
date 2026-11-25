@@ -340,8 +340,9 @@ def test_state_ne_vaut_que_pour_ce_flux(env):
     from oto_mcp.auth import flow as oauth_flow
 
     etat = env.auth.make_state(SUB, ORG, "", SERVICE, "contoso.onmicrosoft.com")
-    assert env.auth.verify_state(etat) == (SUB, ORG, "", SERVICE, "contoso.onmicrosoft.com",
-                                            "member", None)
+    lu = env.auth.verify_state(etat)
+    assert lu[:7] == (SUB, ORG, "", SERVICE, "contoso.onmicrosoft.com", "member", None)
+    assert lu.jti, "usage unique"
     assert env.auth.verify_state(oauth_flow.sign_state(
         "meta_ads", {"sub": SUB, "org": ORG, "c": SERVICE})) is None
     # Une carte inconnue n'est pas une carte de retour.
@@ -370,7 +371,7 @@ def test_le_dialogue_d_un_service_demande_ses_scopes(env):
     assert client_id == "app-id-fictif" and retour == _RETOUR
     assert appel.kwargs == {"scopes": env.coeur.scopes.IDENTITY + env.coeur.scopes.FILES,
                             "tenant": "organizations", "login_hint": None}
-    assert env.auth.verify_state(etat) == (SUB, ORG, "", SERVICE, None, "member", None)
+    assert env.auth.verify_state(etat)[:7] == (SUB, ORG, "", SERVICE, None, "member", None)
 
 
 def test_le_flux_porte_l_annuaire_du_client(env):
@@ -435,24 +436,19 @@ def test_seul_client_secret_est_secret_et_suit_la_convention():
 # ── Retour de connexion ─────────────────────────────────────────────────────
 
 def _callback(query: dict):
-    from urllib.parse import urlencode
+    """Le vrai callback, puis la complétion du front (`auth/flow.complete`) :
+    `(issue, détail)` — `détail["location"]` quand le callback n'a rien remis."""
+    from _retour_oauth import terminer
 
-    from starlette.requests import Request
-
-    from oto_mcp.api import microsoft as api_ms
-
-    route = api_ms.make_routes(None, None, None, None, None)[0]
-    req = Request({"type": "http", "method": "GET", "path": route.path,
-                   "query_string": urlencode(query).encode(), "headers": []})
-    return asyncio.run(route.endpoint(req))
+    return terminer("/api/microsoft/oauth/callback", query)
 
 
 def test_retour_echange_le_code_et_range_le_refresh_token(env):
     etat = env.auth.make_state(SUB, ORG, "", SERVICE)
-    resp = _callback({"code": "le-code", "state": etat})
-    lieu = resp.headers["location"]
-    assert resp.status_code == 302 and "connect=connected" in lieu
-    assert "connector=sharepoint" in lieu, "le retour revient sur la carte qui a demandé"
+    issue, out = _callback({"code": "le-code", "state": etat})
+    assert issue == "connected"
+    assert out["connector"] == "sharepoint", "la connexion revient sur la carte qui a demandé"
+    assert out["account"] == "jane@contoso.example" and out["scope"] == "member"
     appel = env.coeur.auth.exchange_code.call_args
     assert appel.args == ("app-id-fictif", "secret-fictif", "le-code", _RETOUR)
     assert appel.kwargs == {"scopes": env.coeur.scopes.IDENTITY + env.coeur.scopes.FILES,
@@ -476,47 +472,45 @@ def test_retour_sur_l_annuaire_d_un_client(env):
 
 
 def test_retour_refuse_sans_state_ou_sur_refus(env):
-    assert "connect=error" in _callback({"code": "c", "state": "faux"}).headers["location"]
+    assert _callback({"code": "c", "state": "faux"})[0] == "error"
     etat = env.auth.make_state(SUB, ORG, "", SERVICE)
-    resp = _callback({"error": "access_denied", "state": etat})
-    assert resp.headers["location"].endswith("?connector=sharepoint&connect=denied"), (
+    issue, out = _callback({"error": "access_denied", "state": etat})
+    assert out["location"].endswith("?connector=sharepoint&connect=denied"), (
         "un refus chez Microsoft n'est pas un refus d'oto (`forbidden`) — oto-app#11")
     env.coeur.auth.exchange_code.assert_not_called()
     assert not env.coffre.lignes
-    resp = _callback({"error": "access_denied", "state": etat,
-                      "error_description": "AADSTS65004: User declined to consent."})
-    assert resp.headers["location"].endswith("connect=denied")
-    resp = _callback({"error": "server_error", "state": etat})
-    assert resp.headers["location"].endswith("connect=error")
+    assert _callback({"error": "access_denied", "state": etat,
+                      "error_description": "AADSTS65004: User declined to consent."}
+                     )[0] == "denied"
+    assert _callback({"error": "server_error", "state": etat})[0] == "error"
 
 
 def test_retour_quand_l_organisation_exige_un_administrateur(env):
     etat = env.auth.make_state(SUB, ORG, "", SERVICE)
-    resp = _callback({"error": "access_denied", "state": etat,
-                      "error_description": "AADSTS90094: The grant requires admin "
-                                           "permission. Trace ID: x"})
-    assert resp.headers["location"].endswith("?connector=sharepoint&connect=admin_required")
+    issue, out = _callback({"error": "access_denied", "state": etat,
+                            "error_description": "AADSTS90094: The grant requires admin "
+                                                 "permission. Trace ID: x"})
+    assert out["location"].endswith("?connector=sharepoint&connect=admin_required")
     assert not env.coffre.lignes
-    resp = _callback({"error": "access_denied", "state": etat,
+    assert _callback({"error": "access_denied", "state": etat,
                       "error_description": "AADSTS65001: The user or administrator has "
-                                           "not consented to use the application."})
-    assert resp.headers["location"].endswith("connect=admin_required")
+                                           "not consented to use the application."}
+                     )[0] == "admin_required"
 
 
 def test_un_refus_d_entra_a_l_echange_qui_exige_un_admin(env):
     env.coeur.auth.exchange_code.side_effect = env.coeur.MicrosoftAuthError(
         "consent", code="AADSTS65001")
     etat = env.auth.make_state(SUB, ORG, "", SERVICE)
-    resp = _callback({"code": "le-code", "state": etat})
-    assert resp.headers["location"].endswith("connect=admin_required")
+    assert _callback({"code": "le-code", "state": etat})[0] == "admin_required"
     assert not env.coffre.lignes
 
 
 def test_retour_quand_entra_refuse_l_annuaire(env):
     etat = env.auth.make_state(SUB, ORG, "", SERVICE, "contoso.onmicrosoft.com")
-    resp = _callback({"error": "invalid_request", "state": etat,
-                      "error_description": "AADSTS90002: Tenant not found."})
-    assert resp.headers["location"].endswith("?connector=sharepoint&connect=error")
+    issue, out = _callback({"error": "invalid_request", "state": etat,
+                            "error_description": "AADSTS90002: Tenant not found."})
+    assert out["location"].endswith("?connector=sharepoint&connect=error")
 
 
 # ── Plusieurs comptes, plusieurs services : se connecter AJOUTE ─────────────
@@ -891,18 +885,19 @@ def _etat_approbation(env):
 
 
 def test_retour_d_approbation_donnee_n_ecrit_rien(env):
-    resp = _callback({"admin_consent": "True", "tenant": "un-guid",
-                      "state": _etat_approbation(env)})
-    assert resp.headers["location"].endswith(
-        "/connectors?connector=sharepoint&connect=admin_approved")
+    etat = _etat_approbation(env)
+    issue, out = _callback({"admin_consent": "True", "tenant": "un-guid", "state": etat})
+    assert out["location"].endswith("/connectors?connector=sharepoint&connect=admin_approved")
+    # Le lien d'approbation ne sert qu'une fois.
+    assert _callback({"admin_consent": "True", "tenant": "un-guid", "state": etat}
+                     )[0] == "error"
     env.coeur.auth.exchange_code.assert_not_called()
     assert not env.coffre.lignes
 
 
 def test_retour_d_approbation_refusee_n_ecrit_rien(env):
-    resp = _callback({"error": "access_denied", "error_description": "AADSTS65004: declined",
-                      "state": _etat_approbation(env)})
-    assert resp.headers["location"].endswith("connect=admin_refused")
+    assert _callback({"error": "access_denied", "error_description": "AADSTS65004: declined",
+                      "state": _etat_approbation(env)})[0] == "admin_refused"
     env.coeur.auth.exchange_code.assert_not_called()
     assert not env.coffre.lignes
 
@@ -1456,8 +1451,7 @@ def test_la_cause_d_entra_est_lue_et_bornee(env, texte, code, attendu):
 def test_power_bi_echange_graph_puis_demande_son_propre_jeton(env):
     env.coeur.auth.refresh.return_value = _grant("AT-PBI", "RT-PBI", scope=SCOPE_POWERBI)
     etat = env.auth.make_state(SUB, ORG, "", "powerbi")
-    resp = _callback({"code": "le-code", "state": etat})
-    assert resp.status_code == 302 and "connect=connected" in resp.headers["location"]
+    assert _callback({"code": "le-code", "state": etat})[0] == "connected"
     # L'échange du code ne nomme que Graph : une requête de jeton = UNE ressource.
     assert env.coeur.auth.exchange_code.call_args.kwargs["scopes"] == env.coeur.scopes.IDENTITY
     assert env.coeur.auth.refresh.call_args.args[2] == "RT1"

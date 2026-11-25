@@ -237,11 +237,8 @@ class ActivityEntry(BaseModel):
     # ── Le run qui portait le geste (ADR 0017), quand il y en avait un ────────
     run_id: Optional[int] = None
     run_label: Optional[str] = None
-    # Le guide sous lequel le run s'est déclaré. ⚠️ **Servi sous ses DEUX noms** :
-    # `guide` (aujourd'hui) et `doctrine` (l'ancien, doublé par `avec_les_deux_noms`
-    # et voué au retrait). Un client neuf lit `guide`.
+    # Le guide sous lequel le run s'est déclaré.
     guide: Optional[str] = None
-    doctrine: Optional[str] = None
     outcome: Optional[str] = None
 
     # ── La ligne visée — de quoi VISER, pas de quoi refaire l'état ────────────

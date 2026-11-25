@@ -203,6 +203,21 @@ _NOMMES_TOLERES = {
 }
 
 
+# Les sous-actions d'une APPLICATION de Custom API (`capabilities/connectors/api_apps.py`) :
+# `api` y nomme la ressource « application de Custom API » d'une org — un objet que l'org
+# crée, comme ses projets —, pas le flux d'un connecteur du catalogue. « Connecter » y est
+# une action sur CETTE application (son serveur, son client), à côté de `/import`. La
+# tolérance est bornée à ce préfixe ET aux capacités `custom_api.apps.*` : un autre chemin
+# nommé, ou une autre famille sous ce préfixe, reste refusé.
+_RESSOURCE_APP_CUSTOM_API = "/api/orgs/{id}/connectors/api/apps/{account}/"
+_FAMILLE_APP_CUSTOM_API = "custom_api.apps."
+
+
+def _sous_action_d_app_custom_api(cle: str, chemin: str) -> bool:
+    return cle.startswith(_FAMILLE_APP_CUSTOM_API) and \
+        chemin.startswith(_RESSOURCE_APP_CUSTOM_API)
+
+
 def _sous_le_prefixe(chemin: str) -> str:
     """Le chemin REST APRÈS le préfixe `/api` — que le connecteur `api` porte le même
     nom que le préfixe ne doit pas compter pour un chemin nommé."""
@@ -221,9 +236,27 @@ def test_aucune_face_rest_de_connexion_nommee_dapres_un_connecteur():
         if not any(v in cap.key for v in _VERBES_DE_FLUX):
             continue
         for binding in cap.rest_bindings():
+            if _sous_action_d_app_custom_api(cap.key, binding.path):
+                continue
             for n in providers.REGISTRY:
                 assert f"/{n}/" not in _sous_le_prefixe(binding.path), (
                     f"{cap.key} expose une face REST nommée : {binding.path}")
+
+
+def test_la_tolerance_des_apps_custom_api_reste_etroite():
+    """La tolérance ne couvre que les capacités `custom_api.apps.*` sous la ressource
+    application ; elle sert (sinon elle est à retirer), et rien d'autre n'en profite."""
+    from oto_mcp.capabilities import registry
+    couverts = sorted(
+        (c.key, b.path) for c in registry.CAPABILITIES for b in c.rest_bindings()
+        if any(v in c.key for v in _VERBES_DE_FLUX)
+        and _sous_action_d_app_custom_api(c.key, b.path))
+    assert couverts == [("custom_api.apps.connect",
+                         "/api/orgs/{id}/connectors/api/apps/{account}/connect")], couverts
+    assert not _sous_action_d_app_custom_api(
+        "me.connector_connect", "/api/orgs/{id}/connectors/api/apps/{account}/connect")
+    assert not _sous_action_d_app_custom_api(
+        "custom_api.apps.connect", "/api/me/connectors/api/connect")
 
 
 def test_la_tolerance_de_chemin_nomme_ne_ment_pas():
@@ -253,15 +286,12 @@ def test_la_tolerance_ne_couvre_que_des_chemins_reellement_nommes():
         "connecteur — retire-les.")
 
 
-def test_le_demarrage_generique_partage_le_handler_des_capacites_nommees():
-    """Il n'existe qu'UNE façon de démarrer un consentement : la face MCP par connecteur
-    et le flux générique appellent le MÊME `start_for`, donc les deux surfaces ne peuvent
-    pas diverger."""
-    from oto_mcp.capabilities import salesforce_connect, zoho_connect
+def test_le_demarrage_generique_passe_par_le_seul_start_for():
+    """Il n'existe qu'UNE façon de démarrer un consentement Zoho ou Salesforce : le flux
+    générique (`me.connector_connect`, le bouton de la fiche) appelle leur `start_for`. Les
+    verbes MCP par connecteur sont retirés (24/11/2026) : un agent reçoit la page de la
+    fiche (`oto_connector_connect`), jamais une URL de consentement."""
     import inspect
-    assert "start_for" in inspect.getsource(zoho_connect._start)
-    assert "start_for" in inspect.getsource(salesforce_connect._start)
-    # et le flux générique passe par les mêmes
     from oto_mcp.tools import salesforce as sf_tools, zoho as zoho_tools
     assert "start_for" in inspect.getsource(sf_tools._start_flow)
     assert "start_for" in inspect.getsource(zoho_tools._start_flow)

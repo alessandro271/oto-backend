@@ -74,7 +74,7 @@ def socle(monkeypatch):
         vus["get"].append(url)
         return reponses.pop(0) if reponses else _Reponse()
     import requests
-    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(requests.Session, "get", lambda self, *a, **k: get(*a, **k))
     stub_authz(monkeypatch)
     return vus, etat, reponses
 

@@ -1,8 +1,9 @@
 """Hygiène mémoire des sessions MCP ouvertes, et sa ligne de contrôle.
 
-Deux défauts du transport Streamable HTTP de l'SDK `mcp` (1.28.x), corrigés sans le forker,
-par une enveloppe posée au démarrage sur le serveur bas niveau que chaque gestionnaire de
-session (`StreamableHTTPSessionManager.app`) fait tourner pour chaque session.
+Un défaut du transport Streamable HTTP de l'SDK `mcp` (relevé en 1.28.x, toujours là en
+1.30.0), corrigé sans le forker, par une enveloppe posée au démarrage sur le serveur bas
+niveau que chaque gestionnaire de session (`StreamableHTTPSessionManager.app`) fait
+tourner pour chaque session ; et les fermetures de sessions, comptées au même endroit.
 
 **1. La dernière réponse reste vivante tant que la session l'est.** La tâche
 `message_router` du transport (`mcp/server/streamable_http.py`, `connect`) boucle sur
@@ -17,21 +18,23 @@ réponse ne va jamais au flux GET autonome). Garanti tant qu'aucun `event_store`
 posé (il STOCKERAIT le témoin pour le rejouer) : un gestionnaire qui en porte un refuse le
 démarrage.
 
-**2. Une session fermée par `DELETE` n'est jamais retirée.** `terminate()` ferme les
-flux, `app.run` finit normalement, et le `finally` de `run_server` ne retire l'entrée de
-`_server_instances` / `_session_owners` que si le transport n'est PAS terminé : la
-session reste, sans tâche, et la borne d'inactivité ne la verra jamais (elle n'a plus
-d'échéance). L'enveloppe du serveur la retire elle-même, à la fin de `run`.
+**2. Une session fermée par `DELETE`** — en 1.28.x, l'SDK ne la retirait jamais de
+`_server_instances` / `_session_owners`, et l'enveloppe le faisait à la fin de `run`.
+**Corrigé par l'SDK en 1.30.0** (`_discard_session`, quelle que soit la fin de la session :
+`DELETE`, inactivité, panne, requête d'ouverture refusée) : ce retrait a été ôté de
+l'enveloppe (25/11/2026), qui ne fait plus que COMPTER les fermetures. Son témoin
+(`tests/test_sessions_mcp_liberation.py`) prouve désormais que l'SDK la retire seul.
 
 **La ligne de contrôle** (`veiller`) : toutes les `INTERVALLE_VEILLE_S`, une ligne INFO
 par processus, par face — sessions ouvertes, sessions terminées encore retenues (0
-attendu), fermées pour inactivité et par `DELETE` depuis la ligne précédente. Le
+attendu), fermées pour inactivité et terminées autrement (`DELETE` du client, ou requête
+d'ouverture que l'SDK a refusée : il la termine aussi) depuis la ligne précédente. Le
 journal de l'SDK (`Created new transport…`, `Session … idle timeout`) dit la même chose
 session par session, mais seulement si les journaux `mcp.*` sont au niveau INFO.
 
-Les deux accroches sont éprouvées contre le VRAI SDK par
-`tests/test_sessions_mcp_liberation.py`, y compris par un témoin qui rougit le jour où
-l'SDK corrige lui-même le défaut (l'enveloppe devient alors inutile : la retirer).
+L'accroche est éprouvée contre le VRAI SDK par `tests/test_sessions_mcp_liberation.py`, y
+compris par un témoin qui rougit le jour où l'SDK corrige lui-même le défaut (l'enveloppe
+devient alors inutile : la retirer).
 """
 from __future__ import annotations
 
@@ -106,7 +109,8 @@ class _EcritureLiberatrice:
 
 class _ServeurLiberateur:
     """Le serveur bas niveau d'un gestionnaire, dont `run` (une session) écrit par
-    `_EcritureLiberatrice` et retire, à sa fin, la session que `DELETE` a terminée."""
+    `_EcritureLiberatrice` et compte, à sa fin, comment la session s'est fermée (l'SDK
+    1.30 la retire lui-même)."""
 
     def __init__(self, serveur, equipe: Equipe):
         self._serveur = serveur
@@ -118,7 +122,7 @@ class _ServeurLiberateur:
     async def run(self, read_stream, write_stream, *args, **kwargs):
         instances = self._equipe.gestionnaire._server_instances
         # Le transport est inscrit AVANT le lancement de sa tâche ; il se reconnaît au
-        # flux qu'il a lui-même cédé. Absent en mode sans état : rien à retirer.
+        # flux qu'il a lui-même cédé. Absent en mode sans état : rien à compter.
         transport = next((t for t in instances.values()
                           if getattr(t, "_write_stream", None) is write_stream), None)
         try:
@@ -129,22 +133,18 @@ class _ServeurLiberateur:
                 self._fin_de_session(transport)
 
     def _fin_de_session(self, transport) -> None:
-        g = self._equipe.gestionnaire
+        # Compter seulement : l'SDK (1.30) retire la session lui-même, dans tous les cas.
         portee = transport.idle_scope
         if portee is not None and portee.cancel_called:
-            self._equipe.inactivite += 1           # l'SDK la retire lui-même
+            self._equipe.inactivite += 1
             return
         if not transport.is_terminated:
-            return                                 # arrêt du processus, ou panne : l'SDK s'en charge
-        self._equipe.delete += 1
-        sid = transport.mcp_session_id
-        if g._server_instances.get(sid) is transport:
-            del g._server_instances[sid]
-            g._session_owners.pop(sid, None)
+            return                                 # arrêt du processus, ou panne
+        self._equipe.delete += 1                   # DELETE, ou ouverture refusée
 
 
 def _verifier(gestionnaire) -> None:
-    manque = [nom for nom in ("_server_instances", "_session_owners")
+    manque = [nom for nom in ("_server_instances",)
               if not isinstance(getattr(gestionnaire, nom, None), dict)]
     if not callable(getattr(getattr(gestionnaire, "app", None), "run", None)):
         manque.append("app.run")

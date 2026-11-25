@@ -94,7 +94,8 @@ def setup_link(ctx: ResolvedCtx, name: str) -> dict:
         raise AuthzDenied(
             400, "use_http_setup_link",
             "The Custom API connector has its own setup link, pre-filled with the API's "
-            "name, base URL and auth mode: `api(op=\"setup_link\", label=…, base_url=…)`.")
+            "name, never its address or auth mode: `api(op=\"setup_link\", label=…)`. The "
+            "person types the base URL and picks the auth mode themselves on that page.")
     method = (card.get("auth") or {}).get("method") or "secret"
     # The product's one-connector page when it declares one (`connect` link kind);
     # else its connectors page, opened on this card, with `via=agent` — a FIXED

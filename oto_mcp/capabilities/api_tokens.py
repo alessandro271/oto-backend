@@ -64,7 +64,8 @@ from .. import (access, credentials_store, db, org_origin, org_store, ownership,
 from ..auth import token_scopes
 from ..datastore.errors import est_un_nom_de_tableau
 from .datastore.common import refus_nom_de_tableau
-from ._authz import SUB_ONLY, SUPER_ADMIN
+from ._authz import SERVICE_OU, SUB_ONLY, SUPER_ADMIN
+from ..auth.service_identity import COMMERCE
 from ._refus_de_pose import REFUS_DE_VERIFICATION, refus_de_pose
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -661,7 +662,8 @@ CAPABILITIES += [
     ),
     Capability(
         key="platform.key.list", handler=_keys_list, Input=PlatformKeyListInput,
-        authz=SUPER_ADMIN, Output=PlatformKeyList, description=_D_K_LIST, mcp=None,
+        authz=SERVICE_OU(COMMERCE, SUPER_ADMIN), Output=PlatformKeyList,
+        description=_D_K_LIST, mcp=None,
         rest=RestBinding("GET", _KEYS),
     ),
     Capability(
@@ -669,11 +671,12 @@ CAPABILITIES += [
         authz=SUPER_ADMIN, Output=PlatformKeyCreated, description=_D_K_CREATE,
         errors=REFUS_DE_VERIFICATION,
         mcp=None,   # `api_key` est un secret brut : jamais un argument d'outil
-        rest=RestBinding("POST", _KEYS),
+        # Poser ou retirer une clé plateforme : session seule (`_session_exigee`).
+        rest=RestBinding("POST", _KEYS, allow_api_token=False),
     ),
     Capability(
         key="platform.key.delete", handler=_keys_delete, Input=PlatformKeyDeleteInput,
         authz=SUPER_ADMIN, Output=PlatformKeyDeleted, description=_D_K_DELETE, mcp=None,
-        rest=RestBinding("DELETE", _KEYS + "/{provider}/{label}"),
+        rest=RestBinding("DELETE", _KEYS + "/{provider}/{label}", allow_api_token=False),
     ),
 ]

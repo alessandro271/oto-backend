@@ -536,3 +536,39 @@ def test_reply_all_is_refused_outside_composition(client):
     with pytest.raises(McpError, match="only apply when composing"):
         _call("gmail", op="search", query="x", reply_all=True)
     client._factory.assert_not_called()
+
+
+# --- réécrire un brouillon existant (op="draft" + draft_id) --------------------
+
+def test_draft_with_draft_id_rewrites_that_draft_and_creates_none(client):
+    client.update_draft.return_value = {"id": "d1", "message_id": "m2", "threadId": "t1"}
+    out = _call("gmail", op="draft", draft_id="d1", body="Corps **corrigé**", to="a@x.fr")
+    client.update_draft.assert_called_once()
+    args, kw = client.update_draft.call_args
+    assert args == ("d1",) and kw["body"] == "Corps **corrigé**" and kw["to"] == "a@x.fr"
+    assert kw["subject"] is None and kw["cc"] is None      # absent = gardé tel quel
+    assert "Signature" in kw["html"]                       # même signature qu'à l'écriture
+    for m in ("create_draft", "create_draft_reply", "send", "send_draft", "reply",
+              *_DESTRUCTIVE):
+        getattr(client, m).assert_not_called()
+    assert out["kind"] == "draft" and out["updated"] is True and out["id"] == "d1"
+
+
+def test_rewriting_a_draft_needs_no_recipient(client):
+    client.update_draft.return_value = {"id": "d1", "message_id": "m2", "threadId": ""}
+    _call("gmail", op="draft", draft_id="d1", body="b")
+    client.update_draft.assert_called_once()
+
+
+@pytest.mark.parametrize("extra", [{"reply_to": "m1"}, {"reply_to_thread": "t1"},
+                                   {"reply_all": True}, {"from_name": "A"}])
+def test_rewriting_a_draft_refuses_reply_arguments(client, extra):
+    with pytest.raises(McpError, match="keeps its thread"):
+        _call("gmail", op="draft", draft_id="d1", body="b", **extra)
+    client.update_draft.assert_not_called()
+
+
+def test_draft_id_is_refused_outside_op_draft(client):
+    with pytest.raises(McpError, match="only applies to op='draft'"):
+        _call("gmail", op="drafts", draft_id="d1")
+    client._factory.assert_not_called()

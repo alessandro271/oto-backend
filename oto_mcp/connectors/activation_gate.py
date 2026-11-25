@@ -36,7 +36,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import access, call_axes, org_suspension, providers
 from ..mcp_errors import McpError
 from ..tool_visibility import namespace_of
-from . import activation, cle_perso
+from . import activation, cle_perso, connect_link
 
 CODE = "connector_disabled"
 
@@ -101,13 +101,36 @@ def _refus(connector: str) -> Optional[ErrorData]:
     if coupure is None:
         return None
     cran, pourquoi, geste = coupure
+    contrat = _contrat_coupure(connector, sub, org, group, cran)
     return ErrorData(
         code=INVALID_PARAMS,
         message=(f"Refusal `{CODE}`: the connector `{connector}` is {pourquoi}. The call "
-                 f"is served neither directly nor through oto_call. To enable it, {geste}"),
+                 f"is served neither directly nor through oto_call. To enable it, {geste}"
+                 + connect_link.phrase(contrat)),
+        # `oto` = the uniform envelope (`data.oto`, `middleware/error_envelope`), with the
+        # fields of the connection-refusal contract (`connectors/connect_link`): this
+        # refusal leaves the chain OUTSIDE the envelope (CallContext is outer), so it
+        # carries its own. The flat keys stay as they were served.
         data={"code": CODE, "retryable": False, "connector": connector,
-              "org_id": org, "group_id": group, "scope": cran},
+              "org_id": org, "group_id": group, "scope": cran,
+              "oto": {"code": CODE, "retryable": False, **contrat}},
     )
+
+
+def _contrat_coupure(connector: str, sub: str, org: Optional[int], group: Optional[int],
+                     cran: str) -> dict:
+    """The contract fields of a cut (`reason: connector_off`, `gesture: admin_activation`):
+    the org's or the team's connectors page, where an administrator reopens it. A cut by
+    the tenant or the platform has NO such page inside the org (nobody there can reopen
+    it): no address, the message already says who can."""
+    if cran == "org" and org is not None:
+        space = "org"
+    elif cran == "group" and group is not None:
+        space = connect_link.espace_d_equipe(group)
+    else:
+        return {}
+    return connect_link.details_du_refus("connector_off", connector, sub=sub, org=org,
+                                         space=space)
 
 
 class ConnecteurCoupe(Exception):
@@ -182,4 +205,8 @@ async def require_active(tool_name: str) -> None:
         return
     refus = await run_in_threadpool(_refus, con.name)
     if refus is not None:
-        raise McpError(refus)
+        # Through `oto_call`, this refusal is raised INSIDE a tool: the error envelope
+        # rewrites it, and reads the contract fields from here (`connect_link.lu`).
+        oto = (refus.data or {}).get("oto") or {}
+        raise connect_link.poser(McpError(refus), {k: v for k, v in oto.items()
+                                                   if k not in ("code", "retryable")})
