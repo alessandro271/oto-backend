@@ -311,7 +311,7 @@ github_orgs	add_collaborator add_team_member collaborators get is_collaborator i
 github_pulls	commits create files get merge merged remove_reviewers request_review review review_comment review_comments reviewers reviews search submit_review update update_branch	859355bc42715359
 github_repos	branches commit commits compare contributors create_release get languages latest_release mine org release releases tags topics update_release user	56e360c3072b00ce
 github_search	code commits issues repos users	48102a71899e53e0
-gmail	accounts attachment draft drafts get search	a4f78d0f9ac98fbc
+gmail	accounts attachment draft drafts get search	d3e5e8d70b5b9659
 gmail_act	archive delete_draft send trash	d7323019750c5de9
 gocardless_creditors	-	99334726611ccf58
 gocardless_events	-	bdc3f81b4f1b4e56
