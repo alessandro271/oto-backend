@@ -376,6 +376,91 @@ Logto, l'`iss` reste le sien (RFC 9207), et seuls trois chemins du domaine de l'
 - **Débit** : la limite globale (`limite_debit`, classe `anonyme`, par adresse) ; pas de
   borne propre à la route.
 
+## Administration de la plateforme : session interactive ET second facteur (CASA 3.3.1)
+
+**Réglage d'instance, éteint par défaut** (`OTO_ADMIN_MFA`, non posé = `off`) : la règle
+ci-dessous ne mord que sur une instance qui s'y inscrit — `report` d'abord, puis
+`enforce`. Sans déclaration, le tronc est inchangé : un opérateur exerce son rôle comme
+avant, sous jeton compris, et Logto n'est jamais lu.
+
+**La règle** (sous `enforce`) : un compte `admin` ou `super_admin` n'exerce son rôle plateforme que dans
+une **session Logto interactive** (JWT vérifié) d'un compte qui a un **second facteur
+fort enrôlé** (`Totp` ou `WebAuthn`). Sinon il lit `member`, à chaque requête. Exigence
+CASA AL1 3.3.1 (« le MFA est imposé à tout compte d'administration ») ; code :
+`oto_mcp/garde_admin.py`, tests : `tests/test_garde_admin.py`.
+
+- **Un seul point** : `access.scope.role_effectif`, d'où dérivent TOUS les prédicats
+  plateforme (`is_platform_operator`, `is_super_admin`, l'escalade
+  `roles.is_platform_admin` vers les orgs tierces, la consultation « en tant que » et son
+  écriture acceptée, la visibilité des `oto_admin_*`). La garde s'y applique en DERNIER,
+  après `OTO_MCP_ADMIN_SUB` et le verrou des jetons de délégation : le compte de
+  bootstrap n'y échappe pas. Couvre donc les routes `/api/admin/*`, les outils
+  `oto_admin_*` et toute règle future, sans drapeau par route. Un tripwire appelle toute
+  branche d'autz à plancher plateforme du registre sous un jeton d'API et exige le refus
+  nommé ; un second refuse une comparaison de rôle plateforme littérale hors du seam.
+- **Refusés** : un jeton `oto_` (utilisateur, clé d'org) — il ne passe aucun second
+  facteur ; une session dont le compte n'a aucun facteur fort (`BackupCode` seul ne compte
+  pas ; un code par SMS ou e-mail ne compte pas non plus, par choix : seuls TOTP et
+  WebAuthn ouvrent l'administration) ; une session dont
+  les facteurs sont illisibles (Logto injoignable, compte d'un tenant tiers dont nous
+  n'administrons pas l'annuaire) — **fail-closed**.
+- **Le seul chemin non interactif** : un jeton de **délégation** (travail du runner)
+  garde le rôle de son porteur PENDANT l'appel d'un `oto_admin_*` que son agent nomme
+  (`platform_tools`, `verrou_org.outil_admin_permis`, déjà tracé), et seulement si ce
+  porteur a lui-même un facteur enrôlé — quel que soit `OTO_VERROU_ROLES_PLATEFORME`.
+  Hors de ces outils, `member`. Les secrets de worker et les identités de service n'ont
+  aucun rôle de compte : rien ne change pour eux (`_require_sub` les refuse déjà).
+- **Le porteur seul** : la garde juge le rôle de celui qui a présenté le bearer de la
+  requête, jamais celui d'un tiers (lister les opérateurs reste exact). Il est posé
+  POSITIVEMENT à chaque branche de `api.base._authenticate` (rejeu compris) et lu, sur la
+  face MCP, sur le jeton vérifié par FastMCP (`client_id="oto_api_token"` / `token_id` =
+  jeton d'API). **Hors requête** (scripts, maintenance, boucles de fond) : aucun porteur,
+  rien n'est borné. Deux portes agissent sous un sub sans bearer et restent donc hors
+  de la garde : le worker des travaux Jev (`jev_jobs_worker`, sous le sub du travail
+  émis plus tôt) et l'upload signé (`api/uploads.py`, une URL frappée en session) —
+  aucune n'est une surface d'administration, mais un travail d'opérateur y garde son
+  rôle.
+- **Les facteurs** : `GET /api/users/{id}/mfa-verifications` (API de gestion, credential
+  `OTO_MCP_LOGTO_M2M_*`, `auth.annuaire.facteurs_mfa`), sur l'identifiant Logto du JWT
+  (avant le drain d'alias), délai 5 s par appel (jeton de gestion compris), une seule
+  lecture à la fois par compte. Cache par compte : 5 min positif, 1 min « aucun
+  facteur », 10 s panne. `reset_user_mfa` le vide. Payé uniquement pour un compte dont
+  le rôle EN BASE est `admin`/`super_admin`.
+- **Le refus se dit** : `PLATFORM_ADMIN`, `SUPER_ADMIN`, `LIBRARY_PUBLISHER`,
+  `PLATFORM_OPERATOR_OPT` et les règles de tenant rendent `403` avec un code nommé —
+  `admin_interactive_session_required`, `admin_mfa_required` (enrôler TOTP ou clé
+  d'accès, se reconnecter), `admin_mfa_unverifiable` (réessayer) — au lieu de « réservé à
+  un admin plateforme ».
+- **`OTO_ADMIN_MFA`** : non posé ou vide = `off` (défaut du tronc) ; `report`
+  (journalise ce qui serait retiré, ne retire rien) ; `enforce`. Une valeur POSÉE mais
+  inconnue vaut `enforce`, sur le modèle des verrous de délégation : une faute de frappe
+  dans une déclaration qui voulait fermer n'ouvre pas l'administration. Lu à chaque
+  requête ; en changer demande un redémarrage du processus (environnement).
+- **S'inscrire** (une instance) : poser `OTO_ADMIN_MFA=report`, relever dans le journal
+  (`garde admin (report)`) les opérateurs qui perdraient le rôle ; quand chaque
+  `admin`/`super_admin` a enrôlé TOTP ou une clé d'accès ET s'est reconnecté, passer à
+  `enforce`.
+
+**Pourquoi « enrôlé » et pas « utilisé dans cette session »** : Logto re-vérifie le
+facteur enrôlé à chaque connexion (§ MFA par org, `guardMfaVerificationStatus`), et le
+jeton d'accès ne porte pas le niveau d'authentification (pas d'`amr`, pas de step-up
+`acr_values`). Le lire demanderait un claim posé par le script de claims du tenant — un
+changement de configuration Logto, hors de ce lot. Limites restantes, à dire telles
+quelles :
+
+- une session ouverte **avant** l'enrôlement continue de produire des jetons par
+  rafraîchissement sans avoir vu le facteur : après l'enrôlement, se déconnecter partout ;
+- la récupération par lien magique (e-mail) reste mono-facteur (§ MFA par org, Limite) ;
+- les agents hébergés d'un opérateur qui appellent un `oto_admin_*` doivent le nommer
+  dans `platform_tools` : hors de cette liste, ils lisent `member` même en mode
+  `report` du verrou des rôles ;
+- **prérequis d'`enforce`** : tout compte `admin`/`super_admin`, et le sub de
+  `OTO_MCP_ADMIN_SUB`, doit avoir enrôlé TOTP ou une clé d'accès AVANT le passage à
+  `enforce` — sinon il perd l'administration à la première requête (récupérable :
+  enrôler, se reconnecter ; ou revenir à `OTO_ADMIN_MFA=report` le temps de le faire).
+  Un opérateur dont le seul second facteur est un code par SMS doit enrôler TOTP ou une
+  clé d'accès en plus.
+
 ## MFA par org## MFA par org (« une org impose le 2ᵉ facteur à ses membres »)
 
 But : un `org_admin` peut rendre le MFA **obligatoire** pour tous les membres de

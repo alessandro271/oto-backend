@@ -310,6 +310,19 @@ def _cle_perso_permise_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _operateurs_enroles_sans_logto(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Aucun banc ne parle à Logto : tout compte y a un second facteur fort enrôlé. La
+    garde des administrateurs (`garde_admin`, CASA 3.3.1) lit les facteurs d'un
+    opérateur en SESSION dès qu'un banc authentifie un JWT ; sans ce double, la garde
+    réseau sortante ferait lire `member` à tout opérateur de banc. Le cache est vidé à
+    chaque test. Les tests de la garde (`tests/test_garde_admin.py`) posent leur
+    propre double."""
+    from oto_mcp import garde_admin
+    garde_admin.oublier()
+    monkeypatch.setattr(garde_admin, "_facteurs_logto", lambda sub_logto: ["Totp"])
+
+
+@pytest.fixture(autouse=True)
 def _aucun_pret_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sans base, aucune instance n'est prêtée. Le palier équipe lit les instances
     prêtées à l'équipe (`group_store.lent_instances` → `list_shared_with`) à chaque
