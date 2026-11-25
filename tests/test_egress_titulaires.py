@@ -469,8 +469,6 @@ def test_le_detecteur_de_titulaire_rougit_sur_commande():
 _SORTIES_ADMISES = {
     ("oto_mcp/egress_transport.py", "requests"):
         "la session gardée elle-même",
-    ("oto_mcp/connectors/api_mcp.py", "requests"):
-        "session neuve passée aussitôt à `egress_transport.harden`",
     ("oto_mcp/tools/infosec.py", "socket"):
         "poignée TLS vers une adresse déjà jugée par `egress.decide` (AGENT)",
     ("oto_mcp/anthropic_usage.py", "requests"): "hôte fixe de l'API du modèle",
@@ -510,68 +508,114 @@ _SORTIES_ADMISES = {
     ("oto_mcp/tools/jev.py", "requests"): "hôte fixe de la passerelle de modèles",
 }
 
+#: Exemptions À LA FONCTION, pour un fichier où une adresse saisie par un client sort :
+#: seule la forme nommée, dans la fonction nommée, passe ; toute autre sortie brute du
+#: fichier rougit, et l'exemption rougit aussi si la forme disparaît.
+_SORTIES_ADMISES_PAR_FONCTION = {
+    ("oto_mcp/connectors/api_mcp.py", "_session", "requests.Session→harden"):
+        "session neuve passée aussitôt à `egress_transport.harden`, au titulaire de la carte",
+}
+
 _VERBES_REQUESTS = {"get", "post", "put", "patch", "delete", "head", "options",
                     "request", "Session", "session"}
 
 
-def _sorties_brutes(source: str) -> list[tuple[int, str, str]]:
-    """`(ligne, famille, forme)` de chaque sortie réseau qui ne passe pas par la garde :
-    `requests.<verbe>`/`requests.Session`, `httpx`, `aiohttp`, `urllib.request`/
-    `urlopen`, `socket.create_connection`/`socket.socket`."""
+def _sorties_brutes(source: str) -> list[tuple[int, str, str, str]]:
+    """`(ligne, famille, forme, fonction)` de chaque sortie réseau qui ne passe pas par
+    la garde : `requests.<verbe>`/`requests.Session`, `httpx`, `aiohttp`,
+    `urllib.request`/`urlopen`, `socket.create_connection`/`socket.socket`. Une
+    `requests.Session()` passée DIRECTEMENT à `egress_transport.harden` a la forme
+    `requests.Session→harden` ; `fonction` = la fonction englobante (`""` au module)."""
     import ast
+    arbre = ast.parse(source)
+    parents, fonctions = {}, {}
+    for n in ast.walk(arbre):
+        for enfant in ast.iter_child_nodes(n):
+            parents[enfant] = n
+    def englobante(n):
+        while n in parents:
+            n = parents[n]
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return n.name
+        return ""
     vues = []
-    for n in ast.walk(ast.parse(source)):
+    for n in ast.walk(arbre):
         if isinstance(n, ast.Import):
             for a in n.names:
                 racine = a.name.split(".")[0]
                 if racine in ("httpx", "aiohttp"):
-                    vues.append((n.lineno, racine, f"import {a.name}"))
+                    vues.append((n.lineno, racine, f"import {a.name}", englobante(n)))
                 elif a.name.startswith("urllib.request"):
-                    vues.append((n.lineno, "urllib", f"import {a.name}"))
+                    vues.append((n.lineno, "urllib", f"import {a.name}", englobante(n)))
         elif isinstance(n, ast.ImportFrom):
             module = n.module or ""
             racine = module.split(".")[0]
             noms = {a.name for a in n.names}
+            forme = None
             if racine in ("httpx", "aiohttp"):
-                vues.append((n.lineno, racine, f"from {module} import …"))
+                forme = (racine, f"from {module} import …")
             elif module.startswith("urllib.request") or (module == "urllib"
                                                           and "request" in noms):
-                vues.append((n.lineno, "urllib", f"from {module} import …"))
+                forme = ("urllib", f"from {module} import …")
             elif module == "requests" and noms & _VERBES_REQUESTS:
-                vues.append((n.lineno, "requests", f"from requests import …"))
+                forme = ("requests", "from requests import …")
             elif module == "socket" and noms & {"create_connection", "socket"}:
-                vues.append((n.lineno, "socket", "from socket import …"))
+                forme = ("socket", "from socket import …")
+            if forme:
+                vues.append((n.lineno, *forme, englobante(n)))
         elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
             base, attr = ast.unparse(n.func.value), n.func.attr
+            forme = None
             if base == "requests" and attr in _VERBES_REQUESTS:
-                vues.append((n.lineno, "requests", f"requests.{attr}"))
+                p = parents.get(n)
+                dans_harden = (attr == "Session" and isinstance(p, ast.Call)
+                               and ast.unparse(p.func) == "egress_transport.harden"
+                               and p.args and p.args[0] is n)
+                forme = ("requests", "requests.Session→harden" if dans_harden
+                         else f"requests.{attr}")
             elif base == "socket" and attr in ("create_connection", "socket"):
-                vues.append((n.lineno, "socket", f"socket.{attr}"))
+                forme = ("socket", f"socket.{attr}")
             elif attr == "urlopen":
-                vues.append((n.lineno, "urllib", f"{base}.urlopen"))
+                forme = ("urllib", f"{base}.urlopen")
+            if forme:
+                vues.append((n.lineno, *forme, englobante(n)))
     return vues
+
+
+def _fautes_de_sorties(fichiers) -> tuple[list[str], set, set]:
+    """Les sorties hors garde de `fichiers` (`(chemin, source)`), et les exemptions
+    servies (par fichier, par fonction)."""
+    fautes, servies, servies_fn = [], set(), set()
+    for chemin, source in fichiers:
+        for ligne, famille, forme, fonction in _sorties_brutes(source):
+            cle_fn = (chemin, fonction, forme)
+            if cle_fn in _SORTIES_ADMISES_PAR_FONCTION:
+                servies_fn.add(cle_fn)
+            elif (chemin, famille) in _SORTIES_ADMISES:
+                servies.add((chemin, famille))
+            else:
+                fautes.append(f"{chemin}:{ligne} {forme}")
+    return fautes, servies, servies_fn
 
 
 def test_aucune_sortie_reseau_hors_garde():
     """Le parcours exhaustif : une sortie réseau du code servi passe par la garde,
-    ou figure dans `_SORTIES_ADMISES` avec sa raison. Une exception qui ne sert plus
-    rougit aussi : la liste ne garde que ce qui est vrai."""
+    ou figure dans `_SORTIES_ADMISES` (par fichier) ou `_SORTIES_ADMISES_PAR_FONCTION`
+    avec sa raison. Une exemption qui ne sert plus rougit aussi : la liste ne garde
+    que ce qui est vrai."""
     import pathlib
     racine = pathlib.Path(egress.__file__).parent
-    fautes, servies = [], set()
-    for f in sorted(racine.rglob("*.py")):
-        chemin = str(f.relative_to(racine.parent))
-        for ligne, famille, forme in _sorties_brutes(f.read_text(encoding="utf-8")):
-            if (chemin, famille) in _SORTIES_ADMISES:
-                servies.add((chemin, famille))
-            else:
-                fautes.append(f"{chemin}:{ligne} {forme}")
+    fichiers = [(str(f.relative_to(racine.parent)), f.read_text(encoding="utf-8"))
+                for f in sorted(racine.rglob("*.py"))]
+    fautes, servies, servies_fn = _fautes_de_sorties(fichiers)
     assert not fautes, ("sortie(s) réseau hors garde d'egress — passer par "
                         "`egress_transport.session` avec son titulaire, ou nommer "
                         "l'exception et sa raison :\n  " + "\n  ".join(fautes))
-    perimees = sorted(set(_SORTIES_ADMISES) - servies)
-    assert not perimees, f"exception(s) qui ne servent plus : {perimees}"
-    assert all(r.strip() for r in _SORTIES_ADMISES.values())
+    perimees = sorted(set(_SORTIES_ADMISES) - servies) + \
+        sorted(set(_SORTIES_ADMISES_PAR_FONCTION) - servies_fn)
+    assert not perimees, f"exemption(s) qui ne servent plus : {perimees}"
+    assert all(r.strip() for r in (*_SORTIES_ADMISES.values(),
+                                   *_SORTIES_ADMISES_PAR_FONCTION.values()))
 
 
 def test_le_detecteur_de_sorties_rougit_sur_commande():
@@ -583,10 +627,56 @@ def test_le_detecteur_de_sorties_rougit_sur_commande():
            "socket.create_connection((h, 443))\n"
            "urllib.request.urlopen(u)\n"
            "egress_transport.session(connector='x', titulaire=t).get(u)\n")
-    formes = [f for _, _, f in _sorties_brutes(src)]
-    assert set(formes) == {"import httpx", "import urllib.request",
-                           "from aiohttp import …", "requests.get", "requests.Session",
-                           "socket.create_connection", "urllib.request.urlopen"}
+    formes = {f for _, _, f, _ in _sorties_brutes(src)}
+    assert formes == {"import httpx", "import urllib.request", "from aiohttp import …",
+                      "requests.get", "requests.Session", "socket.create_connection",
+                      "urllib.request.urlopen"}
+
+
+def _api_mcp() -> tuple[str, str]:
+    import pathlib
+    chemin = "oto_mcp/connectors/api_mcp.py"
+    return chemin, (pathlib.Path(egress.__file__).parent.parent / chemin).read_text(
+        encoding="utf-8")
+
+
+def test_api_mcp_n_admet_que_la_session_passee_a_harden():
+    """Le connecteur où le client saisit l'adresse : toute AUTRE sortie brute ajoutée
+    au fichier rougit, même dans la fonction exemptée."""
+    chemin, source = _api_mcp()
+    assert _fautes_de_sorties([(chemin, source)])[0] == []
+    for ajout in ("\ndef _fuite(u):\n    return requests.get(u)\n",
+                  "\ndef _session(f, r):\n    return requests.Session()\n",
+                  "\nimport httpx\n"):
+        fautes = _fautes_de_sorties([(chemin, source + ajout)])[0]
+        assert len(fautes) == 1 and fautes[0].startswith(chemin), (ajout, fautes)
+
+
+def test_l_exemption_d_api_mcp_rougit_si_sa_ligne_disparait():
+    chemin, source = _api_mcp()
+    sans = source.replace("egress_transport.harden(requests.Session(),",
+                          "egress_transport.harden(_neuve(),")
+    assert sans != source, "la ligne exemptée a changé : mettre l'exemption à jour"
+    _, _, servies_fn = _fautes_de_sorties([(chemin, sans)])
+    assert not servies_fn & set(_SORTIES_ADMISES_PAR_FONCTION)
+
+
+def test_le_demarrage_nomme_les_exceptions_de_la_plateforme(monkeypatch, caplog):
+    import logging
+    monkeypatch.setenv(egress.ALLOW_VAR, ALLOW + ", autre=10.0.0.5:9000")
+    with caplog.at_level(logging.WARNING, logger=egress.__name__):
+        egress.verifier_reglages()
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages == ["exceptions d'egress réservées à la plateforme : "
+                        "pont-plateforme, autre ; une exception qui sert une org ou un "
+                        "groupe doit nommer son titulaire (@palier:id)"]
+    assert INTERNE not in messages[0] and "10.0.0.5" not in messages[0], \
+        "les noms seulement, jamais les adresses"
+    caplog.clear()
+    monkeypatch.setenv(egress.ALLOW_VAR, f"pont-equipe={INTERNE}:443@group:3")
+    with caplog.at_level(logging.WARNING, logger=egress.__name__):
+        egress.verifier_reglages()
+    assert caplog.records == [], "rien quand toutes les exceptions ont un titulaire"
 
 
 # ── 7. Pipedrive : un sous-domaine, rien d'autre ──────────────────────────────

@@ -379,7 +379,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "org ou tenant ; sans `@` = la plateforme seule ; virgules). Absente = "
              "aucune exception : fail-closed. Une entrée mal formée refuse le "
              "démarrage.",
-             ("oto_mcp/egress.py:297",)),
+             ("oto_mcp/egress.py:300",)),
     Variable("REQUESTS_CA_BUNDLE", Classe.REGLAGE, None,
              "Magasin de certificats (fichier PEM) que les sessions gardées par la garde "
              "d'egress reprennent pour VÉRIFIER le TLS, comme `requests` le ferait : une "

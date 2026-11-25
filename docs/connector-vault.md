@@ -285,6 +285,19 @@ la ligne du coffre (l'id de l'équipe, de l'org, le slug du tenant).
   cet id. Une équipe n'hérite pas des exceptions de son org, ni l'inverse ; une clé
   personnelle de membre n'en reçoit aucune.
 
+**Déployer cette version (titulaires des exceptions).**
+
+1. AVANT de déployer : réécrire `OTO_EGRESS_ALLOW` en ajoutant leur titulaire
+   (`@palier:id`) à chaque exception qui sert une org ou un groupe ; une exception
+   sans `@` ne sert plus que la plateforme. Relire la valeur : une valeur mal formée
+   arrête le service au démarrage.
+2. Déployer. Au démarrage, le journal nomme (noms seulement) les exceptions restées
+   sans titulaire, donc réservées à la plateforme : « exceptions d'egress réservées à
+   la plateforme : a, b ; … ». Rien n'est journalisé quand il n'y en a pas.
+3. Retour arrière, dans l'ordre inverse : remettre l'ancienne valeur, sans `@`, AVANT
+   de revenir à la version précédente — son lecteur lève une erreur sur `@` à chaque
+   sortie vers une adresse interne.
+
 **Adresse littérale obligatoire** (un nom d'hôte peut se déplacer sous nous) et **port
 obligatoire** (une exception par adresse seule ouvrirait toute la machine : le pont sur
 9000 donnerait aussi l'administration du proxy sur 9001). Le défaut est **vide** : ce

@@ -93,11 +93,14 @@ pas ce lot.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import socket
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlsplit
+
+logger = logging.getLogger(__name__)
 
 #: Variable d'environnement qui porte les exceptions nommées.
 ALLOW_VAR = "OTO_EGRESS_ALLOW"
@@ -306,8 +309,17 @@ def declared_exceptions(brut: str | None = None, *,
 
 def verifier_reglages() -> None:
     """Au démarrage : `OTO_EGRESS_ALLOW` se lit en entier, ou le service ne démarre
-    pas — jamais un repli sur une liste partielle ou vide."""
-    _lire_exceptions(os.environ.get(ALLOW_VAR, ""))
+    pas — jamais un repli sur une liste partielle ou vide. Les exceptions SANS
+    titulaire (réservées à la plateforme) sont nommées dans le journal : une
+    exception posée avant les titulaires pour une org ou un groupe ne les sert plus,
+    et c'est ici qu'on le voit. Les noms seulement, jamais les adresses."""
+    plateforme = [e.nom for e in _lire_exceptions(os.environ.get(ALLOW_VAR, ""))
+                  if not e.titulaires]
+    if plateforme:
+        logger.warning(
+            "exceptions d'egress réservées à la plateforme : %s ; une exception qui "
+            "sert une org ou un groupe doit nommer son titulaire (@palier:id)",
+            ", ".join(plateforme))
 
 
 # ── l'instance elle-même ──────────────────────────────────────────────────────
