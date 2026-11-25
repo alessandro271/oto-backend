@@ -71,7 +71,10 @@ CAPABILITIES += [
         Input=ConnectorConnectInput,
         authz=ORG_MEMBER,
         Output=ConnectorConnectStarted,
-        mcp=None,     # the per-connector MCP faces already exist (oto_zoho_connect…)
+        # No MCP face: its answer carries a single-use `state`, a secret an agent would
+        # relay. An agent gets the card's page instead (`oto_connector_connect`), whose
+        # button calls this capability under the person's own session.
+        mcp=None,
         errors=(DeclaredError(400, "no_connection_flow",
                               "this connector has no connection flow: its "
                               "key is SET, not requested"),),

@@ -466,8 +466,33 @@ def _retrait_decrit(ancien: str) -> Retrait:
     )
 
 
+# --- 24/11/2026 : la connexion menée par l'agent ----------------------------------------
+# `zoho_connect` et `salesforce_connect` rendaient une URL de consentement portant un `state`
+# à usage unique : un secret relayé par l'agent, et un verbe par connecteur. Un seul verbe
+# les remplace pour tous les connecteurs, `oto_connector_connect`, qui rend la page où la
+# personne fait son geste (contrat `refus-de-connexion.md` de la lib connectors). Les anciens
+# noms d'avant le 02/09/2026 (`oto_…`) refusent de même.
+def _retrait_connexion(ancien: str, connecteur: str) -> Retrait:
+    return Retrait(
+        message=(
+            f"`{ancien}` is retired: an agent no longer builds a consent URL. Call "
+            f"`oto_connector_connect(connector=\"{connecteur}\")`: it returns the page where "
+            "the person connects the account themselves (`url`, opening it starts nothing; "
+            "they click Connect there and approve at the provider — the Zoho region is asked "
+            "on that page), and who does it (`by`). Send them that `url`. If a procedure or a "
+            f"page told you to call `{ancien}`, it predates this change: take the path above "
+            "— this name only returns this refusal, called directly or through `oto_call`."),
+        hint=f'oto_connector_connect(connector="{connecteur}"), then send its url to the person',
+    )
+
+
+CONNEXION = {"zoho_connect": "zoho", "oto_zoho_connect": "zoho",
+             "salesforce_connect": "salesforce", "oto_salesforce_connect": "salesforce"}
+
+
 RETIRES: dict[str, Retrait] = {
     "oto_kb": KB,
+    **{a: _retrait_connexion(a, c) for a, c in CONNEXION.items()},
     **{a: _retrait_act(a) for a in dict.fromkeys(r.ancien for r in RENOMMAGES)},
     **{a: _retrait_decrit(a) for a in dict.fromkeys(r.ancien for r in RENOMMAGES_DECRITS)},
 }

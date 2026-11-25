@@ -101,8 +101,8 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
   coupure) : un connecteur coupé n'ouvre ni consentement ni session, refus `connector_disabled`
   avant toute URL ou écriture. Points fermés : le flux commun (`connectors/flow.start`, donc
   `POST /api/me/connectors/{name}/connect` pour tous les flux déclarés), `auth/google.build_auth_url`
-  (le compte, chaque service, et `GET /api/google/oauth/start`), le connecteur CIBLE de
-  `zoho_connect`, le canal de `unipile_connect.hosted_auth_url` (trois chemins) et la Live View
+  (le compte, chaque service, et `GET /api/google/oauth/start`), le connecteur CIBLE du
+  départ Zoho (`zoho_connect.start_for`), le canal de `unipile_connect.hosted_auth_url` (trois chemins) et la Live View
   (`.../session/start`). Une clé BYOK posée sur un connecteur coupé n'ouvre aucun consentement :
   elle reste posable, et la garde d'appel la rend inerte.
 - Surfaces : `/platform/connectors` (master + clé plateforme, super_admin) ; `/org/connectors`
@@ -640,6 +640,55 @@ est en panne » (20-22/08).
 un : un champ toujours présent devient du bruit qu'on cesse de lire.
 
 ---
+
+## La connexion menée par l'agent (24/11/2026)
+
+Contrat commun aux deux plateformes qui servent les connecteurs de la lib : `oto-now/connectors`,
+`docs/conception/refus-de-connexion.md`. Le seul geste qui reste à la personne est le sien
+(consentir, coller une clé, brancher son compte, ou, administrateur, rouvrir le connecteur) ;
+l'agent l'y mène en lui donnant l'adresse exacte.
+
+- **Les refus portent l'adresse** (`connectors/connect_link`), dans `data.oto` (enveloppe
+  uniforme, `middleware/error_envelope`), et le message finit par `open <url>` :
+  `reason` (`connector_off` | `no_account` | `reconnect`), `gesture` (`oauth` | `key` |
+  `hosted_link` | `admin_activation`), `connector`, `space` (`me` | `org` | `team:<group_id>`),
+  `url`. Trois refus : `connector_disabled` (coupé par l'org ou l'équipe ; il garde ses clés
+  plates et ajoute `data.oto`), la clé absente (`access/resolve`, code servi inchangé
+  `invalid_input`), la reconnexion (clé refusée par l'amont, ou `<X>ReauthRequired` d'un
+  module OAuth — lue au relevé de l'appel). Les codes servis ne bougent pas : le contrat
+  s'ajoute.
+- **Le geste** suit le connecteur : un flux déclaré (`connectors/flow`) → `oauth` ; un canal
+  hébergé (porteur `unipile`) → `hosted_link` ; un porteur à clé → `key` (sur la fiche du
+  PORTEUR) ; une coupure → `admin_activation`.
+- **L'adresse** est une page du tableau de bord, sous l'org du refus (une clé perso se range
+  par org) : `connect_member` (`/o/{org}/connectors/{connector}`), `connect_org`,
+  `connect_team` (`links.DEFAULT_PATHS`). Elle ne porte ni code, ni `state`, ni jeton ; son
+  ouverture ne lance rien — c'est le bouton de la fiche qui appelle `me.connector_connect`
+  sous la session de la personne, et le retour se termine par cette même session (#1914).
+  Un produit qui ne déclare pas la page lève `PageDeConnexionAbsente` (409
+  `connect_page_undeclared` sur la capacité ; journalisé en erreur sur un refus, qui garde
+  son message) : jamais de repli vers une page que ce produit n'a pas.
+- **Sur demande** : `oto_connector_connect` (capacité `connector.connect`), entrée
+  `{connector, space?, access?}`, sortie `{url, gesture, connector, space, by}` ou
+  `{gesture: "none", connector, space, account}` quand un compte sert déjà (`account.id` =
+  l'instance `inst:<id>`, `owner` nommé, jamais identifié). Elle remplace `zoho_connect` et
+  `salesforce_connect` (et leurs anciens noms `oto_…`), qui rendaient une URL de
+  consentement avec son `state` : ces noms refusent en nommant le nouvel appel
+  (`outils_retires`).
+- **Qui reçoit l'adresse d'une reconnexion** (`error_envelope._contrat_reconnexion`), sous
+  l'org où vit la clé, lue sur sa ligne du coffre (`entity_id`, ou l'org de l'équipe), jamais
+  l'org courante de l'appelant : une clé **personnelle**, seulement si elle est à l'appelant ;
+  une clé **d'org ou d'équipe**, tout membre de cette org qu'elle a servi, administrateur ou
+  non — la page revérifie le droit de poser la clé à chaque geste. Une clé d'une org dont
+  l'appelant n'est pas membre (prêt entre orgs) : pas d'adresse.
+- **La capacité ne désigne que ce qu'on peut nommer** : `space: team:<id>` refuse
+  `unknown_team` pour une équipe d'une autre org, comme pour une équipe inexistante ; le
+  `label` d'un compte prêté par un autre membre qui est une adresse (email d'un compte Google
+  ou Microsoft) est remplacé par le nom du connecteur ; un compte qui sert sans être
+  désignable est un refus nommé (409 `serving_account_undesignatable`), jamais un 500.
+- **Hors contrat, assumé** : une coupure par le tenant ou la plateforme n'a pas d'adresse
+  (personne dans l'org ne la lève) ; une clé de l'hôte ou prêtée par une autre personne non
+  plus. `administrators`, `shared_accounts` et `account_id` ne sont pas encore servis.
 
 ## Récap — « activer unipile pour quelqu'un »
 

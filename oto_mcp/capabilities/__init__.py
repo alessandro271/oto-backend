@@ -75,9 +75,10 @@ import oto_mcp.capabilities.connectors.selection  # noqa: F401 — connectors.{m
 import oto_mcp.capabilities.connectors.identities  # noqa: F401 — connectors.{identities,set_default_identity} (ADR 0024)
 import oto_mcp.capabilities.connectors.connect  # noqa: F401 — me.connector_connect (POST /api/me/connectors/{name}/connect, chemin FIXE)
 import oto_mcp.capabilities.connectors.complete  # noqa: F401 — me.connector_complete (POST /api/me/connectors/{name}/complete)
+import oto_mcp.capabilities.connectors.connect_link  # noqa: F401 — connector.connect (oto_connector_connect : la page où la personne connecte)
 from . import microsoft_admin_consent  # noqa: F401 — me.microsoft_admin_consent (POST /api/me/connectors/microsoft/admin-consent ; outil microsoft_admin_consent)
-from . import salesforce_connect  # noqa: F401 — me.salesforce_connect (oto_salesforce_connect ; REST = le chemin fixe /connect)
-from . import zoho_connect  # noqa: F401 — me.zoho_connect (oto_zoho_connect + GET /api/zoho/oauth/{start,modes})
+from . import salesforce_connect  # noqa: F401 — départ du consentement Salesforce (flux commun, chemin fixe /connect)
+from . import zoho_connect  # noqa: F401 — départ du consentement Zoho (flux commun) + me.zoho_analytics_orgs
 import oto_mcp.capabilities.connectors.verify  # noqa: F401 — connectors.verify (sonde de credential — MCP via oto_instance op=verify)
 # Credential PERSONNEL (pose/état/retrait) — REST-only, un secret ne passe pas
 # en argument d'outil. Ex-routes écrites à la main d'`api/routes.py` (#121).
