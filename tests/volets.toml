@@ -171,6 +171,10 @@ chemins = [
   # lecteur et migration des secrets d'application de l'instance : sept connecteurs
   "oto_mcp/auth/app_instance.py",
   "oto_mcp/auth/app_instance_rangement.py",
+  # La connexion par membre d'une application de Custom API et la découverte MCP : elles
+  # servent `connectors/api_apps.py` et le retour commun (`auth/flow.py`), rangés ici.
+  "oto_mcp/auth/api_oauth.py",
+  "oto_mcp/auth/mcp_discovery.py",
   "oto_mcp/middleware/**",
   "oto_mcp/org_store/**",
   "oto_mcp/org_created_hook.py",

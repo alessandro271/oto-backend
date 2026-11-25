@@ -197,6 +197,8 @@ class DefinitionSetInput(BaseModel):
     variables: Optional[dict] = None
     operations: Optional[list[Any]] = Field(default=None, description=(
         "When given, REPLACES the action list. Parts not given stay as they are."))
+    mcp_tools: Optional[list[str]] = Field(default=None, description=(
+        "Protocol `mcp`: the remote tools open to agents (names); [] = all."))
 
 
 def _card(row: Row) -> dict:
@@ -229,7 +231,8 @@ def _get_definition(ctx: ResolvedCtx, inp: GetInput) -> dict:
 def _set_definition(ctx: ResolvedCtx, inp: DefinitionSetInput) -> dict:
     row = _row(ctx, inp)
     given = {k: getattr(inp, k) for k in ("label", "description", "logo_domain",
-                                          "headers", "variables", "operations")
+                                          "headers", "variables", "operations",
+                                          "mcp_tools")
              if getattr(inp, k) is not None}
     card = _card(row)
     auth_header = card.get("header_name") if card.get("auth_mode") == "header" else None

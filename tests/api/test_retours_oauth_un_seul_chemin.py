@@ -105,15 +105,17 @@ def test_tout_module_qui_signe_un_state_declare_son_retour():
 #
 # `side_return` (trancher au callback) et `code` (remettre autre chose que le code reçu)
 # tournent avant toute vérification du porteur. Légitimes aujourd'hui : Microsoft
-# (approbation d'un administrateur, rien n'est rangé) et WordPress (le credential reçu
-# est SCELLÉ, pas rangé). Un nouveau venu qui s'en servirait pour ranger contournerait
-# le cœur : il doit passer par la revue, donc par cette liste.
+# (approbation d'un administrateur, rien n'est rangé), WordPress (le credential reçu
+# est SCELLÉ, pas rangé) et Custom API (le code et l'`iss` du retour sont SCELLÉS
+# ensemble pour ce state, rien n'est rangé : `auth/api_oauth._code_scelle`). Un
+# nouveau venu qui s'en servirait pour ranger contournerait le cœur : il doit passer
+# par la revue, donc par cette liste.
 
 def test_side_return_reserve_a_microsoft():
     assert {a for a, r in oauth_flow.load_returns().items()
             if r.side_return is not None} == {"microsoft"}
 
 
-def test_code_au_callback_reserve_a_wordpress():
+def test_code_au_callback_reserve_a_wordpress_et_custom_api():
     assert {a for a, r in oauth_flow.load_returns().items()
-            if r.code is not None} == {"wordpress"}
+            if r.code is not None} == {"wordpress", "custom_api"}

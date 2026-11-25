@@ -32,8 +32,20 @@ def _endpoint(retour: oauth_flow.OAuthReturn):
     return callback
 
 
+async def custom_api_client_document(request: Request) -> Response:
+    """Our Client ID Metadata Document, for the MCP servers a Custom API signs in to
+    (`auth/mcp_discovery.py`): public, no secret — its URL IS the client id."""
+    from starlette.responses import JSONResponse
+    from ..auth import mcp_discovery
+    return JSONResponse(mcp_discovery.client_document(),
+                        headers={"Cache-Control": "public, max-age=300"})
+
+
 def make_routes() -> list[Route]:
     # Triées par chemin : l'ordre ne dépend pas de l'ordre d'import des modules.
+    from ..auth import mcp_discovery
     return [Route(r.callback_path, _endpoint(r), methods=["GET"])
             for r in sorted(oauth_flow.load_returns().values(),
-                            key=lambda r: r.callback_path)]
+                            key=lambda r: r.callback_path)] + [
+        Route(mcp_discovery.CLIENT_DOCUMENT_PATH, custom_api_client_document,
+              methods=["GET"])]

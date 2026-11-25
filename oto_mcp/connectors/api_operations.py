@@ -102,7 +102,8 @@ def definition_of(config: dict) -> dict:
             "logo_domain": config.get("logo_domain"),
             "headers": config.get("headers") or {},
             "variables": config.get("variables") or {},
-            "operations": ops if isinstance(ops, list) else []}
+            "operations": ops if isinstance(ops, list) else [],
+            "mcp_tools": config.get("mcp_tools") or []}
 
 
 def load_definition(owner_type: str, owner_id: str, account: str = "") -> dict:

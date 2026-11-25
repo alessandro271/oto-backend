@@ -504,7 +504,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "hithorizons_search_unstructured": "lire",
     "hithorizons_suggestions": "lire",
     # import only proposes candidate actions; call runs a saved action of any verb
-    "api_act": {"lire": "import", "detruire": "call request set_definition"},
+    # call_mcp: a remote tool of any effect — its annotations are the third party's word
+    "api_act": {"lire": "import", "detruire": "call request set_definition call_mcp"},
     "api_doc": "lire",
     "api_post": "envoyer",
     # add_members may also remove (remove_record_ids); copy_from moves up to 100 000 records

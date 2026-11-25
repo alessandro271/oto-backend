@@ -181,6 +181,7 @@ Open, dated, referenced. This list is the point of the document.
 | Production and pre-production share one database — a pre-production write is a production write | Accepted trade-off | ADR 0040 |
 | Disk encryption is the hosting provider's baseline only: no guest-side full-disk encryption and no hardware attestation, so a snapshot exfiltrated through a compromised cloud account remains a risk | Accepted residual | ADR 0002 |
 | Service bootstrap environment (database URL, identity-provider machine credentials, object storage and payment keys) is still read from an on-disk `.env`; only the vault master key is fetched from the secrets manager at boot | In progress | §5 |
+| Custom API per-member sign-in (`oauth2_user`): the authorization server and the API may be on different domains, and one that ignores the `resource` parameter issues a token valid for any API that accepts it. Endpoints are held to one origin and `resource` to the API's own address, and the member is shown both hosts before connecting; beyond that, trust in an app's configuration rests on the organization administrator and on the member's attention at the sign-in screen | Accepted residual | `docs/connector-vault.md` |
 | No third-party security audit or certification | Open | §8 |
 
 ADRs referenced above are internal architecture decision records; their substance is summarised here and the records themselves are not public. The security epic is tracked in a private repository — ask at the address in §2 for its current state.

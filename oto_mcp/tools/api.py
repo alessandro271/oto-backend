@@ -249,8 +249,22 @@ def client_for(fields: dict, headers: dict | None = None, *,
                          "are required on the Custom API card")
     egress.check_url(base_url, connector="api", field="base_url")
     token_url = (fields.get("token_url") or "").strip()
-    if mode.lower() == "oauth2" and token_url:
+    if mode.lower() in ("oauth2", "oauth2_user") and token_url:
         egress.check_url(token_url, connector="api", field="token_url")
+    if mode.lower() == "oauth2_user":
+        # Per-member sign-in (`auth/api_oauth.py`): the HOST turns the person's refresh
+        # token into an access token, and oto-core calls as a plain `bearer`.
+        if row is None:
+            raise ValueError("the oauth2_user mode renews its token on the card's vault "
+                             "row, and none was given for this call")
+        from ..auth import api_oauth
+        try:
+            token = api_oauth.access_token_for(row, fields)
+        except api_oauth.ApiOAuthRefused as e:
+            raise ValueError(e.message) from None
+        return api_operations.with_constant_headers(
+            _pinned(HttpConnectorClient(base_url, "bearer", {**fields, "token": token},
+                                        timeout=TIMEOUT)), headers)
     session = {}
     if api_session.keeps_jar(fields):
         if row is None:
