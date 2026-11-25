@@ -897,8 +897,9 @@ découverte et à chacune des trois demandes — autorisation, échange, renouve
   sinon celle que l'admin a déclarée. Un mélange est refusé (`invalid_app_connection` à
   l'écriture, `api_app_origin_mixed` à l'usage, `mcp_discovery_failed` à la
   découverte) ;
-- en mode MCP, `resource` est l'adresse canonique du serveur (RFC 8707,
-  `ressource_canonique`), imposée aux trois demandes ; une autre saisie est refusée ;
+- une `resource` déclarée désigne l'API elle-même : en mode MCP l'adresse canonique du
+  serveur (RFC 8707, `ressource_canonique`), imposée aux trois demandes ; en http une URI
+  de l'origine de `base_url`. Une autre saisie est refusée ;
 - au retour, le callback scelle le code avec le paramètre `iss` (RFC 9207) : exigé et
   égal à l'émetteur quand le serveur annonce `authorization_response_iss_parameter_supported`,
   refusé dans tous les cas s'il est présent et différent (`api_oauth_issuer_mismatch`) ;
@@ -908,7 +909,12 @@ découverte et à chacune des trois demandes — autorisation, échange, renouve
 Toutes les requêtes de ce chemin (découverte, inscription, échange, renouvellement, et
 les quatre requêtes MCP) partent sur une session épinglée (`egress_transport`). Le
 renouvellement fait sa requête HORS transaction ; seule l'écriture du jeton tourné prend
-le verrou de la ligne, et n'écrase pas un jeton changé entretemps. ⚠️ Limite : le mode
+le verrou de la ligne, et n'écrase pas un jeton changé entretemps. Limite assumée : le
+service d'autorisation et l'API peuvent être sur des domaines différents (un fournisseur
+d'identité devant une API interne), et un service qui ignore `resource` délivre un jeton
+valable pour toute API qui l'accepte ; la confiance dans la configuration d'une app
+repose sur l'admin de l'org, et sur l'attention du membre aux deux hôtes montrés avant
+la connexion (`SECURITY.md` §10). ⚠️ Limite : le mode
 `oauth2` (client credentials) d'une carte MCP obtient son jeton par oto-core, hors de
 ce transport.
 

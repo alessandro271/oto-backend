@@ -400,3 +400,16 @@ def test_l_emetteur_decouvert_tombe_quand_un_point_ou_l_adresse_change(monkeypat
                                        "token_url": "https://autre.example.test/t"},
                                       base=base)
     assert "issuer" not in deux and "iss_parameter_supported" not in deux
+
+
+def test_en_http_une_ressource_declaree_est_sur_l_origine_de_l_api(monkeypatch):
+    from oto_mcp.connectors import api_apps
+    monkeypatch.setattr("oto_mcp.egress.check_url", lambda *a, **k: None)
+    ok = api_apps.valider_connexion(_conn(resource="https://api.example.test/v1"))
+    assert ok["resource"] == "https://api.example.test/v1"
+    for autre in ("https://autre-api.example.test", "https://api.example.test:8443",
+                  "http://api.example.test", "urn:example:api"):
+        with pytest.raises(api_apps.AppRefused) as e:
+            api_apps.valider_connexion(_conn(resource=autre))
+        assert "`resource`" in e.value.message, autre
+    assert "resource" not in api_apps.valider_connexion(_conn())

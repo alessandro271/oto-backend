@@ -325,6 +325,12 @@ def test_l_appel_part_en_bearer_avec_le_jeton_du_membre(monkeypatch, coffre):
     client = api_tool.client_for(champs, row=LIGNE)
     assert type(client._auth).__name__ == "StaticBearer"
     assert "at-call" in vars(client._auth).values()
+    # The member's bearer goes out on the pinned transport, like every other card.
+    from oto_mcp import egress_transport
+    s = client._ready()
+    assert isinstance(s.get_adapter(APP["connection"]["base_url"]),
+                      egress_transport.AdaptateurEpingle)
+    assert s.trust_env is False and s.headers["Authorization"] == "Bearer at-call"
 
 
 def test_sans_ligne_le_mode_refuse():
@@ -667,3 +673,20 @@ def test_un_dns_qui_change_d_avis_entre_deux_echanges_est_refuse(monkeypatch):
         api_oauth._token_request(url, {"grant_type": "x"}, annoncee=True)
     assert "127.0.0.1" in str(e.value)
     assert ouvertes == ["93.184.216.34"]
+
+
+def test_en_http_une_ressource_d_une_autre_api_est_refusee_aux_trois_demandes(
+        monkeypatch, coffre):
+    autre = {**APP, "connection": {**APP["connection"],
+                                   "resource": "https://autre-api.example.test"}}
+    with pytest.raises(api_oauth.ApiOAuthRefused) as e:
+        api_oauth.authorize_url(autre, "sub-1")
+    assert e.value.code == "api_app_origin_mixed"
+    monkeypatch.setattr("oto_mcp.db.api_apps.vivante", lambda org, account: autre)
+    envois = _poste(monkeypatch)
+    with pytest.raises(api_oauth.ApiOAuthRefused):
+        api_oauth.exchange_and_persist(_etat(), "c")
+    coffre.apps[7] = autre
+    with pytest.raises(api_oauth.ApiOAuthRefused):
+        api_oauth.access_token_for(LIGNE, {**_pose(coffre), **autre["connection"]})
+    assert not envois

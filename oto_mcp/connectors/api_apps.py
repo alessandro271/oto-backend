@@ -102,8 +102,9 @@ def refus_d_origine(conn: dict) -> Optional[str]:
     Le navigateur du membre va à `authorize_url`, son code et son verifier partent à
     `token_url`, son jeton de renouvellement aussi : les deux doivent être le même service
     d'autorisation (schéma, hôte, port), celui de l'émetteur découvert quand la découverte
-    l'a lu (`ISSUER`), sinon celui que l'admin a déclaré par `authorize_url`. En mode MCP,
-    `resource` est l'adresse du serveur (`ressource_canonique`), jamais une autre."""
+    l'a lu (`ISSUER`), sinon celui que l'admin a déclaré par `authorize_url`. Une
+    `resource` déclarée désigne l'API elle-même : en mode MCP l'adresse du serveur
+    (`ressource_canonique`), en http une URI de l'origine de `base_url`."""
     a, t = (conn.get("authorize_url") or "").strip(), (conn.get("token_url") or "").strip()
     if a and t and _origine(a) != _origine(t):
         return (f"`authorize_url` ({_origine(a)}) and `token_url` ({_origine(t)}) must be "
@@ -114,12 +115,17 @@ def refus_d_origine(conn: dict) -> Optional[str]:
             if v and _origine(v) != _origine(emetteur):
                 return (f"`{name}` ({_origine(v)}) is not on the origin of the sign-in "
                         f"server's issuer ({_origine(emetteur)}).")
-    if est_mcp_par_membre(conn) and (conn.get("resource") or "").strip() and \
-            ressource_canonique(conn["resource"]) != ressource_canonique(
-                conn.get("base_url") or ""):
+    ressource = (conn.get("resource") or "").strip()
+    if ressource and est_mcp_par_membre(conn) and ressource_canonique(ressource) != \
+            ressource_canonique(conn.get("base_url") or ""):
         return ("`resource` of an MCP server is its own address "
                 f"({ressource_canonique(conn.get('base_url') or '')}): another value is "
                 "refused.")
+    if ressource and not est_mcp_par_membre(conn) and \
+            _origine(ressource) != _origine(conn.get("base_url") or ""):
+        return (f"`resource` ({_origine(ressource)}) must be on the API's own origin "
+                f"({_origine(conn.get('base_url') or '')}): a token is asked for the API "
+                "it is sent to, never for another one.")
     return None
 
 

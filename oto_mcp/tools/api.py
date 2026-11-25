@@ -263,8 +263,8 @@ def client_for(fields: dict, headers: dict | None = None, *,
         except api_oauth.ApiOAuthRefused as e:
             raise ValueError(e.message) from None
         return api_operations.with_constant_headers(
-            HttpConnectorClient(base_url, "bearer", {**fields, "token": token},
-                                timeout=TIMEOUT), headers)
+            _pinned(HttpConnectorClient(base_url, "bearer", {**fields, "token": token},
+                                        timeout=TIMEOUT)), headers)
     session = {}
     if api_session.keeps_jar(fields):
         if row is None:
