@@ -276,6 +276,12 @@ def test_one_account_is_one_queue_whoever_calls(gate_env):
     assert U._account_gate("sub-1", None) is U._account_gate("sub-1", _acct(None))
 
 
+def test_the_queue_wait_stays_short():
+    # A read waiting for its turn holds a thread of the shared pool (plus the sleep of a
+    # short retry): a burst on one account must not hold them long.
+    assert U._GATE_WAIT_MAX_S <= 5
+
+
 def test_a_read_never_waits_past_the_bound(gate_env, monkeypatch):
     monkeypatch.setattr(U, "_GATE_WAIT_MAX_S", 0.05)
     client = _acct("acc-A")

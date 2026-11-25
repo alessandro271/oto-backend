@@ -113,7 +113,8 @@ _RL_MAX_SECS = 3600      # cap: a "Retry in 12 hours" (rare/misleading) does not
 # turn. A longer wait, a second 429, or a turn not obtained in time is the
 # `unipile_rate_limited` refusal as before. READS only: no send goes through `_scrape`.
 _SHORT_RETRY_MAX_S = 3   # a 429 asking for at most this is waited out once
-_GATE_WAIT_MAX_S = 10    # longest a read waits for its account's turn
+_GATE_WAIT_MAX_S = 5     # longest a read waits for its account's turn: the wait
+                         #  holds a thread of the shared pool, so keep it short
 _ACCOUNT_GATES: dict[str, threading.Lock] = {}  # gate key -> lock (one per account)
 _ACCOUNT_GATES_LOCK = threading.Lock()
 
