@@ -154,6 +154,10 @@ PLAFONDS: dict[str, int] = {
     #   tracé `doctrine_version` (écrit dans `tool_calls.args`).
     "oto_mcp/tools/guide_run.py": 4,
     "oto_mcp/server.py": 3,
+    # — Pas le mot produit : le CHEMIN `/api/doctrine/bofip` que sert le service FOD,
+    #   hors de ce dépôt (la doctrine fiscale de la DGFiP). Écrit une seule fois, dans
+    #   une constante ; l'outil, lui, s'appelle `bofip` (otomata-tech/oto-backend#1904).
+    "oto_mcp/fod/bofip.py": 1,
 }
 
 

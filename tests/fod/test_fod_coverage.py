@@ -87,8 +87,9 @@ FOD_NOT_EXPOSED = {
     "pubmed": _SANTE_JAMAIS_PAR_LA_LIB,  # sante(op="search_pubmed"|"get_pubmed_article")
     "europepmc": _SANTE_JAMAIS_PAR_LA_LIB,  # sante(op="search_europepmc"|"get_europepmc_article")
     "transparence": _SANTE_JAMAIS_PAR_LA_LIB,  # liens d'intérêts — sante(op="search_interest_declarations"|…)
-    "bofip": "client BOFiP (doctrine fiscale) servi par le service FOD (/api/doctrine/*) ; "
-             "aucun outil du backend ne l'expose encore — décision d'exposition à prendre",
+    "bofip": "client BOFiP (doctrine fiscale) consommé via le service FOD en proxy HTTP "
+             "(oto_mcp/fod/bofip.py → /api/doctrine/bofip*) — le tool bofip "
+             "est exposé, le client lib n'a jamais tourné dans le backend",
     "judilibre": "client Judilibre (jurisprudence) = source d'INGESTION du service "
                  "FOD (fod-0, épopée DILA) ; le backend consomme la jurisprudence "
                  "via le service FOD (fr_juris_*, oto_mcp/fod_juris.py → HTTP), pas "
@@ -97,10 +98,9 @@ FOD_NOT_EXPOSED = {
                   "source d'INGESTION du service FOD (fod-0) ; le backend consomme "
                   "les codes via le service FOD (fr_loi_*, oto_mcp/fod_loi.py → HTTP), "
                   "pas le client lib direct",
-    "osm": "client OpenStreetMap/Overpass (france_opendata récent) PAS encore exposé "
-           "côté oto — aucun tool `foncier_*`/`fr_*` ne le câble à ce jour ; décision de "
-           "câblage à prendre (retirer cette entrée quand un tool l'expose). Ajouté pour "
-           "débloquer le pipeline après un bump france_opendata (2026-07-08).",
+    "osm": "client OpenStreetMap/Overpass consommé via le service FOD en proxy HTTP "
+           "(oto_mcp/fod/osm.py → /api/osm/pois) — le tool osm_pois est exposé, le "
+           "client lib n'a jamais tourné dans le backend",
     "ban": _FONCIER_VIA_FOD,
     "apicarto": _FONCIER_VIA_FOD,
     "bdtopo": _FONCIER_VIA_FOD,
