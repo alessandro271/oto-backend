@@ -299,6 +299,14 @@ voulu. Avant d'armer sur un déploiement, établir les destinations des instance
 existantes — `GET /api/settings/api-keys/{provider}` rend les champs NON secrets, donc
 `base_url`, sans jamais rendre de secret (scope `org`/`group` = admin du palier).
 
+**Aucune sortie réseau hors garde.** `tests/test_egress_titulaires.py` parcourt le code
+servi : `requests.<verbe>`/`requests.Session`, `httpx`, `aiohttp`, `urllib.request`,
+`socket.create_connection`/`socket.socket` y sont refusés hors d'une liste d'exceptions
+NOMMÉES (`_SORTIES_ADMISES`), chacune avec sa raison — une destination fixe du code, une
+table fermée, ou un service déclaré par l'opérateur. Une exception qui ne sert plus
+rougit aussi. Un sous-domaine saisi qui entre dans un nom d'hôte (Pipedrive) est validé
+à la forme stricte d'une étiquette DNS.
+
 **La garde fait foi à la CONNEXION (`oto_mcp/egress_transport.py`).** `check_url` reste
 le refus précoce, celui qui explique et nomme la carte. Mais le client HTTP résolvait
 l'hôte une seconde fois pour se connecter : un DNS qui répond « public » au contrôle puis
@@ -313,7 +321,7 @@ résolution : le processus parle légitimement à sa boucle locale. Les proxies
 d'environnement sont ignorés (`trust_env=False`) et un proxy explicite est refusé —
 derrière un proxy, c'est lui qui résout. Le dépôt ne lit aucune variable de proxy ; une instance derrière un proxy d'egress ou un magasin de certificats propre (`REQUESTS_CA_BUNDLE`) voit ces chemins échouer, fermés.
 
-Câblé : `web_read`/`web_image` (`tools/web.py`), une source `url` de fichier
+Câblé : `web_read`/`web_image` (`tools/web.py`), `infosec` (en-têtes HTTP, RDAP, journaux de certificats par la session gardée de l'agent ; la poignée TLS se connecte à l'adresse jugée par `egress.decide`), une source `url` de fichier
 (`file_source.py`), l'import d'une description publique
 (`api_operations.fetch_public_document`), le CV d'une candidature (`tools/wttj_resume.py`),
 l'import d'avatar, la session des clients `n8n`, `make`, `github`, `posthog`, `lucca` et

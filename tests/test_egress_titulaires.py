@@ -333,7 +333,7 @@ def test_les_outils_sortent_au_nom_de_la_ligne_resolue(monkeypatch):
     porte le titulaire de la ligne gagnante."""
     from types import SimpleNamespace
 
-    from oto_mcp.access import resolve, views
+    from oto_mcp import access
     from oto_mcp.tools import threecx
 
     def resolu(t):
@@ -344,11 +344,11 @@ def test_les_outils_sortent_au_nom_de_la_ligne_resolue(monkeypatch):
             entity_type=t[0], entity_id=t[1])
 
     monkeypatch.setattr("oto.tools.threecx.ThreeCXClient", _Double)
-    monkeypatch.setattr(resolve, "resolve_credential", resolu(GROUPE))
-    assert egress.titulaire_des_champs(views.resolve_credential_fields("threecx")) == GROUPE
+    monkeypatch.setattr(access, "resolve_credential", resolu(GROUPE))
+    assert egress.titulaire_des_champs(access.resolve_credential_fields("threecx")) == GROUPE
     threecx.client()
     for t in (MEMBRE, AUTRE_ORG):
-        monkeypatch.setattr(resolve, "resolve_credential", resolu(t))
+        monkeypatch.setattr(access, "resolve_credential", resolu(t))
         with pytest.raises(egress.EgressRefused, match="destination refusée"):
             threecx.client()
 
@@ -457,3 +457,217 @@ def test_le_detecteur_de_titulaire_rougit_sur_commande():
            "egress.check_url(u, connector='n8n', titulaire=t)\n")
     assert _appels_sans_titulaire(src, "x") == ["x:2 egress.check_url",
                                                 "x:3 egress_transport.session"]
+
+
+# ── 6. aucune sortie réseau hors garde ────────────────────────────────────────
+#
+# Le code servi ne sort que par la garde (`egress_transport`), sauf une exception
+# NOMMÉE ci-dessous, chacune justifiée : une destination fixe écrite dans le code,
+# choisie dans une table fermée, ou déclarée par l'opérateur — jamais une valeur
+# qu'un client, un membre ou un agent fournit.
+
+_SORTIES_ADMISES = {
+    ("oto_mcp/egress_transport.py", "requests"):
+        "la session gardée elle-même",
+    ("oto_mcp/connectors/api_mcp.py", "requests"):
+        "session neuve passée aussitôt à `egress_transport.harden`",
+    ("oto_mcp/tools/infosec.py", "socket"):
+        "poignée TLS vers une adresse déjà jugée par `egress.decide` (AGENT)",
+    ("oto_mcp/anthropic_usage.py", "requests"): "hôte fixe de l'API du modèle",
+    ("oto_mcp/anthropic_cle.py", "httpx"): "hôte fixe de l'API du modèle",
+    ("oto_mcp/capabilities/copilot/modele.py", "httpx"): "hôte fixe de l'API du modèle",
+    ("oto_mcp/routine_fire.py", "requests"): "hôte fixe de l'API du modèle",
+    ("oto_mcp/embeddings.py", "httpx"): "hôte fixe du service d'embeddings",
+    ("oto_mcp/apify_releve.py", "requests"): "hôte fixe de l'API Apify",
+    ("oto_mcp/tools/apify.py", "requests"): "hôte fixe de l'API Apify",
+    ("oto_mcp/auth/annuaire.py", "requests"):
+        "annuaire d'identité de l'instance, déclaré par l'opérateur",
+    ("oto_mcp/auth/inscription_dynamique.py", "requests"):
+        "annuaire d'identité de l'instance, déclaré par l'opérateur",
+    ("oto_mcp/mfa_mirror.py", "requests"):
+        "annuaire d'identité de l'instance, déclaré par l'opérateur",
+    ("oto_mcp/auth/google.py", "requests"): "hôtes fixes de Google",
+    ("oto_mcp/tools/search_console.py", "requests"): "hôte fixe de Google",
+    ("oto_mcp/auth/hubspot.py", "requests"): "hôtes fixes de HubSpot",
+    ("oto_mcp/auth/meta_ads.py", "requests"): "hôte fixe de l'API Graph",
+    ("oto_mcp/auth/zoho.py", "requests"): "hôtes Zoho pris dans une table fermée de régions",
+    ("oto_mcp/tools/zoho.py", "requests"): "hôtes Zoho pris dans une table fermée de régions",
+    ("oto_mcp/tools/zohodesk.py", "requests"):
+        "hôtes Zoho pris dans une table fermée de régions",
+    ("oto_mcp/browserbase.py", "urllib"): "hôte fixe de l'API Browserbase",
+    ("oto_mcp/crypto.py", "urllib"): "API de gestion de clés de l'hébergeur, gabarit fixe",
+    ("oto_mcp/ferme.py", "requests"): "service d'exploitation déclaré par l'opérateur",
+    ("oto_mcp/org_created_hook.py", "requests"): "crochet déclaré par l'opérateur",
+    ("oto_mcp/email.py", "httpx"):
+        "relais d'envoi déclaré par l'opérateur, ou hôtes fixes des fournisseurs d'envoi",
+    ("oto_mcp/fod/ccn.py", "httpx"): "service de données déclaré par l'opérateur",
+    ("oto_mcp/fod/http.py", "httpx"): "service de données déclaré par l'opérateur",
+    ("oto_mcp/fod/juris.py", "httpx"): "service de données déclaré par l'opérateur",
+    ("oto_mcp/fod/loi.py", "httpx"): "service de données déclaré par l'opérateur",
+    ("oto_mcp/mollie_client.py", "httpx"): "hôte fixe du prestataire de paiement",
+    ("oto_mcp/tools/fr.py", "requests"): "hôte fixe du registre public des entreprises",
+    ("oto_mcp/tools/fullenrich.py", "requests"): "hôte fixe de l'API FullEnrich",
+    ("oto_mcp/tools/jev.py", "requests"): "hôte fixe de la passerelle de modèles",
+}
+
+_VERBES_REQUESTS = {"get", "post", "put", "patch", "delete", "head", "options",
+                    "request", "Session", "session"}
+
+
+def _sorties_brutes(source: str) -> list[tuple[int, str, str]]:
+    """`(ligne, famille, forme)` de chaque sortie réseau qui ne passe pas par la garde :
+    `requests.<verbe>`/`requests.Session`, `httpx`, `aiohttp`, `urllib.request`/
+    `urlopen`, `socket.create_connection`/`socket.socket`."""
+    import ast
+    vues = []
+    for n in ast.walk(ast.parse(source)):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                racine = a.name.split(".")[0]
+                if racine in ("httpx", "aiohttp"):
+                    vues.append((n.lineno, racine, f"import {a.name}"))
+                elif a.name.startswith("urllib.request"):
+                    vues.append((n.lineno, "urllib", f"import {a.name}"))
+        elif isinstance(n, ast.ImportFrom):
+            module = n.module or ""
+            racine = module.split(".")[0]
+            noms = {a.name for a in n.names}
+            if racine in ("httpx", "aiohttp"):
+                vues.append((n.lineno, racine, f"from {module} import …"))
+            elif module.startswith("urllib.request") or (module == "urllib"
+                                                          and "request" in noms):
+                vues.append((n.lineno, "urllib", f"from {module} import …"))
+            elif module == "requests" and noms & _VERBES_REQUESTS:
+                vues.append((n.lineno, "requests", f"from requests import …"))
+            elif module == "socket" and noms & {"create_connection", "socket"}:
+                vues.append((n.lineno, "socket", "from socket import …"))
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+            base, attr = ast.unparse(n.func.value), n.func.attr
+            if base == "requests" and attr in _VERBES_REQUESTS:
+                vues.append((n.lineno, "requests", f"requests.{attr}"))
+            elif base == "socket" and attr in ("create_connection", "socket"):
+                vues.append((n.lineno, "socket", f"socket.{attr}"))
+            elif attr == "urlopen":
+                vues.append((n.lineno, "urllib", f"{base}.urlopen"))
+    return vues
+
+
+def test_aucune_sortie_reseau_hors_garde():
+    """Le parcours exhaustif : une sortie réseau du code servi passe par la garde,
+    ou figure dans `_SORTIES_ADMISES` avec sa raison. Une exception qui ne sert plus
+    rougit aussi : la liste ne garde que ce qui est vrai."""
+    import pathlib
+    racine = pathlib.Path(egress.__file__).parent
+    fautes, servies = [], set()
+    for f in sorted(racine.rglob("*.py")):
+        chemin = str(f.relative_to(racine.parent))
+        for ligne, famille, forme in _sorties_brutes(f.read_text(encoding="utf-8")):
+            if (chemin, famille) in _SORTIES_ADMISES:
+                servies.add((chemin, famille))
+            else:
+                fautes.append(f"{chemin}:{ligne} {forme}")
+    assert not fautes, ("sortie(s) réseau hors garde d'egress — passer par "
+                        "`egress_transport.session` avec son titulaire, ou nommer "
+                        "l'exception et sa raison :\n  " + "\n  ".join(fautes))
+    perimees = sorted(set(_SORTIES_ADMISES) - servies)
+    assert not perimees, f"exception(s) qui ne servent plus : {perimees}"
+    assert all(r.strip() for r in _SORTIES_ADMISES.values())
+
+
+def test_le_detecteur_de_sorties_rougit_sur_commande():
+    src = ("import requests, socket, httpx\n"
+           "import urllib.request\n"
+           "from aiohttp import ClientSession\n"
+           "requests.get(u)\n"
+           "requests.Session()\n"
+           "socket.create_connection((h, 443))\n"
+           "urllib.request.urlopen(u)\n"
+           "egress_transport.session(connector='x', titulaire=t).get(u)\n")
+    formes = [f for _, _, f in _sorties_brutes(src)]
+    assert set(formes) == {"import httpx", "import urllib.request",
+                           "from aiohttp import …", "requests.get", "requests.Session",
+                           "socket.create_connection", "urllib.request.urlopen"}
+
+
+# ── 7. Pipedrive : un sous-domaine, rien d'autre ──────────────────────────────
+
+@pytest.mark.parametrize("hostile", [
+    "acme.evil", "acme@evil", "acme:8080", "acme/x", "127.0.0.1", "-acme", "a" * 64,
+    "acme evil", "acme#x",
+])
+def test_pipedrive_refuse_un_sous_domaine_qui_viserait_un_autre_hote(hostile):
+    from oto_mcp.tools import pipedrive
+    with pytest.raises(ValueError, match="subdomain"):
+        pipedrive._domain(hostile)
+
+
+def test_pipedrive_accepte_un_sous_domaine_simple():
+    from oto_mcp.tools import pipedrive
+    assert pipedrive._domain(" Acme-2 ") == "acme-2"
+    assert pipedrive._domain("") is None
+
+
+# ── 8. infosec : la garde de l'agent, redirections et TLS compris ─────────────
+
+def test_infosec_refuse_l_interieur_meme_declare(monkeypatch, aucune_socket):
+    """Un domaine résolu vers un pont déclaré, à son port : refusé quand même (AGENT),
+    avant toute socket, pour l'en-tête HTTP comme pour la poignée TLS."""
+    from oto_mcp.tools import infosec
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://instance.exemple.test")
+    c = infosec._classe(infosec.InfosecClient)("ua")
+    with pytest.raises(egress.EgressRefused, match="sans exception"):
+        c.headers("pont.exemple.test")
+    with pytest.raises(egress.EgressRefused, match="sans exception"):
+        c.tls("pont.exemple.test", 8443)
+
+
+def test_infosec_refuse_une_redirection_vers_l_interieur(monkeypatch):
+    """Public au premier saut, puis une redirection vers un nom qui résout interne :
+    la session gardée juge chaque saut à la connexion, et seul le premier part."""
+    import http.server
+    import threading
+
+    from oto_mcp.tools import infosec
+
+    class _Redirige(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.server.hotes.append(self.headers.get("Host"))
+            self.send_response(302)
+            self.send_header("Location", "http://interne.exemple.test/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Redirige)
+    srv.hotes = []
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    try:
+        monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://instance.exemple.test")
+        monkeypatch.setattr(egress, "resolved_addresses",
+                            lambda hote, p: {"93.184.216.34"} if hote.startswith("public.")
+                            else {INTERNE})
+        vers_le_banc = egress_transport._ouvrir
+        # La décision est prise sur l'adresse publique ; la socket rejoint le banc local.
+        monkeypatch.setattr(egress_transport, "_ouvrir",
+                            lambda adresse, p, *a: vers_le_banc("127.0.0.1", port, *a))
+        with infosec._session() as s:
+            with pytest.raises(egress.EgressRefused, match="sans exception"):
+                s.get(f"http://public.exemple.test:{port}/", timeout=5)
+        assert srv.hotes == [f"public.exemple.test:{port}"], "seul le premier saut est parti"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_infosec_tls_se_connecte_a_l_adresse_jugee(monkeypatch):
+    from oto_mcp.tools import infosec
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://instance.exemple.test")
+    monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
+    vues = []
+    monkeypatch.setattr(infosec, "_poignee_tls",
+                        lambda host, adresse, port: vues.append((host, adresse, port)) or {})
+    infosec._classe(infosec.InfosecClient)("ua").tls("public.exemple.test", 443)
+    assert vues == [("public.exemple.test", "93.184.216.34", 443)]
