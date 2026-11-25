@@ -43,7 +43,7 @@ def banc(monkeypatch):
     compte = {"garde": 0, "upsert": 0, "jeton": 0, "pause": None,
               "ligne": {"sub": "u-api", "scopes": None, "token_id": 7}}
 
-    def _garde(sub, emis_le=None):
+    def _garde(sub, emis_le=None, lue=None):
         compte["garde"] += 1
         return compte["pause"]
 
@@ -55,6 +55,8 @@ def banc(monkeypatch):
         return dict(compte["ligne"])
 
     monkeypatch.setattr(garde_identite, "refus", _garde)
+    # La lecture d'entrée du sub d'un JWT, faite avant le drain d'alias : aucun état.
+    monkeypatch.setattr(api_base.db, "get_suspension", lambda sub: None)
     monkeypatch.setattr(api_base.db, "upsert_user", _upsert)
     monkeypatch.setattr(api_base.db, "verify_api_token", _jeton)
     monkeypatch.setattr(api_base, "alias_drain_armed", lambda: False)
