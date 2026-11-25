@@ -1,4 +1,4 @@
-"""La révision `20261120_1108_responsables` pose `docs.owner_sub` et
+"""La révision `20261125_1700_responsables` pose `docs.owner_sub` et
 `org_instructions.owner_sub`.
 
 Le responsable d'une page et d'une procédure. Deux colonnes NEUVES, nullables sans
@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 
 RACINE = Path(__file__).resolve().parent.parent
-_PRECEDENTE = "20261119_1600_repar_consentie"
-_REVISION = "20261120_1108_responsables"
+_PRECEDENTE = "20261124_1200_empreintes_2fa"
+_REVISION = "20261125_1700_responsables"
 
 
 def _alembic():

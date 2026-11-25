@@ -14,7 +14,7 @@ pour une page, l'auteur de la PREMIÈRE version pour une procédure. Rien n'est 
 pour le déduire : une ligne d'avant n'a pas à être migrée, et changer l'auteur d'origine
 n'arrive jamais.
 
-Les deux colonnes sont posées par la révision `20261120_1108_responsables` ET par le
+Les deux colonnes sont posées par la révision `20261125_1700_responsables` ET par le
 démarrage, sous garde de catalogue — même DDL.
 """
 from __future__ import annotations

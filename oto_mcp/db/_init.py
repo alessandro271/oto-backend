@@ -715,7 +715,7 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     if any(_colonne_absente(conn, "docs", c) for c in doc_archivage.COLONNES):
         conn.execute(doc_archivage.DDL_COLONNES)
     # Le responsable d'une page et d'une procédure (`db/responsables.py`) — les mêmes que
-    # pose la révision `20261120_1108_responsables` : ordre indifférent.
+    # pose la révision `20261125_1700_responsables` : ordre indifférent.
     from . import responsables
     if _colonne_absente(conn, "docs", responsables.COLONNE):
         conn.execute(responsables.DDL_COLONNE_PAGES)
