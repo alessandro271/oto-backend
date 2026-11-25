@@ -286,15 +286,12 @@ def test_la_tolerance_ne_couvre_que_des_chemins_reellement_nommes():
         "connecteur — retire-les.")
 
 
-def test_le_demarrage_generique_partage_le_handler_des_capacites_nommees():
-    """Il n'existe qu'UNE façon de démarrer un consentement : la face MCP par connecteur
-    et le flux générique appellent le MÊME `start_for`, donc les deux surfaces ne peuvent
-    pas diverger."""
-    from oto_mcp.capabilities import salesforce_connect, zoho_connect
+def test_le_demarrage_generique_passe_par_le_seul_start_for():
+    """Il n'existe qu'UNE façon de démarrer un consentement Zoho ou Salesforce : le flux
+    générique (`me.connector_connect`, le bouton de la fiche) appelle leur `start_for`. Les
+    verbes MCP par connecteur sont retirés (24/11/2026) : un agent reçoit la page de la
+    fiche (`oto_connector_connect`), jamais une URL de consentement."""
     import inspect
-    assert "start_for" in inspect.getsource(zoho_connect._start)
-    assert "start_for" in inspect.getsource(salesforce_connect._start)
-    # et le flux générique passe par les mêmes
     from oto_mcp.tools import salesforce as sf_tools, zoho as zoho_tools
     assert "start_for" in inspect.getsource(sf_tools._start_flow)
     assert "start_for" in inspect.getsource(zoho_tools._start_flow)

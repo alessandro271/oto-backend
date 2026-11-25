@@ -44,6 +44,7 @@ from pydantic import BaseModel
 
 from .. import db
 from ._authz import ADMIN_BY_OP, SUPER_ADMIN, TENANT_ADMIN_OF_TARGET
+from ._session_exigee import exiger_session
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
 from .registry import CAPABILITIES
 
@@ -98,6 +99,8 @@ def _vue(sub: str, etat: Optional[dict], *, changed: bool) -> dict:
 
 
 def _account(ctx: ResolvedCtx, inp: AccountSuspensionInput) -> dict:
+    # Mettre un compte en pause, ou lever la pause : session seule (`_session_exigee`).
+    exiger_session("Mettre un compte en pause ou lever sa pause")
     cible = inp.target.strip()
     if cible == ctx.sub:
         # On ne se neutralise pas soi-même. Ce n'est pas un anti-lockout (un super
@@ -184,6 +187,7 @@ CAPABILITIES += [
         # muterait. L'état de pause se lit par la fiche du compte
         # (`GET /api/admin/users/{sub}`) et par la liste des membres d'une org, qui le
         # portent tous deux — il n'y a pas de troisième surface à inventer ici.
-        rest=RestBinding("POST", "/api/admin/users/{sub}/suspension", {"sub": "target"}),
+        rest=RestBinding("POST", "/api/admin/users/{sub}/suspension", {"sub": "target"},
+                         allow_api_token=False),
     ),
 ]

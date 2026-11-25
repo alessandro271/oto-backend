@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from .. import db, tenancy
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN, TENANT_ADMIN_OF
+from ._session_exigee import exiger_session
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -92,6 +93,7 @@ def _list(ctx: ResolvedCtx, inp: TenantAdminsInput) -> dict:
 
 
 def _add(ctx: ResolvedCtx, inp: TenantAdminAddInput) -> dict:
+    exiger_session("Déclarer un admin de tenant")  # `_session_exigee`
     slug = _known(inp.slug)
     if slug == tenancy.primary_slug():
         raise AuthzDenied(400, "primary_tenant",
@@ -103,6 +105,7 @@ def _add(ctx: ResolvedCtx, inp: TenantAdminAddInput) -> dict:
 
 
 def _remove(ctx: ResolvedCtx, inp: TenantAdminRemoveInput) -> dict:
+    exiger_session("Retirer un admin de tenant")  # `_session_exigee`
     slug = _known(inp.slug)
     sub = (inp.sub or "").strip()
     return {"ok": True, "slug": slug, "sub": sub,
@@ -120,12 +123,14 @@ CAPABILITIES += [
         key="admin.tenant_admin_add", handler=_add, Input=TenantAdminAddInput,
         Output=TenantAdminAdded, authz=SUPER_ADMIN,
         description="Declare a tenant admin (a `sub` qualified under the tenant).",
-        rest=RestBinding("POST", "/api/admin/tenants/{slug}/admins"),
+        # Session interactive seule (`_session_exigee`).
+        rest=RestBinding("POST", "/api/admin/tenants/{slug}/admins", allow_api_token=False),
     ),
     Capability(
         key="admin.tenant_admin_remove", handler=_remove, Input=TenantAdminRemoveInput,
         Output=TenantAdminRemoved, authz=SUPER_ADMIN,
         description="Withdraw a tenant admin.",
-        rest=RestBinding("DELETE", "/api/admin/tenants/{slug}/admins/{sub}"),
+        rest=RestBinding("DELETE", "/api/admin/tenants/{slug}/admins/{sub}",
+                         allow_api_token=False),
     ),
 ]

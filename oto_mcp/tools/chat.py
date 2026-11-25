@@ -1,7 +1,8 @@
 """Google Chat — oto-core surface (ChatClient) exposed per user, multi-account.
 
 List spaces (rooms + DMs), read messages, post (into a space or as a DM to a
-user). **Restricted** scopes `chat.spaces.readonly` + `chat.messages`.
+user). Scopes `chat.spaces.readonly` + `chat.messages.readonly` (restricted) +
+`chat.messages.create`: list, read and post only — never edit or delete.
 Default account or targeted by `account`. Per-user via OAuth.
 
 **Surface** — the connector's PAIR (`tools/lecture.py`): `chat` READS (op=spaces: the

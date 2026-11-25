@@ -909,7 +909,7 @@ def account_status(provider: str = "LINKEDIN",
             sub, nom, org=org, group=access.current_group(sub))
         out["next_step"] = pointer_error or (
             diag.next_step if diag is not None
-            else connector_readiness.no_identity_step(sub, nom, "account"))
+            else connector_readiness.no_identity_step(sub, nom, "account", org=org))
     elif alive is False:
         out["next_step"] = (
             f"The {front} account is linked, but its session is DEAD on the "

@@ -40,8 +40,9 @@ _HEADER_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$")
 _PARAM_RE = re.compile(r"^[A-Za-z0-9_.\-\[\]]{1,64}$")
 
 INSTRUCTIONS = (
-    "Send this link to the person who holds the API key. They open it, check the "
-    "pre-filled fields and paste the key IN THE FORM: oto keeps it encrypted in the "
+    "Send this link to the person who holds the API key, with the base URL and auth "
+    "mode to enter: the page never pre-fills an address or a mode. They "
+    "open it, type those, and paste the key IN THE FORM: oto keeps it encrypted in the "
     "vault. Never ask for the key in the conversation and never pass it to a tool. "
     "If a key was already pasted in a chat, ask them to revoke it at the provider and "
     "create a new one before connecting. Once saved, the API is reachable with "
@@ -193,7 +194,10 @@ def register(mcp: FastMCP) -> None:
         - `setup_link`: a link to connect a tool that has no dedicated connector (a
           payroll, ERP or any SaaS with an API key) → `{url, prefilled,
           instructions}`. Send the url to the person who holds the key; they paste the
-          key in the form, never in the chat — this tool takes no secret. If a key was
+          key in the form, never in the chat — this tool takes no secret. The page
+          pre-fills only the name and the header or parameter NAME: the person types
+          the base URL and picks the auth mode themselves (a link may come from a
+          manipulated agent). Tell them the values you validated (`prefilled`). If a key was
           already pasted in a chat, tell them to revoke it and create a new one.
         - `mcp_tools`: on a custom connector whose protocol is `mcp` (its base URL is a
           remote MCP server), the remote tools open to agents — name, description,
@@ -203,10 +207,10 @@ def register(mcp: FastMCP) -> None:
         Args:
             op: list (default) | setup_link | mcp_tools.
             label: setup_link — name of the tool to connect (e.g. "Acme Payroll").
-            base_url: setup_link — API root to pre-fill (e.g. https://api.acme.test/v1),
-                no query.
+            base_url: setup_link — API root (e.g. https://api.acme.test/v1), no query;
+                validated, then typed by the person on the page (never pre-filled).
             auth_mode: setup_link — bearer | header | query | basic | oauth2 | session
-                | visitor | none. `session` = an account's login and password, for a
+                | visitor | none; validated, then picked by the person on the page. `session` = an account's login and password, for a
                 service with no API key: read-only, its steps are filled in on the card.
                 `visitor` = a public site with no account, read with the cookies its
                 entry page sets (named on the card).

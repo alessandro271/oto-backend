@@ -303,6 +303,14 @@ def _platform_eligible(provider: str) -> bool:
     return con is not None and "platform" in con.auth_modes
 
 
+def instance_ref_of_vault_row(entity_type: str, entity_id: str, connector: str,
+                              account: str) -> Optional[str]:
+    """`inst:<id>` of the instance a vault row backs, or None (no instance row) — the
+    resource's own id, which names no person (`connector.connect`, the serving account)."""
+    inst = db.instance_id_for_vault_row(entity_type, entity_id, connector, account)
+    return instance_refs.make_instance_ref(inst) if inst is not None else None
+
+
 def _shared_ref(entity_type: str, entity_id: str, connector: str,
                 account: str) -> Optional[str]:
     """PINNABLE ref of an instance shared with me (share_side), rebuilt from

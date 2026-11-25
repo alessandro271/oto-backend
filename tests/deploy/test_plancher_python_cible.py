@@ -24,7 +24,7 @@ import subprocess
 
 import pytest
 
-from _banc_cible import DECLARATION, SHA, Banc
+from _banc_cible import DECLARATION, DEPOT, SHA, Banc
 
 UNITE = "exemple-prod"
 
@@ -380,3 +380,116 @@ def test_retour_vers_la_couleur_3_10_apres_migration_par_le_choix(role_en_310):
     assert venv(banc, "blue") == "3.10" and temoin(banc, "blue")
     assert venvs_crees(banc) == []
     assert not [c for c in banc.commandes() if "reset" in c]
+
+
+# --- le choix au patch (`"python": "3.12.8"`) : l'interpréteur figé -----------------
+def test_choix_au_patch_installe_et_vise_cette_version(role_en_310):
+    banc = role_en_310
+    decl = choisir(banc, "3.12.8")
+    banc.trace.write_text("")
+    fini = banc.lancer("deployer.sh", "deployer", "prod", "v2.0.0", declaration=decl)
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    cmds = banc.commandes()
+    assert "uv python install --quiet 3.12.8" in cmds
+    assert venvs_crees(banc) == [
+        "uv venv --quiet --seed --python 3.12.8 --python-preference only-managed "
+        "/opt/exemple/prod-green/.venv"]
+    assert "venv 3.10 → 3.12.8 recréé" in fini.stdout
+    assert venv(banc, "green") == "3.12.8" and venv(banc, "blue") == "3.10" and temoin(banc, "blue")
+
+
+def test_choix_au_patch_egal_rien(role_en_310):
+    banc = role_en_310
+    decl = choisir(banc, "3.12.8")
+    for tag in ("v2.0.0", "v2.1.0"):                          # verte, puis bleue → 3.12.8
+        assert banc.lancer("deployer.sh", "deployer", "prod", tag,
+                           declaration=decl).returncode == 0
+    poser_temoins(banc)
+    fini = monter(banc, "v2.2.0", declaration=decl)
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    assert venvs_crees(banc) == [] and temoin(banc, "green")
+
+
+def test_choix_au_patch_qui_differe_recree(role_en_310):
+    """Même série, autre patch : le choix figé l'emporte ; un choix « 3.12 » l'aurait gardé."""
+    banc = role_en_310
+    for tag in ("v2.0.0", "v2.1.0"):                          # les deux couleurs en 3.12.8
+        assert banc.lancer("deployer.sh", "deployer", "prod", tag,
+                           declaration=choisir(banc, "3.12.8")).returncode == 0
+    poser_temoins(banc)
+    fini = monter(banc, "v2.2.0", declaration=choisir(banc, "3.12.9"))
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    assert "venv 3.12.8 → 3.12.9 recréé" in fini.stdout
+    assert venv(banc, "green") == "3.12.9" and not temoin(banc, "green")
+    assert venv(banc, "blue") == "3.12.8" and temoin(banc, "blue")
+
+
+def test_choix_sans_patch_garde_un_venv_de_la_meme_serie(role_en_310):
+    banc = role_en_310
+    for tag in ("v2.0.0", "v2.1.0"):
+        assert banc.lancer("deployer.sh", "deployer", "prod", tag,
+                           declaration=choisir(banc, "3.12.8")).returncode == 0
+    poser_temoins(banc)
+    fini = monter(banc, "v2.2.0", declaration=choisir(banc, "3.12"))
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    assert venvs_crees(banc) == [] and temoin(banc, "green")
+
+
+def test_choix_au_patch_sous_le_requires_python_refuse(role_en_310):
+    banc = role_en_310
+    plancher(banc, "3.12.4")
+    fini = monter(banc, "v2.0.0", declaration=choisir(banc, "3.12.3"))
+    assert fini.returncode == 1
+    assert "l'instance choisit Python 3.12.3" in fini.stderr
+    assert not [c for c in banc.commandes() if c.startswith(("uv ", "git ", "systemctl "))]
+
+
+def test_choix_mineur_sous_un_plancher_au_patch_admis(role_en_310):
+    """`3.12` sous `>=3.12.4` : des 3.12.x satisfont, le choix n'est plus refusé à tort."""
+    banc = role_en_310
+    plancher(banc, "3.12.4")
+    fini = monter(banc, "v2.0.0", declaration=choisir(banc, "3.12"))
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    assert "n'admet pas" not in fini.stderr
+
+
+def test_un_choix_mal_forme_refuse_avant_toute_action(role_en_310):
+    banc = role_en_310
+    fini = monter(banc, "v2.0.0", declaration=choisir(banc, "3.12.8.1"))
+    assert fini.returncode == 1
+    assert "python : MAJEUR.MINEUR ou MAJEUR.MINEUR.PATCH attendu" in fini.stderr
+    assert not [c for c in banc.commandes() if c.startswith(("uv ", "git ", "systemctl "))]
+
+
+@pytest.mark.parametrize("spec, choix, admis", [
+    (">=3.12.4", "3.12", True),
+    (">=3.12.4", "3.12.3", False),
+    (">=3.12.4", "3.12.4", True),
+    (">=3.10,<3.12.2", "3.12", True),
+    (">=3.10,<3.12.0", "3.12", False),
+    (">=3.10,!=3.12.*", "3.12", False),
+    (">=3.10,==3.12.7", "3.12", True),
+    ("~=3.11.2", "3.11", True),
+    ("~=3.11.2", "3.12", False),
+    (">=3.13", "3.12", False),
+])
+def test_admet_un_choix(tmp_path, spec, choix, admis):
+    py = tmp_path / "pyproject.toml"
+    py.write_text(f'[project]\nrequires-python = "{spec}"\n')
+    fini = subprocess.run(["python3", str(DEPOT / "deploy/cible/plancher_python.py"),
+                           "admet", str(py), choix], capture_output=True, text=True)
+    assert fini.returncode == (0 if admis else 1), fini.stderr
+
+
+def test_venv_recree_qui_ne_rend_pas_le_patch_choisi_refus_l_ancien_remis(role_en_310):
+    """La version se lit par l'interpréteur du venv neuf, jamais par son chemin : un uv qui
+    servirait un autre patch (lien de version mineure déplacé) est refusé, rien n'est
+    installé, et la couleur garde son venv d'avant."""
+    banc = role_en_310
+    fini = monter(banc, "v2.0.0", declaration=choisir(banc, "3.12.14"), BANC_PYV="3.12.15")
+    assert fini.returncode == 1
+    assert ("le venv recréé dans /opt/exemple/prod-green rend Python 3.12.15, pas 3.12.14"
+            in fini.stderr.replace(str(banc.racine), ""))
+    assert venv(banc, "green") == "3.10" and temoin(banc, "green")
+    assert not [c for c in banc.commandes() if c.startswith("git reset")]
+    assert actif(banc) == "blue"

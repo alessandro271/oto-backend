@@ -24,6 +24,14 @@ un appel interne (boucle de fond, maintenance, banc) n'a ni geste REST ni jeton 
 doit passer — contrairement à la garde de l'agent intégré (`copilot`), fail-closed parce
 que sa seule face est REST. Une session OAuth Logto (dashboard, client MCP connecté par
 OAuth) n'est pas un jeton nommé : elle passe.
+
+**Règle pour l'identité de SERVICE** (décision d'Alexis du 23/11/2026) : un geste réservé
+à une session reste ouvrable à une identité de service DÉCLARÉE qui porte le rôle
+voulu (`_authz.SERVICE_OU(role, …)`, `auth/service_identity.py`) ; seuls les jetons `oto_`
+(et le secret de worker) en restent refusés. Aujourd'hui aucune route réservée n'est
+ouverte à un service. Le jour où l'une l'est, ce refus doit laisser passer l'identité de
+service qui porte le rôle (`_authz.est_service`), sans relâcher le jeton `oto_`, avec un
+test des deux porteurs sur la route.
 """
 from __future__ import annotations
 

@@ -78,9 +78,22 @@ def etat(sub: str) -> Optional[dict]:
     servirait la requête d'un compte neutralisé comme s'il était vivant, c'est-à-dire
     qu'un incident de base ferait sauter la garde, en silence et sans une ligne. Le
     fail-safe d'une neutralisation est le refus, pas le laisser-passer."""
+    return pause_de(entree(sub))
+
+
+def entree(sub: Optional[str]) -> Optional[dict]:
+    """L'état d'ENTRÉE du compte (`db.get_suspension`) : sa pause et son instant
+    « révoqué avant », en une lecture — `None` s'il n'a ni l'une ni l'autre. La garde
+    d'identité le lit une fois et en tire les deux refus. Même règle qu'`etat` : une
+    panne remonte."""
     if not sub:
         return None
     return db.get_suspension(sub)
+
+
+def pause_de(lue: Optional[dict]) -> Optional[dict]:
+    """La pause portée par un état d'entrée déjà lu, ou `None` (compte vivant)."""
+    return lue if lue and lue.get("suspended_at") is not None else None
 
 
 def message(pause: dict) -> str:
@@ -125,15 +138,20 @@ def refus_preteur(sub: str, quoi: str) -> Optional[PreteurEnPause]:
     return PreteurEnPause(user.get("email") or sub, quoi)
 
 
-def refus(sub: str) -> Optional[tuple[str, dict]]:
-    """`(message, état)` si le compte est en pause, `None` sinon.
+#: « Pas encore lu » : la garde lit elle-même (`refus`, `garde_identite.refus`).
+A_LIRE = object()
+
+
+def refus(sub: str, lue=A_LIRE) -> Optional[tuple[str, dict]]:
+    """`(message, état)` si le compte est en pause, `None` sinon. `lue` : l'état
+    d'entrée déjà lu par l'appelant (`entree`), pour ne pas le relire.
 
     Appelé par la seule garde d'identité (`garde_identite.refus`), que traversent les
     portes d'entrée REST, MCP et le lien d'upload signé. Journalise chaque refus en `warning` : un
     compte en pause qui continue de frapper à la porte est un fait d'exploitation qu'on
     veut voir — c'est ce qui dira si la pause a été comprise, ou si une automatisation
     tourne encore sous cette identité."""
-    pause = etat(sub)
+    pause = etat(sub) if lue is A_LIRE else pause_de(lue)
     if not pause:
         return None
     logger.warning("compte en pause refusé à l'entrée : sub=%s depuis=%s",

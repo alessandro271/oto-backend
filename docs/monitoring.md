@@ -694,7 +694,13 @@ déjà journalisée ne porte : les jours consolidés ne se recalculent pas d'eux
 l'archive S3) — sans `since`, la fenêtre maximale
 s'applique et `since_effectif` la rend ; au-delà, `400 window_too_large`, jamais une
 fenêtre rognée. Une page d'au plus `RELEVE_LIMITE_MAX` (5 000) lignes — au-delà,
-`400 limit_too_large`, là où la valeur était écrêtée en silence. Les deux lectures
+`400 limit_too_large`, là où la valeur était écrêtée en silence. Une borne VIDE
+(`?since=&until=`) est une borne ABSENTE ; une borne que PostgreSQL ne lit pas comme un
+instant fini (`garbage`, `2026-13-45`, `infinity`) — `since`, `until`, `before_at`, et
+de même sur l'export d'audit — rend `400 invalid_timestamp` qui nomme le paramètre,
+plus un `500` (durcissement CASA 6.2.1, `db.BorneIllisible`, relue par PostgreSQL
+lui-même avant la requête : aucun second analyseur). `days` des lentilles `calls`,
+`runs`, `gaps`, `tool_quality` est écrêté à [1, 365] comme les autres agrégats. Les deux lectures
 passent par `idx_tool_calls_org_tool_ok (org_id, tool, created_at DESC) WHERE ok`
 (révision 0032).
 

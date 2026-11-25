@@ -1193,7 +1193,9 @@ def list_runs_page(
         params.append(sub)
     if since_days is not None:
         portee += " AND d.created_at >= NOW() - make_interval(days => %s)"
-        params.append(int(since_days))
+        # Écrêté comme les agrégats de ce module : un `days` au-delà d'un int4 ne trouve
+        # pas de `make_interval`, une fenêtre de mille ans sort du calendrier — deux 500.
+        params.append(max(1, min(int(since_days), 365)))
     if before is not None:
         portee += " AND (d.created_at, d.id) < (%s::timestamptz, %s)"
         params += [before[0], int(before[1])]
@@ -1306,7 +1308,10 @@ def _signal_agg(signal: str, group_by: str, label: str, days: int,
     inconnu), même scope `org_id` optionnel — seuls le signal et l'axe de groupement
     changent. `group_by`/`label` sont des littéraux du module, jamais une entrée."""
     org_clause = " AND s.org_id = %s" if org_id is not None else ""
-    params: list[Any] = [signal, int(days)] + ([int(org_id)] if org_id is not None else [])
+    # Écrêté à [1, 365] comme les autres agrégats : sans borne, un `days` énorme sort
+    # du calendrier de PostgreSQL (`timestamp out of range`, un 500).
+    params: list[Any] = ([signal, max(1, min(int(days), 365))]
+                         + ([int(org_id)] if org_id is not None else []))
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
             f"""
@@ -1645,6 +1650,7 @@ def export_tool_calls_for_org(
     # refusé après une requête), avec la borne de durée des lectures d'agrégat
     # (infra#9) : sans `since`, le compte parcourt toute la rétention de l'org.
     with _agregat("export du journal d'une org", isolation="REPEATABLE READ") as conn:
+        _lire_les_bornes(conn, since=since, until=until)
         if not until:
             # `now()` = l'instant d'ouverture de la transaction, donc cohérent avec
             # le snapshot que les deux lectures partagent.
@@ -1745,6 +1751,48 @@ class FenetreDeReleveRefusee(ValueError):
     jamais une fenêtre rognée en silence — le total rendu ne serait plus celui demandé."""
 
 
+class BorneIllisible(ValueError):
+    """Une borne horaire d'entrée (`since`, `until`, `before_at`…) que PostgreSQL ne lit
+    pas comme un instant FINI : refus NOMMÉ, jamais la panne du cast `::timestamptz` en
+    plein relevé (rendue `500 internal_error` jusqu'au 24/11/2026). `nom` est le
+    paramètre en cause, tel que l'appelant l'a écrit."""
+
+    def __init__(self, nom: str):
+        self.nom = nom
+        super().__init__(
+            f"`{nom}` is not a readable timestamp: expected an ISO 8601 date "
+            "(2026-11-01) or date-time (2026-11-01T08:00:00Z).")
+
+
+#: Ce que PostgreSQL lève sur une borne qu'il ne lit pas (22007), hors des bornes de son
+#: calendrier (22008) ou au fuseau impossible (22009) — la classe 22 entière nommerait
+#: aussi des fautes qui ne sont pas celles de l'appelant.
+_BORNE_REFUSEE_PAR_PG = (psycopg.errors.InvalidDatetimeFormat,
+                         psycopg.errors.DatetimeFieldOverflow,
+                         psycopg.errors.InvalidTimeZoneDisplacementValue)
+
+
+def _lire_les_bornes(conn, **bornes: Optional[str]) -> None:
+    """Relit chaque borne fournie PAR POSTGRESQL, avant la requête qui la caste : c'est
+    lui qui la lira, donc lui seul dit si elle est lisible — un second analyseur côté
+    Python accepterait ce qu'il refuse (fuseau au-delà de ±15:59) ou l'inverse. Une
+    requête sans table par borne posée (aucune quand il n'y en a pas), pour que le refus
+    NOMME la borne en cause. `infinity`/`-infinity` se lisent mais ne bornent rien :
+    refusés aussi, la largeur d'une fenêtre infinie ne se calcule pas.
+
+    Absente = `None` ; la chaîne vide est normalisée en absente par la capacité, avant."""
+    for nom, valeur in bornes.items():
+        if valeur is None:
+            continue
+        try:
+            finie = conn.execute("SELECT isfinite(%s::timestamptz) AS f",
+                                 (valeur,)).fetchone()["f"]
+        except _BORNE_REFUSEE_PAR_PG as e:
+            raise BorneIllisible(nom) from e
+        if not finie:
+            raise BorneIllisible(nom)
+
+
 def _fenetre_du_releve(conn, since: Optional[str], until: Optional[str]) -> tuple[str, str]:
     """La fenêtre CLOSE d'un relevé : `(since_effectif, until_effectif)`.
 
@@ -1752,7 +1800,9 @@ def _fenetre_du_releve(conn, since: Optional[str], until: Optional[str]) -> tupl
     l'export d'audit). Borne basse absente = la borne haute moins
     `RELEVE_FENETRE_MAX_JOURS`. La largeur est mesurée par PostgreSQL, qui lit les
     horodatages tels que la requête les lira : aucun second analyseur à tenir d'accord.
-    Une borne fournie revient telle quelle — c'est elle que le curseur reporte."""
+    Une borne fournie revient telle quelle — c'est elle que le curseur reporte ; une
+    borne illisible lève `BorneIllisible` avant toute lecture (`_lire_les_bornes`)."""
+    _lire_les_bornes(conn, since=since, until=until)
     row = conn.execute(
         f"""
         SELECT to_char(b.u AT TIME ZONE 'UTC', {_ISO_US}) AS u_iso,
@@ -1827,6 +1877,8 @@ def list_billable_calls_for_org(
     with _agregat("relevé des appels d'une org",
                   isolation="REPEATABLE READ") as conn:
         since, until = _fenetre_du_releve(conn, since, until)
+        if before is not None:
+            _lire_les_bornes(conn, before_at=before[0])
         clauses, params = _audit_window_clauses(org_id, since, until, facturation=True)
         clauses.append("l.ok = TRUE")
         if tool:

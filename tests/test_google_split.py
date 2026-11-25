@@ -202,8 +202,12 @@ def test_un_connecteur_inconnu_nobtient_aucun_scope():
 
 def test_services_granted_lit_les_scopes_dun_compte():
     assert G.services_granted("https://www.googleapis.com/auth/drive " + EMAIL) == ["drive"]
-    # Chat a DEUX scopes : un seul ne suffit pas.
+    # Chat a TROIS scopes : un seul ne suffit pas.
     assert G.services_granted("https://www.googleapis.com/auth/chat.messages") == []
+    # L'ancienne paire (avant le 23/11/2026) ne couvre plus Chat : il faut reconsentir.
+    assert G.services_granted(
+        "https://www.googleapis.com/auth/chat.spaces.readonly "
+        "https://www.googleapis.com/auth/chat.messages") == []
     # Le consentement du COMPTE (`SCOPES`) couvre les six du split, pas les suivants.
     assert G.services_granted(" ".join(G.SCOPES)) == [s for s in G.SERVICES if s in SPLIT]
     assert G.services_granted(None) == []

@@ -98,7 +98,9 @@ def call_filter_clauses(
         clauses.append("l.ok = FALSE")
     if since_days is not None:
         clauses.append("l.created_at >= NOW() - make_interval(days => %s)")
-        params.append(int(since_days))
+        # Écrêté à [1, 365] comme les agrégats de `usage` : au-delà d'un int4,
+        # `make_interval` n'existe pas ; au-delà du calendrier, le cast lève — deux 500.
+        params.append(max(1, min(int(since_days), 365)))
     if run_id:
         clauses.append("l.run_id = %s")
         params.append(run_id)

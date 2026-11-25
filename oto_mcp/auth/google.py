@@ -120,9 +120,17 @@ SERVICE_SCOPES: dict[str, tuple[str, ...]] = {
     "tasks": ("https://www.googleapis.com/auth/tasks",),
     # Google Calendar (read/write events). SENSITIVE, not restricted.
     "calendar": ("https://www.googleapis.com/auth/calendar",),
-    # Google Chat (RESTRICTED) — read spaces + read/post messages.
+    # Google Chat — least privilege, one scope per call the client makes
+    # (`oto.tools.google.chat`): `spaces.list` + `spaces.findDirectMessage`
+    # (`chat.spaces.readonly`, SENSITIVE), `spaces.messages.list`
+    # (`chat.messages.readonly`, RESTRICTED), `spaces.messages.create`
+    # (`chat.messages.create`, SENSITIVE). No edit, delete, reaction or membership
+    # call exists, so NOT `chat.messages` (which allows all of those) — dropped
+    # 2026-11-23. A row that still records it no longer covers Chat
+    # (`services_granted`) and never sends it back at refresh (`_declared_scopes`).
     "chat": ("https://www.googleapis.com/auth/chat.spaces.readonly",
-             "https://www.googleapis.com/auth/chat.messages"),
+             "https://www.googleapis.com/auth/chat.messages.readonly",
+             "https://www.googleapis.com/auth/chat.messages.create"),
     # BigQuery (SENSITIVE). NOT `bigquery.readonly`: `jobs.query`, `getQueryResults`
     # and `jobs.insert` (the dry run) do not accept it (discovery document v2,
     # rev. 20260811). The scope would allow writing: read-only is enforced by
@@ -195,6 +203,39 @@ def services_granted(scopes) -> list[str]:
     what an account has actually authorized, in service order."""
     have = set(scopes.split() if isinstance(scopes, str) else (scopes or ()))
     return [svc for svc in SERVICES if set(SERVICE_SCOPES[svc]) <= have]
+
+
+def _declared_scopes(recorded: Optional[str]) -> Optional[str]:
+    """The row's recorded scopes that this code still declares (`KNOWN_SCOPES`), in
+    their recorded order: what a refresh BOUNDS the access token to.
+
+    A scope we stopped requesting (Chat's `chat.messages`, narrowed on 2026-11-23)
+    stays recorded on the rows that were granted it, and stays in their refresh token.
+    Sending it back at refresh would ask Google for a scope our OAuth project no longer
+    declares: it is dropped here, never sent. The access token keeps every right the
+    services still served need: each one's scopes are all in `KNOWN_SCOPES`.
+    `None` or empty (a row that recorded nothing) is returned as is, and so is a row
+    none of whose scopes we declare: filtering it to nothing would send NO bound,
+    i.e. an unbounded token. Only a call without a service can meet such a row
+    (`services_granted` refuses the others first); Google then judges the row."""
+    if not recorded:
+        return recorded
+    declared = " ".join(sc for sc in recorded.split() if sc in KNOWN_SCOPES)
+    return declared or recorded
+
+
+def _service_bound(declared: Optional[str], service: Optional[str]) -> Optional[str]:
+    """The narrower bound a refresh retries with when Google refuses `declared`
+    (`invalid_scope`): the identity and the CALLED service's scopes, still a subset of
+    the row. It covers a scope dropped from the OAuth project's declaration while the
+    code still knows it (Tasks, removed from the console on 2026-11-23, its card off):
+    Gmail must not fall because the row also carries Tasks. Never unbounded:
+    `None` when there is no service, or nothing narrower to try."""
+    if not declared or service not in SERVICE_SCOPES:
+        return None
+    keep = set(IDENTITY_SCOPES) | set(SERVICE_SCOPES[service])
+    narrowed = " ".join(sc for sc in declared.split() if sc in keep)
+    return narrowed if narrowed and narrowed != declared else None
 
 
 def scopes_for(connector: str, app: "OAuthApp") -> list[str]:
@@ -643,7 +684,8 @@ def _refresh_access_token(refresh_token: str, sub: str,
     """`app`: the app already resolved by the caller (one vault read fewer);
     when absent, the one `app_for(sub)` serves.
 
-    `scopes`: the scopes RECORDED for this row. Passed to Google, they BOUND
+    `scopes`: the scopes RECORDED for this row, less those we no longer declare
+    (`_declared_scopes`, the caller's job). Passed to Google, they BOUND
     the returned access token: with `include_granted_scopes` (the per-service split needs
     it), a tenant client's refresh token also carries the rights that client obtained
     elsewhere — the access token, for its part, only carries ours (review of
@@ -950,13 +992,32 @@ def credentials_for(sub: str, account: Optional[str] = None,
             f"reconnect this account at {_reconnecter(sub)}. Nothing was done.")
 
     ligne = (et, eid, email)
-    access_token = _jeton_garde(ligne, row["refresh_token"], row.get("scopes"))
+    # What the refresh bounds the token to: the row's scopes that we still declare
+    # (`_declared_scopes`), and, if Google refuses those, the called service's alone
+    # (`_service_bound`). The memory key is the bound actually SENT, so a token bounded
+    # to one service is never served to another.
+    borne = _declared_scopes(row.get("scopes"))
+    repli = _service_bound(borne, service)
+    envoye = borne
+    access_token = _jeton_garde(ligne, row["refresh_token"], borne)
+    if access_token is None and repli:
+        access_token = _jeton_garde(ligne, row["refresh_token"], repli)
+        envoye = repli if access_token is not None else borne
     if access_token is None:
         account = email
         scope = ligne
         try:
-            resp = _refresh_access_token(row["refresh_token"], sub, app,
-                                         scopes=row.get("scopes"))
+            try:
+                resp = _refresh_access_token(row["refresh_token"], sub, app,
+                                             scopes=borne)
+            except GoogleScopeRejected:
+                if not repli:
+                    raise
+                logger.warning("Google refused the row's bound for %s; retrying bounded "
+                               "to %s alone", email or "(no email)", service)
+                resp = _refresh_access_token(row["refresh_token"], sub, app,
+                                             scopes=repli)
+                envoye = repli
         except GoogleScopeRejected as e:
             raise GoogleScopeRejected(
                 f"Google refuses to bound the token of account {account or '(no email)'} "
@@ -983,7 +1044,7 @@ def credentials_for(sub: str, account: Optional[str] = None,
         expires_in = int(resp.get("expires_in", 0) or 0)
         # Kept in THIS process only: two concurrent refreshes each get a valid token
         # (Google does not rotate the refresh token), the last one kept wins.
-        _garder(ligne, row["refresh_token"], row.get("scopes"), access_token,
+        _garder(ligne, row["refresh_token"], envoye, access_token,
                 time.time() + expires_in)
         # A successful refresh clears a `health_ko` set by an earlier dead refresh
         # (oto#25 lot b3, same reason as the Salesforce rotation).
@@ -997,7 +1058,8 @@ def credentials_for(sub: str, account: Optional[str] = None,
         token_uri=_TOKEN_URL,
         client_id=app.client_id,
         client_secret=app.client_secret,
-        scopes=row["scopes"].split() if row.get("scopes") else SCOPES,
+        # The same bound as our refresh: google-auth sends these when it refreshes.
+        scopes=envoye.split() if envoye else SCOPES,
     )
 
 

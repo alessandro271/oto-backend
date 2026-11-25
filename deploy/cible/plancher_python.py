@@ -13,6 +13,11 @@ virgules. Une spécification qu'on ne sait pas lire est REFUSÉE, jamais deviné
     plancher_python.py satisfait <pyproject.toml> <version>
         code 0 si la version (`3.12.4`, ou `3.12`, lue `3.12.0`) satisfait la
         spécification, 1 sinon.
+    plancher_python.py admet <pyproject.toml> <choix>
+        le choix d'interpréteur d'une instance (`python` de sa déclaration) : code 0 si la
+        spécification l'admet, 1 sinon. Un choix au patch (`3.12.8`) est jugé sur cette
+        version exacte ; un choix MAJEUR.MINEUR (`3.12`) est admis s'il EXISTE une 3.12.x
+        qui satisfait (`3.12` sous `>=3.12.4` : admis, 3.12.4 et au-delà conviennent).
 
 Code 2, message sur stderr : pyproject sans `requires-python`, ou spécification illisible.
 """
@@ -25,6 +30,7 @@ from pathlib import Path
 REQUIRES = re.compile(r'(?m)^requires-python\s*=\s*"([^"]*)"\s*$')
 CLAUSE = re.compile(r"^(===|~=|==|!=|<=|>=|<|>)\s*([0-9]+(?:\.[0-9]+)*)(\.\*)?$")
 VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+)*$")
+CHOIX = re.compile(r"^[0-9]+\.[0-9]+(?:\.[0-9]+)?$")
 
 
 class Illisible(Exception):
@@ -79,6 +85,18 @@ def satisfait(spec: str, version: str) -> bool:
     return all(_clause(op, v, j, version) for op, v, j in _clauses(spec))
 
 
+def admet(spec: str, choix: str) -> bool:
+    """Le choix d'une instance : au patch, la version exacte ; sinon, une MAJEUR.MINEUR.x
+    qui satisfait existe-t-elle. Les clauses ne changent de verdict qu'aux patchs qu'elles
+    nomment : essayer 0 … (plus haut patch nommé + 1) couvre tous les cas."""
+    if not CHOIX.match(choix):
+        raise Illisible(f"choix « {choix} » illisible (MAJEUR.MINEUR ou MAJEUR.MINEUR.PATCH attendu)")
+    if choix.count(".") == 2:
+        return satisfait(spec, choix)
+    patchs = [int(v.split(".")[2]) for _, v, _ in _clauses(spec) if v.count(".") >= 2]
+    return any(satisfait(spec, f"{choix}.{z}") for z in range(max(patchs, default=0) + 2))
+
+
 def plancher(spec: str) -> str:
     bas = [v for op, v, _ in _clauses(spec) if op in (">=", "~=")]
     if len(bas) != 1:
@@ -99,10 +117,13 @@ def main(argv: list[str]) -> int:
             return 0
         if len(argv) == 3 and argv[0] == "satisfait":
             return 0 if satisfait(specification(Path(argv[1])), argv[2]) else 1
+        if len(argv) == 3 and argv[0] == "admet":
+            return 0 if admet(specification(Path(argv[1])), argv[2]) else 1
     except (Illisible, OSError) as erreur:
         print(f"plancher Python : {erreur}", file=sys.stderr)
         return 2
-    print("usage : plancher_python.py plancher <pyproject> | satisfait <pyproject> <version>",
+    print("usage : plancher_python.py plancher <pyproject> | satisfait <pyproject> <version>"
+          " | admet <pyproject> <choix>",
           file=sys.stderr)
     return 2
 

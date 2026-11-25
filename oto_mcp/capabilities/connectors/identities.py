@@ -312,7 +312,7 @@ def _why_empty(ctx: ResolvedCtx, connector: str, noun: str) -> dict:
         out = {"reason": "no_identity_connected",
                "next_step": (diag.next_step if diag is not None
                              else connector_readiness.no_identity_step(
-                                 ctx.sub, connector, noun))}
+                                 ctx.sub, connector, noun, org=ctx.org_id))}
         if couches_ok:
             # ⚠️ **In a SEPARATE field, not in `next_step`.** The latter is the
             # action declared by the connector, relayed as is: two surfaces that

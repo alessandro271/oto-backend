@@ -12,7 +12,9 @@
 #      (`migrer upgrade head`), puis relue ; tout autre écart refuse, en le nommant
 #      (docs/instance-cible.md, § Les migrations, jouées par la montée) ;
 #   4. elle démarre la couleur, bascule l'amont Caddy, vérifie le trafic public, vidange ;
-#   5. la maintenance du rôle suit l'arbre qui sert désormais.
+#   5. la maintenance du rôle suit l'arbre qui sert désormais : ses unités sont rendues et
+#      validées AVANT la bascule (un refus n'y bascule rien), posées APRÈS ; un échec de la
+#      pose fait échouer le déploiement, en nommant l'arbre que visent encore les unités.
 #
 # usage : deployer.sh <déclaration.json> deployer <rôle> <tag>
 #         deployer.sh <déclaration.json> retour   <rôle> <tag>   rebascule sur la couleur
@@ -41,7 +43,7 @@ PYV=$(python3 "$PLANCHER_PY" plancher "$PYPROJECT_DU_TAG") \
   || { echo "déploiement : REFUS — plancher Python illisible dans le pyproject du tag (motif ci-dessus)" >&2; exit 1; }
 PY_VISEE=${PYTHON_CHOISI:-$PYV}
 if [ "$ACTION" = deployer ] && [ -n "$PYTHON_CHOISI" ]; then
-  python3 "$PLANCHER_PY" satisfait "$PYPROJECT_DU_TAG" "$PYTHON_CHOISI"
+  python3 "$PLANCHER_PY" admet "$PYPROJECT_DU_TAG" "$PYTHON_CHOISI"
   case $? in
     0) ;;
     1) echo "déploiement : REFUS — l'instance choisit Python ${PYTHON_CHOISI} (« python » de la déclaration), que le requires-python de ${TAG} n'admet pas : rien n'est touché" >&2
@@ -94,8 +96,9 @@ bg_garde_avant_retour() {
 # --- L'amorce, elle, ne fait que dire l'écart : elle tourne aussi quand la couleur inactive
 # --- est le retour arrière. La règle (docs/instance-cible.md, § Changer de Python) : le
 # --- venv est recréé si sa version ne satisfait pas le `requires-python` du tag, ou si elle
-# --- diffère du choix de l'instance (`python` de la déclaration) ; la version visée est ce
-# --- choix, à défaut le plancher. Sinon : rien. Recréé à l'identique de sa naissance
+# --- diffère du choix de l'instance (`python` de la déclaration) — au niveau de détail du
+# --- choix : au patch près si le choix porte un patch (`3.12.8`), à MAJEUR.MINEUR sinon ;
+# --- la version visée est ce choix, à défaut le plancher. Sinon : rien. Recréé à l'identique de sa naissance
 # --- (amorcer.sh), sur l'interpréteur géré par uv que l'amorce vient de poser, jamais le
 # --- Python du système ; `uv sync --frozen` le remplit ensuite. Refus, sans rien toucher,
 # --- si la couleur sert ou pourrait servir : son unité tourne, ou le pointeur est
@@ -103,7 +106,7 @@ bg_garde_avant_retour() {
 # --- réussisse (`bg_apres_installation`) : en cas d'échec, la couleur redevient ce
 # --- qu'elle était — code et venv ensemble —, donc un retour arrière valable.
 bg_avant_installation() {
-  local couleur=$1 arbre=$2 version mm actif code majeur mineur
+  local couleur=$1 arbre=$2 version mm actif code majeur mineur compare
   AVANT_PLANCHER_ARBRE="" AVANT_PLANCHER_TETE="" AVANT_PLANCHER_VERSION=""
   if [ -x "$arbre/.venv/bin/python" ]; then
     version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null) \
@@ -118,7 +121,10 @@ bg_avant_installation() {
       IFS=. read -r majeur mineur _ <<< "$version"; mm="${majeur}.${mineur}"
       python3 "$PLANCHER_PY" satisfait "$PYPROJECT_DU_TAG" "$version"; code=$?
       [ "$code" -le 1 ] || return 1
-      if [ "$code" = 0 ] && { [ -z "$PYTHON_CHOISI" ] || [ "$mm" = "$PYTHON_CHOISI" ]; }; then
+      # Le choix se compare à son niveau de détail : la version complète s'il porte un patch.
+      compare=$mm
+      case "$PYTHON_CHOISI" in *.*.*) compare=$version ;; esac
+      if [ "$code" = 0 ] && { [ -z "$PYTHON_CHOISI" ] || [ "$compare" = "$PYTHON_CHOISI" ]; }; then
         return 0
       fi ;;
   esac
@@ -150,7 +156,21 @@ bg_avant_installation() {
     echo "déploiement : REFUS — venv Python ${PY_VISEE} non créé dans ${arbre} (l'ancien est remis)" >&2
     return 1
   fi
-  bg_log "venv ${mm} → ${PY_VISEE} recréé dans ${arbre} (l'ancien est gardé jusqu'à la fin de l'installation)"
+  # Le venv neuf doit RENDRE la version visée — lue par son interpréteur, jamais par le
+  # chemin ni par pyvenv.cfg (uv y inscrit le lien de version mineure, `cpython-3.12-…`,
+  # qu'une pose d'un autre patch déplace) : au patch près si la visée en porte un.
+  local rendu rendu_mm
+  rendu=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null) \
+    || rendu="illisible"
+  IFS=. read -r majeur mineur _ <<< "$rendu"; rendu_mm="${majeur}.${mineur}"
+  case "$PY_VISEE" in *.*.*) [ "$rendu" = "$PY_VISEE" ] ;; *) [ "$rendu_mm" = "$PY_VISEE" ] ;; esac || {
+    rm -rf "$arbre/.venv"
+    [ ! -e "$arbre/.venv.avant-plancher" ] || mv "$arbre/.venv.avant-plancher" "$arbre/.venv"
+    AVANT_PLANCHER_ARBRE=""
+    echo "déploiement : REFUS — le venv recréé dans ${arbre} rend Python ${rendu}, pas ${PY_VISEE} (interpréteur géré absent ou lien de version mineure déplacé sous ${PYTHONS}) : l'ancien est remis" >&2
+    return 1
+  }
+  bg_log "venv ${compare:-$mm} → ${PY_VISEE} recréé dans ${arbre} (l'ancien est gardé jusqu'à la fin de l'installation)"
 }
 
 # --- après `bg_install` de la couleur dont le venv vient d'être recréé : succès, l'ancien
@@ -193,15 +213,47 @@ export OTO_FUNCTIONS_ISOLATION=bwrap
 # shellcheck source=deploy/oto-mcp-bluegreen.sh
 . "$ICI/../oto-mcp-bluegreen.sh"
 
+# --- les unités de maintenance et d'archive du journal suivent la couleur qui va servir —
+# --- celle que la montée installe, ou celle que le retour rebascule : l'inactive, dans les
+# --- deux cas. Rendues et validées ICI, avant toute bascule ; un refus arrête tout.
+CIBLE=$(bg_other) || { echo "déploiement : REFUS — pointeur de couleur illisible ($BG_ACTIVE) : rien n'a basculé" >&2; exit 1; }
+if ! bash "$ICI/amorcer.sh" "$DECLARATION" "$ROLE" maintenance-verifier "$CIBLE"; then
+  echo "déploiement : REFUS — les unités de maintenance et d'archive du journal ne se rendent pas pour ${CIBLE} (motif ci-dessus) : rien n'a basculé, ${ROLE} reste servi par $(bg_active)" >&2
+  exit 1
+fi
+
 case "$ACTION" in
   deployer) bg_run "$TAG" ;;
   retour)   bg_run --rollback ;;
   *) echo "action inconnue « $ACTION »" >&2; exit 2 ;;
 esac
 
-# La maintenance est posée APRÈS la bascule, et n'est jamais un motif d'échec
-# du déploiement — une maintenance manquée se rattrape, un service arrêté non. Mais son
-# échec se DIT, en tête du journal du run.
+# --- l'arbre que nomme une unité posée (son WorkingDirectory), avec sa couleur.
+arbre_vise() {
+  local fichier=$1 arbre
+  [ -f "$fichier" ] || { echo "aucun (unité absente)"; return; }
+  arbre=$(sed -n 's/^WorkingDirectory=//p' "$fichier" | head -n 1)
+  case "$arbre" in
+    "${BG_TREE}-blue")  echo "$arbre (blue)" ;;
+    "${BG_TREE}-green") echo "$arbre (green)" ;;
+    *) echo "${arbre:-illisible}" ;;
+  esac
+}
+
+# La maintenance est posée APRÈS la bascule (montée comme retour). Ses unités ont été
+# validées avant ; si la pose échoue quand même (écriture, rechargement, timers), le service
+# a basculé mais ses unités peuvent nommer l'ancienne couleur — l'arbre que la montée
+# suivante réécrira : le déploiement ÉCHOUE, en disant ce qu'elles visent et comment corriger.
 if ! bash "$ICI/amorcer.sh" "$DECLARATION" "$ROLE" maintenance; then
-  echo "déploiement : ATTENTION — maintenance de ${UNITE} non posée (le service, lui, a basculé)" >&2
+  servie=$(bg_active) || servie="?"
+  {
+    echo "déploiement : ÉCHEC — ${ROLE} a basculé et est servi par ${servie} (${BG_TREE}-${servie}), mais ses unités de maintenance et d'archive du journal ne suivent pas (motif ci-dessus)."
+    for nom in maintenance journal-archive; do
+      echo "  ${UNITE}-${nom}.service vise : $(arbre_vise "/etc/systemd/system/${UNITE}-${nom}.service")"
+    done
+    echo "  Corriger la cause, puis reposer les unités, en root sur la machine :"
+    echo "    bash ${BG_TREE}-${servie}/deploy/cible/amorcer.sh <déclaration.json> ${ROLE} maintenance"
+    echo "  Contrôler : systemctl cat ${UNITE}-maintenance.service ${UNITE}-journal-archive.service | grep WorkingDirectory"
+  } >&2
+  exit 1
 fi

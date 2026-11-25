@@ -1130,6 +1130,11 @@ et que le corps illisible : refuser plutôt qu'ignorer. `filters` de
 erreur de forme, pas deux filtres. Une clé inconnue répétée reste `unknown_fields`.
 Garde : `tests/test_rest_query_repeated_param.py`.
 
+**Un octet NUL (`%00`) dans une clé ou une valeur de query string est REFUSÉ — `400
+invalid_query`, qui nomme la clé** — avant tout handler : aucune colonne texte de
+PostgreSQL ne le porte, le pilote levait en pleine lecture (un 500 sur n'importe quel
+filtre). Garde : `tests/test_query_valeurs_illisibles.py`.
+
 **Garde au seam** : `tests/test_rest_query_list_fields.py` balaye le registre, exige une
 **valeur d'exemple valide** par champ liste (`EXEMPLES`) et exerce le vrai handler avec
 cette URL. Un champ liste neuf sans exemple fait rouge — c'est cette ligne qui oblige à
@@ -1312,6 +1317,36 @@ déploiement : **`docs/version-servie.md`**.
   (le tableau de bord, un client MCP connecté par OAuth) n'est pas un jeton : elle passe.
   ⚠️ `GET /api/orgs/{id}` reste ouvert au jeton (lecture générale) : un service tiers qui y
   lit `my_role` pour autoriser une dépense doit refuser lui-même un porteur `oto_`/`otow_`.
+- **Gestes d'administration réservés à une session** (#1913), même mécanisme, même code
+  `403 api_token_forbidden`. Route entière (`allow_api_token=False`) :
+  `POST /api/admin/tenants/{slug}/admins` et `DELETE …/admins/{sub}` (admin de tenant),
+  `POST /api/admin/users/{sub}/suspension` (pause d'un compte et sa levée),
+  `POST /api/admin/tenants/{slug}/disablement`, `PUT|DELETE /api/admin/tenants/{slug}/keys/{provider}`
+  (le sous-chemin `…/grants` n'est pas concerné), `PUT|DELETE /api/admin/tenants/{slug}/apps/{connector}`,
+  `POST /api/admin/editor-apps` et `DELETE /api/admin/editor-apps/{connector}/{data_center}`,
+  `POST /api/admin/platform-keys` et `DELETE /api/admin/platform-keys/{provider}/{label}`,
+  `POST /api/admin/runner/workers`, `POST /api/admin/option-comps`,
+  `POST /api/admin/orgs/{id}/plan`, `PUT /api/admin/orgs/{id}/contract`,
+  `POST /api/admin/orgs/{id}/contract/cancel`, `PUT /api/admin/orgs/{id}/billing-identity`.
+  Garde de handler, face MCP comprise : `oto_admin_tenant op=admin_add|admin_remove|disable|enable|key_clear`,
+  `oto_admin_account`, `oto_admin_set_option`, `oto_admin_set_plan`,
+  `oto_admin_set_contract`, `oto_admin_cancel_contract`. Création d'org par l'admin
+  plateforme, qui nomme un org_admin : `POST /api/admin/orgs` et `oto_admin_org op=create`
+  (la création en libre-service `POST /api/me/orgs` reste ouverte). Clé plateforme d'une
+  équipe et accès plateforme à un connecteur : `POST|DELETE /api/admin/groups/{id}/grants/{provider}`
+  et `oto_admin_key_grant op=grant|revoke scope=group`,
+  `POST /api/admin/connectors/{provider}/platform-access`. **Restent ouvertes au jeton**,
+  appelées sous jeton par un service d'instance (liste nominative tenue par
+  `tests/test_session_exigee.py`) : `GET /api/admin/tenants/{slug}`, `GET …/keys`,
+  `GET|PUT|DELETE …/keys/{provider}/grants[/{org_id}]` (et `oto_admin_tenant
+  op=org_grant|org_revoke`), `GET /api/admin/platform-keys`,
+  `GET /api/admin/connectors/{provider}/platform-access`,
+  `POST|DELETE /api/admin/orgs/{id}/grants/{provider}`, `GET|PUT /api/admin/orgs/{id}/unipile-limit`,
+  `GET /api/admin/usage/first-calls`, `POST /api/admin/orgs/{id}/suspension`,
+  `POST /api/admin/orgs/{id}/trial`, `GET /api/admin/orgs[/{id}]`,
+  `GET /api/admin/unipile/seats`, `DELETE /api/admin/unipile/seats/{account_id}`. Ouvertes
+  aussi, en attente de décision : `POST|DELETE /api/admin/users/{sub}/grants/{provider}`,
+  `PUT|DELETE /api/orgs/{id}/secrets/{provider}` et leur miroir `/api/admin/…`.
 - **Portée opt-in** (`auth/token_scopes.py`, colonne `user_api_tokens.scopes` JSONB) : à la
   création, `POST /api/me/tokens {"label":"scout", "scopes":{"datastores":{"leads":"read"}}}`
   rend un jeton **porté** — deny-by-default, il n'ouvre QUE les tableaux nommés, en `read`

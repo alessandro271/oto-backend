@@ -56,9 +56,9 @@ def test_l_exemple_est_conforme(doc):
     # forme `<credential>_ID` d'une famille dynamique de l'inventaire : elle passe.)
     (lambda d: d["roles"]["prod"]["env"].update(OTO_MCP_OAUTH_RELAY_HOSTS="mcp.x.test"),
      "OTO_MCP_OAUTH_RELAY_HOSTS : variable absente de l'inventaire"),
-    (lambda d: d.update(python="3"), "python : MAJEUR.MINEUR attendu"),
-    (lambda d: d.update(python=3.12), "python : MAJEUR.MINEUR attendu"),
-    (lambda d: d.update(python="3.12.4"), "python : MAJEUR.MINEUR attendu"),
+    (lambda d: d.update(python="3"), "python : MAJEUR.MINEUR ou MAJEUR.MINEUR.PATCH attendu"),
+    (lambda d: d.update(python=3.12), "python : MAJEUR.MINEUR ou MAJEUR.MINEUR.PATCH attendu"),
+    (lambda d: d.update(python="3.12.4.1"), "python : MAJEUR.MINEUR ou MAJEUR.MINEUR.PATCH attendu"),
     (lambda d: d["roles"]["prod"].update(secrets_optionnels=["OTO_ENV"]),
      "OTO_ENV n'est pas un secret facultatif"),
     (lambda d: d["roles"]["prod"].update(secrets_optionnels=["DATABASE_URL"]),
@@ -121,6 +121,16 @@ def test_le_choix_d_interpreteur_est_facultatif(doc):
     doc["python"] = "3.12"
     decl.valider(doc)
     assert decl.variables(doc, "prod")["PYTHON_CHOISI"] == "3.12"
+    doc["python"] = "3.12.8"
+    decl.valider(doc)
+    assert decl.variables(doc, "prod")["PYTHON_CHOISI"] == "3.12.8"
+
+
+@pytest.mark.parametrize("python", ["3", "3.12.8.1", "3.12.", "v3.12", "3.12.x", "3.12-dev", 312])
+def test_un_choix_d_interpreteur_mal_forme_refuse(doc, python):
+    doc["python"] = python
+    with pytest.raises(decl.Refus, match="python : MAJEUR.MINEUR ou MAJEUR.MINEUR.PATCH attendu"):
+        decl.valider(doc)
 
 
 def test_un_role_non_declare_refuse(doc):

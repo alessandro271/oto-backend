@@ -108,6 +108,8 @@ CAPABILITIES += [replace(_cap, gate=billing.is_enabled) for _cap in [
     Capability(
         key="admin.orgs.billing_identity.set", handler=_admin_identity_set,
         Input=AdminIdentityInput, authz=PLATFORM_ADMIN, Output=AdminIdentityView,
-        rest=RestBinding("PUT", "/api/admin/orgs/{org_id}/billing-identity", _ID),
+        # Session interactive seule (`_session_exigee`).
+        rest=RestBinding("PUT", "/api/admin/orgs/{org_id}/billing-identity", _ID,
+                         allow_api_token=False),
     ),
 ]]

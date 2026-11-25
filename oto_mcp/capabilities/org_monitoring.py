@@ -37,7 +37,7 @@ from . import audit_log, monitoring
 from ._authz import COMMERCE_SERVICE, ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._lecture_bornee import bornee
 from ._org_du_service import ORG_INCONNUE, org_ou_404
-from ._types import (cap_limit, AuthzDenied, Capability, DeclaredError, ResolvedCtx,
+from ._types import (cap_limit, vide_en_absent, AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
 from .registry import CAPABILITIES
 
@@ -725,6 +725,8 @@ class OrgMonitoringInput(BaseModel):
     since: Optional[str] = None           # export : borne basse ISO
     until: Optional[str] = None           # export : borne haute ISO
 
+    _bornes = field_validator("since", "until", mode="before")(vide_en_absent)
+
     # Console op-aware : plafond du plus large de ses ops (`export`, 1000) — borner
     # plus bas écrêterait un export légitime. Écrête au lieu de refuser (#300).
     @field_validator("limit")
@@ -926,6 +928,8 @@ class OrgBillableCallsInput(BaseModel):
     before_at: Optional[str] = None
     before_id: Optional[int] = None
 
+    _bornes = field_validator("since", "until", "before_at", mode="before")(vide_en_absent)
+
     @field_validator("run_id", mode="after")
     @classmethod
     def _runs_en_liste(cls, v):
@@ -962,6 +966,11 @@ def _refus_de_fenetre(e: "db.FenetreDeReleveRefusee") -> AuthzDenied:
     return AuthzDenied(400, "window_too_large", str(e))
 
 
+# Une borne horaire illisible : le même refus que l'export d'audit (`audit_log`).
+_REFUS_BORNE = audit_log.REFUS_BORNE
+_refus_de_borne = audit_log.refus_de_borne
+
+
 def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
     return _releve(inp, avec_personne=False)
 
@@ -996,6 +1005,8 @@ def _releve(inp: OrgBillableCallsInput, *, avec_personne: bool) -> dict:
             limit=limit, before=before, avec_personne=avec_personne)
     except db.FenetreDeReleveRefusee as e:
         raise _refus_de_fenetre(e) from e
+    except db.BorneIllisible as e:
+        raise _refus_de_borne(e) from e
     nxt = page["next"]
     return {
         # Projection EXPLICITE, pas un `**row` : la lentille reste étroite même
@@ -1063,6 +1074,8 @@ class OrgBillableToolsInput(BaseModel):
     since: Optional[str] = None
     until: Optional[str] = None
 
+    _bornes = field_validator("since", "until", mode="before")(vide_en_absent)
+
     @field_validator("tool", mode="after")
     @classmethod
     def _outils_en_liste(cls, v):
@@ -1079,6 +1092,8 @@ def _billable_tools(ctx: ResolvedCtx, inp: OrgBillableToolsInput) -> dict:
             inp.org_id, tools=inp.tool, since=inp.since, until=inp.until)
     except db.FenetreDeReleveRefusee as e:
         raise _refus_de_fenetre(e) from e
+    except db.BorneIllisible as e:
+        raise _refus_de_borne(e) from e
 
 
 # ── connexions de messagerie d'une org, lentille MEMBRE ─────────────────────
@@ -1117,6 +1132,7 @@ class OrgConnectionsInput(BaseModel):
     @field_validator("since")
     @classmethod
     def _since_iso(cls, v: Optional[str]) -> Optional[str]:
+        v = vide_en_absent(v)
         if v is None:
             return v
         from datetime import datetime
@@ -1272,14 +1288,15 @@ CAPABILITIES += [
     # d'agent.
     Capability(key="org.usage.calls", handler=bornee(_billable_calls),
                Input=OrgBillableCallsInput, authz=_MEMBER_OF, mcp=None,
-               Output=OrgBillableCalls, errors=(_REFUS_FENETRE, _REFUS_LIMITE),
+               Output=OrgBillableCalls, errors=(_REFUS_FENETRE, _REFUS_LIMITE, _REFUS_BORNE),
                rest=RestBinding("GET", "/api/orgs/{id}/usage/calls", _ID)),
     # Le même relevé pour le COMMERCE, avec la personne de chaque appel : c'est ce qui
     # lui permet d'appliquer une limite de dépense par personne ou par équipe. REST
     # seule, sous `/api/service/`, comme toute sa face.
     Capability(key="service.org.usage.calls", handler=bornee(_billable_calls_service),
                Input=OrgBillableCallsInput, authz=COMMERCE_SERVICE, mcp=None,
-               Output=ServiceBillableCalls, errors=(_REFUS_FENETRE, _REFUS_LIMITE),
+               Output=ServiceBillableCalls,
+               errors=(_REFUS_FENETRE, _REFUS_LIMITE, _REFUS_BORNE),
                description="[service commerce] The billable calls of an org, as "
                            "`org.usage.calls` serves them to members, plus `sub`: the "
                            "person each call ran for. Same window, page and cursor "
@@ -1289,11 +1306,11 @@ CAPABILITIES += [
     # `usage/calls` par outil. Même lentille membre, `mcp=None` pour la même raison.
     Capability(key="org.usage.tools", handler=bornee(_billable_tools),
                Input=OrgBillableToolsInput, authz=_MEMBER_OF, mcp=None,
-               Output=OrgBillableTools, errors=(_REFUS_FENETRE,),
+               Output=OrgBillableTools, errors=(_REFUS_FENETRE, _REFUS_BORNE),
                rest=RestBinding("GET", "/api/orgs/{id}/usage/tools", _ID)),
     Capability(key="service.org.usage.tools", handler=bornee(_billable_tools_service),
                Input=OrgBillableToolsInput, authz=COMMERCE_SERVICE, mcp=None,
-               Output=OrgBillableTools, errors=(ORG_INCONNUE, _REFUS_FENETRE),
+               Output=OrgBillableTools, errors=(ORG_INCONNUE, _REFUS_FENETRE, _REFUS_BORNE),
                description="[service commerce] The billable calls of an org summed per "
                            "tool, as `org.usage.tools` serves them to members.",
                rest=RestBinding("GET", "/api/service/orgs/{id}/usage/tools", _ID)),
@@ -1357,7 +1374,7 @@ CAPABILITIES += [
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/tool-quality", _ID)),
     Capability(
         key="org.monitoring.console", handler=bornee(_console), Input=OrgMonitoringInput,
-        authz=_ADMIN_OF, errors=(_REFUS_CURSEUR,),
+        authz=_ADMIN_OF, errors=(_REFUS_CURSEUR, _REFUS_BORNE),
         description=(
             "Observability of YOUR org (org admin) — `org_id` required. op=summary "
             "(aggregates over the org: totals, by tool w/ avg+p95 latency, by member, by "

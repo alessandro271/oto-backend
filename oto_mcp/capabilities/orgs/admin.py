@@ -57,6 +57,9 @@ def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
     La cible est résolue AVANT la création : un email inconnu doit échouer sans laisser
     derrière lui l'org orpheline qu'on cherche justement à ne plus produire.
     """
+    # Elle nomme un org_admin : session seule (`_session_exigee`), sur les deux faces.
+    # La création en libre-service (`POST /api/me/orgs`) reste ouverte au jeton.
+    exiger_session("Créer une org pour un responsable")
     name = (inp.name or "").strip()
     if not name:
         raise AuthzDenied(400, "missing_name", "Nom d'org requis.")
@@ -91,7 +94,7 @@ CAPABILITIES += [
                     "`admin` = email|sub of the person who will run it (or \"me\"); "
                     "omitted, you are it. Returns its id.",
         # MCP fusionné dans oto_admin_org(op=create). REST conservé (dashboard).
-        rest=RestBinding("POST", "/api/admin/orgs"),
+        rest=RestBinding("POST", "/api/admin/orgs", allow_api_token=False),
     ),
     Capability(
         key="org.admin.archive", handler=_archive_org, Input=OrgIdInput,
