@@ -16,14 +16,15 @@ refus lève `SessionRevoquee` ; l'`on_error` du middleware rend le 401, avec le 
 reçoit de `http_app`). Les middlewares ASGI de `main` (hôte de tenant, texte d'accueil)
 le voient passer comme les autres.
 
-**Zéro requête de plus.** La lecture d'entrée (`account_suspension.entree` → une
-`db.get_suspension` : pause ET instant « révoqué avant ») se fait ICI, seulement sur
-un `POST /mcp` (là où passent les messages JSON-RPC, donc la garde), et son résultat
-est posé dans le `scope` de la requête (`CLE`). La garde d'identité le reprend
-(`entree_lue`) au lieu de relire : la lecture a changé de place, pas de nombre. Un
-`GET`/`DELETE /mcp` (flux de notifications, fin de session) ne la paie pas, comme avant,
-et la face REST non plus — le backend est posé sur toute l'app, mais `api.base` a sa
-propre porte et sa propre lecture.
+**Toute méthode sur `/mcp`.** La lecture d'entrée (`garde_identite.entree_du_jeton` →
+une `db.get_suspension` : pause ET instant « révoqué avant ») se fait ICI pour toute
+requête authentifiée sur `/mcp` : `POST` (les messages JSON-RPC), mais aussi `GET` (le
+flux de notifications, qui sans cela resterait ouvert sous un jeton révoqué) et `DELETE`
+(fin de session). Son résultat est posé dans le `scope` de la requête (`CLE`) ; la garde
+d'identité, qui ne voit que les messages d'un `POST`, le reprend (`entree_lue`) au lieu de
+relire : sur un `POST`, la lecture a changé de place, pas de nombre ; un `GET`/`DELETE`
+en paie une. La face REST, elle, ne la paie pas ici — le backend est posé sur toute
+l'app, mais `api.base` a sa propre porte et sa propre lecture.
 
 **Ce qui reste à la garde.** La pause et le tenant désactivé restent des refus du
 protocole (`-32003`), servis par `AccountSuspendedMiddleware` : leur forme servie ne
@@ -34,6 +35,7 @@ filet pour les chemins sans porte HTTP, jamais un second refus sur le chemin nom
 compte Logto dont `fermer_tout` a fermé les sessions. Si le drain le canonicalise en un
 autre sub, la garde ne reprend pas cet état (il ne vaut pas pour le sub canonique) et lit
 le sien : une lecture de plus pour un ancien identifiant redirigé, et seulement pour lui.
+La face REST juge de même (`api.base._authenticate`, même `entree_du_jeton`).
 """
 from __future__ import annotations
 
@@ -50,7 +52,7 @@ from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse, Response
 
-from .. import account_suspension, session_revoquee
+from .. import account_suspension, garde_identite, session_revoquee
 
 logger = logging.getLogger(__name__)
 
@@ -72,22 +74,23 @@ class SessionRevoquee(AuthenticationError):
 
 
 class BackendOto(BearerAuthBackend):
-    """Le backend de fastmcp, plus la lecture d'entrée du compte sur un `POST /mcp`."""
+    """Le backend de fastmcp, plus la lecture d'entrée du compte sur toute requête
+    `/mcp` (toute méthode : le flux `GET` et le `DELETE` sont jugés comme le `POST`)."""
 
     async def authenticate(self, conn: HTTPConnection):
         admis = await super().authenticate(conn)
-        if (admis is None or conn.scope.get("method") != "POST"
-                or conn.scope.get("path") not in CHEMINS):
+        if admis is None or conn.scope.get("path") not in CHEMINS:
             return admis
         jeton = admis[1].access_token
         sub = (getattr(jeton, "claims", None) or {}).get("sub")
         if not sub:
             return admis
         # Une panne de lecture REMONTE (fail-closed), comme dans la garde.
-        lue = await run_in_threadpool(account_suspension.entree, sub)
+        lue, revoque = await run_in_threadpool(
+            garde_identite.entree_du_jeton, sub, session_revoquee.emis_le_du_jeton(jeton))
         conn.scope[CLE] = (sub, lue)
-        if session_revoquee.refus(sub, lue, session_revoquee.emis_le_du_jeton(jeton)):
-            raise SessionRevoquee(session_revoquee.CODE)
+        if revoque:
+            raise SessionRevoquee(revoque[0])
         return admis
 
 
@@ -143,6 +146,6 @@ def entree_lue(sub: Optional[str]):
     # noqa: SILENT — hors requête HTTP (transport en mémoire, travail de fond) : la garde lit
     except RuntimeError:
         return account_suspension.A_LIRE
-    if lu and sub and lu[0] == sub:
-        return lu[1]
-    return account_suspension.A_LIRE
+    if not lu:
+        return account_suspension.A_LIRE
+    return garde_identite.reprise(lu[1], lu[0], sub)

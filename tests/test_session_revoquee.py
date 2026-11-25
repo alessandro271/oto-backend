@@ -104,6 +104,55 @@ def test_compte_jamais_ferme_sert_tout_jwt(base, monkeypatch):
     assert _rest_jwt({"sub": SUB, "iat": 1}) == (SUB, None)
 
 
+def test_jwt_emis_apres_coute_une_seule_lecture(base):
+    """Le sub du jeton est jugé avant le drain d'alias, et l'état lu est repris par la
+    garde : une lecture par requête, comme avant."""
+    assert _rest_jwt({"sub": SUB, "iat": int(APRES)}) == (SUB, None)
+    assert base == [SUB]
+
+
+# ── REST, JWT d'un ancien identifiant redirigé (drain d'alias) ───────────────
+
+ANCIEN = "u-ancien"
+
+
+@pytest.fixture
+def redirige(monkeypatch):
+    """`ANCIEN` (l'identifiant Logto du jeton) est redirigé vers `SUB` par le drain. La
+    fermeture est posée sous `ANCIEN` seulement, comme `fermer_tout` la pose (sous l'id
+    du webhook) ; le compte canonique, lui, n'a aucun instant."""
+    from oto_mcp.api import base as api_base
+    lectures = []
+
+    def _entree(sub):
+        lectures.append(sub)
+        if sub != ANCIEN:
+            return None
+        return {"sub": sub, "suspended_at": None, "suspended_by": None,
+                "suspended_reason": None, "revoque_avant": FERMETURE}
+    monkeypatch.setattr(db, "get_suspension", _entree)
+    monkeypatch.setattr(db, "upsert_user", lambda *a, **k: None)
+    monkeypatch.setattr(api_base, "alias_drain_armed", lambda: True)
+    monkeypatch.setattr(api_routes.db, "resolve_sub",
+                        lambda s: SUB if s == ANCIEN else s)
+    yield lectures
+    token_scopes.set_current(None)
+
+
+def test_jwt_d_un_ancien_identifiant_redirige_emis_avant_est_refuse(redirige):
+    """Discriminant sur l'ORDRE : jugé après le drain, sur `SUB` qui n'a pas d'instant,
+    ce jeton passerait jusqu'à son terme."""
+    _refus_nomme(_rest_jwt({"sub": ANCIEN, "iat": int(AVANT)}))
+    assert redirige == [ANCIEN]
+
+
+def test_jwt_d_un_ancien_identifiant_redirige_emis_apres_passe(redirige):
+    """Contrefactuel : la reconnexion passe, servie sous le sub canonique ; la garde lit
+    l'état du canonique en plus (une lecture de plus, pour ce seul cas)."""
+    assert _rest_jwt({"sub": ANCIEN, "iat": int(APRES)}) == (SUB, None)
+    assert redirige == [ANCIEN, SUB]
+
+
 # ── REST, jeton `oto_` ───────────────────────────────────────────────────────
 
 def test_jeton_oto_cree_avant_la_fermeture_est_refuse_401_nomme(base, monkeypatch):

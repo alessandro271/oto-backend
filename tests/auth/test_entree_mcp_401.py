@@ -173,10 +173,31 @@ def test_la_garde_relit_quand_le_sub_canonique_differe(lectures, monkeypatch):
     assert lectures == [_SUB, "canonique"]
 
 
-def test_un_get_de_flux_ne_paie_pas_la_lecture(lectures):
-    """`GET /mcp` (flux de notifications) : pas de message JSON-RPC, pas de garde —
-    et donc pas de lecture, comme avant."""
+# --- toute méthode sur /mcp : le flux GET et le DELETE sont jugés aussi -----------
+
+@pytest.mark.parametrize("methode", ["GET", "DELETE"])
+@pytest.mark.parametrize("jeton", [_JWT_AVANT, _OTO_AVANT], ids=["jwt", "oto_"])
+def test_un_flux_ou_une_fin_de_session_sous_jeton_revoque_recoit_un_401(
+        lectures, methode, jeton):
+    """`GET /mcp` ouvre le flux de notifications : sous un jeton émis avant la fermeture,
+    il ne s'ouvre pas (sinon les notifications continueraient d'arriver jusqu'au terme
+    du jeton). Même 401 que le `POST`, avant tout le transport."""
+    r = TestClient(_app_reelle()).request(
+        methode, "/mcp", headers={"host": "mcp.oto.cx", "accept": "text/event-stream",
+                                  "mcp-session-id": "quelconque",
+                                  "authorization": f"Bearer {jeton}"})
+    assert r.status_code == 401, r.text
+    defi = r.headers["www-authenticate"]
+    assert defi.startswith("Bearer ") and 'error="invalid_token"' in defi
+    assert r.json()["code"] == "session_revoked"
+    assert lectures == [_SUB]
+
+
+def test_un_get_de_flux_emis_apres_passe_la_porte_avec_une_lecture(lectures):
+    """Contrefactuel : un jeton émis après la fermeture franchit la porte (pas de 401) ;
+    le flux paie une lecture d'entrée, la seule."""
     with TestClient(_app_minimale()) as c:
-        c.get("/mcp", headers={"host": "mcp.oto.cx", "accept": "text/event-stream",
-                               "authorization": f"Bearer {_JWT_APRES}"})
-    assert lectures == []
+        r = c.get("/mcp", headers={"host": "mcp.oto.cx", "accept": "text/event-stream",
+                                   "authorization": f"Bearer {_JWT_APRES}"})
+    assert r.status_code != 401, r.text
+    assert lectures == [_SUB]
