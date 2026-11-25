@@ -1493,8 +1493,8 @@ wheels = [
 
 [[package]]
 name = "oto-core"
-version = "1.245.0"
-source = { git = "https://github.com/otomata-tech/oto-core.git?rev=v1.245.0#693e5c14de661c2a58020cc13d513c0b28cddacb" }
+version = "1.251.0"
+source = { git = "https://github.com/otomata-tech/oto-core.git?rev=v1.251.0#b4fab1d3294c1aa73fea81d77bf8ababa5781277" }
 dependencies = [
     { name = "defusedxml" },
     { name = "france-opendata" },
