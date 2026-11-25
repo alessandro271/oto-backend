@@ -326,10 +326,9 @@ def test_l_import_d_un_document_public_refuse_un_rebinding(monkeypatch, aucune_s
 
 
 def test_la_carte_api_sort_par_le_transport_epingle_avant_son_auth(monkeypatch):
-    """`HttpConnectorClient` crée sa session paresseusement et la confie à l'auth
-    (le mode session s'y connecte aussitôt) : la session doit être gardée AVANT.
-    Tient aussi le couplage au `_ready` privé d'oto-core — un renommage côté lib
-    rougit ici."""
+    """`HttpConnectorClient` confie à l'auth la session qu'on lui donne (`session=`,
+    le mode session s'y connecte aussitôt) : c'est CETTE session, gardée, qui porte
+    l'auth et les en-têtes constants."""
     from oto_mcp.tools import api as tool_api
     monkeypatch.setattr(egress, "resolved_addresses", _Resolveur([PUBLIQUE]))
     client = tool_api.client_for({"base_url": "https://api.exemple.test",
@@ -352,8 +351,40 @@ def test_la_carte_api_refuse_un_rebinding_a_l_appel(monkeypatch, aucune_socket):
         client.get("/v1/x")
 
 
+def test_le_jeton_oauth2_de_la_carte_api_sort_par_une_session_gardee(monkeypatch,
+                                                                    aucune_socket):
+    """Le jeton `oauth2` part vers `token_url` par sa propre session (`token_session=`),
+    gardée elle aussi : public aux deux contrôles précoces (`base_url`, `token_url`),
+    interne à la connexion — refusé, sans socket, et le refus nomme `token_url`."""
+    from oto_mcp.tools import api as tool_api
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _Resolveur([PUBLIQUE], ["127.0.0.1"], n=2))
+    monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
+    client = tool_api.client_for({"base_url": "https://api.exemple.test",
+                                  "auth_mode": "oauth2",
+                                  "token_url": "https://jeton.exemple.test/token",
+                                  "client_id": "i", "client_secret": "s"})
+    with pytest.raises(egress.EgressRefused, match="boucle locale(.|\n)*token_url"):
+        client.get("/v1/x")
+
+
+def test_le_jeton_oauth2_du_pont_mcp_sort_par_une_session_gardee(monkeypatch,
+                                                                aucune_socket):
+    from oto_mcp.connectors import api_mcp
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _Resolveur([PUBLIQUE], ["127.0.0.1"]))
+    monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
+    with pytest.raises(egress.EgressRefused, match="boucle locale(.|\n)*token_url"):
+        api_mcp._session({"base_url": "https://mcp.exemple.test", "auth_mode": "oauth2",
+                          "token_url": "https://jeton.exemple.test/token",
+                          "client_id": "i", "client_secret": "s"}, None)
+
+
 @pytest.mark.parametrize("connecteur,fields,config", [
     ("n8n",     {"api_key": "k", "base_url": "https://n8n.exemple.test"}, None),
+    ("lighton", {"api_key": "k", "base_url": "https://lighton.exemple.test"}, None),
+    ("wordpress", {"site_url": "https://wp.exemple.test", "username": "u",
+                   "application_password": "p"}, None),
     ("make",    {"api_token": "t", "base_url": "https://make.exemple.test/api/v2"}, None),
     ("git" "hub", {"token": "t", "base_url": "https://ghe.exemple.test/api/v3"}, None),
     ("posthog", {"api_key": "k"}, {"host": "https://ph.exemple.test"}),
@@ -374,14 +405,83 @@ def test_la_sonde_d_un_connecteur_a_hote_libre_refuse_un_rebinding(
 
 
 def test_le_client_3cx_porte_une_session_gardee(monkeypatch):
-    """3CX obtient son jeton par un appel de module dans la lib (reste nommé dans
-    `docs/connector-vault.md`) ; ses appels d'API, eux, passent par la session."""
+    """La session donnée à la construction porte les appels d'API ET le jeton."""
     from oto_mcp.tools import threecx
     monkeypatch.setattr(egress, "resolved_addresses", _Resolveur([PUBLIQUE]))
     monkeypatch.setattr(threecx.access, "resolve_credential_fields", lambda name: {
         "base_url": "https://pbx.exemple.test", "auth_mode": "api_client",
         "client_id": "c", "client_secret": "s"})
-    assert _monte(threecx.client().session)
+    client = threecx.client()
+    assert _monte(client.session)
+    assert client._token_session is client.session
+
+
+def test_le_jeton_3cx_de_la_sonde_sort_par_la_session_gardee(monkeypatch, aucune_socket):
+    """La première requête de la sonde est le jeton : public au contrôle, interne à la
+    connexion — refusé par le transport, sans socket. (Le contrôle propre de la lib,
+    qui résout par le DNS de la machine, est neutralisé : ce banc éprouve le nôtre.)"""
+    from oto.tools.threecx import auth as threecx_auth, client as threecx_client
+    from oto_mcp.tools import threecx
+    for module in (threecx_auth, threecx_client):
+        monkeypatch.setattr(module, "assert_public_https_url", lambda url: None)
+    monkeypatch.setattr(threecx_auth, "_TOKEN_CACHE", {})
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _Resolveur([PUBLIQUE], ["127.0.0.1"]))
+    monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
+    with pytest.raises(egress.EgressRefused, match="boucle locale(.|\n)*base_url"):
+        threecx._verify({"base_url": "https://pbx.exemple.test", "auth_mode": "api_client",
+                         "client_id": "c", "client_secret": "s"})
+
+
+def test_la_sonde_salesforce_sort_par_la_session_gardee(monkeypatch, aucune_socket):
+    """L'échange du refresh token sur `login_url` : public au contrôle, interne à la
+    connexion — refusé par le transport, sans socket."""
+    from oto.tools.salesforce import client as sf_client
+    from oto_mcp.tools import salesforce
+    monkeypatch.setattr(sf_client, "_TOKEN_CACHE", {})
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _Resolveur([PUBLIQUE], ["127.0.0.1"]))
+    monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
+    with pytest.raises(ValueError, match="boucle locale"):
+        salesforce._verify({"client_id": "i", "client_secret": "s", "refresh_token": "r",
+                            "login_url": "https://acme.my.salesforce.com"},
+                           instance=("user", "u"))
+
+
+def test_la_session_salesforce_nomme_le_champ_de_chaque_destination():
+    """Une session, deux destinations : le refus dit `login_url` pour le serveur
+    d'autorisation, `instance_url` pour les appels d'API — même politique."""
+    from oto_mcp.tools import salesforce
+    s = salesforce._session("https://login.salesforce.com")
+    assert _monte(s)
+    vers_login = s.get_adapter("https://login.salesforce.com/services/oauth2/token")
+    vers_api = s.get_adapter("https://acme.my.salesforce.com/services/data/v60.0/query")
+    assert vers_login._politique == egress_transport.Politique("salesforce", "login_url", True)
+    assert vers_api._politique == egress_transport.Politique("salesforce", "instance_url", True)
+
+
+def test_l_index_public_wordpress_de_la_connexion_sort_par_la_session_gardee(
+        monkeypatch, aucune_socket):
+    """La connexion par autorisation d'application lit d'abord l'index public du site."""
+    from oto_mcp.auth import wordpress as wp_auth
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _Resolveur([PUBLIQUE], ["127.0.0.1"]))
+    monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
+    wp_auth.check_site("https://wp.exemple.test")
+    with pytest.raises(wp_auth.ConnectRefused, match="boucle locale"):
+        wp_auth._authorization_endpoint("https://wp.exemple.test")
+
+
+def test_le_retour_wordpress_verifie_le_mot_de_passe_par_la_session_gardee(
+        monkeypatch, aucune_socket):
+    """Au retour, `users/me` vérifie le mot de passe reçu AVANT de le poser."""
+    from oto_mcp.auth import wordpress as wp_auth
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _Resolveur([PUBLIQUE], ["127.0.0.1"]))
+    monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
+    with pytest.raises(egress.EgressRefused, match="boucle locale(.|\n)*site_url"):
+        wp_auth.finish({"site": "https://wp.exemple.test", "sub": "s", "org": 1,
+                        "scope": "member"}, "https://wp.exemple.test", "u", "p")
 
 
 def test_l_echange_du_code_salesforce_sort_par_une_session_gardee(monkeypatch, aucune_socket):

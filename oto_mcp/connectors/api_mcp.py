@@ -101,7 +101,8 @@ def _session(fields: dict, row) -> requests.Session:
         return s
     if mode == "oauth2":
         egress.check_url(fields.get("token_url") or "", connector="api", field="token_url")
-    auth = build_auth(mode, fields)
+    auth = build_auth(mode, fields, token_session=egress_transport.session(
+        connector="api", field="token_url", exceptions_declarees=True))
     auth.configure(s)
     q = auth.query_params()
     if q:

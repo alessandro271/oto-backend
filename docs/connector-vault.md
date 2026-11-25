@@ -286,17 +286,24 @@ derrière un proxy, c'est lui qui résout. Le dépôt ne lit aucune variable de 
 Câblé : `web_read`/`web_image` (`tools/web.py`), une source `url` de fichier
 (`file_source.py`), l'import d'une description publique
 (`api_operations.fetch_public_document`), le CV d'une candidature (`tools/wttj_resume.py`),
-l'import d'avatar, et la session des clients `api` (`tools/api.client_for`, login du mode
-session compris), `n8n`, `make`, `github`, `posthog`, `lucca`, `threecx` et du webhook
-`clay`, et l'échange du code OAuth de Salesforce sur `login_url` (`auth/salesforce.exchange_code`
-passe une session gardée à `auth/flow.exchange_code`, dont le défaut — hôte fixe des
-autres fournisseurs — ne change pas). Banc : `tests/test_egress_transport.py`.
+l'import d'avatar, la session des clients `n8n`, `make`, `github`, `posthog`, `lucca` et
+du webhook `clay` (`egress_transport.pinned`), et l'échange du code OAuth de Salesforce sur
+`login_url` (`auth/salesforce.exchange_code` passe une session gardée à
+`auth/flow.exchange_code`, dont le défaut — hôte fixe des autres fournisseurs — ne change
+pas). Les clients dont la lib prend une session à la construction (`session=`, oto-core
+v1.250.0) la reçoivent gardée, et TOUTES leurs requêtes y passent : `api`
+(`tools/api.client_for` : les appels et le login du mode session sur `base_url`, le jeton
+`oauth2` sur `token_url` par une session à part, `token_session=` ; le pont MCP
+`connectors/api_mcp` aussi), `wordpress` (sonde, index public, appels — `site_url`),
+`lighton` (`base_url`, SaaS compris), `salesforce` (l'échange du refresh token sur
+`login_url` et les appels sur l'`instance_url` rendue, chacun nommé dans le refus) et
+`threecx` (jeton ET appels — `base_url`). Politique : celle de la destination d'un
+credential (exceptions nommées applicables), la même que leur `check_url` précoce.
+Banc : `tests/test_egress_transport.py`.
 
-⚠️ **Ce qui reste sous le seul contrôle précoce, nommé** : les appels qu'oto-core fait par
-`requests.<verbe>` au niveau module, sans session à monter — `lighton`, `salesforce`
-(dont l'échange du refresh token sur `login_url`), `wordpress`, le jeton `oauth2` du
-connecteur `api` (`token_url`) et les jetons `threecx`. Les fermer demande un
-paramètre `session=` côté lib, donc un bump de pin.
+⚠️ **Ce qui reste sous le seul contrôle précoce** : un appel `requests.<verbe>` au niveau
+module dans la lib, qui ne passe pas par `.session` — `egress_transport.pinned` ne couvre
+que `client.session`. Le fermer demande un paramètre `session=` côté lib.
 
 ⚠️ **Contredit l'ADR 0037 §4**, qui décidait « zéro code SSRF dans le connecteur » et
 renvoyait le blocage des plages privées à un egress proxy « plus tard… si le besoin

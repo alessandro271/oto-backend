@@ -47,7 +47,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, egress, status_hints
+from .. import access, egress, egress_transport, status_hints
 from ..connectors import flow as connector_flow
 from ..connectors import health as connector_health
 from ..connectors import verify as connector_verify
@@ -82,6 +82,21 @@ def _login_url(login_url: Optional[str]) -> str:
         return "https://login.salesforce.com"
     egress.check_url(valeur, connector="salesforce", field="login_url")
     return valeur
+
+
+def _session(login_url: str):
+    """The session EVERY request of the client goes out through — the refresh-token
+    exchange on `login_url` AND the API calls on the `instance_url` Salesforce
+    returns — pinned by the egress guard at connection time (`egress_transport`),
+    under the policy of a credential's destination (that of `_login_url`'s early
+    check). The refusal names the field it concerns: `instance_url` by default, and
+    `login_url` for what goes to the authorization server (the longer prefix wins in
+    `requests`)."""
+    s = egress_transport.session(connector="salesforce", field="instance_url",
+                                 exceptions_declarees=True)
+    s.mount(f"{login_url.rstrip('/')}/", egress_transport.AdaptateurEpingle(
+        egress_transport.Politique("salesforce", "login_url", True)))
+    return s
 
 
 # What a field needs to be READ or WRITTEN — the rest of the 57 keys that
@@ -262,17 +277,19 @@ def _verify(fields: dict, config: dict | None = None,
     """
     from oto.tools.salesforce.client import SalesforceClient
 
+    login_url = _login_url(fields.get("login_url"))
     client = SalesforceClient(
         client_id=fields.get("client_id"),
         client_secret=fields.get("client_secret"),
         refresh_token=fields.get("refresh_token"),
-        login_url=_login_url(fields.get("login_url")),
+        login_url=login_url,
         # `instance` = the key ACTUALLY probed, supplied by the caller. Without it we
         # can only guess via the cascade — which designates the nearest, not the one
         # being tested: a `verify level=org` for someone who ALSO has a personal key
         # compared the org token to the personal token, didn't recognize it, persisted
         # nothing, and thus killed the org token by refreshing it. Lived 03/08.
         on_refresh=_rotation_writer_for(fields.get("refresh_token") or "", instance),
+        session=_session(login_url),
     )
     try:
         client.query("SELECT Id FROM Contact LIMIT 1")
@@ -439,12 +456,14 @@ def register(mcp: FastMCP) -> None:
         # also serves to mark a rejected row (oto#25 lot b2, `rc` returned to the caller).
         rc = access.resolve_credential("salesforce")
         creds = rc.fields
+        login_url = _login_url(creds.get("login_url"))
         client = SalesforceClient(
             client_id=creds.get("client_id"),
             client_secret=creds.get("client_secret"),
             refresh_token=creds.get("refresh_token"),
-            login_url=_login_url(creds.get("login_url")),
+            login_url=login_url,
             on_refresh=_rotation_writer(rc, creds.get("refresh_token") or ""),
+            session=_session(login_url),
         )
         return client, rc
 

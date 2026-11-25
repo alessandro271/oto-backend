@@ -25,7 +25,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from oto.tools.common.errors import UpstreamHTTPError
 
-from .. import access, egress, file_source
+from .. import access, egress, egress_transport, file_source
 from ..connectors import verify as connector_verify
 
 
@@ -38,6 +38,15 @@ def _check_base_url(base_url) -> None:
     valeur = (base_url or "").strip()
     if valeur:
         egress.check_url(valeur, connector="lighton")
+
+
+def _session():
+    """The session every LightOn request goes out through: pinned by the egress
+    guard at connection time (`egress_transport`), under the policy of a credential's
+    destination — the same as `_check_base_url`. Mounted on the SaaS too: its host is
+    a constant, the guard costs nothing there, and no path is left outside it."""
+    return egress_transport.session(connector="lighton", field="base_url",
+                                    exceptions_declarees=True)
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:
@@ -60,6 +69,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     _check_base_url(fields.get("base_url"))
     LightOnClient(
         api_key=fields["api_key"], base_url=fields.get("base_url"),
+        session=_session(),
     ).list_workspaces()
 
 
@@ -74,7 +84,8 @@ def register(mcp: FastMCP) -> None:
     def _client(creds: dict) -> LightOnClient:
         _check_base_url(creds.get("base_url"))
         return LightOnClient(api_key=creds.get("api_key"),
-                             base_url=creds.get("base_url") or None)
+                             base_url=creds.get("base_url") or None,
+                             session=_session())
 
     def _default_workspace(creds: dict) -> Optional[int]:
         raw = (creds.get("workspace_id") or "").strip()

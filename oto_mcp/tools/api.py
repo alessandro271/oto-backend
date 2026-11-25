@@ -234,10 +234,11 @@ def client_for(fields: dict, headers: dict | None = None, *,
     """THE oto-core client for these credential fields — the only place one is built,
     for the agent's calls (`client_from_fields`) as for the REST import of a `doc_path`
     (`connectors/api_operations.fetch_doc_path_document`). The TWO destinations a
-    card carries are guarded: the called base, and — in oauth2 mode — the token
-    server, which goes out via `requests.post` from oto-core without passing through
-    `base_url`. Guarding only the first would leave an entire outbound path outside the
-    guard. In `session` mode, every hop of the login is guarded as it goes
+    card carries are guarded, early by `check_url` and at connection time by a pinned
+    session each (`egress_transport`): the called base (`session=`, which carries the
+    calls and the session mode's login), and — in oauth2 mode — the token server
+    (`token_session=`, kept apart from the session that carries the bearer it renews).
+    In `session` mode, every hop of the login is also checked as it goes
     (`api_session.guard`), and `row` — the vault row of these fields, required in that
     mode and in `visitor` mode — keeps the cookie jar (`api_session`). `headers` = the saved
     definition's constant headers. Raises `egress.EgressRefused` or `ValueError`
@@ -263,8 +264,8 @@ def client_for(fields: dict, headers: dict | None = None, *,
         except api_oauth.ApiOAuthRefused as e:
             raise ValueError(e.message) from None
         return api_operations.with_constant_headers(
-            _pinned(HttpConnectorClient(base_url, "bearer", {**fields, "token": token},
-                                        timeout=TIMEOUT)), headers)
+            HttpConnectorClient(base_url, "bearer", {**fields, "token": token},
+                                timeout=TIMEOUT, session=_session("base_url")), headers)
     session = {}
     if api_session.keeps_jar(fields):
         if row is None:
@@ -273,29 +274,20 @@ def client_for(fields: dict, headers: dict | None = None, *,
         session = {"guard": api_session.guard(base_url),
                    "jar": api_session.read_jar(row, fields),
                    "on_jar": api_session.jar_writer(row, fields)}
-    client = HttpConnectorClient(base_url, mode, fields, timeout=TIMEOUT, **session)
-    return api_operations.with_constant_headers(_pinned(client), headers)
+    client = HttpConnectorClient(base_url, mode, fields, timeout=TIMEOUT,
+                                 session=_session("base_url"),
+                                 token_session=_session("token_url"), **session)
+    return api_operations.with_constant_headers(client, headers)
 
 
-def _pinned(client: HttpConnectorClient) -> HttpConnectorClient:
-    """The client's session goes out through the pinned transport (`egress_transport`):
-    the guard holds at CONNECTION time, on the addresses actually joined — a resolution
-    that changes after `check_url` (DNS rebinding) is refused there, and so is every
-    hop of a session-mode login. The session must be pinned BEFORE the auth configures
-    it (the session mode logs in right there), hence oto-core's private `_ready`
-    REPLACED by the same three steps on a guarded session — coupled to `_session` and
-    `_auth`, held by `tests/test_egress_transport.py`. Follow-up: a `session=`
-    parameter in oto-core. ⚠️ The oauth2 token request leaves through a module-level
-    `requests.post` in oto-core: outside this session, checked only by `check_url`."""
-    def _ready():
-        if client._session is None:
-            s = egress_transport.harden(requests.Session(), connector="api",
-                                        field="base_url")
-            client._auth.configure(s)
-            client._session = s
-        return client._session
-    client._ready = _ready
-    return client
+def _session(field: str) -> requests.Session:
+    """A session pinned by the egress guard (`egress_transport`), under the policy of a
+    credential's destination: the guard holds at CONNECTION time, on the addresses
+    actually joined — a resolution that changes after `check_url` (DNS rebinding) is
+    refused there, and so is every redirect hop. `field` = the card's field this
+    session goes to (`base_url`, `token_url`), named in the refusal."""
+    return egress_transport.session(connector="api", field=field,
+                                    exceptions_declarees=True)
 
 
 def client_from_fields(f: dict, headers: dict | None = None, *,

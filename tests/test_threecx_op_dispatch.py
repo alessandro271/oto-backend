@@ -24,10 +24,17 @@ _API = {"base_url": "https://pbx.exemple.fr", "auth_mode": "api_client", "client
 
 @pytest.fixture
 def construits(monkeypatch):
-    """Les kwargs de chaque construction de `ThreeCXClient`, et le faux client."""
+    """Les kwargs de chaque construction de `ThreeCXClient`, et le faux client. La
+    session, toujours donnée, doit être gardée par la garde d'egress (jeton ET appels) :
+    elle est vérifiée ici puis retirée des kwargs comparés."""
+    from oto_mcp import egress_transport
     inst, calls = MagicMock(), []
 
     def fabrique(**kw):
+        s = kw.pop("session")
+        assert isinstance(s.get_adapter("https://pbx.exemple.fr/"),
+                          egress_transport.AdaptateurEpingle)
+        assert s.trust_env is False
         calls.append(kw)
         return inst
 

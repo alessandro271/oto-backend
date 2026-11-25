@@ -198,10 +198,13 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     site side), never a limit of the probe."""
     from oto.tools.wordpress import WordPressClient
 
+    from ..auth.wordpress import site_session
+
     allow_http = _guard(fields.get("site_url") or "")
     try:
         me = WordPressClient(fields["site_url"], fields["username"],
-                             fields["application_password"], allow_http=allow_http).me()
+                             fields["application_password"], allow_http=allow_http,
+                             session=site_session()).me()
     except UpstreamHTTPError as e:
         if e.status_code == 401:
             raise connector_verify.NonAutorise(_translate(e).error.message) from e
@@ -213,13 +216,15 @@ def _verify(fields: dict, config: dict | None = None) -> None:
 def _client(account: Optional[str] = None) -> WordPressClient:
     from oto.tools.wordpress import WordPressClient
 
+    from ..auth.wordpress import site_session
+
     creds = access.resolve_credential_fields("wordpress", account)
     site = creds.get("site_url") or ""
     try:
         allow_http = _guard(site)
         return WordPressClient(site, creds.get("username") or "",
                                creds.get("application_password") or "",
-                               allow_http=allow_http)
+                               allow_http=allow_http, session=site_session())
     except ValueError as e:   # egress guard, HTTP, URL or credentials missing
         raise _bad(f"unusable WordPress credential: {e}") from e
 

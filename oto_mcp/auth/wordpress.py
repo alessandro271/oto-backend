@@ -99,6 +99,17 @@ def http_allowed(site_url: str) -> bool:
         "passwords outside HTTPS, except in a local environment).")
 
 
+def site_session():
+    """The session EVERY request to the site goes out through (probe, public index,
+    authenticated calls): pinned by the egress guard at connection time, under the
+    policy of a credential's destination — the same as `check_site`'s early check
+    (`egress_transport`)."""
+    from .. import egress_transport
+
+    return egress_transport.session(connector="wordpress", field="site_url",
+                                    exceptions_declarees=True)
+
+
 def still_allowed(parsed: dict) -> bool:
     """The right to write at the state's tier, re-read ON RETURN. Synchronous (SQL)."""
     from .. import roles
@@ -143,7 +154,8 @@ def _authorization_endpoint(site_url: str, *, allow_http: bool = False) -> str:
     # credentials on ANY REST route, index included — a dummy credential
     # would return a 401 there (`rest_application_password_check_errors`). The two
     # constructor values are never sent.
-    c = WordPressClient(site_url, "-", "-", allow_http=allow_http)
+    c = WordPressClient(site_url, "-", "-", allow_http=allow_http,
+                        session=site_session())
     try:
         index = c.public_index()
     except ValueError as e:
@@ -264,7 +276,8 @@ def finish(parsed: dict, site_url: str, user_login: str, password: str) -> str:
         raise ConnectRefused("WordPress returned neither a username nor a password.")
     allow_http = check_site(asked)
 
-    me = WordPressClient(asked, user_login, password, allow_http=allow_http).me()
+    me = WordPressClient(asked, user_login, password, allow_http=allow_http,
+                         session=site_session()).me()
     if not me.get("id"):
         raise ConnectRefused("the received password does not authenticate (empty users/me).")
 
