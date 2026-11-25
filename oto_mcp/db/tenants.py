@@ -21,10 +21,14 @@ L3bis partielle). Les compteurs les gardent donc SÉPARÉS et nomment l'écart
 """
 from __future__ import annotations
 
+import logging
+
 from .. import tenancy
 from ._conn import _connect
 from . import journal_jour
 from .lecture_bornee import lecture_d_agregat
+
+_log = logging.getLogger(__name__)
 
 # Bornes des listes servies par la fiche d'un tenant : une fiche rend son INDEX,
 # pas la population (cf. §« Ce qu'un outil RENVOIE a un budget »).
@@ -435,6 +439,23 @@ def org_tenant_slug(org_id: int, conn=None) -> str:
         return _lire_org_tenant(conn, org_id)
     with _connect() as c:
         return _lire_org_tenant(c, org_id)
+
+
+def invitation_du_tenant_de(inv: dict, sub: str) -> bool:
+    """L'invitation (ou le partage en attente) `inv` relève-t-elle du tenant du compte
+    `sub` ? Son tenant est celui de son org (`org_tenant_slug`, le juge de
+    `org.invite.claim`), sinon — invitation de plateforme, partage d'un objet — celui de
+    son émetteur. Sert à l'acceptation d'office au premier passage d'un compte, qui
+    n'honore que son tenant ; un écart est journalisé (ids, jamais l'adresse) et
+    l'invitation reste en attente."""
+    attendu = tenancy.current().tenant_of(sub)
+    porte = (org_tenant_slug(int(inv["org_id"])) if inv.get("org_id") is not None
+             else tenancy.current().tenant_of(inv.get("invited_by")))
+    if porte == attendu:
+        return True
+    _log.warning("invitation #%s (tenant %s) non acceptée d'office pour %s (tenant %s) "
+                 ": elle reste en attente", inv.get("id"), porte, sub, attendu)
+    return False
 
 
 def _lire_org_tenant(conn, org_id: int) -> str:

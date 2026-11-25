@@ -34,7 +34,7 @@ SECRETS = ("mot-de-passe-de-test", "JETON-B", "JETON-ORG")
 @pytest.fixture
 def service(live, monkeypatch):
     """Le faux service du mode session, joignable sous ses noms (`banc_session`)."""
-    from oto_mcp import egress
+    from oto_mcp import egress, egress_transport
     monkeypatch.setenv("OTO_MCP_MASTER_KEY", banc_session._KEY)
     monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
     monkeypatch.setattr(egress, "resolved_addresses", lambda hote, port: {"93.184.216.34"})
@@ -45,6 +45,11 @@ def service(live, monkeypatch):
             hote = "127.0.0.1"
         return vrai(hote, *a, **k)
     monkeypatch.setattr(socket, "getaddrinfo", resoudre)
+    # Le transport épinglé (`egress_transport`) se connecte à l'adresse DÉCIDÉE — la
+    # « publique » ci-dessus : la machine qui la porte, ici, est la boucle locale.
+    monkeypatch.setattr(egress_transport, "_ouvrir",
+                        lambda adresse, port, timeout, *a: socket.create_connection(
+                            ("127.0.0.1", port), timeout))
     etat = banc_session.Etat()
     api, port_api = banc_session._serveur(banc_session._api(etat))
     cx, port_cx = banc_session._serveur(banc_session._connexion(etat))

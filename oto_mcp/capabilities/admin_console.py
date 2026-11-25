@@ -398,7 +398,9 @@ CAPABILITIES += [
                            "events": ORG_ADMIN_OF_OR_OPERATOR("org_id"),
                            "list": PLATFORM_ADMIN}),
         description=("Manage an org's members (org_admin of `org_id`; list = platform admin). "
-                     "op=add (`target` email|sub, `role` org_member|org_admin) / remove (`target`) / "
+                     "op=add (`target` email|sub, `role` org_member|org_admin; a non-member "
+                     "is INVITED by email and joins only on accepting — `status` says "
+                     "member|invited) / remove (`target`) / "
                      "set_role (`target`, `role`) / list / connectors (`target` — the member's "
                      "configured connectors: connector/account/secret_kind/set_at/public meta, "
                      "NEVER any secret — diagnose a failing byo_user key) / events (membership log: "

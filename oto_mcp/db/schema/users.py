@@ -71,3 +71,34 @@ CREATE TABLE IF NOT EXISTS sub_aliases (
     migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
+
+# empreinte des facteurs de double authentification d'un compte
+EMPREINTES_2FA = """
+-- La dernière empreinte vue des facteurs de double authentification d'un compte de
+-- l'annuaire primaire (`auth/revocation_2fa.py`) : un hachage des couples (id, type)
+-- que rend la Management API, jamais un facteur ni sa valeur. Une empreinte qui change
+-- entre deux livraisons du webhook Logto dit un facteur ajouté, retiré ou régénéré :
+-- toutes les sessions et tous les jetons du compte sont alors fermés. Une ligne par
+-- compte, posée à la première livraison. Sans clé étrangère : le webhook nomme un
+-- compte de l'annuaire, qui n'a pas forcément encore de ligne `users`.
+CREATE TABLE IF NOT EXISTS empreintes_2fa (
+    sub TEXT PRIMARY KEY,
+    empreinte TEXT NOT NULL,
+    vue_le TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+# date de révocation des jetons d'un compte (« révoqué avant »)
+REVOCATIONS_COMPTES = """
+-- L'instant avant lequel tout jeton d'un compte est refusé à l'usage
+-- (`auth/revocation_mot_de_passe.fermer_tout`, contrôle par `garde_identite`) : un JWT
+-- d'accès dont l'`iat` est antérieur, un jeton `oto_` créé avant. Posé à chaque fermeture
+-- de toutes les sessions du compte (mot de passe changé, double authentification
+-- changée ou remise à zéro), jamais reculé. Une ligne par compte, sans clé étrangère :
+-- le webhook nomme un compte de l'annuaire, qui n'a pas forcément de ligne `users`.
+CREATE TABLE IF NOT EXISTS revocations_comptes (
+    sub TEXT PRIMARY KEY,
+    revoque_avant TIMESTAMPTZ NOT NULL,
+    motif TEXT NOT NULL
+);
+"""

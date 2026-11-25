@@ -22,7 +22,11 @@
 # Chaque manque refuse, en nommant ce qu'il faut poser.
 #
 # usage : amorcer.sh <déclaration.json> <rôle>             amorce le rôle
-#         amorcer.sh <déclaration.json> <rôle> maintenance  pose le timer de maintenance
+#         amorcer.sh <déclaration.json> <rôle> maintenance-verifier <couleur>
+#                                                            rend et valide, sans rien poser,
+#                                                            les unités de maintenance pour
+#                                                            l'arbre de <couleur> (avant bascule)
+#         amorcer.sh <déclaration.json> <rôle> maintenance  pose les unités de maintenance
 #                                                            sur l'arbre de la couleur active
 # Env   : OTO_CIBLE_DEPOT  URL du dépôt du tronc (posée par la porte, deploy/cible/porte.sh)
 # ============================================================================
@@ -42,41 +46,100 @@ refus() { echo "amorce : REFUS — $*" >&2; exit 1; }
 VARIABLES=$(python3 "$ICI/declaration.py" variables "$DECLARATION" "$ROLE") || exit 1
 eval "$VARIABLES"
 
-# --- rend un gabarit de deploy/cible/ : chaque @CLE@ remplacée, aucune laissée.
-rendre() {
-  local gabarit=$1 cible=$2 arbre_actif=${3:-}
-  local tmp; tmp=$(mktemp)
-  sed -e "s|@UNITE@|${UNITE}|g" -e "s|@UTILISATEUR@|${UTILISATEUR}|g" \
+# --- rend un gabarit de deploy/cible/ dans <fichier> : chaque @CLE@ remplacée, aucune laissée.
+rendre_dans() {
+  local gabarit=$1 fichier=$2 arbre_actif=${3:-}
+  [ -r "$gabarit" ] || refus "gabarit $gabarit absent du tag"
+  if ! sed -e "s|@UNITE@|${UNITE}|g" -e "s|@UTILISATEUR@|${UTILISATEUR}|g" \
       -e "s|@ARBRE@|${BG_TREE}|g" -e "s|@ETC@|${ETC_ROLE}|g" \
       -e "s|@CLE_SCW@|${CLE_SCW}|g" -e "s|@ARBRE_ACTIF@|${arbre_actif}|g" \
       -e "s|@ARRET_MAX@|$((BG_DRAIN_MAX + 30))|g" \
-      "$gabarit" > "$tmp"
-  if grep -q '@[A-Z_]*@' "$tmp"; then
-    rm -f "$tmp"; refus "gabarit $gabarit : clé non rendue"
+      "$gabarit" > "$fichier"; then
+    rm -f "$fichier"; refus "gabarit $gabarit : rendu en échec"
   fi
+  local restes
+  restes=$(grep -o '@[A-Z_]*@' "$fichier" | sort -u | tr '\n' ' ') || true
+  if [ -n "$restes" ]; then
+    rm -f "$fichier"; refus "gabarit $gabarit : clé non rendue (${restes% })"
+  fi
+}
+
+# --- rend un gabarit et le pose à <cible>.
+rendre() {
+  local gabarit=$1 cible=$2 arbre_actif=${3:-} tmp
+  tmp=$(mktemp)
+  rendre_dans "$gabarit" "$tmp" "$arbre_actif"
   install -m 0644 "$tmp" "$cible"
   rm -f "$tmp"
 }
 
-# --- les timers de maintenance et d'archive du journal vivent au niveau du RÔLE, pas de la couleur : posé APRÈS la
-# --- bascule, sur l'arbre de la couleur qui sert (comme install_timers de notre prod).
-# --- Chaque rôle a SA base, donc chacun a sa maintenance.
+# --- les timers de maintenance et d'archive du journal vivent au niveau du RÔLE, pas de la
+# --- couleur : chaque rôle a SA base, donc chacun a sa maintenance. Leurs services nomment
+# --- l'arbre de la couleur qui sert, et doivent la suivre à chaque bascule (montée ou
+# --- retour) : sinon ils tournent sur l'arbre que la montée suivante réécrit, sans que
+# --- personne le voie. D'où deux étapes, appelées par deploy/cible/deployer.sh :
+# ---   `maintenance-verifier <couleur>`, AVANT la bascule : les unités sont rendues et
+# ---     validées pour la couleur qui va servir, dans un dossier jetable, sans rien poser —
+# ---     un refus ici arrête la montée, rien n'a basculé ;
+# ---   `maintenance`, APRÈS la bascule : les mêmes unités, rendues pour la couleur en
+# ---     service, sont posées, rechargées, leurs timers activés, puis RELUES — chaque échec
+# ---     refuse en nommant le geste (la montée échoue alors, bruyamment).
+# --- <nom de l'unité>:<timer du tag>, le service venant du gabarit deploy/cible/<nom>.service.
+UNITES_MAINTENANCE=(maintenance:oto-mcp-maintenance journal-archive:oto-journal-archive)
+
+# --- rend les services et copie les timers, pour l'arbre de <couleur>, dans <dossier>.
+preparer_maintenance() {
+  local couleur=$1 dossier=$2 paire nom timer
+  case "$couleur" in blue|green) ;; *) refus "couleur « $couleur » inconnue (blue | green)" ;; esac
+  [ -d "${BG_TREE}-${couleur}" ] || refus "arbre ${BG_TREE}-${couleur} absent — l'amorce du rôle n'a pas tourné"
+  for paire in "${UNITES_MAINTENANCE[@]}"; do
+    nom=${paire%%:*} timer=${paire#*:}
+    rendre_dans "$ICI/${nom}.service" "$dossier/${UNITE}-${nom}.service" "${BG_TREE}-${couleur}"
+    [ -r "$DEPLOY/${timer}.timer" ] || refus "timer $DEPLOY/${timer}.timer absent du tag"
+    cp "$DEPLOY/${timer}.timer" "$dossier/${UNITE}-${nom}.timer" \
+      || refus "timer $DEPLOY/${timer}.timer illisible"
+  done
+}
+
+if [ "$ETAPE" = maintenance-verifier ] || [ "$ETAPE" = maintenance ]; then
+  RENDU=$(mktemp -d)
+  trap 'rm -rf "$RENDU"' EXIT
+fi
+
+if [ "$ETAPE" = maintenance-verifier ]; then
+  couleur="${4:?couleur attendue (blue | green)}"
+  preparer_maintenance "$couleur" "$RENDU"
+  amorce_log "maintenance : unités rendues et valides pour ${BG_TREE}-${couleur}, posées après la bascule"
+  exit 0
+fi
+
 if [ "$ETAPE" = maintenance ]; then
-  actif=$(cat "$BG_ACTIVE")
+  actif=$(cat "$BG_ACTIVE") || refus "pointeur $BG_ACTIVE illisible"
   case "$actif" in blue|green) ;; *) refus "pointeur $BG_ACTIVE illisible (« $actif »)" ;; esac
-  rendre "$ICI/maintenance.service" "/etc/systemd/system/${UNITE}-maintenance.service" "${BG_TREE}-${actif}"
-  install -m 0644 "$DEPLOY/oto-mcp-maintenance.timer" "/etc/systemd/system/${UNITE}-maintenance.timer"
-  # L'archive du journal d'appels, même pose : sans elle, la rétention ne tourne jamais
-  # et le journal grossit sans que rien ne le signale.
-  rendre "$ICI/journal-archive.service" "/etc/systemd/system/${UNITE}-journal-archive.service" "${BG_TREE}-${actif}"
-  install -m 0644 "$DEPLOY/oto-journal-archive.timer" "/etc/systemd/system/${UNITE}-journal-archive.timer"
-  systemctl daemon-reload
-  systemctl enable --now "${UNITE}-maintenance.timer" >/dev/null
-  systemctl enable --now "${UNITE}-journal-archive.timer" >/dev/null
+  preparer_maintenance "$actif" "$RENDU"
+  for paire in "${UNITES_MAINTENANCE[@]}"; do
+    nom=${paire%%:*}
+    for f in "${UNITE}-${nom}.service" "${UNITE}-${nom}.timer"; do
+      install -m 0644 "$RENDU/$f" "/etc/systemd/system/$f" \
+        || refus "écriture de /etc/systemd/system/$f en échec"
+    done
+  done
+  systemctl daemon-reload || refus "systemctl daemon-reload en échec"
+  for paire in "${UNITES_MAINTENANCE[@]}"; do
+    nom=${paire%%:*}
+    systemctl enable --now "${UNITE}-${nom}.timer" >/dev/null \
+      || refus "systemctl enable --now ${UNITE}-${nom}.timer en échec"
+  done
+  # Relire ce qui est posé, pas ce qu'on a cru écrire.
+  for paire in "${UNITES_MAINTENANCE[@]}"; do
+    nom=${paire%%:*}
+    grep -qxF "WorkingDirectory=${BG_TREE}-${actif}" "/etc/systemd/system/${UNITE}-${nom}.service" \
+      || refus "/etc/systemd/system/${UNITE}-${nom}.service, relu, ne vise pas ${BG_TREE}-${actif}"
+  done
   amorce_log "maintenance : ${UNITE}-maintenance.timer et ${UNITE}-journal-archive.timer sur ${BG_TREE}-${actif}"
   exit 0
 fi
-[ "$ETAPE" = socle ] || refus "étape inconnue « $ETAPE » (socle | maintenance)"
+[ "$ETAPE" = socle ] || refus "étape inconnue « $ETAPE » (socle | maintenance-verifier | maintenance)"
 
 # --- ce que l'amorce exige et ne pose pas ----------------------------------------
 [ "$(id -u)" = 0 ] || refus "l'amorce tourne en root (par la porte, deploy/cible/porte.sh)"
@@ -88,8 +151,8 @@ done
 [ "$(stat -c %a "$CLE_SCW")" = 600 ] || refus "$CLE_SCW doit être en 0600 (lue par systemd seul)"
 [ -f "$BG_CADDYFILE" ] || refus "$BG_CADDYFILE absent — Caddy n'est pas installé"
 
-PYV=$(grep -oP '^requires-python\s*=\s*">=\K[0-9]+\.[0-9]+' "$RACINE_TAG/pyproject.toml") \
-  || refus "plancher Python introuvable dans le pyproject du tag"
+PYV=$(python3 "$ICI/plancher_python.py" plancher "$RACINE_TAG/pyproject.toml") \
+  || refus "plancher Python illisible dans le pyproject du tag (motif ci-dessus)"
 
 # --- utilisateur de service : système, sans shell, sans maison — jamais root -----
 if ! id -u "$UTILISATEUR" >/dev/null 2>&1; then
@@ -104,6 +167,12 @@ install -d -m 0700 "$ETC_INSTANCE" "$ETC_ROLE"
 python3 "$ICI/declaration.py" ecrire "$DECLARATION" "$ROLE" / >/dev/null
 export UV_PYTHON_INSTALL_DIR="$PYTHONS"
 uv python install --quiet "$PYV"
+# L'interpréteur que l'instance choisit (`python` de la déclaration), en plus du plancher :
+# la montée y recrée le venv de la couleur qu'elle installe (deploy/cible/deployer.sh), qui
+# refuse, avant cette amorce, un choix que le tag n'admet pas. L'amorce, elle, ne refuse rien.
+if [ -n "$PYTHON_CHOISI" ] && [ "$PYTHON_CHOISI" != "$PYV" ]; then
+  uv python install --quiet "$PYTHON_CHOISI"
+fi
 
 for couleur in blue green; do
   arbre="${BG_TREE}-${couleur}"
@@ -117,8 +186,19 @@ for couleur in blue green; do
     uv venv --quiet --seed --python "$PYV" --python-preference only-managed "$arbre/.venv"
     amorce_log "venv Python ${PYV} créé dans ${arbre}"
   fi
-  version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
-  [ "$version" = "$PYV" ] || refus "$arbre/.venv est en Python $version, le tag exige $PYV — recréer ce venv"
+  # Un venv que le `requires-python` du tag n'admet pas se DIT, et c'est tout : l'amorce
+  # ne le recrée ni ne le refuse. Elle tourne à chaque montée, à chaque retour arrière et
+  # avant la maintenance — à ces moments, la couleur inactive est le RETOUR ARRIÈRE, et son
+  # venv est celui de la version qu'elle porte. Refuser ici bloquerait toute montée dès que
+  # le plancher change (les deux couleurs ne changent jamais de Python ensemble), et tout
+  # retour vers la couleur d'avant. Même règle que la montée, qui recrée le venv de la
+  # couleur qu'elle INSTALLE, et d'elle seule (`bg_avant_installation`,
+  # deploy/cible/deployer.sh) : un venv qui satisfait le `requires-python` reste tel quel.
+  version=$("$arbre/.venv/bin/python" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null) \
+    || version="illisible"
+  if [ "$version" = illisible ] || ! python3 "$ICI/plancher_python.py" satisfait "$RACINE_TAG/pyproject.toml" "$version"; then
+    amorce_log "${arbre}/.venv est en Python ${version}, que le requires-python du tag n'admet pas (plancher ${PYV}) — laissé tel quel ; recréé par la montée qui installera cette couleur"
+  fi
 done
 
 # --- naissance : la couleur « en service » d'un rôle qui n'a jamais servi est bleue ;

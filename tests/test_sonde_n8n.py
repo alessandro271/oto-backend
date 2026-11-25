@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import requests
+
 import pytest
 
 from oto_mcp import credentials_store
@@ -25,6 +27,7 @@ class _FauxClient:
     def __init__(self, boom=None):
         self._boom = boom
         self.appels = []
+        self.session = requests.Session()   # gardée par le backend (egress_transport)
 
     def list_workflows(self, limit=None, active=None, tags=None, cursor=None):
         self.appels.append(("list_workflows", limit))

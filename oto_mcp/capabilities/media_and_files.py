@@ -218,33 +218,38 @@ def _telecharger_photo(url: str) -> bytes:
     stockage), aucune redirection suivie hors des hôtes de Google."""
     import requests
 
-    from .. import media_store
+    from .. import egress, egress_transport, media_store
     borne = media_store.max_image_bytes()
     courante = url
-    for _ in range(_REDIRECTIONS_PHOTO + 1):
-        _adresse_de_photo(courante)
-        try:
-            r = requests.get(courante, stream=True, allow_redirects=False,
-                             timeout=_DELAI_PHOTO)
-        except requests.RequestException:
-            raise AuthzDenied(502, "fetch_failed") from None
-        try:
-            if r.is_redirect or r.is_permanent_redirect:
-                courante = urljoin(courante, r.headers.get("Location") or "")
-                continue
-            if r.status_code != 200:
-                raise AuthzDenied(502, "fetch_failed")
-            if not (r.headers.get("Content-Type") or "").lower().startswith("image/"):
-                raise AuthzDenied(400, "unsupported_type")
-            morceaux, total = [], 0
-            for morceau in r.iter_content(chunk_size=65536):
-                total += len(morceau)
-                if total > borne:
-                    raise AuthzDenied(413, "image_too_large")
-                morceaux.append(morceau)
-            return b"".join(morceaux)
-        finally:
-            r.close()
+    # Session épinglée : la garde tient à la connexion, sur l'adresse jointe.
+    with egress_transport.session(connector="avatar_import", field="url",
+                                  exceptions_declarees=False) as s:
+        for _ in range(_REDIRECTIONS_PHOTO + 1):
+            _adresse_de_photo(courante)
+            try:
+                r = s.get(courante, stream=True, allow_redirects=False,
+                          timeout=_DELAI_PHOTO)
+            except egress.EgressRefused:
+                raise AuthzDenied(400, "url_not_allowed") from None
+            except requests.RequestException:
+                raise AuthzDenied(502, "fetch_failed") from None
+            try:
+                if r.is_redirect or r.is_permanent_redirect:
+                    courante = urljoin(courante, r.headers.get("Location") or "")
+                    continue
+                if r.status_code != 200:
+                    raise AuthzDenied(502, "fetch_failed")
+                if not (r.headers.get("Content-Type") or "").lower().startswith("image/"):
+                    raise AuthzDenied(400, "unsupported_type")
+                morceaux, total = [], 0
+                for morceau in r.iter_content(chunk_size=65536):
+                    total += len(morceau)
+                    if total > borne:
+                        raise AuthzDenied(413, "image_too_large")
+                    morceaux.append(morceau)
+                return b"".join(morceaux)
+            finally:
+                r.close()
     raise AuthzDenied(502, "fetch_failed")
 
 

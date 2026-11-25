@@ -143,12 +143,8 @@ class LibraryList(BaseModel):
 
     ⚠️ Ne contient QUE les entrées `public` : une entrée `unlisted` existe et reste
     lisible par son slug exact (library.get), mais n'apparaît jamais ici. Une liste
-    vide ne prouve donc pas qu'un guide n'existe pas.
-
-    ⚠️ La liste est servie sous SES DEUX noms — `guides` (aujourd'hui) et `doctrines`,
-    retiré avec un préavis (#519), cf. `docs/alias-deprecies.md`."""
+    vide ne prouve donc pas qu'un guide n'existe pas."""
     guides: list[LibraryEntrySummary]
-    doctrines: list[LibraryEntrySummary]     # ALIAS déprécié (retiré avec un préavis)
 
 
 class LibraryEntry(BaseModel):
@@ -304,9 +300,9 @@ def _author_for(ctx: ResolvedCtx) -> tuple[str, Optional[int], str]:
 
 
 def _list(ctx: ResolvedCtx, inp: LibraryListInput) -> dict:
-    return deprecations.avec_les_deux_noms({"guides": org_store.list_library(
+    return {"guides": org_store.list_library(
         query=inp.query, category=inp.category, author_kind=inp.author_kind,
-        include_unlisted=False, limit=inp.limit)})
+        include_unlisted=False, limit=inp.limit)}
 
 
 def _get(ctx: ResolvedCtx, inp: LibraryGetInput) -> dict:

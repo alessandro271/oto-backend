@@ -107,7 +107,6 @@ def test_read_ne_couvre_que_la_lecture_du_crm():
     assert CRM.covered_ops("read", "zoho_record") == {"list", "get", "search"}
     assert CRM.covered_ops("read", "zoho_note") == {"list"}
     assert CRM.covers("read", "zoho_modules")
-    assert CRM.covers("read", "zoho_connect")      # le geste de consentement, toujours
     assert CRM.covered_ops(al.FULL, "zoho_record") == {
         "list", "get", "search", "create", "update", "delete"}
 

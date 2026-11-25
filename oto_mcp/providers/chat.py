@@ -14,7 +14,7 @@ from .google import service
 CONNECTOR = service(
     "chat",
     label="Google Chat",
-    help="your Google Chat spaces — read spaces and messages, post; scopes `chat.spaces.readonly` + `chat.messages`, granted on your Google account",
+    help="your Google Chat spaces — read spaces and messages, post; scopes `chat.spaces.readonly` + `chat.messages.readonly` + `chat.messages.create`, granted on your Google account",
     href="https://chat.google.com",
 )
 

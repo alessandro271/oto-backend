@@ -231,10 +231,10 @@ def is_connector_tool(name: str) -> bool:
     """True si `name` appartient à un CONNECTEUR du registre — donc déjà présenté par
     la moitié « connecteurs » de la carte, et hors socle.
 
-    Le filtre n'est pas cosmétique : quatre outils de connecteur sont déclarés comme
-    des capacités (`salesforce_connect`, `zoho_connect`, `zohoanalytics_orgs`,
-    `routine_fire`). Sans lui, ils apparaîtraient « non classés » au socle, donc
-    DEUX FOIS dans la carte, dont une fois au mauvais endroit."""
+    Le filtre n'est pas cosmétique : des outils de connecteur sont déclarés comme
+    des capacités (`zohoanalytics_orgs`, `routine_fire`). Sans lui, ils apparaîtraient
+    « non classés » au socle, donc DEUX FOIS dans la carte, dont une fois au mauvais
+    endroit."""
     try:
         from .providers import connector_for_namespace
         from .tool_visibility import namespace_of

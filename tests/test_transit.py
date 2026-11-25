@@ -161,3 +161,48 @@ def test_upload_private_ne_met_plus_de_pourcent_dans_la_cle(s3):
     media_store.upload_private("threecx-files", "sub-a", b"x", "text/csv", "[a] b.csv")
     [cle] = s3.objets
     assert cle.endswith("/a_b.csv") and "%" not in cle
+
+
+# ── `upload_private` : le type SERVI, jamais le type déclaré par un connecteur seul ──
+# Ce que dépose un connecteur (pièce jointe d'e-mail, fichier partagé, export) porte le
+# type qu'un TIERS a déclaré. L'URL signée s'ouvre dans un navigateur : un contenu actif
+# n'y doit jamais s'afficher.
+
+HTML = b"<!doctype html><html><body><script>alert(1)</script></body></html>"
+SVG = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+
+
+@pytest.mark.parametrize("octets, declare", [
+    (HTML, "text/html"),
+    (HTML, "application/xhtml+xml"),
+    (SVG, "image/svg+xml"),
+    (b'<?xml version="1.0"?><x/>', "text/xml"),
+    (b'<?xml version="1.0"?><x/>', "application/xml"),
+    (b"alert(document.domain)", "application/javascript"),
+    (b"alert(document.domain)", "text/javascript"),
+    (HTML, "image/png"),          # déclaration mensongère
+    (HTML, "text/plain"),         # balisage actif dans un type passif
+    (b"\x00\x01\x02 inconnu", ""),  # type vide, octets non reconnus
+    (b"\x00\x01\x02 inconnu", "application/x-whatever"),
+])
+def test_upload_private_neutralise_l_actif_et_l_inconnu(s3, octets, declare):
+    media_store.upload_private("gmail-attachments", "sub-a", octets, declare, "piece.html")
+    [objet] = s3.objets.values()
+    assert objet["ContentType"] == "application/octet-stream"
+    assert objet["ContentDisposition"] == "attachment; filename*=UTF-8''piece.html"
+
+
+@pytest.mark.parametrize("octets, declare, servi", [
+    (b"\x89PNG\r\n\x1a\n" + b"0" * 32, "image/png", "image/png"),
+    (b"%PDF-1.4 x", "application/pdf", "application/pdf"),
+    (b"ID3\x04\x00" + b"0" * 32, "audio/mpeg", "audio/mpeg"),
+    (b"a,b\n1,2\n", "text/csv", "text/csv"),
+])
+def test_upload_private_garde_le_type_d_un_contenu_passif_et_l_affiche(s3, octets,
+                                                                     declare, servi):
+    """Une image générée, un PDF, un audio ou un CSV restent affichables : seule la
+    neutralisation force le téléchargement."""
+    media_store.upload_private("gemini-images", "sub-a", octets, declare, "f")
+    [objet] = s3.objets.values()
+    assert objet["ContentType"] == servi
+    assert "ContentDisposition" not in objet

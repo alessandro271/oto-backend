@@ -185,6 +185,45 @@ def test_le_constat_couvre_chaque_table_vivante():
         assert sql.lstrip().upper().startswith("SELECT")
 
 
+def test_un_connecteur_renomme_se_lit_a_part(monkeypatch):
+    """L'ancien nom d'un connecteur renommé n'est pas un orphelin à réclamer : ses lignes
+    sont les restes d'une copie sous le nouveau nom, comptés hors de `total`."""
+    from oto_mcp import providers
+    from oto_mcp.db import lecture_bornee
+    ancien, nouveau = next(iter(providers.CONNECTEURS_RENOMMES.items()))
+    assert ancien not in orphelins.catalogue() and nouveau in orphelins.catalogue()
+    rows = {"t_credentials": [{"connecteur": ancien, "lignes": 6},
+                              {"connecteur": FANTOME, "lignes": 1}],
+            "t_kit": [{"connecteur": ancien, "lignes": 2}],
+            "t_vide": []}
+    monkeypatch.setattr(orphelins, "REFERENCES", tuple((t, t) for t in rows))
+
+    class _ParTable:
+        def execute(self, sql, _params):
+            self.rows = rows[sql]
+            return self
+
+        def fetchall(self):
+            return self.rows
+
+    @contextmanager
+    def _lecture(*_a, **_k):
+        yield _ParTable()
+    monkeypatch.setattr(lecture_bornee, "lecture_d_agregat", _lecture)
+
+    rendu = orphelins.constat()
+    assert rendu["tables"] == [
+        {"table": "t_credentials", "connecteurs": [
+            {"connecteur": ancien, "lignes": 6, "renomme_en": nouveau},
+            {"connecteur": FANTOME, "lignes": 1}]},
+        {"table": "t_kit", "connecteurs": [
+            {"connecteur": ancien, "lignes": 2, "renomme_en": nouveau}]},
+        {"table": "t_vide", "connecteurs": []},
+    ]
+    assert rendu["total"] == 1
+    assert rendu["total_renommes"] == 8
+
+
 def test_le_constat_sur_la_base_reelle(live):
     from oto_mcp import db
     with db._connect() as conn:
@@ -205,6 +244,9 @@ def test_le_constat_sur_la_base_reelle(live):
                          "connector, secret_enc) VALUES ('org', %s, %s, 'x')", (str(org), nom))
             conn.execute("INSERT INTO connector_instances (connector, owner_type, owner_id) "
                          "VALUES (%s, 'org', %s)", (nom, str(org)))
+        # L'ancien nom d'un connecteur renommé : compté à part, hors de `total`.
+        conn.execute("INSERT INTO user_selected_connectors (sub, org_id, connector) "
+                     "VALUES ('sub-d', %s, 'http')", (org,))
         # Un pont remote se définit par sa donnée : ni lui ni son instance ne comptent.
         conn.execute("INSERT INTO connector_credentials (entity_type, entity_id, connector, "
                      "secret_enc, meta) VALUES ('org', %s, 'pont_maison', 'x', %s)",
@@ -218,7 +260,9 @@ def test_le_constat_sur_la_base_reelle(live):
     rendu = orphelins.constat()
     par_table = {t["table"]: t["connecteurs"] for t in rendu["tables"]}
     assert par_table == {
-        "user_selected_connectors": [{"connecteur": FANTOME, "lignes": 2}],
+        "user_selected_connectors": [{"connecteur": FANTOME, "lignes": 2},
+                                     {"connecteur": "http", "lignes": 1,
+                                      "renomme_en": "api"}],
         "connector_selection_removed": [{"connecteur": FANTOME, "lignes": 1}],
         "connector_availability": [{"connecteur": FANTOME, "lignes": 1}],
         "connector_credentials": [{"connecteur": FANTOME, "lignes": 1}],
@@ -227,4 +271,5 @@ def test_le_constat_sur_la_base_reelle(live):
         "orgs.default_connectors": [{"connecteur": FANTOME, "lignes": 1}],
     }
     assert rendu["total"] == 8
+    assert rendu["total_renommes"] == 1
     assert rendu["catalogue"] == len(orphelins.catalogue())

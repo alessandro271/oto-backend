@@ -188,8 +188,15 @@ def signup(monkeypatch):
 
 
 def test_signup_nominal_ne_leve_pas(signup):
-    db_users.upsert_user("u-1", email="a@b.c", name="A")
+    db_users.upsert_user("u-1", email="a@b.c", name="A", email_verified=True)
     assert signup == ["invitation", "partages", "org_maison"]
+
+
+def test_signup_sans_adresse_verifiee_n_accepte_rien_d_office(signup):
+    """Le jeton ne dit pas l'adresse vérifiée : ni invitation ni partage acceptés
+    d'office (ils restent en attente), l'org maison naît quand même."""
+    db_users.upsert_user("u-1", email="a@b.c", name="A")
+    assert signup == ["org_maison"]
 
 
 def test_un_invite_deja_membre_ne_recoit_pas_d_org_perso(signup, monkeypatch):
@@ -197,7 +204,7 @@ def test_un_invite_deja_membre_ne_recoit_pas_d_org_perso(signup, monkeypatch):
     à côté n'était qu'un second espace qu'il n'a pas demandé."""
     from oto_mcp import org_store
     monkeypatch.setattr(org_store, "list_orgs_for_user", lambda sub: [{"org_id": 7}])
-    db_users.upsert_user("u-1", email="a@b.c", name="A")
+    db_users.upsert_user("u-1", email="a@b.c", name="A", email_verified=True)
     assert signup == ["invitation", "partages"]
 
 
@@ -208,7 +215,7 @@ def test_partages_en_attente_non_honores_est_une_erreur_nommee(signup, monkeypat
     monkeypatch.setattr(partage_en_attente, "honorer_au_signup",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("timeout")))
     with pytest.raises(db_users.OnboardingIncomplet) as e:
-        db_users.upsert_user("u-1", email="a@b.c", name="A")
+        db_users.upsert_user("u-1", email="a@b.c", name="A", email_verified=True)
     assert "partage_en_attente" in str(e.value)
     assert signup == ["invitation", "org_maison"]
 
@@ -220,7 +227,7 @@ def test_org_maison_manquante_est_une_erreur_nommee(signup, monkeypatch, caplog)
     caplog.set_level(logging.DEBUG, logger=db_users.logger.name)
 
     with pytest.raises(db_users.OnboardingIncomplet) as e:
-        db_users.upsert_user("u-1", email="a@b.c", name="A")
+        db_users.upsert_user("u-1", email="a@b.c", name="A", email_verified=True)
     assert "ensure_home_org" in str(e.value)
 
     erreurs = [r for r in caplog.records if r.levelno >= logging.ERROR]
@@ -234,7 +241,7 @@ def test_invitation_non_honoree_est_une_erreur_nommee(signup, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("timeout")))
 
     with pytest.raises(db_users.OnboardingIncomplet) as e:
-        db_users.upsert_user("u-1", email="a@b.c", name="A")
+        db_users.upsert_user("u-1", email="a@b.c", name="A", email_verified=True)
     assert "reconcile_signup_with_invitation" in str(e.value)
     # L'échec de l'un ne dispense pas de tenter les autres : tous sont tentés, et
     # l'erreur finale dit lesquels ont manqué.

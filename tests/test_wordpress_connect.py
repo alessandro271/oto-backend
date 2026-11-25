@@ -3,7 +3,6 @@ retour de navigateur non authentifié : state signé, lié à son audience et à
 unique, droits re-vérifiés au retour, HTTPS, site renvoyé = site demandé,
 vérification AVANT la pose, compte nommé par l'hôte, et le mot de passe (en query)
 retiré du journal d'accès et de Sentry."""
-import asyncio
 import logging
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -302,23 +301,11 @@ def test_finish_org_scope_writes_the_org_row(monkeypatch):
 CALLBACK = "/api/wordpress/connect/callback"
 
 
-def _handler():
-    from oto_mcp.api import wordpress as wp_routes
+def _call(query: str) -> str:
+    """The real callback, then the front's completion: the issue."""
+    from _retour_oauth import terminer
 
-    routes = wp_routes.make_routes(None, None, None, None, None)
-    return next(r.endpoint for r in routes if r.path == CALLBACK)
-
-
-def _call(query: str):
-    from starlette.requests import Request
-
-    async def _receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    req = Request({"type": "http", "method": "GET", "path": CALLBACK, "headers": [],
-                   "query_string": query.encode(), "path_params": {}}, receive=_receive)
-    resp = asyncio.run(_handler()(req))
-    return parse_qs(urlsplit(resp.headers["location"]).query).get("connect", [None])[0]
+    return terminer(CALLBACK, {k: v[0] for k, v in parse_qs(query).items()})[0]
 
 
 @pytest.fixture
@@ -334,7 +321,8 @@ def retour(monkeypatch):
                         lambda app, connector, etat, org=None:
                         f"https://front.example.test/c?connector={connector}&connect={etat}")
     posed = []
-    monkeypatch.setattr(wp_auth, "finish", lambda parsed, *a: posed.append(parsed) or "acct")
+    monkeypatch.setattr(wp_auth, "finish",
+                        lambda parsed, *a: posed.append((parsed, a)) or "acct")
     monkeypatch.setattr(wp_auth, "still_allowed", lambda parsed: True)
 
     def state(**over):
@@ -354,8 +342,9 @@ def test_callback_success_then_replay_is_refused(retour):
         == "connected"
     # La même `success_url`, rejouée avec un autre identifiant : rien n'est posé.
     assert _call(f"state={st}&site_url=https://blog.example.com&user_login=x&password=q") \
-        == "error"
+        == "state_used"
     assert len(retour.posed) == 1
+    assert retour.posed[0][1] == ("https://blog.example.com", "e", "p")
 
 
 def test_callback_denied(retour):
@@ -365,7 +354,7 @@ def test_callback_denied(retour):
 
 def test_callback_rechecks_rights(retour, monkeypatch):
     monkeypatch.setattr(wp_auth, "still_allowed", lambda parsed: False)
-    assert _call(f"state={retour.state(scope='org')}&user_login=e&password=p") == "forbidden"
+    assert _call(f"state={retour.state(scope='org')}&user_login=e&password=p") == "not_allowed"
     assert not retour.posed
 
 
@@ -374,7 +363,33 @@ def test_callback_finish_failure_is_error(retour, monkeypatch):
         raise wp_auth.ConnectRefused("non")
 
     monkeypatch.setattr(wp_auth, "finish", boom)
-    assert _call(f"state={retour.state()}&user_login=e&password=p") == "error"
+    assert _call(f"state={retour.state()}&user_login=e&password=p") == "exchange_failed"
+
+
+def test_callback_hands_an_opaque_code_bound_to_its_state(retour):
+    """The callback hands the front a sealed `code`: the received fields are not in
+    the return URL, and the code opens for its own state only."""
+    from _retour_oauth import rappel
+
+    st, autre = retour.state(), retour.state(jti="j-2")
+    url = rappel(CALLBACK, {"state": st, "site_url": "https://blog.example.com",
+                            "user_login": "e", "password": "mot-de-passe"})
+    assert "mot-de-passe" not in url and "user_login" not in url
+    code = parse_qs(urlsplit(url).fragment)["code"][0]
+    lu = wp_auth.read_state(st)
+    assert oauth_flow.unseal_code(wp_auth.AUD, lu["jti"], code)["password"] == "mot-de-passe"
+    assert oauth_flow.unseal_code(wp_auth.AUD, wp_auth.read_state(autre)["jti"], code) is None
+    with pytest.raises(oauth_flow.CompletionRefused) as e:
+        oauth_flow.complete(wp_auth.RETURN, lu["sub"], code, autre)
+    assert e.value.code == "invalid_state"
+    assert not retour.posed
+
+
+def test_a_sealed_code_expires_with_its_state(retour, monkeypatch):
+    vrai = oauth_flow.time.time
+    code = oauth_flow.seal_code(wp_auth.AUD, "j1", {"password": "p"})
+    monkeypatch.setattr(oauth_flow.time, "time", lambda: vrai() + 601)
+    assert oauth_flow.unseal_code(wp_auth.AUD, "j1", code) is None
 
 
 def test_still_allowed_reads_the_role_of_the_scope(monkeypatch):

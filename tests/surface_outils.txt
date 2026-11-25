@@ -48,8 +48,8 @@ amplitude_cohort	list members request	5524bc99528ed61c
 amplitude_query	active_users funnel retention segmentation sessions	9c41b5a331326e08
 amplitude_schema	event_properties events group_properties user_properties volumes	b9a31536079a166d
 amplitude_user	activity search	9495c97fc1194f35
-api	list setup_link	32817fb7d91f6f29
-api_act	call import request set_definition	80e97b4410d978f0
+api	list mcp_tools setup_link	9446c6bf317e1976
+api_act	call call_mcp import request set_definition	eb53f602c94c952e
 api_doc	-	99334726611ccf58
 api_get	-	128463baca5916ac
 api_post	-	e2be3dfc680c648c
@@ -312,7 +312,7 @@ github_orgs	add_collaborator add_team_member collaborators get is_collaborator i
 github_pulls	commits create files get merge merged remove_reviewers request_review review review_comment review_comments reviewers reviews search submit_review update update_branch	859355bc42715359
 github_repos	branches commit commits compare contributors create_release get languages latest_release mine org release releases tags topics update_release user	56e360c3072b00ce
 github_search	code commits issues repos users	48102a71899e53e0
-gmail	accounts attachment draft drafts get search	a4f78d0f9ac98fbc
+gmail	accounts attachment draft drafts get search	d3e5e8d70b5b9659
 gmail_act	archive delete_draft send trash	d7323019750c5de9
 gocardless_creditors	-	99334726611ccf58
 gocardless_events	-	bdc3f81b4f1b4e56
@@ -630,6 +630,7 @@ oto_connector	force list pause recommend select setup_link unselect	f2cc853acfe3
 oto_connector_access_level	clear get set	ffa2628b78fe842b
 oto_connector_activation	clear list set	7596a92524e0e798
 oto_connector_app	-	d015e84398cf40a2
+oto_connector_connect	-	2f08723ba3335885
 oto_context	-	fd3168d48576c83d
 oto_disable_tool	-	1149380513abd0af
 oto_doc	archive backlinks bulk_create create delete get list move outline patch revert revisions search set_public shared_with_me unarchive update verify	c20aad60a0879f59
@@ -817,7 +818,6 @@ resend_topic	get list	ca69d00179b60475
 routine_fire	-	795d51d55a47cf70
 run_finish	-	a58273cfd52f4114
 run_start	-	1dc80fc7499d4fcc
-salesforce_connect	start	81a411974462b440
 salesforce_describe	-	b08f321a0ab3d244
 salesforce_note	create list	8fb225c1a4a92370
 salesforce_query	soql sosl	af4c2a14ce5b1c7e
@@ -854,8 +854,9 @@ sharepoint_excel	range sheets	2d4b796ea392726d
 sharepoint_excel_act	update_range	08c0f66dd71cbce2
 sharepoint_file	create_folder download get list search upload	71548fca01d9a9ca
 sharepoint_site	drives get search	1023081e240273ee
+sheets_chart	add delete list	6ca56b12e3448086
 sheets_create	-	9724ca91b2f76777
-sheets_spreadsheet	add_sheet clear column_width copy_sheet delete_rows delete_sheet dropdown format freeze metadata number_format read rename_sheet write	325b688f67023b90
+sheets_spreadsheet	add_sheet auto_fit clear clear_conditional_formats clear_filter column_width conditional_format copy_sheet delete_columns delete_rows delete_sheet dropdown fill filter find_replace format freeze hide insert_columns insert_rows merge metadata number_format read rename_sheet show sort unmerge write	15d5aec486a1ec5d
 signwell_account	api_application delete_api_application me	f7727344dada1c3e
 signwell_act	remind_document send_document	f1560a9ec238aa32
 signwell_bulk_send	create csv_template documents get list validate_csv	2d07b6263fb76db8
@@ -1019,7 +1020,6 @@ zeendoc	binders choices count document file search text values	b86df90f330b0f9e
 zerobounce_credits	-	99334726611ccf58
 zerobounce_verify_batch	-	09062cdf32915f48
 zerobounce_verify_email	-	e554a85546f6e8cd
-zoho_connect	modes start	2a491988a28db2bf
 zoho_modules	-	99334726611ccf58
 zoho_note	create list	6b3760d00c86a138
 zoho_record	create delete get list search update	2c27480697da575c

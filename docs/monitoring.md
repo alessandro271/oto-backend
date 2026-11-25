@@ -376,16 +376,35 @@ le démarrage journalise `borne de session MCP : … N gestionnaire(s) armé(s)`
 (face authentifiée + face anonyme). Chaque dépassement est aussi journalisé (`borne <limiteur> …`, une ligne par clé
 et par minute au plus, empreinte tronquée).
 
+**Le transport de l'SDK `mcp` 1.30** (25/11/2026, `borne_session.plafonner`) : deux réglages
+posés dans TOUS les modes, `off` compris, parce que l'SDK les applique de lui-même ; ils ne
+passent pas par le palmarès : l'SDK refuse seul (et le journalise : `Refusing to open a new
+session…`), et le compteur des refus du transport (`transport_refusals`) les classe en
+`corps_trop_gros` et `trop_de_sessions`.
+
+| réglage (défaut) | ce que l'SDK en fait | réponse |
+| --- | --- | --- |
+| `OTO_BORNE_CORPS_MCP_OCTETS` 32 MiB | `max_request_body_size` du gestionnaire (défaut de l'SDK : 4 MiB) — posé au-dessus du `request_body` du proxy (32 Mo), donc sans refus nouveau ; `corps` ci-dessus reste la borne mesurée | `413` |
+| `OTO_BORNE_SESSIONS_MCP_MAX` 10 000 | `max_sessions` : sessions ouvertes à la fois, par gestionnaire (défaut de l'SDK). Mesuré sur 7 jours au 25/11/2026 : 568 au plus. Exception assumée à « aucun plafond de nombre » : global, sans état par principal | `503` sur une ouverture de plus ; les sessions ouvertes ne sont pas touchées |
+
+Le démarrage journalise `transport MCP : corps max … octets, … sessions ouvertes au plus, N
+gestionnaire(s) plafonné(s)` — attendu 2. En `off` ou avec `OTO_BORNE_SESSION_INACTIVE_S=0`,
+l'inactivité est désarmée explicitement (l'SDK 1.30 l'armerait à 30 min) : les sessions ne
+sortent plus que par `DELETE`, et le plafond finit par se remplir. ⚠️ Depuis 1.30,
+l'inactivité part de la fin de la dernière requête en cours : un flux GET ouvert tient sa
+session. Le pic de 568 a été mesuré sous la règle de 1.28 ; après déploiement, c'est
+`ouvertes=` de la ligne de contrôle qui dit le nouveau régime.
+
 **Les sessions MCP ouvertes ne retiennent plus leur dernière réponse** (`oto_mcp/sessions_mcp.py`,
-équipé au même démarrage, dans tous les modes). Deux défauts du transport Streamable HTTP de
-l'SDK `mcp`, corrigés par une enveloppe sur le serveur que chaque gestionnaire fait tourner,
+équipé au même démarrage, dans tous les modes). Un défaut du transport Streamable HTTP de
+l'SDK `mcp` (deux en 1.28), corrigé par une enveloppe sur le serveur que chaque gestionnaire fait tourner,
 sans forker l'SDK : la tâche `message_router` du transport gardait dans ses variables locales
 le dernier message acheminé (une session arrêtée après un `tools/list` gardait ~1,3 Mo de tas
 et ~3 Mo de RSS jusqu'à la borne d'inactivité) — chaque réponse est désormais suivie d'un
 témoin minuscule, une réponse à un identifiant qu'aucune requête ne porte, que le routeur
-prend à sa place et ne livre à personne ; et une session fermée par `DELETE` restait pour
-toujours dans le gestionnaire (`_server_instances`, `_session_owners` : l'SDK ne retire que
-les sessions NON terminées) — l'enveloppe la retire. Un gestionnaire qui n'a plus ces
+prend à sa place et ne livre à personne. (Une session fermée par `DELETE` restait pour
+toujours dans le gestionnaire en 1.28 et l'enveloppe la retirait ; l'SDK 1.30 la retire
+lui-même, l'enveloppe ne fait plus que compter.) Un gestionnaire qui n'a plus ces
 accroches, ou qui porte un `event_store` (il rejouerait le témoin), refuse le démarrage ; le
 démarrage journalise `sessions MCP : N gestionnaire(s) équipé(s)…` — attendu 2. Le banc
 `tests/test_sessions_mcp_liberation.py` joue le vrai SDK, avec pour chaque correctif un
@@ -400,7 +419,9 @@ sessions MCP : authentifiee ouvertes=42 terminees_retenues=0 fermees_inactivite=
 `ouvertes` = sessions vivantes au gestionnaire à l'instant de la ligne ; `terminees_retenues`
 = sessions terminées encore retenues (**0 attendu** : autre chose dit qu'une fermeture
 échappe à l'enveloppe) ; `fermees_*` = fermetures depuis la ligne précédente, par la borne
-d'inactivité ou par `DELETE`. Elle ne dépend pas du niveau des journaux `mcp.*`, qui disent
+d'inactivité, ou terminées autrement (`fermees_delete` : `DELETE` du client, mais aussi une
+requête d'ouverture que l'SDK 1.30 a refusée — sans identifiant de session, seul un
+`initialize` réussi en ouvre une, et l'SDK termine les autres). Elle ne dépend pas du niveau des journaux `mcp.*`, qui disent
 la même chose session par session (`Created new transport…`, `Session … idle timeout`).
 
 Pas la connexion d'un connecteur, pas le `tools/list`. (Ce paragraphe disait « uniquement
@@ -694,7 +715,13 @@ déjà journalisée ne porte : les jours consolidés ne se recalculent pas d'eux
 l'archive S3) — sans `since`, la fenêtre maximale
 s'applique et `since_effectif` la rend ; au-delà, `400 window_too_large`, jamais une
 fenêtre rognée. Une page d'au plus `RELEVE_LIMITE_MAX` (5 000) lignes — au-delà,
-`400 limit_too_large`, là où la valeur était écrêtée en silence. Les deux lectures
+`400 limit_too_large`, là où la valeur était écrêtée en silence. Une borne VIDE
+(`?since=&until=`) est une borne ABSENTE ; une borne que PostgreSQL ne lit pas comme un
+instant fini (`garbage`, `2026-13-45`, `infinity`) — `since`, `until`, `before_at`, et
+de même sur l'export d'audit — rend `400 invalid_timestamp` qui nomme le paramètre,
+plus un `500` (durcissement CASA 6.2.1, `db.BorneIllisible`, relue par PostgreSQL
+lui-même avant la requête : aucun second analyseur). `days` des lentilles `calls`,
+`runs`, `gaps`, `tool_quality` est écrêté à [1, 365] comme les autres agrégats. Les deux lectures
 passent par `idx_tool_calls_org_tool_ok (org_id, tool, created_at DESC) WHERE ok`
 (révision 0032).
 

@@ -27,7 +27,7 @@ from typing import Any, Optional
 from fastmcp import FastMCP
 from mcp.types import INVALID_PARAMS, ErrorData
 
-from .. import access, egress, output_projection
+from .. import access, egress, egress_transport, output_projection
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 
@@ -234,7 +234,9 @@ def register(mcp: FastMCP) -> None:
         url, token = _webhook_of(fields)
         egress.check_url(url, connector=CONNECTOR, field="webhook")
         try:
-            hook = ClayTableWebhook(url, auth_token=token, timeout=WEBHOOK_TIMEOUT)
+            hook = egress_transport.pinned(
+                ClayTableWebhook(url, auth_token=token, timeout=WEBHOOK_TIMEOUT),
+                connector=CONNECTOR, field="webhook")
         except ValueError as e:
             raise _bad(f"Table `{name}`: {e} — paste the webhook again on the Clay card.")
         return hook, entry, _url_mark(url)

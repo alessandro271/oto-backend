@@ -66,7 +66,9 @@ def journal():
 def monde(monkeypatch, journal):
     """Le monde par défaut : le projet existe, il est DANS l'org de consultation, et
     l'acteur y a l'écriture. Chaque test ne débranche que ce qu'il éprouve."""
-    monkeypatch.setattr("oto_mcp.account_suspension.refus", lambda sub: None)
+    # Compte vivant, jamais fermé : la lecture d'entrée de la garde (pause et
+    # instant « révoqué avant », `db.get_suspension`) ne rend rien.
+    monkeypatch.setattr("oto_mcp.db.get_suspension", lambda sub: None)
     monkeypatch.setattr(base, "alias_drain_armed", lambda: False)
     monkeypatch.setattr(db, "upsert_user", lambda *a, **k: None)
 
@@ -412,3 +414,55 @@ def test_l_export_devrait_lui_aussi_etre_borne_a_l_org_de_consultation(client,
     monkeypatch.setattr(ownership, "visible_in_org", lambda *a: False)
     r = client.get(f"/api/me/projects/{PID}/export", headers=_en_tant_que())
     assert r.status_code == 404
+
+
+# ── le plafond tient PENDANT la lecture, pas après ────────────────────────────
+
+def test_un_content_length_au_dela_du_plafond_est_refuse_sans_lire_le_corps(
+        client, monkeypatch, journal):
+    """L'annonce suffit : le corps n'est ni lu, ni confié au parseur multipart."""
+    monkeypatch.setenv("OTO_MCP_UPLOAD_MAX_BYTES", "8")
+    lu = []
+
+    def _corps():
+        lu.append(1)
+        yield b"x" * 10
+
+    r = client.post(f"/api/me/projects/{PID}/files", content=_corps(),
+                    headers={**_en_tant_que(), "Content-Type": "multipart/form-data; b=x",
+                             "Content-Length": str(10 ** 9)})
+    assert r.status_code == 413 and r.json()["error"] == "file_too_large"
+    _rien_n_a_ete_depose(journal)
+
+
+def test_un_corps_chunked_s_arrete_au_plafond(client, monkeypatch, journal):
+    """Sans `Content-Length` (envoi `chunked`), la lecture s'arrête au premier morceau
+    qui fait dépasser le plafond (+ l'enveloppe multipart) : la suite n'est jamais lue.
+    Éprouvé au niveau ASGI : le `TestClient` lit tout le corps avant de l'envoyer."""
+    import asyncio
+    monkeypatch.setenv("OTO_MCP_UPLOAD_MAX_BYTES", "8")
+    morceau, total = b"x" * 64 * 1024, 1000
+    lus, envoye = [], []
+
+    async def receive():
+        lus.append(1)
+        return {"type": "http.request", "body": morceau, "more_body": len(lus) < total}
+
+    async def send(message):
+        envoye.append(message)
+
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+             "method": "POST", "scheme": "http", "server": ("test", 80),
+             "client": ("127.0.0.1", 1), "root_path": "", "query_string": b"",
+             "path": f"/api/me/projects/{PID}/files",
+             "raw_path": f"/api/me/projects/{PID}/files".encode(),
+             "headers": [(b"host", b"test"), (b"authorization", b"Bearer u1"),
+                         (b"content-type", b"multipart/form-data; boundary=x"),
+                         (b"transfer-encoding", b"chunked")]}
+    asyncio.run(client.app(scope, receive, send))
+
+    [debut] = [m for m in envoye if m["type"] == "http.response.start"]
+    corps = b"".join(m.get("body", b"") for m in envoye if m["type"] == "http.response.body")
+    assert debut["status"] == 413 and b"file_too_large" in corps
+    assert len(lus) <= 2, f"{len(lus)} morceaux lus : le corps a été lu au-delà du plafond"
+    _rien_n_a_ete_depose(journal)

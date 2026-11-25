@@ -168,7 +168,7 @@ def verify_api_token(token: str) -> Optional[dict]:
             "  AND p.revoked_at IS NULL "
             "  AND (p.expires_at IS NULL OR p.expires_at > NOW()))) "
             "RETURNING t.id, t.sub, t.scopes, t.kind, t.job_id, t.verrou_org, "
-            "t.verrou_org_id",
+            "t.verrou_org_id, EXTRACT(EPOCH FROM t.created_at)::float8 AS cree_le",
             (h,),
         ).fetchone()
         if not row:
@@ -181,7 +181,10 @@ def verify_api_token(token: str) -> Optional[dict]:
                 "token_id": row["id"], "token_kind": row.get("kind"),
                 # Le verrou d'org d'un jeton de délégation (`verrou_org.py`).
                 "job_id": row.get("job_id"), "verrou_org": bool(row.get("verrou_org")),
-                "verrou_org_id": row.get("verrou_org_id")}
+                "verrou_org_id": row.get("verrou_org_id"),
+                # La date de création, jugée par la garde d'identité contre l'instant
+                # « révoqué avant » du compte (`session_revoquee.py`).
+                "cree_le": row.get("cree_le")}
 
 
 def _as_scopes(raw: object) -> Optional[dict]:

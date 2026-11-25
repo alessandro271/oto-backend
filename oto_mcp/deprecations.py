@@ -159,15 +159,7 @@ def annonce_connecteur_api_du_jour(aujourd_hui: Optional[datetime.date] = None
 # gates, la denylist de visibilité, le journal `tool_calls` et les références
 # `<tool:slug>` continuent de voir un seul nom pour un seul outil.
 TOOLS: dict = {
-    "oto_admin_doctrine": "oto_admin_guide",
-    # Deux verbes de CONNEXION rangés sous le préfixe transverse (02/09/2026) : le
-    # gate par connecteur résout au namespace du NOM, donc `oto_…` les servait à
-    # tous les comptes — y compris ceux qui n'ont ni Salesforce ni Zoho. C'est ce
-    # qu'Alexis a repéré en trouvant dans ses outils un connecteur qu'il n'utilise
-    # pas. Renommés sous leur connecteur ; l'ancien nom reste appelable parce
-    # qu'une procédure d'org le référence (mesuré, pas supposé).
-    "oto_salesforce_connect": "salesforce_connect",
-    "oto_zoho_connect": "zoho_connect",
+    # (L'ancien nom du lot #519 est RETIRÉ, lot D, #526 : il est inconnu.)
     **OUTILS_CONNECTEUR_API,
 }
 
@@ -229,20 +221,6 @@ class AliasRest(NamedTuple):
     # placeholder de `ancien` → placeholder de `nouveau`, quand ils diffèrent.
     # Jamais muté (une valeur par défaut de NamedTuple est partagée).
     params: dict = {}
-    # L'`operationId` HISTORIQUE de ce chemin, quand plus personne ne le réclame.
-    #
-    # ⚠️ L'`operationId` suit la CAPACITÉ, pas le chemin — c'est le nom de méthode
-    # qu'un client généré s'est donné pour une opération. Quand la clé de capacité ne
-    # change pas (`library.list`), le NOUVEAU chemin hérite de l'id : regénérer le
-    # client ne renomme rien, seule l'URL bouge. C'est le bon résultat, et ça
-    # interdit de donner le même id à l'entrée dépréciée (un `operationId` est unique
-    # dans un document OpenAPI — garde-fou `test_openapi.py`). Elle en reçoit alors un
-    # dérivé de son chemin, laissé à `""` ici.
-    #
-    # Un seul cas le renseigne : la clé a changé AUSSI (`org.doctrine.get` →
-    # `org.guide.get`), l'id historique n'est plus réclamé par personne, et le garder
-    # sur l'ancien chemin laisse un client déjà généré retrouver sa méthode.
-    operation_id: str = ""
     # La date de REVUE propre à cet alias, quand elle diffère de `REVUE` — jamais
     # servie (plus d'en-tête `Sunset`, décision du 23/11/2026).
     revue: object = None
@@ -322,7 +300,7 @@ def _alias_datastore() -> tuple:
         ancien = _DS_ANCIEN + chemin[len(_DS_NOUVEAU):]
         ancien = ancien.replace("{datastore}", "{namespace}")
         out.append(AliasRest(getattr(rest, "verb", "GET"), ancien, chemin,
-                             _DS_PARAMS, "", REVUE_DATASTORE))
+                             _DS_PARAMS, REVUE_DATASTORE))
     # Un chemin LITTÉRAL doit précéder un chemin à placeholder qui l'engloberait :
     # `…/namespaces` avant `…/namespaces/{namespace}`. Le tri par longueur puis par
     # nombre de placeholders donne cet ordre sans qu'on ait à le tenir à jour.
@@ -349,32 +327,15 @@ def _alias_connecteur_api() -> tuple:
         for rest in cap.rest_bindings():
             if rest.path.startswith(_API_NOUVEAU) and not rest.path.startswith(_API_NEES_APRES):
                 ancien = _API_ANCIEN + rest.path[len(_API_NOUVEAU):]
-                out.append(AliasRest(rest.verb, ancien, rest.path, {}, "",
+                out.append(AliasRest(rest.verb, ancien, rest.path, {},
                                      REVUE_CONNECTEUR_API))
     return tuple(sorted(out, key=lambda a: (a.ancien.count("{"), len(a.ancien))))
 
 
 def alias_rest_derives() -> tuple:
-    """Tous les alias DÉRIVÉS des routes montées (à côté des déclarés, `REST`)."""
+    """Tous les anciens chemins REST servis en 308, DÉRIVÉS des routes montées. (Les
+    chemins du lot #519, déclarés à la main, sont RETIRÉS — lot D, #526.)"""
     return _alias_datastore() + _alias_connecteur_api()
-
-
-REST: tuple = (
-    # (`/api/doctrines/library[/{slug}]` → `/api/guide-library[/{slug}]` : partis
-    # avec leur cible, la vitrine anonyme des guides — otomata-tech/oto#84.)
-    # ⚠️ ORDRE — `library` AVANT `{doctrine_id}` : le second capture un segment, et
-    # servirait `library` comme un identifiant. C'est exactement ce que faisait la
-    # table d'avant ce lot (le chemin `…/doctrines/library` y était inatteignable).
-    AliasRest("GET", "/api/me/doctrines/library", "/api/me/guide-library"),
-    AliasRest("GET", "/api/me/doctrines/library/{slug}",
-              "/api/me/guide-library/{slug}"),
-    AliasRest("DELETE", "/api/me/doctrines/library/{id}",
-              "/api/me/guide-library/{id}"),
-    AliasRest("POST", "/api/me/doctrines/publish", "/api/me/guide-library/publish"),
-    AliasRest("POST", "/api/me/doctrines/fork", "/api/me/guide-library/fork"),
-    AliasRest("GET", "/api/me/doctrines/{doctrine_id}", "/api/me/guides/{guide_id}",
-              {"doctrine_id": "guide_id"}, "org_doctrine_get_get"),
-)
 
 
 def cible(alias: AliasRest, path_params: dict, query: str = "") -> str:
@@ -391,30 +352,18 @@ def cible(alias: AliasRest, path_params: dict, query: str = "") -> str:
     return f"{chemin}?{query}" if query else chemin
 
 
-# ── Valeurs d'entrée renommées (otomata-tech/oto#65, 23/09/2026) ───────────
+# ── Valeurs d'entrée renommées ──────────────────────────────────────────────
 #
 # Une VALEUR qu'un appelant passe dans un champ, renommée — pas une clé ni un chemin.
-# Premier cas : la famille « procédure » de `oto_resource` (`resource_type`), que la
-# surface servait sous le mot d'avant #519. Arbitrage d'Alexis du 23/09/2026 : ce
-# mot-là ne doit plus apparaître.
+# **Forme de la coexistence** : l'entrée est RÉÉCRITE vers la valeur d'aujourd'hui
+# avant toute autre lecture (autz comprise), la réponse porte `deprecation_warning`
+# (sans date), et le journal compte l'usage (`args.deprecated_value`).
 #
-# ⚠️ **Pourquoi un alias et pas un retrait sec** : un appelant vivant l'envoie —
-# l'écran de partage d'une procédure du dashboard (`DoctrineView` →
-# `SharePrincipalDialog`, `resource-type=` codé en dur), mesuré le 23/09/2026. Le
-# nouveau front ne l'emploie pas, ni le plugin, ni oto-core, ni la CLI.
-#
-# **Forme de la coexistence** : l'entrée est RÉÉCRITE vers le nom d'aujourd'hui avant
-# toute autre lecture (autz comprise), et la réponse porte `deprecation_warning`, qui
-# nomme le nom d'aujourd'hui, sans date. Rien en aval n'apprend que l'alias existe ;
-# la réponse, elle, ne sert que le nom d'aujourd'hui (`resource_type: "procedure"`).
-# Le journal, lui, le compte : `args.deprecated_value = "resource_type=<valeur d'hier>"`.
-ANNONCE_PROCEDURE = datetime.date(2026, 9, 23)
-REVUE_PROCEDURE = _plus_de_mois(ANNONCE_PROCEDURE, PREAVIS_MOIS)
-
+# Vide aujourd'hui : la famille « procédure » de `oto_resource` (`resource_type`,
+# otomata-tech/oto#65) est RETIRÉE avec le lot D (#526) — l'ancienne valeur est
+# inconnue, refusée comme toute valeur invalide.
 #: champ → ({valeur d'hier → valeur d'aujourd'hui}, date de REVUE — jamais servie).
-VALEURS: dict = {
-    "resource_type": ({"doctrine": "procedure"}, REVUE_PROCEDURE),
-}
+VALEURS: dict = {}
 
 
 def valeur_canonique(champ: str, valeur: Any) -> tuple:
@@ -586,67 +535,8 @@ def traduire_arguments(surface: Optional[str], args: dict, sub: Optional[str]) -
         portee.update(traduite)
 
 
-# ── Clés de capacité (lot B2) ───────────────────────────────────────────────
-# ancienne clé → clé d'aujourd'hui. ⚠️ **Renommées SANS alias**, et c'est un choix :
-# une clé de capacité ne sort du serveur qu'à deux endroits — `/api/admin/capabilities`
-# (le navigateur d'objets de la plateforme, réservé à l'admin plateforme, sans
-# intégrateur tiers) et l'`operationId` de `/openapi.json`. Ce second est le seul qui
-# engage quelqu'un dehors, et il est préservé : l'entrée DÉPRÉCIÉE du chemin d'avant
-# le porte (`AliasRest.operation_id`). Il n'y a donc rien à aliaser.
-CAPACITES: dict = {
-    "org.doctrine.get": "org.guide.get",
-    "org.doctrine.admin_get": "org.guide.admin_get",
-    "org.doctrine.admin_list": "org.guide.admin_list",
-    "admin.doctrine": "admin.guide",
-}
-
-
-# ── Clés de réponse (lot B3) ────────────────────────────────────────────────
-# ancienne clé SERVIE → clé d'aujourd'hui. Le doublage est **additif** : le handler
-# écrit la clé d'aujourd'hui, `avec_anciennes_cles` recopie l'ancienne à côté. Au lot
-# D on retire l'appel, et les anciennes disparaissent d'un geste.
-#
-# ⚠️ Une clé de réponse est ce qu'un client LIT. La renommer sec, c'est rendre `null`
-# là où il attendait une valeur — sans erreur, sans log, sans que rien ne s'allume.
-# C'est la panne la plus chère de la liste, et la plus silencieuse.
-CLES: dict = {
-    "doctrine_id": "guide_id",
-    "doctrine_version": "guide_version",
-    "doctrine_ref_count": "guide_ref_count",
-    "doctrines": "guides",
-    "group_doctrine": "group_guide",
-    "doctrine": "guide",
-}
-
-
-def avec_les_deux_noms(payload: dict) -> dict:
-    """Chaque clé de `CLES` servie sous SES DEUX noms, quel que soit celui écrit.
-
-    Bidirectionnel à dessein : certains payloads naissent déjà en vocabulaire
-    d'aujourd'hui (un handler qu'on vient d'écrire), d'autres en vocabulaire d'hier
-    (une ligne SQL, dont la COLONNE ne se renomme qu'au lot B4 — la base est partagée
-    prod/preprod). Deux fonctions symétriques auraient créé deux façons de se tromper.
-
-    **NON récursif, et jamais posé globalement.** Il s'appelle site par site, sur des
-    payloads qu'on a nommés. Un passage automatique sur toute réponse traverserait
-    aussi les données de l'utilisateur — la ligne d'un tableau dont il a nommé une
-    colonne « doctrine » gagnerait une colonne fantôme. Une compatibilité ne doit
-    jamais inventer un champ dans la donnée de quelqu'un.
-
-    Une clé déjà présente n'est jamais écrasée : le producteur garde le dernier mot.
-    """
-    out = dict(payload)
-    for ancienne, actuelle in CLES.items():
-        if actuelle in out and ancienne not in out:
-            out[ancienne] = out[actuelle]
-        elif ancienne in out and actuelle not in out:
-            out[actuelle] = out[ancienne]
-    return out
-
-
-def lignes_avec_les_deux_noms(lignes) -> list:
-    """`avec_les_deux_noms` sur chaque ligne d'une liste (un journal de runs)."""
-    return [avec_les_deux_noms(l) if isinstance(l, dict) else l for l in lignes or ()]
+# (Clés de capacité et clés de réponse du lot #519 — `CAPACITES`, `CLES` et leur
+# doublage : RETIRÉES, lot D, #526. Une réponse ne sert plus que les noms d'aujourd'hui.)
 
 
 # ── Codes d'erreur (lot B3) ─────────────────────────────────────────────────

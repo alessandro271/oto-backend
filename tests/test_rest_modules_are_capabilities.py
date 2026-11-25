@@ -52,6 +52,10 @@ _KNOWN: dict[str, str] = {
     "/api/microsoft/oauth/callback": NATURE,
     "/api/ubersuggest/oauth/callback": NATURE,
     "/api/jefacture/oauth/callback": NATURE,
+    "/api/custom-api/oauth/callback": NATURE,
+    # Client ID Metadata Document read, unauthenticated, by a remote MCP server's
+    # authorization server (`auth/mcp_discovery.py`) — its URL is our client id.
+    "/api/custom-api/oauth/client.json": NATURE,
     "/api/linkedin_ads/oauth/callback": NATURE,
     # Écran d'autorisation WordPress (mot de passe d'application) : même geste de
     # navigateur, sans code à échanger.
@@ -286,19 +290,8 @@ _KNOWN: dict[str, str] = {
     # LLM) — mais une capacité peut être REST-only (`mcp=None`), c'était donc bien de la
     # dette et pas une nature. Le pendant AGENT du même geste existe et c'est
     # `me.connector_connect` (`POST /api/me/connectors/{name}/connect`).
-    # --- NATURE — ALIAS DÉPRÉCIÉS (#519, retrait suivi en #526). Ces chemins ne
-    # portent AUCUN métier : ils répondent 308 vers le chemin d'aujourd'hui, et s'en
-    # iront quand leur usage compté sera nul (`oto_mcp/deprecations.REST`). Ce n'est
-    # donc pas de la dette — il n'y a rien à migrer, il y a un compteur à lire. Ils
-    # quittent cette liste au lot D, avec le module qui les déclare.
-    # Montés EN DERNIER dans `make_routes` : un alias ne capture que ce que rien
-    # d'autre ne sert.
-    "/api/me/doctrines/library": NATURE,
-    "/api/me/doctrines/library/{slug}": NATURE,
-    "/api/me/doctrines/library/{id}": NATURE,
-    "/api/me/doctrines/publish": NATURE,
-    "/api/me/doctrines/fork": NATURE,
-    "/api/me/doctrines/{doctrine_id}": NATURE,
+    # (Les six anciens chemins du lot #519 — 308 vers `/api/me/guide-library…` et
+    # `/api/me/guides/{guide_id}` — sont RETIRÉS avec le lot D, #526.)
     #
     # (Le palier admin — clés plateforme et jetons émis pour un tiers — a migré le
     #  2026-08-27 avec le palier membre ci-dessus. `api_routes_admin.py` a été SUPPRIMÉ.

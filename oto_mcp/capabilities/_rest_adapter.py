@@ -127,6 +127,18 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
             data[cle] = valeurs
             if cle not in champs_liste:
                 repetees_scalaires.append(cle)
+        # Un octet NUL (`%00`) dans une valeur est REFUSÉ, avant tout handler : aucune
+        # colonne texte de PostgreSQL ne peut le porter, et le pilote levait en pleine
+        # lecture — un 500 sur n'importe quel filtre (`?tool=%00`, durcissement CASA
+        # 6.2.1). Aucun usage légitime : une valeur de query string est un texte.
+        avec_nul = sorted({cle for cle in request.query_params.keys()
+                           if "\x00" in cle or any("\x00" in v for v in
+                                                   request.query_params.getlist(cle))})
+        if avec_nul:
+            return json_error(
+                request, 400, "invalid_query",
+                f"Octet NUL refusé dans le(s) paramètre(s) : "
+                f"{', '.join(repr(c) for c in avec_nul)}.")
         if request.method in ("POST", "PUT", "PATCH") or binding.reads_body:
             # Un corps illisible est REFUSÉ, jamais ignoré — c'est le même principe
             # que la garde des champs inconnus vingt lignes plus bas, et il lui

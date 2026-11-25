@@ -160,16 +160,10 @@ class GuideView(BaseModel):
 
     ⚠️ Sans org active, la forme 2 répond **200 avec un bundle vide** (`org_id: null`,
     `guide: ""`, `guides: []`), pas une erreur : `guide: ""` confond « pas d'org » et
-    « org sans readme ».
-
-    ⚠️ **Chaque clé est servie DEUX FOIS** le temps du préavis (#519) : sous son nom
-    d'aujourd'hui (`guide_id`, `guide`, `group_guide`, `guides`) et sous celui
-    d'hier, retiré avec un préavis — cf. `docs/alias-deprecies.md`. Écris le
-    nouveau ; l'ancien est là pour ne casser personne, pas pour être choisi."""
+    « org sans readme »."""
     org_id: Optional[int] = None
     group_id: Optional[int] = None
     guide_id: Optional[int] = None
-    doctrine_id: Optional[int] = None   # ALIAS déprécié (retiré avec un préavis)
     scope: Optional[str] = None
     slug: Optional[str] = None
     title: Optional[str] = None
@@ -196,13 +190,10 @@ class GuideView(BaseModel):
     # Forme 2 seulement : le readme d'org (prose plate), son org, son équipe active.
     org: Optional[str] = None
     guide: Optional[str] = None
-    doctrine: Optional[str] = None        # ALIAS déprécié (retiré avec un préavis)
     group: Optional[str] = None
     group_guide: Optional[str] = None
-    group_doctrine: Optional[str] = None  # ALIAS déprécié (retiré avec un préavis)
     # Index (slug/title/description/scope) — SANS les corps.
     guides: Optional[list[dict]] = None
-    doctrines: Optional[list[dict]] = None  # ALIAS déprécié (retiré avec un préavis)
     # Présent seulement s'il y a un projet actif : les entités du projet contre
     # lesquelles résoudre les `<slot:>`. Dérivé best-effort — son ABSENCE peut donc
     # aussi vouloir dire « la dérivation a échoué », pas seulement « hors projet ».
@@ -255,8 +246,7 @@ class InstructionsBundle(BaseModel):
     Indiscernable, à la lecture, d'une org réelle qui n'aurait rien écrit.
 
     ⚠️ **`instructions` exclut le readme** (slug réservé `claude_md`), qui n'est décrit
-    que par `guide` (servi aussi sous son nom d'hier, `doctrine`, tant que
-    l'alias est servi). Et l'asymétrie va plus loin : `guide.exists: true` annonce
+    que par `guide`. Et l'asymétrie va plus loin : `guide.exists: true` annonce
     un readme que `GET /api/me/instructions/claude_md` **ne sait pas servir** (404) —
     le readme se lit sur la surface guide, pas ici.
 
@@ -279,7 +269,6 @@ class InstructionsBundle(BaseModel):
         "Peut supprimer une procédure de cette org ET tout son historique "
         "(irréversible) : org_admin."))
     guide: GuideMeta
-    doctrine: GuideMeta   # ALIAS déprécié, retiré avec un préavis (#519)
     instructions: list[InstructionIndexEntry]
     # Pas un drapeau de plus dans `_DROITS_SERVIS` : la liste EST la réponse à « qui
     # peut désarchiver », servie pleine ou vide par la règle de la capacité elle-même.
@@ -1256,21 +1245,21 @@ def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
         servi = (owner_type, owner_id)
         paliers = (_paliers_du_slug(ctx, instr["slug"], servi, "lecture", archivee)
                    if member_mode and servi in _paliers_de(ctx) else {})
-        return deprecations.avec_les_deux_noms({
+        return {
             "org_id": parent_org, "guide_id": int(guide_id),
             "scope": owner_type, "slug": instr["slug"], "title": instr["title"],
             "description": instr["description"], "version": instr["version"],
             "body_md": instr["body_md"], "slots": instr.get("slots") or [],
             **{k: auteur[k] for k in ("set_by", "set_by_name") if k in auteur},
             "archived_at": str(archivee) if archivee is not None else None,
-            **paliers}), (instr["body_md"],)
+            **paliers}, (instr["body_md"],)
 
     if slug is None:
         # Début de session : guide de base + index (vide gracieux si pas d'org).
         if org_id is None:
-            return deprecations.avec_les_deux_noms({
+            return {
                 "org_id": None, "org": None, "guide": "", "group_id": None,
-                "group": None, "group_guide": "", "guides": [], "referenced_tools": []}), None
+                "group": None, "group_guide": "", "guides": [], "referenced_tools": []}, None
         o = org_store.get_org(org_id)
         # Le readme d'org/équipe est un GUIDE `delivery='init'` (ADR 0042), plus une
         # instruction déguisée : on le lit sur sa surface, pas via le store de procédures.
@@ -1297,12 +1286,12 @@ def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
                       for i in org_store.list_instructions("group", group_id)]
         guide_body = base_body
         pi = _project_instance(member_mode)
-        return deprecations.avec_les_deux_noms({
+        return {
             "org_id": org_id, "org": o["name"] if o else None, "guide": guide_body,
             "group_id": group_id, "group": group_name, "group_guide": group_guide,
             "guides": index,
             **({"project_instance": pi} if pi else {}),
-        }), (guide_body, group_guide)
+        }, (guide_body, group_guide)
 
     # Un guide nommé précis.
     if scope is None and member_mode:
@@ -1460,7 +1449,7 @@ def _list_guides(ctx: ResolvedCtx, inp) -> dict:
     query = inp.query
     scope = inp.scope
     if org_id is None:
-        return deprecations.avec_les_deux_noms({"org_id": None, "guides": []})
+        return {"org_id": None, "guides": []}
     out: list = []
     if member_mode and scope in (None, "user") and ctx.sub is not None:
         # ⚠️ Le palier PERSONNEL entre dans le cumul (04/09/2026). Sans lui, on écrit
@@ -1495,9 +1484,8 @@ def _list_guides(ctx: ResolvedCtx, inp) -> dict:
             out += [{**r, "scope": otype}
                     for r in org_store.list_archived_instructions(otype, oid)
                     if _repond_a(r, query)]
-    return deprecations.avec_les_deux_noms(
-        {"org_id": org_id, "group_id": group_id,
-         "guides": _catalogue_pour_l_agent(out, ctx, inp)})
+    return {"org_id": org_id, "group_id": group_id,
+            "guides": _catalogue_pour_l_agent(out, ctx, inp)}
 
 
 def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tuple[dict, str]:
@@ -1845,19 +1833,18 @@ def _instructions_list(ctx: ResolvedCtx, inp: InstrListInput) -> dict:
                         "guide": {"exists": False, "version": 0, "updated_at": None}}
         else:
             org_part = _readme_de_l_org(ctx, org_id)
-        return deprecations.avec_les_deux_noms(
-            {**_instructions_perso(ctx, org_part), "scope": "user"})
+        return {**_instructions_perso(ctx, org_part), "scope": "user"}
     if org_id is None:
         # Sans org active, aucun geste n'aboutit : tous les droits à faux — et TOUS
         # ceux que le modèle déclare, pas seulement `can_edit` (un drapeau absent d'une
         # branche se lit `undefined`, ce qu'un front prend pour « pas le droit » sur
         # l'une et pour « peut-être » sur l'autre).
-        return deprecations.avec_les_deux_noms({
+        return {
             "org_id": None, "org_name": None, "can_edit": False,
             **{nom: False for nom in _DROITS_SERVIS},
             "guide": {"exists": False, "version": 0, "updated_at": None},
-            "instructions": [], "archived": []})
-    return deprecations.avec_les_deux_noms({
+            "instructions": [], "archived": []}
+    return {
         **_readme_de_l_org(ctx, org_id),
         # Droits sur les PROCÉDURES, rendus par les règles d'autz déclarées.
         # `org=` épingle CETTE org : la règle a une branche self-service qui relirait
@@ -1872,7 +1859,7 @@ def _instructions_list(ctx: ResolvedCtx, inp: InstrListInput) -> dict:
                      if capacite_autorise("org.instruction.unarchive", ctx.sub, org=org_id)
                      else []),
         **({"scope": inp.scope} if inp.scope else {}),
-    })
+    }
 
 
 def _readme_de_l_org(ctx: ResolvedCtx, org_id: int) -> dict:

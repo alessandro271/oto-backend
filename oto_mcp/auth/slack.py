@@ -330,3 +330,30 @@ def _declare_flow() -> None:
 
 
 _declare_flow()
+
+
+# --- the return: the callback hands over, the front completes (`auth/flow.py`) ------
+
+def _return_state(state: Optional[str]) -> Optional[oauth_flow.ReturnState]:
+    d = read_state(state)
+    if d is None:
+        return None
+    return oauth_flow.ReturnState(d["sub"], d["org"],
+                                  oauth_flow.resolve_return_app(d["app"]), CONNECTOR,
+                                  d["jti"], d)
+
+
+def _finish_return(d: dict, code: str) -> dict:
+    """The right to write at the state's tier, re-read ON RETURN; then the exchange and
+    the vault. The `code` and the tokens never enter a log line."""
+    if not still_allowed(d):
+        oauth_flow.not_allowed(
+            "You no longer have the right to connect a Slack workspace at this level.")
+    account = finish(d, exchange(code))
+    return {"account": account, "scope": d["scope"]}
+
+
+RETURN = oauth_flow.OAuthReturn(
+    audience=AUD, callback_path=CALLBACK_PATH, label="Slack", default_card=CONNECTOR,
+    read=_return_state, finish=_finish_return, cards=lambda: (CONNECTOR,))
+oauth_flow.declare_return(RETURN)

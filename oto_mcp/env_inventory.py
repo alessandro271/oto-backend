@@ -377,7 +377,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "Destinations internes autorisées en egress (`nom=adresse:port`, "
              "virgules). Absente = aucune exception : fail-closed, jamais un défaut "
              "qui ouvre la machine.",
-             ("oto_mcp/egress.py:138",)),
+             ("oto_mcp/egress.py:155",)),
     Variable("OTO_EGRESS_IP", Classe.REGLAGE, "",
              "Adresse IP sortante de l'instance, servie par le marqueur `{{egress_ip}}` "
              "des docs connecteur (liste blanche d'IP chez le fournisseur, ex. "
@@ -390,6 +390,15 @@ _REGLAGES: tuple[Variable, ...] = (
              "`report` la journalise et la laisse passer, `off` le coupe. Une valeur "
              "inconnue vaut `enforce`.",
              ("oto_mcp/verrou_org.py:142",)),
+    Variable("OTO_ADMIN_MFA", Classe.REGLAGE, "",
+             "Garde des rôles PLATEFORME (`garde_admin.py`, CASA 3.3.1), réglage "
+             "d'instance : non posé = `off` (le tronc inchangé). `enforce` lit `member` "
+             "le porteur `admin`/`super_admin` d'une requête qui n'est pas une session "
+             "Logto interactive avec un second facteur enrôlé (jeton `oto_`, compte sans "
+             "TOTP ni clé d'accès, Logto injoignable) ; `report` journalise ce qui serait "
+             "retiré et ne retire rien (à jouer avant `enforce`). Posée mais inconnue, "
+             "elle vaut `enforce`. Lue à chaque requête.",
+             ("oto_mcp/garde_admin.py:146",)),
     Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "enforce",
              "Verrou des rôles PLATEFORME des jetons de délégation (`verrou_org.py`) : "
              "`enforce` (défaut) lit `member` le porteur `admin`/`super_admin` d'un "
@@ -655,6 +664,19 @@ _REGLAGES: tuple[Variable, ...] = (
              "hygiène mémoire, pas un refus) ; `0` désarme ; "
              "illisible : refus de démarrer.",
              ("oto_mcp/bornes_processus.py:122",)),
+    Variable("OTO_BORNE_CORPS_MCP_OCTETS", Classe.REGLAGE, "33554432",
+             "Transport de l'SDK `mcp` 1.30 : taille max (octets) du corps d'une requête "
+             "`/mcp` acceptée par l'SDK (`max_request_body_size`, `413` au-delà), posée "
+             "dans TOUS les modes. 32 MiB par défaut, au-dessus du proxy (32 Mo) ; la "
+             "borne `OTO_BORNE_CORPS_OCTETS` reste en dessous. `0` ou illisible : refus "
+             "de démarrer.",
+             ("oto_mcp/bornes_processus.py:171",)),
+    Variable("OTO_BORNE_SESSIONS_MCP_MAX", Classe.REGLAGE, "10000",
+             "Transport de l'SDK `mcp` 1.30 : nombre max de sessions MCP ouvertes à la "
+             "fois, par gestionnaire (`max_sessions`, `503` sur une ouverture de plus), "
+             "posé dans TOUS les modes. Global au processus, sans état par principal. "
+             "`0` ou illisible : refus de démarrer.",
+             ("oto_mcp/bornes_processus.py:174",)),
     Variable("OTO_DEBIT_ADRESSES_EXEMPTEES", Classe.REGLAGE, "",
              "Adresses ou CIDR (séparés par des virgules) de NOS machines, exemptés des "
              "classes de débit par adresse et du budget d'échecs ; leurs jetons paient "
@@ -694,9 +716,16 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_MCP_MAX_ORGS_PER_USER", Classe.REGLAGE, "10",
              "Plafond d'orgs créées par un même compte (hors super_admin et admin de son tenant).",
              ("oto_mcp/capabilities/orgs/core.py:19",)),
-    Variable("OTO_MCP_INVITE_TTL_DAYS", Classe.REGLAGE, "7",
-             "Durée de vie (jours) d'une invitation d'org.",
-             ("oto_mcp/capabilities/orgs/invites.py:34",)),
+    Variable("OTO_MCP_INVITATION_TTL_HOURS", Classe.REGLAGE, "168",
+             "Durée de vie, en HEURES, d'une invitation (org, équipe, plateforme), d'un "
+             "partage en attente et du lien de connexion joint au mail ; le mail dit la "
+             "durée. Réglage d'instance, 7 jours par défaut. Pas un entier ≥ 1 : refus "
+             "de démarrer.",
+             ("oto_mcp/config.py:279",)),
+    Variable("OTO_MCP_INVITE_TTL_DAYS", Classe.REGLAGE, "",
+             "RETIRÉE le 22/11/2026, remplacée par `OTO_MCP_INVITATION_TTL_HOURS` (en "
+             "heures). Encore définie : refus de démarrer, jamais ignorée en silence.",
+             ("oto_mcp/config.py:274",)),
     Variable("OTO_MCP_DB_IDLE_TX_TIMEOUT_MS", Classe.REGLAGE, "60000",
              "`idle_in_transaction_session_timeout` du pool applicatif.",
              ("oto_mcp/db/_conn.py:73",)),

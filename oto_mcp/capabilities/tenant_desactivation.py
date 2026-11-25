@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field
 
 from .. import db, org_suspension, tenancy
 from ._authz import SUPER_ADMIN
+from ._session_exigee import exiger_session
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -134,6 +135,7 @@ def _vue(slug: str, etat: Optional[dict], *, changed: bool, **coupe) -> dict:
 
 
 def _disablement(ctx: ResolvedCtx, inp: TenantDisablementInput) -> dict:
+    exiger_session("Désactiver ou réactiver un tenant")  # `_session_exigee`
     slug = _tenant_cible(inp.slug)
 
     if inp.op == "enable":
@@ -212,6 +214,7 @@ CAPABILITIES += [
             "deleted. Super admin. The primary tenant cannot be disabled."),
         # POST y compris pour `enable` : l'adaptateur REST fusionne la requête dans
         # l'`Input`, un GET muterait.
-        rest=RestBinding("POST", "/api/admin/tenants/{slug}/disablement"),
+        rest=RestBinding("POST", "/api/admin/tenants/{slug}/disablement",
+                         allow_api_token=False),
     ),
 ]

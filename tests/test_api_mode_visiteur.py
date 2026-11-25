@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from fastmcp import FastMCP
 
-from oto_mcp import access, credentials_store, egress, error_taxonomy
+from oto_mcp import access, credentials_store, egress, egress_transport, error_taxonomy
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.tools import api as H
 from oto_mcp.tools import effets
@@ -139,6 +139,11 @@ def banc(live, monkeypatch):
             hote = "127.0.0.1"
         return vrai(hote, *a, **k)
     monkeypatch.setattr(socket, "getaddrinfo", resoudre)
+    # Le transport épinglé (`egress_transport`) se connecte à l'adresse DÉCIDÉE — la
+    # « publique » ci-dessus : la machine qui la porte, ici, est la boucle locale.
+    monkeypatch.setattr(egress_transport, "_ouvrir",
+                        lambda adresse, port, timeout, *a: socket.create_connection(
+                            ("127.0.0.1", port), timeout))
 
     etat = Etat()
     srv, port = _serveur(_site(etat))

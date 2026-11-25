@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from ... import org_store
 from .._authz import SUPER_ADMIN
+from .._session_exigee import exiger_session
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .members import _resolve_target
 from .update import ERREURS_ARCHIVAGE, archive_org_ou_409
@@ -56,6 +57,9 @@ def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
     La cible est résolue AVANT la création : un email inconnu doit échouer sans laisser
     derrière lui l'org orpheline qu'on cherche justement à ne plus produire.
     """
+    # Elle nomme un org_admin : session seule (`_session_exigee`), sur les deux faces.
+    # La création en libre-service (`POST /api/me/orgs`) reste ouverte au jeton.
+    exiger_session("Créer une org pour un responsable")
     name = (inp.name or "").strip()
     if not name:
         raise AuthzDenied(400, "missing_name", "Nom d'org requis.")
@@ -72,6 +76,7 @@ def _create_org(ctx: ResolvedCtx, inp: CreateOrgInput) -> dict:
 
 
 def _archive_org(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
+    exiger_session("Archiver une org")  # jamais sous un jeton (`_session_exigee`)
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     archived = archive_org_ou_409(inp.org_id)
@@ -89,7 +94,7 @@ CAPABILITIES += [
                     "`admin` = email|sub of the person who will run it (or \"me\"); "
                     "omitted, you are it. Returns its id.",
         # MCP fusionné dans oto_admin_org(op=create). REST conservé (dashboard).
-        rest=RestBinding("POST", "/api/admin/orgs"),
+        rest=RestBinding("POST", "/api/admin/orgs", allow_api_token=False),
     ),
     Capability(
         key="org.admin.archive", handler=_archive_org, Input=OrgIdInput,
@@ -101,6 +106,6 @@ CAPABILITIES += [
                     "already archived answers `archived: false, already_archived: true` "
                     "— nothing done, not a failure.",
         # MCP fusionné dans oto_admin_org(op=archive). REST conservé (dashboard).
-        rest=RestBinding("DELETE", "/api/admin/orgs/{id}", _ID),
+        rest=RestBinding("DELETE", "/api/admin/orgs/{id}", _ID, allow_api_token=False),
     ),
 ]

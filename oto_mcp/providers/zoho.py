@@ -92,7 +92,5 @@ ACCESS_LEVELS = {
         "zoho_record": {"list": (_READ,), "get": (_READ,), "search": (_READ,),
                         "create": (_CREATE,), "update": (_UPDATE,), "delete": (_DELETE,)},
         "zoho_note": {"list": (_READ,), "create": (_CREATE,)},
-        # The consent verb itself requires nothing: it is how a level gets its token.
-        "zoho_connect": (),
     },
 }

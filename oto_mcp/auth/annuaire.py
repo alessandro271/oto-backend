@@ -14,6 +14,8 @@ import os
 import time
 from dataclasses import dataclass
 
+from .. import config
+
 _log = logging.getLogger("oto_mcp.annuaire")
 
 _UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"  # vs WAF Cloudflare (1010)
@@ -99,7 +101,7 @@ def _credential_present(d: Directory) -> bool:
                 and os.environ.get(f"{d.credential}_SECRET"))
 
 
-def _mgmt_token(directory: "Directory | None" = None) -> str:
+def _mgmt_token(directory: "Directory | None" = None, *, timeout: float = 15) -> str:
     import requests
     d = directory or _primary_directory()
     cid = os.environ.get(f"{d.credential}_ID")
@@ -115,7 +117,7 @@ def _mgmt_token(directory: "Directory | None" = None) -> str:
     r = requests.post(
         f"{d.token_endpoint}/oidc/token",
         data={"grant_type": "client_credentials", "resource": _MGMT_RESOURCE, "scope": "all"},
-        auth=(cid, csec), headers={"User-Agent": _UA}, timeout=15,
+        auth=(cid, csec), headers={"User-Agent": _UA}, timeout=timeout,
     )
     r.raise_for_status()
     j = r.json()
@@ -172,6 +174,9 @@ def reset_user_mfa(sub: str) -> list[str]:
         d = requests.delete(f"{base}/api/users/{sub}/mfa-verifications/{v['id']}", headers=h, timeout=15)
         d.raise_for_status()
         removed.append(v["type"])
+    # Le verdict de la garde des administrateurs ne survit pas à ses facteurs.
+    from .. import garde_admin
+    garde_admin.oublier(sub)
     return removed
 
 
@@ -180,10 +185,18 @@ def reset_user_mfa(sub: str) -> list[str]:
 # porte → la custom UI Logto le consomme (signIn extraParams) → auth silencieuse,
 # compte créé/loggé avec l'email EXACT (pas de mismatch). Best-effort : si le mint
 # échoue (M2M absent, Logto down), l'invitation reste valide via le flow code email.
-def mint_one_time_token(email: str, *, expires_in: int = 7 * 24 * 3600) -> str | None:
+# Le jeton vit autant que l'invitation qui le porte (`config.invitation_ttl_hours`,
+# réglage d'instance) : c'est un code d'activation, il ne survit pas à son invitation.
+
+
+def mint_one_time_token(email: str, *, expires_in: int | None = None) -> str | None:
     """Mint un one-time-token Logto (magic link) pour `email`. Renvoie le token,
-    ou None si le mint échoue (l'appelant dégrade vers le lien sans magic-link)."""
+    ou None si le mint échoue (l'appelant dégrade vers le lien sans magic-link).
+    `expires_in` (secondes) : par défaut la durée d'une invitation de l'instance, lue
+    HORS du repli ci-dessous — un réglage illisible lève, il ne dégrade pas."""
     import requests
+    if expires_in is None:
+        expires_in = config.invitation_ttl_hours() * 3600
     try:
         base, tok = _logto_base(), _mgmt_token()
         r = requests.post(
@@ -200,7 +213,7 @@ def mint_one_time_token(email: str, *, expires_in: int = 7 * 24 * 3600) -> str |
         return None
 
 
-def magic_url(base_url: str, email: str, *, expires_in: int = 7 * 24 * 3600) -> str:
+def magic_url(base_url: str, email: str, *, expires_in: int | None = None) -> str:
     """Augmente `base_url` d'un magic-link Logto pour `email` (params `otl` +
     `login_hint`). Le front fait `signIn({extraParams:{one_time_token: otl},
     loginHint})`. Si le mint échoue, renvoie `base_url` inchangé (dégradation
@@ -239,7 +252,9 @@ def ensure_api_resource(indicator: str, *, name: str | None = None) -> None:
 # Un mot de passe changé ne ferme RIEN chez Logto : ni les sessions de son annuaire, ni
 # les autorisations (grants) qui portent les jetons de rafraîchissement des clients
 # OAuth — un client MCP autorisé depuis une session volée se rafraîchit donc
-# indéfiniment. Appelé par la réception du webhook Logto (`auth/revocation_mot_de_passe`).
+# indéfiniment. Appelé par la réception du webhook Logto (`auth/revocation_mot_de_passe`),
+# pour un mot de passe changé comme pour un changement de double authentification, et par
+# la remise à zéro de la double authentification (`capabilities/users_admin`).
 
 #: Ce qu'une requête de management attend au plus, et ce que la fermeture entière
 #: attend au plus : une borne posée à SON niveau, pas seulement au plus profond — une
@@ -316,6 +331,44 @@ def fermer_sessions(sub: str) -> dict:
                    if _appel("DELETE", f"{compte}/grants/{quote(gid, safe='')}")
                    is not None)
     return {"sessions": fermees, "grants": revoques}
+
+
+class LectureInachevee(RuntimeError):
+    """Logto n'a pas rendu ce qu'on lui demandait. Levée telle quelle, jamais avalée :
+    l'appelant dit « à refaire » (le webhook rend 502, Logto relivre)."""
+
+
+def facteurs_2fa(sub: str, *, delai: float | None = None) -> list[dict]:
+    """Les facteurs de double authentification de `sub` (annuaire primaire), tels que
+    les rend la Management API (`GET /api/users/{id}/mfa-verifications` :
+    `{id, type, createdAt, …}` par facteur). Un appel, borné à `_DELAI_REQUETE_S`.
+    Lève `LectureInachevee` si Logto refuse ou ne répond pas.
+
+    `delai` (secondes) borne l'appel ET l'obtention du jeton de gestion : la garde des
+    administrateurs (`garde_admin`) le paie dans le fil d'une requête, un Logto lent ne
+    doit pas le tenir plus longtemps."""
+    import requests
+    from urllib.parse import quote
+
+    from ..tenancy import require_primary_tenant
+    require_primary_tenant(sub, "lecture des facteurs de double authentification")
+    try:
+        tok = _mgmt_token() if delai is None else _mgmt_token(timeout=delai)
+        r = requests.get(
+            f"{_logto_base()}/api/users/{quote(sub, safe='')}/mfa-verifications",
+            headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
+            timeout=_DELAI_REQUETE_S if delai is None else delai)
+    except (RuntimeError, requests.RequestException) as e:
+        raise LectureInachevee(
+            f"facteurs de double authentification de {sub} : {e}") from e
+    if r.status_code >= 400:
+        raise LectureInachevee(
+            f"facteurs de double authentification de {sub} : GET → {r.status_code}")
+    facteurs = r.json()
+    if not isinstance(facteurs, list):
+        raise LectureInachevee(
+            f"facteurs de double authentification de {sub} : réponse inattendue")
+    return facteurs
 
 
 class SuppressionInachevee(RuntimeError):

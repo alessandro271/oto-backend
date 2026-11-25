@@ -205,6 +205,17 @@ def _code_du_refus(args: list, acc: Atteignables) -> None:
         acc.statuts_relayes.add(statut)
 
 
+def _cibles_declarees(fn) -> list:
+    """Les fonctions qu'un appel met en marche par une DÉCLARATION, que l'arbre ne
+    montre pas : la complétion commune des retours OAuth (`auth/flow.complete`) appelle
+    le `finish` du fournisseur que le state désigne. Chacun est sur son chemin — un refus
+    qu'un fournisseur lève est un refus de la complétion (oto-backend#1908)."""
+    from oto_mcp.auth import flow as oauth_flow
+    if fn is oauth_flow.complete:
+        return [r.finish for r in oauth_flow.load_returns().values()]
+    return []
+
+
 def atteignables(handler) -> Atteignables:
     """Ce que ce handler peut lever, lui et ce qu'il appelle."""
     acc = Atteignables()
@@ -225,6 +236,6 @@ def atteignables(handler) -> Atteignables:
         except (OSError, SyntaxError, IndentationError):
             continue
         _releve(corps, acc)
-        for appelee in _fonctions_appelees(corps, module, racine):
+        for appelee in _fonctions_appelees(corps, module, racine) + _cibles_declarees(fn):
             file.append((appelee, profondeur + 1))
     return acc

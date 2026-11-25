@@ -322,7 +322,7 @@ gating par connecteur (activation, RBAC, sélection) ne le touche. Ce qui le mas
 
 C'est exactement là que se joue la différence avec les verbes qui ont fuité : **31
 capacités du namespace `oto` ont un plancher `None`** (donc sont servies à tout le monde),
-dont `oto_salesforce_connect` et `oto_zoho_connect`. Une capacité neuve du namespace `oto`
+dont `oto_salesforce_connect` et `oto_zoho_connect` (retirés le 24/11/2026 au profit de `oto_connector_connect`). Une capacité neuve du namespace `oto`
 n'est pas gatée « par défaut » : elle l'est **si et seulement si son autz déclare un
 plancher plateforme**. Le cliquet qui le rappelle est la table `PLANCHERS` de
 `tests/test_admin_tool_visibility_by_authz.py`, et ce test **exécute** désormais le filtre

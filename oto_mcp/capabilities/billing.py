@@ -33,6 +33,7 @@ from .. import billing, billing_consent
 from . import _facturation_externe as facturation_externe
 from ..mollie_client import MollieError
 from ._authz import ORG_ADMIN, ORG_MEMBER, SUB_ONLY, SUPER_ADMIN
+from ._session_exigee import exiger_session
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -646,15 +647,20 @@ def _resume(ctx: ResolvedCtx, inp: NoInput) -> dict:
     raise facturation_externe.refus("Reprendre un abonnement résilié")
 
 
+# Plan et contrat d'une org : session seule (`_session_exigee`), sur les deux faces —
+# même si le cœur les refuse aujourd'hui en 409 `billing_moved`.
 def _admin_set_plan(ctx: ResolvedCtx, inp: AdminPlanInput) -> dict:
+    exiger_session("Offrir ou retirer un plan")
     raise facturation_externe.refus("Offrir un plan" if inp.plan else "Retirer un plan offert")
 
 
 def _admin_set_contract(ctx: ResolvedCtx, inp: AdminContractInput) -> dict:
+    exiger_session("Déclarer un contrat")
     raise facturation_externe.refus("Déclarer un contrat")
 
 
 def _admin_cancel_contract(ctx: ResolvedCtx, inp: AdminContractCancelInput) -> dict:
+    exiger_session("Résilier un contrat")
     raise facturation_externe.refus("Résilier un contrat")
 
 
@@ -670,6 +676,11 @@ def _payments(ctx: ResolvedCtx, inp: PaymentsInput) -> dict:
     ]}
 
 
+# Les six gestes qui engagent un paiement (souscrire, confirmer, résilier, reprendre,
+# changer de moyen de paiement) : session interactive seule (`allow_api_token=False`,
+# `capabilities/_session_exigee.py`) — jamais un jeton d'API, même si le
+# cœur les refuse aujourd'hui en 409 `billing_moved` : la garde ne dépend pas de ce
+# refus-là, qui peut tomber.
 _BILLING_CAPS = [
     Capability(
         key="billing.plans", handler=_plans, Input=NoInput, authz=SUB_ONLY,
@@ -688,7 +699,7 @@ _BILLING_CAPS = [
                     "billing is run by the billing service (oto-commerce), which sets "
                     "the org's rights — subscribing happens there.",
         errors=(facturation_externe.declaration(),),
-        rest=RestBinding("POST", "/api/me/billing/subscribe"),
+        rest=RestBinding("POST", "/api/me/billing/subscribe", allow_api_token=False),
     ),
     Capability(
         key="billing.confirm", handler=_confirm, Input=ConfirmInput,
@@ -696,7 +707,7 @@ _BILLING_CAPS = [
         description="Confirm a subscription's first payment. ⚠️ Always refused with 409 "
                     "`billing_moved`: billing is run by the billing service (oto-commerce).",
         errors=(facturation_externe.declaration(),),
-        rest=RestBinding("POST", "/api/me/billing/confirm"),
+        rest=RestBinding("POST", "/api/me/billing/confirm", allow_api_token=False),
     ),
     # Résiliation et reprise : refusées depuis la coupure du cœur (#1097), comme les
     # autres gestes du cycle — l'abonnement se gère dans oto-commerce.
@@ -706,7 +717,7 @@ _BILLING_CAPS = [
         description="Cancel the org's subscription. ⚠️ Always refused with 409 "
                     "`billing_moved`: billing is run by the billing service (oto-commerce).",
         errors=(facturation_externe.declaration(),),
-        rest=RestBinding("POST", "/api/me/billing/cancel"),
+        rest=RestBinding("POST", "/api/me/billing/cancel", allow_api_token=False),
     ),
     Capability(
         key="billing.resume", handler=_resume, Input=NoInput,
@@ -714,7 +725,7 @@ _BILLING_CAPS = [
         description="Undo a subscription cancellation. ⚠️ Always refused with 409 "
                     "`billing_moved`: billing is run by the billing service (oto-commerce).",
         errors=(facturation_externe.declaration(),),
-        rest=RestBinding("POST", "/api/me/billing/resume"),
+        rest=RestBinding("POST", "/api/me/billing/resume", allow_api_token=False),
     ),
     # Changer de moyen de paiement (#845 ①) — on perdait un abonné payant en silence :
     # carte morte, relances qui échouent toutes, et aucun geste pour y remédier.
@@ -726,7 +737,7 @@ _BILLING_CAPS = [
         description="Change the payment method. ⚠️ Always refused with 409 "
                     "`billing_moved`: billing is run by the billing service (oto-commerce).",
         errors=(facturation_externe.declaration(),),
-        rest=RestBinding("POST", "/api/me/billing/method"),
+        rest=RestBinding("POST", "/api/me/billing/method", allow_api_token=False),
     ),
     Capability(
         key="billing.method_change_confirm", handler=_method_change_confirm,
@@ -734,7 +745,7 @@ _BILLING_CAPS = [
         description="Confirm a payment-method change. ⚠️ Always refused with 409 "
                     "`billing_moved`: billing is run by the billing service (oto-commerce).",
         errors=(facturation_externe.declaration(),),
-        rest=RestBinding("POST", "/api/me/billing/method/confirm"),
+        rest=RestBinding("POST", "/api/me/billing/method/confirm", allow_api_token=False),
     ),
     Capability(
         key="billing.payments", handler=_payments, Input=PaymentsInput,
@@ -753,7 +764,8 @@ _BILLING_CAPS = [
                     "happens there.",
         errors=(facturation_externe.declaration(),),
         mcp="oto_admin_set_plan",
-        rest=RestBinding("POST", "/api/admin/orgs/{org_id}/plan", {"org_id": "org_id"}),
+        rest=RestBinding("POST", "/api/admin/orgs/{org_id}/plan", {"org_id": "org_id"},
+                         allow_api_token=False),
     ),
     Capability(
         key="billing.admin_set_contract", handler=_admin_set_contract,
@@ -765,7 +777,7 @@ _BILLING_CAPS = [
         errors=(facturation_externe.declaration(),),
         mcp="oto_admin_set_contract",
         rest=RestBinding("PUT", "/api/admin/orgs/{org_id}/contract",
-                         {"org_id": "org_id"}),
+                         {"org_id": "org_id"}, allow_api_token=False),
     ),
     Capability(
         key="billing.admin_cancel_contract", handler=_admin_cancel_contract,
@@ -776,7 +788,7 @@ _BILLING_CAPS = [
         errors=(facturation_externe.declaration(),),
         mcp="oto_admin_cancel_contract",
         rest=RestBinding("POST", "/api/admin/orgs/{org_id}/contract/cancel",
-                         {"org_id": "org_id"}),
+                         {"org_id": "org_id"}, allow_api_token=False),
     ),
 ]
 

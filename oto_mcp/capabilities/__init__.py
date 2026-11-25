@@ -74,9 +74,11 @@ from . import guide_library  # noqa: F401 — library.{list,get,publish,fork,unp
 import oto_mcp.capabilities.connectors.selection  # noqa: F401 — connectors.{me,select,pause,unselect}
 import oto_mcp.capabilities.connectors.identities  # noqa: F401 — connectors.{identities,set_default_identity} (ADR 0024)
 import oto_mcp.capabilities.connectors.connect  # noqa: F401 — me.connector_connect (POST /api/me/connectors/{name}/connect, chemin FIXE)
+import oto_mcp.capabilities.connectors.complete  # noqa: F401 — me.connector_complete (POST /api/me/connectors/{name}/complete)
+import oto_mcp.capabilities.connectors.connect_link  # noqa: F401 — connector.connect (oto_connector_connect : la page où la personne connecte)
 from . import microsoft_admin_consent  # noqa: F401 — me.microsoft_admin_consent (POST /api/me/connectors/microsoft/admin-consent ; outil microsoft_admin_consent)
-from . import salesforce_connect  # noqa: F401 — me.salesforce_connect (oto_salesforce_connect ; REST = le chemin fixe /connect)
-from . import zoho_connect  # noqa: F401 — me.zoho_connect (oto_zoho_connect + GET /api/zoho/oauth/{start,modes})
+from . import salesforce_connect  # noqa: F401 — départ du consentement Salesforce (flux commun, chemin fixe /connect)
+from . import zoho_connect  # noqa: F401 — départ du consentement Zoho (flux commun) + me.zoho_analytics_orgs
 import oto_mcp.capabilities.connectors.verify  # noqa: F401 — connectors.verify (sonde de credential — MCP via oto_instance op=verify)
 # Credential PERSONNEL (pose/état/retrait) — REST-only, un secret ne passe pas
 # en argument d'outil. Ex-routes écrites à la main d'`api/routes.py` (#121).
@@ -140,7 +142,7 @@ import oto_mcp.capabilities.connectors.force  # noqa: F401 — connectors.force.
 # Projection lecture du coffre en instances possédées nommées (ADR 0038 B4).
 import oto_mcp.capabilities.connectors.instances  # noqa: F401 — connectors.instances.list (ADR 0038 B4)
 import oto_mcp.capabilities.connectors.api_operations  # noqa: F401 — custom_api.operations.{get,set,import} (connecteur `api`)
-import oto_mcp.capabilities.connectors.api_apps  # noqa: F401 — custom_api.apps.{list,get,create,update,import,remove} (applications du connecteur `api`)
+import oto_mcp.capabilities.connectors.api_apps  # noqa: F401 — custom_api.apps.{list,get,create,update,import,connect,remove} (applications du connecteur `api`)
 # Console admin consolidée par concept (ADR 0009, fusion *_op) — réutilise les handlers
 # de domaine. À importer APRÈS eux (orgs_admin/reads/members, users_admin).
 from . import admin_console  # noqa: F401 — admin.{org,org_member,user,key_grant,guide,signal}

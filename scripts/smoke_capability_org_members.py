@@ -40,9 +40,10 @@ def main() -> None:
         a = c.execute("INSERT INTO orgs(name) VALUES ('Alpha') RETURNING id").fetchone()["id"]
         c.execute("INSERT INTO org_members(org_id, sub, org_role) VALUES (%s,'u1','org_admin')", (a,))
 
-    print("→ u1 (org_admin) ajoute u2")
-    assert run("org.member.add", "u1", org_id=a, target="u2")["sub"] == "u2"
-    assert org_store.get_org_role(a, "u2") == "org_member"
+    print("→ u1 (org_admin) ajoute u2, non-membre → 400 (on l'invite par son adresse)")
+    denied(lambda: run("org.member.add", "u1", org_id=a, target="u2"), 400)
+    assert org_store.get_org_role(a, "u2") is None
+    org_store.add_org_member(a, "u2", "org_member")      # u2 a accepté une invitation
     print("  ✓")
 
     print("→ u3 (non-membre) tente d'ajouter → 403")
@@ -63,8 +64,8 @@ def main() -> None:
     assert org_store.get_org_role(a, "u1") == "org_admin", "u1 ne doit pas avoir été retiré"
     print("  ✓ last_org_admin protégé")
 
-    print("→ escalade : padmin (platform admin, NON membre) peut ajouter")
-    assert run("org.member.add", "padmin", org_id=a, target="u3")["sub"] == "u3"
+    print("→ escalade : padmin (platform admin, NON membre) peut se joindre lui-même")
+    assert run("org.member.add", "padmin", org_id=a, target="padmin")["status"] == "member"
     print("  ✓ platform-admin escalade ORG_ADMIN_OF")
 
     print("→ org inconnue → 404")

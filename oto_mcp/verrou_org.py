@@ -262,6 +262,18 @@ def outils_permis(v: Optional[Verrou] = None) -> frozenset:
     return permis
 
 
+def outil_admin_permis(sub: Optional[str]) -> bool:
+    """Vrai pendant l'appel d'un `oto_admin_*` que le travail de la requête NOMME, pour
+    son porteur `sub` — le seul cas où un jeton de délégation garde le rôle plateforme
+    sous la garde des administrateurs (`garde_admin`), quel que soit le mode du verrou
+    des rôles. Lit la ContextVar BRUTE, comme `role_plateforme`."""
+    v = _COURANT.get()
+    if v is None or sub is None or str(sub) != v.sub:
+        return False
+    outil = _OUTIL.get()
+    return bool(outil and outil.startswith(PREFIXE_ADMIN) and outil in outils_permis(v))
+
+
 def outils_d_admin(noms) -> frozenset:
     """Ce qu'une liste `outils_plateforme` stockée ouvre vraiment : ses `oto_admin_*`,
     rien d'autre. Seul filtre, pour le travail en cours (`outils_permis`) comme pour
