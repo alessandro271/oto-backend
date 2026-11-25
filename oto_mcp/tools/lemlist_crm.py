@@ -41,7 +41,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
-from .. import access
+from .. import access, egress_transport
 from .lecture import ACTE, LECTURE
 
 
@@ -1193,9 +1193,16 @@ def register(mcp: FastMCP) -> None:
             if not links.get("transcript_url"):
                 result["transcript"] = None
             else:
+                from oto.tools.common.errors import UpstreamHTTPError
                 try:
-                    raw = client.get_call_transcript(links["transcript_url"])
-                except Exception as e:  # noqa: SILENT — the call is returned with `transcript_error` naming the failure
+                    # The link comes from lemlist's answer, not from an operator: it is
+                    # fetched through the guarded session, with no declared exceptions.
+                    with egress_transport.session(connector="lemlist", field="transcriptUrl",
+                                                  exceptions_declarees=False) as http:
+                        raw = client.get_call_transcript(links["transcript_url"], session=http)
+                except (requests.RequestException, ValueError, UpstreamHTTPError) as e:
+                    # A network, file or upstream failure: the call still comes back,
+                    # with `transcript_error` naming it. A bug is not caught here.
                     result["transcript_error"] = _transcript_error(e)
                 else:
                     result["transcript"] = _readable_transcript(

@@ -1106,7 +1106,8 @@ def test_un_appel_rend_sa_transcription_et_sort_les_liens_signes():
         out = _tool("lemlist_call").fn(op="get", call_id="act_1")
 
     inst.get_call.assert_called_once_with("act_1")
-    inst.get_call_transcript.assert_called_once_with(_SIGNED)
+    inst.get_call_transcript.assert_called_once()
+    assert inst.get_call_transcript.call_args.args == (_SIGNED,)
     assert out["call"]["_id"] == "act_1" and out["call"]["duration"] == 125
     # Les liens signés ne restent pas dans l'appel, où ils passeraient pour des adresses.
     assert "transcriptUrl" not in out["call"] and "recordingUrl" not in out["call"]
@@ -1165,6 +1166,41 @@ def test_un_lien_expire_rend_lappel_et_une_erreur_sans_la_signature():
         out = _tool("lemlist_call").fn(op="get", call_id="act_1")
         assert "X-Signature" not in out["transcript_error"]
         assert "ConnectionError" in out["transcript_error"]
+
+
+def test_la_transcription_passe_par_la_session_gardee_sans_exceptions_declarees():
+    """Le lien vient de la réponse d'un tiers, pas d'un opérateur : la session donnée
+    au client est celle d'`egress_transport`, sans les exceptions de `OTO_EGRESS_ALLOW`."""
+    from oto_mcp.egress_transport import AdaptateurEpingle, Politique
+
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_call.return_value = _a_call()
+        inst.get_call_transcript.return_value = {"text": "Hello", "utterances": []}
+        _tool("lemlist_call").fn(op="get", call_id="act_1")
+
+    session = inst.get_call_transcript.call_args.kwargs["session"]
+    adaptateur = session.get_adapter(_SIGNED)
+    assert isinstance(adaptateur, AdaptateurEpingle)
+    assert adaptateur._politique == Politique("lemlist", "transcriptUrl", False)
+    assert session.trust_env is False
+
+
+def test_un_bug_pendant_la_transcription_n_est_pas_change_en_transcript_error():
+    """Seuls le réseau, un fichier illisible et une erreur de l'amont deviennent
+    `transcript_error` : un bug remonte."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_call.return_value = _a_call()
+        inst.get_call_transcript.side_effect = KeyError("text")
+        with pytest.raises(KeyError):
+            _tool("lemlist_call").fn(op="get", call_id="act_1")
+        inst.get_call_transcript.side_effect = ValueError("the call transcript is not JSON")
+        out = _tool("lemlist_call").fn(op="get", call_id="act_1")
+        assert out["transcript_error"] == (
+            "the transcript could not be read: the call transcript is not JSON")
 
 
 def test_les_issues_dappel_se_lisent_et_un_appel_sans_id_est_refuse():
