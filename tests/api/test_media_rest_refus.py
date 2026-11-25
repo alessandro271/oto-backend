@@ -67,7 +67,9 @@ def client(monkeypatch, journal):
     seuls le stockage objet, la base et le rôle sont bouchonnés."""
     # `_authenticate` touche la base à chaque requête JWT : on la neutralise sans
     # toucher au chemin d'authentification lui-même, qui est ce qu'on veut exercer.
-    monkeypatch.setattr("oto_mcp.account_suspension.refus", lambda sub: None)
+    # Compte vivant, jamais fermé : la lecture d'entrée de la garde (pause et
+    # instant « révoqué avant », `db.get_suspension`) ne rend rien.
+    monkeypatch.setattr("oto_mcp.db.get_suspension", lambda sub: None)
     monkeypatch.setattr(base, "alias_drain_armed", lambda: False)
     monkeypatch.setattr(db, "upsert_user", lambda *a, **k: None)
 

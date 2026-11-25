@@ -205,6 +205,11 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
         # ses propres facteurs et sa propre empreinte. Repointer l'ancienne la ferait
         # prendre pour un changement à la livraison suivante.
         ("empreintes_2fa", "sub"),
+        # L'instant « révoqué avant » (`session_revoquee.py`) est celui du compte Logto
+        # que nomme le sub, posé par le webhook de SON annuaire. Repointé, il viendrait
+        # écraser (clé primaire) celui du compte survivant ; la garde lit le sub
+        # canonique, et l'ancien identifiant garde le sien.
+        ("revocations_comptes", "sub"),
     }
     couvertes = (set(_SUB_COLUMNS)
                  | {(t, c) for t, c, _ in _PK_SUB_TABLES}

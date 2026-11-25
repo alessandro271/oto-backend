@@ -126,7 +126,10 @@ class _IatGatedVerifier(JWTVerifier):
                                                 # posé par `middleware/verrou_org.py`.
                                                 "job_id": row.get("job_id"),
                                                 "verrou_org": row.get("verrou_org"),
-                                                "verrou_org_id": row.get("verrou_org_id")})
+                                                "verrou_org_id": row.get("verrou_org_id"),
+                                                # Sa date de création : la garde
+                                                # d'identité la juge (`session_revoquee`).
+                                                "cree_le": row.get("cree_le")})
 
     def _route(self, token) -> tuple:
         """`(slug du tenant, verifier)` pour ce jeton — sélection par le claim `iss`,
@@ -424,7 +427,11 @@ def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
     routes de PRM sensibles au host masquent celles-ci (montées avant, cf. `main`) ;
     ces valeurs-ci ne restent servies que derrière elles."""
     from .auth import decouverte
-    return RemoteAuthProvider(
+    from .auth.entree_mcp import FournisseurOto
+    # `FournisseurOto` : le `RemoteAuthProvider` de fastmcp, dont le backend lit l'état
+    # d'entrée du compte sur `POST /mcp` et rend le 401 d'un jeton émis avant la
+    # fermeture des sessions de son compte (`auth.entree_mcp`).
+    return FournisseurOto(
         token_verifier=verifier,
         authorization_servers=[AnyHttpUrl(decouverte.emetteur_primaire())],
         base_url=require_env("OTO_MCP_PUBLIC_URL").rstrip("/"),

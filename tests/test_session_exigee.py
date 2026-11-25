@@ -453,7 +453,7 @@ def _jouer_avec_la_vraie_auth(monkeypatch, ligne: dict, role: str) -> tuple[int,
     monkeypatch.setattr(api_routes.db, "upsert_user", lambda *a, **k: None)
     monkeypatch.setattr(api_routes.db, "get_suspension", lambda sub: None)
     from oto_mcp import garde_identite
-    monkeypatch.setattr(garde_identite, "refus", lambda sub: None)
+    monkeypatch.setattr(garde_identite, "refus", lambda sub, emis_le=None: None)
     monkeypatch.setattr(_authz.roles, "is_org_admin", lambda sub, org: True)
     monkeypatch.setattr(_authz.access, "get_user_role", lambda sub: "member")
     monkeypatch.setattr(oi.org_store, "get_org", lambda oid: {"id": oid, "name": "acme"})

@@ -25,7 +25,8 @@ exactement la livraison d'un changement d'email, de profil ou de double
 authentification. Révoquer sur chacune couperait les jetons à chaque retouche de
 profil ; on ne le fait pas (`docs/auth-logto.md` §Mot de passe changé). Tout
 `User.Data.Updated` qui ne dit pas un mot de passe passe en revanche par le constat de
-double authentification (`revocation_2fa.constater`), qui lit l'état des facteurs.
+double authentification (`revocation_2fa.constater`), qui lit l'état des facteurs — et
+`PostSignIn` / `PostRegister` aussi : un facteur enrôlé pendant la connexion se voit là.
 
 ## La signature
 
@@ -48,6 +49,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from .. import db
+from ..db import revocations_comptes
 from . import annuaire, revocation_2fa
 
 logger = logging.getLogger(__name__)
@@ -137,14 +139,26 @@ def revoquer_jetons(sub: str, motif: str, par: str = REVOQUE_PAR) -> int:
 
 
 def fermer_tout(sub: str, motif: str, par: str = REVOQUE_PAR) -> dict:
-    """Coupe les jetons `oto_` de `sub`, PUIS ferme ses sessions et autorisations Logto
-    (si Logto tombe, les jetons sont déjà coupés). Rend ce qui a été fermé. Lève
-    `annuaire.FermetureInachevee` — tout est idempotent, à refaire."""
+    """Pose l'instant « révoqué avant » de `sub`, coupe ses jetons `oto_`, PUIS ferme ses
+    sessions et autorisations Logto (si Logto tombe, les jetons sont déjà coupés), puis
+    repose l'instant. Rend ce qui a été fermé. Lève `annuaire.FermetureInachevee` — tout
+    est idempotent, à refaire.
+
+    L'instant (`db/revocations_comptes.py`, jugé par `session_revoquee.py` à chaque
+    requête) est posé DEUX fois :
+    - AVANT tout : un JWT d'accès déjà émis — vérifié hors ligne, il survivait jusqu'à
+      son terme — et un jeton `oto_` créé entre la liste et la révocation
+      (`revoquer_jetons`) sont refusés dès la requête suivante ;
+    - APRÈS la fermeture chez Logto : un jeton d'accès rafraîchi pendant la fermeture,
+      sur une autorisation pas encore révoquée, est émis après le premier instant ; le
+      second le couvre. Ce qui est émis ensuite (la reconnexion) passe."""
+    revocations_comptes.poser(sub, motif)
     jetons = revoquer_jetons(sub, motif, par)
     logger.info("%s : %d jeton(s) oto_ révoqué(s) pour %s", motif, jetons, sub)
     logto = annuaire.fermer_sessions(sub)
     logger.info("%s : %d session(s), %d autorisation(s) fermée(s) pour %s",
                 motif, logto["sessions"], logto["grants"], sub)
+    revocations_comptes.poser(sub, motif)
     return {"revoked_tokens": jetons, "closed_sessions": logto["sessions"],
             "revoked_grants": logto["grants"]}
 
@@ -159,7 +173,7 @@ def traiter(brut: bytes, evt: Any, signature: Optional[str],
     verifier(brut, signature, cle_de_signature())
     if not isinstance(evt, dict):
         raise Refus(400, "invalid_event", "The body is not a JSON object.")
-    cree = _frais(evt, time.time() if maintenant is None else maintenant)
+    _frais(evt, time.time() if maintenant is None else maintenant)
     event = evt.get("event")
     sub = compte_vise(evt)
     if sub is not None:
@@ -168,7 +182,8 @@ def traiter(brut: bytes, evt: Any, signature: Optional[str],
     sub = revocation_2fa.compte_vise(evt)
     if sub is None:
         return {"ignored": True, "event": event}
-    changement, empreinte = revocation_2fa.constater(sub, cree)
+    changement, empreinte = revocation_2fa.constater(
+        sub, inscription=event == revocation_2fa.INSCRIPTION)
     if not changement:
         revocation_2fa.poser(sub, empreinte)
         return {"ignored": True, "event": event}

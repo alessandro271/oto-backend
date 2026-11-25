@@ -117,9 +117,12 @@ def test_un_jeton_invalide_garde_son_json_d_erreur_augmente(apps):
 def test_avec_un_jeton_valide_rien_ne_change(apps):
     """Le jeton passe l'auth ; la réponse est celle du TRANSPORT, octet pour octet.
     Un `GET /mcp` sans session : le transport répond sans rien demander à la base, ce
-    qui garde ce banc jouable sans PostgreSQL, comme la CI. Une app neuve par client :
-    le gestionnaire de sessions ne démarre qu'une fois par instance."""
+    qui garde ce banc jouable sans PostgreSQL, comme la CI. La porte HTTP juge toute
+    méthode sur `/mcp` : sa lecture d'entrée du compte est doublée (aucun état). Une app
+    neuve par client : le gestionnaire de sessions ne démarre qu'une fois par instance."""
+    from oto_mcp import db
     with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(db, "get_suspension", lambda sub: None)
         mp.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
         mp.setenv("LOGTO_ENDPOINT", "https://auth.oto.cx")
         reponses = []

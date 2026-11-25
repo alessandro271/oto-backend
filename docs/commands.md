@@ -395,6 +395,33 @@ orphelins --appliquer     # écrit ; relancer à blanc ensuite : « aucun » par
 orphelins --credentials --preavis-echu <date> --connecteur <nom>   # les clés d'UN orphelin
 ```
 
+### Poser les empreintes de double authentification — `oto-mcp maintenance empreintes-2fa`
+
+Le webhook Logto ferme toutes les sessions d'un compte au PREMIER passage de son constat
+de double authentification, quand aucune empreinte n'est posée (`docs/auth-logto.md`
+§Double authentification : la livraison ne permet pas d'exclure un facteur retiré). La
+commande pose, une fois, l'empreinte des comptes existants — ceux de l'annuaire primaire
+(sub sans `:`) qui ont une ligne `users` et aucune empreinte —, lue par la Management API
+de Logto (le client du constat), **sans jamais fermer de session** et **sans jamais
+écraser** une empreinte posée entre-temps par le webhook. Comptes lus par pages de 200, en
+lecture seule sous `statement_timeout` 15 s ; un appel Logto par compte, borné à 10 s.
+**À blanc par défaut** (lit les facteurs et compte), `--appliquer` pour écrire ;
+idempotente. Le rapport n'affiche que des nombres : comptes sans empreinte, empreintes
+posées (à blanc : à poser), facteurs non lus chez Logto, et, appliquée, empreintes déjà
+posées par le webhook entre la lecture et la pose. Un compte non lu est journalisé par son
+sub (jamais une adresse ni un secret). Sorties : 0 fait, 2 erreur (base ; les empreintes
+déjà posées le restent), 3 il reste à faire (à blanc : des empreintes à poser ; dans les
+deux cas : un compte non lu — relancer, ou constater qu'il n'existe plus dans l'annuaire).
+
+Exige le credential de management Logto de l'instance : depuis le commit, sous le lanceur,
+comme `orphelins` (§précédent, même extraction de l'arbre, une seule exécution sur la
+base), avec `maintenance empreintes-2fa` puis `maintenance empreintes-2fa --appliquer`,
+puis à blanc de nouveau (« empreintes à poser : 0 »). **Ordre** : la jouer avant le tag
+qui ferme au premier passage (elle ne lit que `users` et `empreintes_2fa`, qui existent
+déjà) ou juste après, et en tout cas AVANT d'abonner le webhook à `PostSignIn` : sans
+empreinte, chaque première connexion fermerait les sessions de son compte une fois.
+Les comptes nés ensuite reçoivent la leur à `PostRegister`.
+
 ### Retirer les jetons rangés dans `meta` — `oto-mcp maintenance jetons-en-meta`
 
 `connector_credentials.meta` ne porte aucune clé de forme jeton (liste fermée

@@ -186,6 +186,9 @@ Logto et, pour un mot de passe changé :
    management existant `OTO_MCP_LOGTO_M2M_ID`/`_SECRET` (ressource Management API,
    scope `all`, le seul que Logto OSS déclare).
 
+3. pose, avant les deux gestes ci-dessus et de nouveau après, l'instant « révoqué
+   avant » du compte (§ suivante, « Un jeton émis avant la fermeture est refusé »).
+
 **Ce qui déclenche** : `PostResetPassword` (« mot de passe oublié ») et
 `User.Data.Updated` émis par `PATCH /users/:userId/password` (le corps porte `method`
 et `matchedRoute`). Tout autre événement signé rend `200 {ignored: true}`, sauf un
@@ -207,8 +210,9 @@ Réponses : `401 invalid_signature`, `400 invalid_event`, `502 logto_sessions_no
 `500 logto_webhook_failed`. Classe `webhook` de la limite de débit.
 
 **Brancher une instance** : console Logto → Webhooks → endpoint
-`https://<instance>/api/logto/webhook`, événements `PostResetPassword` et
-`User.Data.Updated` ; recopier la clé de signature dans
+`https://<instance>/api/logto/webhook`, événements `PostResetPassword`,
+`User.Data.Updated`, `PostSignIn` et `PostRegister` (ces deux derniers APRÈS
+`oto-mcp maintenance empreintes-2fa --appliquer`, `docs/commands.md`) ; recopier la clé de signature dans
 `OTO_LOGTO_WEBHOOK_SIGNING_KEY`. Le credential M2M doit porter le rôle de Management API
 (scope `all`). Seul l'annuaire PRIMAIRE est couvert : un tenant à annuaire propre
 n'envoie pas ses webhooks ici.
@@ -223,8 +227,11 @@ autorisations Logto). Le compte se reconnecte avec ses facteurs du moment.
 
 **Le constat** (`auth/revocation_2fa.py`). Logto n'a aucun événement propre à la double
 authentification : un geste de l'Account API sur un facteur s'annonce par un
-`User.Data.Updated` sans route ni champ. À chaque `User.Data.Updated` qui ne dit pas un
-mot de passe, le webhook lit donc les facteurs du compte
+`User.Data.Updated` sans route ni champ, qui ne porte que l'entité APRÈS le geste (ni les
+facteurs, ni l'état d'avant). À chaque `User.Data.Updated` qui ne dit pas un mot de
+passe, et à chaque `PostSignIn` et `PostRegister` (le compte : `userId`, ou `user.id` —
+un facteur enrôlé pendant la connexion ne passe par aucun `User.Data.Updated`), le
+webhook lit donc les facteurs du compte
 (`GET /api/users/{id}/mfa-verifications`, une requête bornée à 10 s) et les réduit à une
 empreinte : le SHA-256 des couples `(id, type)` triés — les ids changent à l'ajout, au
 remplacement et à la régénération ; les codes restants, la date de dernier usage et le
@@ -233,18 +240,87 @@ nom d'une clé n'y entrent pas. L'empreinte est comparée à la dernière posée
 
 - différente, y compris d'aucun facteur à un premier facteur → fermeture
   (`200 {reason: "mfa_changed", …}`) ;
-- aucune posée (premier passage du compte) → posée sans fermer, sauf si un facteur a
-  été créé moins d'une heure avant la livraison ;
+- aucune posée (premier passage du compte) → **fermeture**, puis pose. La livraison ne
+  permet jamais d'exclure qu'un facteur vienne d'être RETIRÉ — un facteur ancien, enrôlé
+  par un tiers, que la personne retire —, et la date de création des facteurs n'en dit
+  rien : la règle sûre est de fermer, quelle que soit cette date. Seule exception,
+  `PostRegister` : un compte qui vient de naître n'a aucune session d'avant ; on pose
+  sans fermer. Pour que ce premier passage reste rare, `oto-mcp maintenance
+  empreintes-2fa` pose l'empreinte des comptes existants sans rien fermer
+  (`docs/commands.md`) ;
 - identique → `200 {ignored: true}`.
 
 L'empreinte neuve n'est posée qu'après une fermeture réussie : un `502` laisse l'écart,
-que la relivraison retrouve. Facteurs illisibles → `502 logto_mfa_not_read`, rien n'est
+que la relivraison retrouve. Deux livraisons concurrentes qui voient le même écart
+ferment deux fois — sans effet de plus — et posent la même empreinte.
+
+**La connexion qui enrôle un facteur** (`PostSignIn`). Logto ne dit pas si le webhook
+part avant ou après que le client a échangé son code contre ses jetons, et la fermeture
+(une à quelques secondes) court en parallèle de cet échange. La session de cette
+connexion peut donc être fermée elle aussi : si son jeton d'accès est émis avant la fin
+de la fermeture, il est refusé (§ suivante) et ses autorisations sont révoquées ; la
+personne se reconnecte une fois, et cette seconde connexion ne ferme plus rien
+(l'empreinte est posée). Émis après, il est servi jusqu'à son terme ; son autorisation,
+si la fermeture l'a vue, est révoquée et le rafraîchissement redemandera une connexion. Facteurs illisibles → `502 logto_mfa_not_read`, rien n'est
 fermé ni posé.
 
 **La remise à zéro par un opérateur** (`POST /api/admin/users/{sub}/reset-mfa`) passe
 par la Management API, qui n'émet aucun webhook : elle ferme elle-même (trace
 `revoked_by` = l'opérateur) et pose l'empreinte d'aucun facteur. Fermeture Logto en
 échec → `502 logto_sessions_not_closed`, à rejouer (le geste est idempotent).
+
+## Un jeton émis avant la fermeture est refusé (25/11/2026)
+
+Fermer les sessions Logto et révoquer les jetons `oto_` ne coupait ni un JWT d'accès
+déjà émis — vérifié HORS LIGNE (`server.verify_token` : signature, émetteur, audience),
+il restait servi jusqu'à son terme, environ une heure —, ni un jeton `oto_` créé entre
+la liste et la révocation. Chaque fermeture (`fermer_tout` : mot de passe changé, double
+authentification changée ou remise à zéro) pose donc pour le compte un instant
+« révoqué avant » (table `revocations_comptes`, une ligne par sub de l'annuaire, jamais
+reculé), une fois avant de fermer et une fois après la fermeture chez Logto (un jeton
+rafraîchi pendant la fermeture est couvert).
+
+À chaque requête authentifiée, la date d'émission du jeton est comparée à cet instant :
+l'`iat` d'un JWT (absent : 0), la création d'un jeton `oto_`. Émis avant → refusé, code
+`session_revoked` (`session_revoquee.py`), par un **`401` HTTP sur les deux faces**. Émis
+après — la reconnexion — → servi.
+
+- **Face REST** : `api.base._authenticate` (`garde_identite.entree_du_jeton`, avant le drain
+  d'alias) rend `401 {"error": "session_revoked", "detail": …}`.
+- **Face MCP** : le refus tombe dans la couche HTTP, au backend d'authentification que
+  fastmcp pose devant l'app (`auth/entree_mcp.py`, `FournisseurOto` → `BackendOto`), juste
+  après la vérification du jeton, sur toute méthode de `/mcp` (`POST`, mais aussi le flux
+  `GET` et le `DELETE` de fin de session : un flux de notifications ne reste pas ouvert
+  sous un jeton révoqué). Réponse : `401` avec
+  `WWW-Authenticate: Bearer error="invalid_token", error_description="…",
+  resource_metadata="…"` (RFC 6750 §3.1 ; le même `resource_metadata` que les autres 401
+  de `/mcp`), et le corps `{"error": "invalid_token", "error_description", "code":
+  "session_revoked", "detail"}`. Un client MCP relance ainsi son OAuth tout de suite ; une
+  erreur JSON-RPC dans une réponse 200 le laissait réessayer le même jeton jusqu'à son terme.
+  La pause et le tenant désactivé, eux, restent des erreurs du protocole (`-32003`) servies
+  par `AccountSuspendedMiddleware`.
+
+**Coût : aucune requête de plus.** L'instant est joint (deux clés primaires, une jointure)
+à la lecture d'entrée du compte (`db.get_suspension`, la pause avec) ; la date d'un
+jeton `oto_` sort de l'`UPDATE … RETURNING` qui le vérifie. Sur la face MCP, cette
+lecture est faite UNE fois par requête `/mcp`, par le backend, et posée dans le `scope` de
+la requête : la garde (`AccountSuspendedMiddleware`) la reprend (`entree_mcp.entree_lue`)
+au lieu de la relire. Écarts : un `GET`/`DELETE /mcp` (pas de message, pas de garde) et un
+`POST` qui ne porte qu'une notification (`notifications/initialized`, une fois par
+session) la paient aussi, alors que la garde, qui ne voit que les requêtes, ne la faisait
+pas. La face REST la fait dans sa propre porte, une fois par requête. Aucun cache : une fermeture
+mord à la requête suivante, sur tous les processus, sans fenêtre de retard. Grain : l'`iat`
+est en secondes, l'instant en microsecondes — un jeton émis dans la seconde même de la
+fermeture, après elle, est refusé (il se réémet) ; l'instant vient de l'horloge de la base,
+l'`iat` de celle de Logto.
+
+Sub jugé : l'instant est posé sous le sub que nomme le webhook (l'identifiant Logto), et
+lui seul. Les deux faces le lisent sous le sub du jeton tel que vérifié, avant le drain
+d'alias (`garde_identite.entree_du_jeton`, partagé par `BackendOto` et
+`api.base._authenticate`) : c'est ce même identifiant. Pour un ancien identifiant redirigé
+par une bascule de tenant (`sub_aliases`), la garde lit en plus l'état du sub CANONIQUE
+(pause, tenant désactivé, révocation) : une lecture de plus, pour ce seul cas. Un ancien
+identifiant redirigé perd donc son jeton à la fermeture, en REST comme en MCP.
 
 ## Identité de service — un client machine, pas un compte (#1068, 24/09/2026)
 
