@@ -36,13 +36,14 @@ CTX = ResolvedCtx(sub="super-1")
 @pytest.fixture
 def facteurs(monkeypatch):
     """Les facteurs Logto, doublés et COMPTÉS (le défaut du conftest est remplacé)."""
-    etat = {"types": ["Totp"], "appels": 0, "leve": None}
+    etat = {"types": ["Totp"], "appels": 0, "leve": None, "par_sub": {}, "lus": []}
 
     def lire(sub_logto):
         etat["appels"] += 1
+        etat["lus"].append(sub_logto)
         if etat["leve"]:
             raise etat["leve"]
-        return list(etat["types"])
+        return list(etat["par_sub"].get(sub_logto, etat["types"]))
     monkeypatch.setattr(garde_admin, "_facteurs_logto", lire)
     garde_admin.oublier()
     return etat
@@ -199,6 +200,32 @@ def test_nomination_passe_en_off_et_report(base, facteurs, mode, chemin, valeur)
     facteurs["types"] = []
     assert chemin("admin")["role"] == "admin"
     assert base == [(CIBLE, "admin")]
+
+
+@CHEMINS
+@pytest.mark.parametrize("operateur, cible, accepte", [
+    (["Totp"], [], False),      # l'opérateur a un facteur, la cible n'en a pas : refus
+    ([], ["WebAuthn"], True),   # l'inverse : la nomination passe
+], ids=["operateur-equipe", "cible-equipee"])
+def test_c_est_le_compte_promu_qui_est_controle(base, facteurs, mode, chemin,
+                                                operateur, cible, accepte):
+    """Les facteurs lus sont ceux du compte NOMMÉ, jamais ceux de l'opérateur qui nomme
+    — même en session interactive, porteur posé."""
+    mode("enforce")
+    facteurs["par_sub"] = {CTX.sub: operateur, CIBLE: cible}
+    garde_admin.poser(garde_admin.Porteur(garde_admin.SESSION, CTX.sub, sub_logto=CTX.sub))
+    try:
+        if accepte:
+            assert chemin("admin")["role"] == "admin"
+            assert base == [(CIBLE, "admin")]
+        else:
+            with pytest.raises(AuthzDenied) as e:
+                chemin("admin")
+            assert (e.value.status, e.value.code) == (409, garde_admin.CODE_PROMOTION)
+            assert base == []
+    finally:
+        garde_admin.poser(None)
+    assert facteurs["lus"] == [CIBLE]
 
 
 @CHEMINS

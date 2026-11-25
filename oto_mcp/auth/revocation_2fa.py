@@ -49,17 +49,8 @@ Les écritures de facteurs par la Management API n'émettent aucun webhook : la 
 zéro par un opérateur (`capabilities/users_admin._reset_mfa`) ferme elle-même et pose
 l'empreinte d'aucun facteur.
 
-## L'alerte : un facteur d'admin plateforme a changé
-
-Quand le compte dont les facteurs ont changé est `admin` ou `super_admin` (rôle en
-base, `OTO_MCP_ADMIN_SUB` compris, lu sans la garde de la requête), une alerte part par
-le canal d'exploitation de la plateforme : le journal ET le suivi d'erreurs (Sentry,
-tag `oto.admin_facteurs`), comme les autres anomalies dites hors requête
-(`tenancy._refus`, `medecin_agents._alerte_exploitation`). Elle ne porte que le sub et
-la nature du changement — ni facteur, ni adresse. Elle part quel que soit
-`OTO_ADMIN_MFA` : changer les facteurs d'un compte d'administration est un geste à
-voir, garde armée ou non. Elle part AVANT la pose de l'empreinte : une lecture du rôle
-en échec fait relivrer, et l'alerte n'est pas perdue (au pire, elle part deux fois).
+Quand le compte est un admin plateforme, une alerte part aussi (courriel au titulaire et
+aux autres admins, journal, suivi d'erreurs) : `alerte_facteurs_admin`.
 """
 from __future__ import annotations
 
@@ -109,33 +100,6 @@ def constater(sub: str, *, inscription: bool = False) -> tuple[bool, str]:
     if posee is None:
         return not inscription, neuve
     return posee != neuve, neuve
-
-
-def _role_plateforme(sub: str) -> str:
-    """Le rôle plateforme de `sub` en base, sans la garde de la requête (seam de test)."""
-    from .. import access
-    return access.role_hors_garde(sub)
-
-
-def alerter_si_admin(sub: str, changement: str) -> bool:
-    """Alerte si `sub` est un admin plateforme dont les facteurs viennent de changer
-    (`changement` : l'événement Logto, ou la remise à zéro). Rend vrai si elle part."""
-    from .. import garde_admin
-    role = _role_plateforme(sub)
-    if role not in garde_admin.ROLES_BORNES:
-        return False
-    message = ("double authentification changée sur un compte admin plateforme : "
-               f"{sub} ({role}) — {changement}")
-    logger.warning(message)
-    try:
-        import sentry_sdk
-        with sentry_sdk.new_scope() as scope:
-            scope.set_tag("oto.admin_facteurs", changement)
-            sentry_sdk.capture_message(message, level="warning")
-    # noqa: SILENT — le suivi d'erreurs indisponible n'annule pas la ligne du journal
-    except Exception:
-        pass
-    return True
 
 
 def poser(sub: str, valeur: str) -> None:

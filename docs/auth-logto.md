@@ -269,17 +269,35 @@ par la Management API, qui n'émet aucun webhook : elle ferme elle-même (trace
 `revoked_by` = l'opérateur) et pose l'empreinte d'aucun facteur. Fermeture Logto en
 échec → `502 logto_sessions_not_closed`, à rejouer (le geste est idempotent).
 
-**L'alerte d'un compte d'administration** (`revocation_2fa.alerter_si_admin`). Quand le
+**L'alerte d'un compte d'administration** (`auth/alerte_facteurs_admin.py`). Quand le
 compte dont les facteurs ont changé — sur le webhook comme à la remise à zéro — a le rôle
 `admin` ou `super_admin` en base (`OTO_MCP_ADMIN_SUB` compris, lu hors de la garde de
-requête), une alerte part par le canal d'exploitation de la plateforme : une ligne
-WARNING au journal et un message au suivi d'erreurs (Sentry, tag `oto.admin_facteurs` =
-l'événement Logto ou `reset_mfa`), comme les autres anomalies dites hors requête. Elle ne
-porte que le sub, le rôle et la nature du changement : ni facteur, ni identifiant de
-facteur, ni adresse. Elle part quel que soit `OTO_ADMIN_MFA`, après la fermeture et
-AVANT la pose de l'empreinte : un rôle illisible rend `500`, l'écart reste, et la
-relivraison de Logto refait le constat (l'alerte peut alors partir deux fois, jamais
-zéro).
+requête), quel que soit `OTO_ADMIN_MFA` :
+
+- **un courriel au titulaire** — le seul à savoir si le geste vient de lui —, dans sa
+  langue : quel compte, quel changement, quand (le `createdAt` de la livraison), et « si
+  ce n'est pas vous, répondez ou prévenez un autre administrateur » ; et un courriel
+  séparé, en français, à chacun des AUTRES admins de la plateforme
+  (`alertes_equipe.destinataires`), qui dit le geste à faire si le titulaire ne le
+  reconnaît pas. Par la voie des courriels transactionnels de la plateforme
+  (`email_templates.send_admin_facteurs_email`). Ni facteur, ni secret ;
+- **le canal d'exploitation** : une ligne WARNING au journal et un message au suivi
+  d'erreurs (Sentry, tag `oto.admin_facteurs` = l'événement Logto ou `reset_mfa`), avec
+  une **empreinte par événement** (`oto.admin_facteurs`, sub, `createdAt`) : chaque
+  changement ouvre son propre ticket et notifie, une relivraison du même événement
+  retombe sur le même. Le message ne porte que le sub, le rôle et l'événement. Il part
+  pendant la requête du webhook, dont l'intégration Starlette du SDK a lu le corps — l'entité
+  utilisateur de Logto, adresse et téléphone compris — et l'attache à tout événement :
+  le scope de l'alerte ne laisse partir que ses propres champs (liste blanche,
+  `_CHAMPS_GARDES`). Pour toute autre erreur de la route, `sentry_setup` retire le corps
+  de la requête `/api/logto/webhook` avant l'envoi.
+
+Ordre : le rôle se lit après la fermeture et AVANT la pose de l'empreinte (une base en
+panne rend `500`, l'écart reste, la relivraison refait le constat) ; l'alerte part APRÈS
+la pose. Un courriel refusé ou en échec (transport absent compris) se dit en ERREUR au
+journal et au suivi d'erreurs (tag `oto.admin_facteurs_courriel`), et le webhook répond
+`200` : un `500` ferait relivrer Logto, et chaque relivraison refermerait les sessions
+du compte sans rien envoyer de plus.
 
 ## Un jeton émis avant la fermeture est refusé (25/11/2026)
 
@@ -548,8 +566,9 @@ CASA AL1 3.3.1 (« le MFA est imposé à tout compte d'administration ») ; code
     le rôle le plus fort sur le nouvel identifiant : elle transporte un rôle existant,
     elle n'en nomme pas — non gardée, et bornée à la requête comme tout opérateur.
 - **L'alerte** : tout changement de facteur d'un compte `admin`/`super_admin` (webhook
-  Logto, remise à zéro par un opérateur) part au journal et au suivi d'erreurs, quel que
-  soit `OTO_ADMIN_MFA` (§ Double authentification changée).
+  Logto, remise à zéro par un opérateur) part par courriel au titulaire et aux autres
+  admins, au journal et au suivi d'erreurs (une empreinte par événement), quel que soit
+  `OTO_ADMIN_MFA` (§ Double authentification changée).
 
 **Pourquoi « enrôlé » et pas « utilisé dans cette session »** : Logto re-vérifie le
 facteur enrôlé à chaque connexion (§ MFA par org, `guardMfaVerificationStatus`), et le
@@ -560,6 +579,10 @@ quelles :
 
 - une session ouverte **avant** l'enrôlement continue de produire des jetons par
   rafraîchissement sans avoir vu le facteur : après l'enrôlement, se déconnecter partout ;
+- la garde vérifie qu'un facteur fort est ENRÔLÉ, pas qu'il a servi à la connexion : une
+  connexion par un fournisseur social (Google) d'un compte qui a un facteur enrôlé peut
+  ne pas le présenter. Une évolution prévue lira le contexte d'authentification du jeton
+  (`acr`) ;
 - la récupération par lien magique (e-mail) reste mono-facteur (§ MFA par org, Limite) ;
 - les agents hébergés d'un opérateur qui appellent un `oto_admin_*` doivent le nommer
   dans `platform_tools` : hors de cette liste, ils lisent `member` même en mode

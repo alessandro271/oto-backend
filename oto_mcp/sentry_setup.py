@@ -201,6 +201,11 @@ def _before_send_transaction(event, hint):
     return event
 
 
+#: La route du webhook Logto (`api/logto_webhook.PATH`, figée par un test) : son corps
+#: ne part jamais chez Sentry.
+WEBHOOK_LOGTO = "/api/logto/webhook"
+
+
 def _redact_hook_request(event) -> None:
     """Une requête de webhook ne part jamais entière vers Sentry : son ADRESSE
     est le credential d'un agent sans preuve (`hook_auth=none`), et son CORPS
@@ -213,6 +218,12 @@ def _redact_hook_request(event) -> None:
         return
     url = str(req.get("url") or "")
     parts = urlsplit(url)
+    if parts.path == WEBHOOK_LOGTO:
+        # Le corps du webhook Logto est l'entité utilisateur (adresse, téléphone) : lu
+        # par l'intégration Starlette AVANT le handler, il partirait sur toute erreur
+        # de la route. Le chemin, lui, ne porte rien.
+        req.pop("data", None)
+        return
     if not parts.path.startswith("/api/hooks/"):
         return
     req["url"] = f"{parts.scheme}://{parts.netloc}/api/hooks/[redacted]" if parts.netloc \

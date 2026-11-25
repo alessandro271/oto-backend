@@ -21,6 +21,7 @@ from starlette.testclient import TestClient
 
 from oto_mcp import tenancy
 from oto_mcp.api import logto_webhook
+from oto_mcp.auth import alerte_facteurs_admin as afa
 from oto_mcp.auth import annuaire, revocation_2fa, revocation_mot_de_passe as rmp
 from oto_mcp.capabilities import users_admin
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
@@ -94,7 +95,7 @@ def monde(monkeypatch):
     monkeypatch.setattr(revocation_2fa.empreintes_2fa, "poser", _poser)
     # Le rôle plateforme en base (l'alerte des admins) : `member` sauf test qui le pose.
     etat["roles"] = {}
-    monkeypatch.setattr(revocation_2fa, "_role_plateforme",
+    monkeypatch.setattr(afa, "_role_plateforme",
                         lambda sub: etat["roles"].get(sub, "member"))
     vus.etat = etat
     return vus
@@ -636,19 +637,50 @@ def test_remise_a_zero_fermeture_en_echec_rend_502(remise, monkeypatch):
 
 
 # --- L'alerte : un facteur d'admin plateforme a changé ---------------------------
+# Le module `auth/alerte_facteurs_admin.py`, joué par le webhook et la remise à zéro.
+# Ce qui part réellement chez Sentry : la section suivante, SDK actif.
+
+TITULAIRE = "titulaire@exemple.test"
+AUTRE_ADMIN = "autre-admin@exemple.test"
+
 
 @pytest.fixture
-def alertes(monde, monkeypatch):
-    """Le suivi d'erreurs simulé : chaque alerte entre dans le relevé des gestes."""
-    import sentry_sdk
-    messages: list = []
+def courriels(monde, monkeypatch):
+    """Les courriels de l'alerte simulés, relevés dans les gestes ; le compte a une
+    adresse, l'équipe deux admins (dont le titulaire, qui ne doit recevoir qu'un
+    courriel). `monde.etat["envoi"] = False` : le transport refuse."""
+    from oto_mcp import alertes_equipe, db, email_templates
+    partis = []
 
-    def _capture(message, level=None):
-        messages.append((message, level))
-        monde.append(("alerte", SUB))
-    monkeypatch.setattr(sentry_sdk, "capture_message", _capture)
-    monde.messages = messages
+    def _courriel(to, **kw):
+        partis.append((to, kw))
+        monde.append(("courriel", to))
+        return monde.etat.get("envoi", True)
+    monkeypatch.setattr(email_templates, "send_admin_facteurs_email", _courriel)
+    monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub, "email": TITULAIRE,
+                                                     "locale": "en"})
+    monkeypatch.setattr(alertes_equipe, "destinataires", lambda: [TITULAIRE, AUTRE_ADMIN])
+    monde.courriels = partis
     return monde
+
+
+@pytest.fixture
+def alertes(courriels, monkeypatch):
+    """Et le suivi d'erreurs (`_suivi`) relevé lui aussi."""
+    suivis = []
+
+    def _suivi(message, *, tag, valeur, empreinte, niveau):
+        suivis.append({"message": message, "tag": tag, "valeur": valeur,
+                       "empreinte": empreinte, "niveau": niveau})
+        courriels.append(("suivi", tag))
+    monkeypatch.setattr(afa, "_suivi", _suivi)
+    courriels.suivis = suivis
+    return courriels
+
+
+def _facteur_ajoute(monde) -> None:
+    monde.etat["facteurs"].append({"id": "cle-1", "type": "WebAuthn",
+                                   "createdAt": _maintenant()})
 
 
 @pytest.mark.parametrize("role", ["admin", "super_admin"])
@@ -660,69 +692,124 @@ def test_facteur_d_un_admin_change_alerte_quel_que_soit_le_mode(alertes, monkeyp
     else:
         monkeypatch.setenv("OTO_ADMIN_MFA", valeur)
     alertes.etat["roles"][SUB] = role
-    alertes.etat["facteurs"].append({"id": "cle-1", "type": "WebAuthn",
-                                     "createdAt": _maintenant()})
-    r = _poste(_profil())
+    _facteur_ajoute(alertes)
+    evt = _profil()
+    r = _poste(evt)
     assert r.status_code == 200 and r.json()["reason"] == "mfa_changed"
-    [(message, niveau)] = alertes.messages
-    assert SUB in message and role in message and "User.Data.Updated" in message
-    assert niveau == "warning"
-    # Ni facteur, ni identifiant de facteur, ni adresse.
+    [suivi] = alertes.suivis
+    assert suivi["tag"] == afa.TAG and suivi["valeur"] == "User.Data.Updated"
+    assert SUB in suivi["message"] and role in suivi["message"]
     for interdit in ("WebAuthn", "Totp", "cle-1", "totp-1", "@"):
-        assert interdit not in message
-    # Après la fermeture, AVANT la pose de l'empreinte (une panne fait relivrer).
-    assert (alertes.index(("logto", SUB)) < alertes.index(("alerte", SUB))
-            < alertes.index(("empreinte", SUB)))
+        assert interdit not in suivi["message"]
+    # Une empreinte PAR ÉVÉNEMENT : le `createdAt` de la livraison.
+    assert suivi["empreinte"] == [afa.TAG, SUB, evt["createdAt"]]
+    # Le titulaire (dans sa langue) puis l'autre admin ; le titulaire une seule fois.
+    assert [(to, kw["titulaire"]) for to, kw in alertes.courriels] == [
+        (TITULAIRE, True), (AUTRE_ADMIN, False)]
+    titulaire = alertes.courriels[0][1]
+    assert titulaire["locale"] == "en" and titulaire["role"] == role
+    assert titulaire["changement"] == "User.Data.Updated"
+    assert titulaire["quand"] == evt["createdAt"] and titulaire["compte"] == TITULAIRE
+    # Après la fermeture ET la pose : un échec d'envoi ne fait pas relivrer.
+    assert (alertes.index(("logto", SUB)) < alertes.index(("empreinte", SUB))
+            < alertes.index(("suivi", afa.TAG)) < alertes.index(("courriel", TITULAIRE)))
+
+
+def test_deux_evenements_deux_empreintes(alertes):
+    alertes.etat["roles"][SUB] = "admin"
+    _facteur_ajoute(alertes)
+    premier = _profil()
+    _poste(premier)
+    alertes.etat["facteurs"].append({"id": "totp-2", "type": "Totp",
+                                     "createdAt": _maintenant()})
+    second = dict(_profil(), createdAt=(datetime.now(timezone.utc) + timedelta(seconds=1))
+                  .isoformat().replace("+00:00", "Z"))
+    _poste(second)
+    assert [s["empreinte"][2] for s in alertes.suivis] == [premier["createdAt"],
+                                                          second["createdAt"]]
 
 
 def test_facteur_d_un_membre_change_n_alerte_pas(alertes):
-    alertes.etat["facteurs"].pop()
+    _facteur_ajoute(alertes)
     r = _poste(_profil())
     assert r.json()["reason"] == "mfa_changed"
-    assert alertes.messages == [] and ("alerte", SUB) not in alertes
+    assert alertes.suivis == [] and alertes.courriels == []
 
 
 def test_admin_sans_changement_n_alerte_pas(alertes):
     alertes.etat["roles"][SUB] = "super_admin"
     r = _poste(_profil())
-    assert r.json()["ignored"] is True and alertes.messages == []
+    assert r.json()["ignored"] is True
+    assert alertes.suivis == [] and alertes.courriels == []
 
 
 def test_connexion_qui_enrole_un_facteur_d_admin_alerte(alertes):
     alertes.etat["roles"][SUB] = "admin"
-    alertes.etat["facteurs"].append({"id": "totp-2", "type": "Totp",
-                                     "createdAt": _maintenant()})
+    _facteur_ajoute(alertes)
     r = _poste({"hookId": "h1", "event": "PostSignIn", "createdAt": _maintenant(),
                 "userId": SUB})
     assert r.json()["reason"] == "mfa_changed"
-    [(message, _)] = alertes.messages
-    assert "PostSignIn" in message
+    [suivi] = alertes.suivis
+    assert suivi["valeur"] == "PostSignIn"
 
 
 def test_role_illisible_rend_500_et_ne_pose_pas_l_empreinte(alertes, monkeypatch):
     """L'alerte ne se perd pas : sans rôle lu, l'écart reste et Logto relivre."""
     def _tombe(sub):
         raise RuntimeError("base injoignable")
-    monkeypatch.setattr(revocation_2fa, "_role_plateforme", _tombe)
-    alertes.etat["facteurs"].pop()
+    monkeypatch.setattr(afa, "_role_plateforme", _tombe)
+    _facteur_ajoute(alertes)
     r = _poste(_profil())
     assert r.status_code == 500 and r.json()["error"] == "logto_webhook_failed"
-    assert ("empreinte", SUB) not in alertes
+    assert ("empreinte", SUB) not in alertes and alertes.courriels == []
+
+
+@pytest.mark.parametrize("panne", ["refus", "leve"])
+def test_courriel_en_echec_se_dit_sans_faire_relivrer(alertes, monkeypatch, caplog, panne):
+    from oto_mcp import email_templates
+    alertes.etat["roles"][SUB] = "admin"
+    if panne == "refus":
+        alertes.etat["envoi"] = False
+    else:
+        def _leve(to, **kw):
+            raise RuntimeError("aucun transport de courriel déclaré")
+        monkeypatch.setattr(email_templates, "send_admin_facteurs_email", _leve)
+    _facteur_ajoute(alertes)
+    with caplog.at_level("ERROR", logger="oto_mcp.auth.alerte_facteurs_admin"):
+        r = _poste(_profil())
+    assert r.status_code == 200 and r.json()["reason"] == "mfa_changed"
+    assert ("empreinte", SUB) in alertes
+    echecs = [s for s in alertes.suivis if s["tag"] == afa.TAG_COURRIEL]
+    assert len(echecs) == 2 and all(s["niveau"] == "error" for s in echecs)
+    assert all(TITULAIRE not in s["message"] for s in echecs)
+    assert sum("courriel non envoyé" in r.getMessage() for r in caplog.records) == 2
+
+
+def test_titulaire_sans_adresse_l_equipe_est_prevenue(alertes, monkeypatch):
+    from oto_mcp import db
+    monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
+    alertes.etat["roles"][SUB] = "admin"
+    _facteur_ajoute(alertes)
+    assert _poste(_profil()).status_code == 200
+    assert [(to, kw["titulaire"], kw["compte"]) for to, kw in alertes.courriels] == [
+        (TITULAIRE, False, SUB), (AUTRE_ADMIN, False, SUB)]
+    assert any(s["tag"] == afa.TAG_COURRIEL for s in alertes.suivis)
 
 
 def test_remise_a_zero_d_un_admin_alerte(remise, alertes):
     remise.etat["roles"][SUB] = "admin"
     users_admin._reset_mfa(ResolvedCtx(sub="operateur-1"),
                            users_admin.ResetMfaInput(target=SUB))
-    [(message, _)] = alertes.messages
-    assert SUB in message and "reset_mfa" in message
-    assert alertes.index(("alerte", SUB)) < alertes.index(("empreinte", SUB))
+    [suivi] = alertes.suivis
+    assert suivi["valeur"] == afa.REMISE_A_ZERO and SUB in suivi["message"]
+    assert [to for to, _ in alertes.courriels] == [TITULAIRE, AUTRE_ADMIN]
+    assert alertes.index(("empreinte", SUB)) < alertes.index(("suivi", afa.TAG))
 
 
 def test_remise_a_zero_d_un_membre_n_alerte_pas(remise, alertes):
     users_admin._reset_mfa(ResolvedCtx(sub="operateur-1"),
                            users_admin.ResetMfaInput(target=SUB))
-    assert alertes.messages == []
+    assert alertes.suivis == [] and alertes.courriels == []
 
 
 def test_le_role_se_lit_en_base_sans_la_garde_amorcage_compris(monkeypatch):
@@ -732,8 +819,150 @@ def test_le_role_se_lit_en_base_sans_la_garde_amorcage_compris(monkeypatch):
     monkeypatch.setattr(scope.db, "get_user",
                         lambda sub: {"sub": sub, "role": "member"})
     monkeypatch.setenv("OTO_MCP_ADMIN_SUB", "amorce")
-    assert revocation_2fa._role_plateforme("amorce") == "super_admin"
-    assert revocation_2fa._role_plateforme("quelqu-un") == "member"
+    assert afa.role_a_alerter("amorce") == "super_admin"
+    assert afa.role_a_alerter("quelqu-un") is None
+
+
+@pytest.mark.parametrize("titulaire", [True, False])
+@pytest.mark.parametrize("locale", [None, "en"])
+def test_le_courriel_dit_compte_changement_et_quand_sans_facteur(monkeypatch, titulaire,
+                                                                  locale):
+    from oto_mcp import email as mailer, email_templates
+    partis = []
+    monkeypatch.setattr(mailer, "_send",
+                        lambda to, subject, html, **kw: partis.append((to, subject, html))
+                        or True)
+    assert email_templates.send_admin_facteurs_email(
+        "dest@exemple.test", compte=TITULAIRE, role="super_admin",
+        changement="User.Data.Updated", quand="2026-11-25T21:00:00Z",
+        titulaire=titulaire, locale=locale)
+    [(to, sujet, html)] = partis
+    assert to == "dest@exemple.test"
+    assert TITULAIRE in html and "2026-11-25T21:00:00Z" in html and "super_admin" in html
+    assert ("regenerated" if locale == "en" and titulaire else "régénéré") in html
+    if titulaire:
+        assert ("if this was not you" if locale == "en" else "si ce n'est pas vous") in html
+    else:
+        assert sujet.startswith("[équipe]") and "oto_admin_user op=set_role" in html
+    for interdit in ("WebAuthn", "Totp", "cle-1"):
+        assert interdit not in html
+
+
+# --- Ce qui part RÉELLEMENT chez Sentry (SDK actif, transport collecteur) ---------
+# Le corps du webhook est l'entité utilisateur de Logto : l'intégration Starlette le lit
+# avant le handler et l'attache à tout événement de la requête. Ces bancs inspectent
+# l'événement tel que le SDK l'a construit, intégrations Starlette et journal comprises.
+
+ADRESSE = "personne@exemple.test"
+TELEPHONE = "+33612345678"
+
+
+class _Collecteur:
+    """Transport sans réseau : garde les enveloppes construites par le SDK."""
+
+    def __init__(self):
+        from sentry_sdk.transport import Transport
+
+        class _T(Transport):
+            def __init__(s, options=None):
+                super().__init__(options)
+
+            def capture_envelope(s, envelope):
+                self.enveloppes.append(envelope)
+        self.enveloppes: list = []
+        self.transport = _T()
+
+    def evenements(self) -> list[dict]:
+        return [e for e in (env.get_event() for env in self.enveloppes) if e]
+
+
+@pytest.fixture
+def sentry_reel():
+    import logging
+
+    import sentry_sdk
+    from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+
+    from oto_mcp import sentry_setup
+    avant = sentry_sdk.get_client()
+    c = _Collecteur()
+    # La configuration servie (`sentry_setup.init_sentry`) : `send_default_pii=False`,
+    # pas de variables locales, le même `before_send`.
+    sentry_sdk.init(dsn="https://x@o0.ingest.sentry.io/0", transport=c.transport,
+                    send_default_pii=False, include_local_variables=False,
+                    traces_sample_rate=0, before_send=sentry_setup._before_send,
+                    default_integrations=False,
+                    integrations=[StarletteIntegration(),
+                                  LoggingIntegration(event_level=logging.ERROR)])
+    try:
+        yield c
+    finally:
+        sentry_sdk.get_global_scope().set_client(avant)
+
+
+def _profil_avec_identite() -> dict:
+    """Ce que Logto envoie : l'entité utilisateur, adresse et téléphone compris."""
+    return {"hookId": "h1", "event": "User.Data.Updated", "createdAt": _maintenant(),
+            "data": {"id": SUB, "primaryEmail": ADRESSE, "primaryPhone": TELEPHONE,
+                     "name": "Personne"}}
+
+
+def _sans_identite(evenement: dict) -> None:
+    texte = json.dumps(evenement, default=str)
+    assert ADRESSE not in texte and TELEPHONE not in texte, texte
+
+
+def test_l_alerte_ne_porte_que_sub_role_evenement(courriels, sentry_reel):
+    courriels.etat["roles"][SUB] = "super_admin"
+    _facteur_ajoute(courriels)
+    evt = _profil_avec_identite()
+    assert _poste(evt).status_code == 200
+    [ev] = [e for e in sentry_reel.evenements()
+            if (e.get("tags") or {}).get(afa.TAG)]
+    _sans_identite(ev)
+    for champ in ("request", "breadcrumbs", "extra", "user", "contexts", "transaction"):
+        assert champ not in ev, champ
+    assert ev["tags"] == {afa.TAG: "User.Data.Updated"}
+    assert ev["fingerprint"] == [afa.TAG, SUB, evt["createdAt"]]
+    message = ev.get("message") or (ev.get("logentry") or {}).get("message")
+    assert SUB in message and "super_admin" in message and "User.Data.Updated" in message
+
+
+def test_l_echec_de_courriel_ne_porte_pas_l_identite(courriels, sentry_reel):
+    courriels.etat["roles"][SUB] = "admin"
+    courriels.etat["envoi"] = False
+    _facteur_ajoute(courriels)
+    assert _poste(_profil_avec_identite()).status_code == 200
+    echecs = [e for e in sentry_reel.evenements()
+              if (e.get("tags") or {}).get(afa.TAG_COURRIEL)]
+    assert len(echecs) == 2
+    for ev in echecs:
+        assert "request" not in ev
+    # Les lignes ERROR du journal partent aussi (intégration du journal), avec la
+    # requête : aucune ne porte l'identité.
+    for ev in sentry_reel.evenements():
+        _sans_identite(ev)
+
+
+def test_une_panne_du_webhook_ne_porte_pas_le_corps(monde, sentry_reel, monkeypatch):
+    """La panne de notre côté (500, `logger.exception`) part au suivi par l'intégration
+    du journal, avec la requête : son corps en est retiré (`sentry_setup`). Un
+    `KeyError` : une erreur de code, que le tri des erreurs gérées ne retire pas."""
+    def _tombe(sub):
+        raise KeyError("role")
+    monkeypatch.setattr(afa, "_role_plateforme", _tombe)
+    _facteur_ajoute(monde)
+    assert _poste(_profil_avec_identite()).status_code == 500
+    evenements = sentry_reel.evenements()
+    assert evenements, "la panne doit partir au suivi d'erreurs"
+    for ev in evenements:
+        _sans_identite(ev)
+
+
+def test_la_route_du_webhook_est_celle_que_sentry_epure():
+    from oto_mcp import sentry_setup
+    assert sentry_setup.WEBHOOK_LOGTO == logto_webhook.PATH
 
 
 # --- La lecture des facteurs chez Logto (Management API simulée) -----------------

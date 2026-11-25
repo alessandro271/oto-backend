@@ -327,7 +327,7 @@ _PHRASES_PROMOTION = {
 }
 
 
-def refus_promotion(sub: Optional[str], role: str) -> Optional[Motif]:
+def refus_promotion(sub: str, role: str) -> Optional[Motif]:
     """Pourquoi `sub` ne peut pas être NOMMÉ `role` — None si la nomination passe
     (rôle non borné, garde coupée, `report`, facteur fort enrôlé). Appelé par tout
     chemin qui écrit `users.role` vers un rôle d'administration."""
@@ -336,7 +336,7 @@ def refus_promotion(sub: Optional[str], role: str) -> Optional[Motif]:
     m = mode()
     if m == "off":
         return None
-    code = _lire_et_cacher(str(sub)) if sub else CODE_INVERIFIABLE
+    code = _lire_et_cacher(sub)
     if code is None:
         return None
     if m == "report":

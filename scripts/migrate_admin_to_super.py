@@ -58,7 +58,7 @@ def main() -> None:
                 print("\n[dry-run] aucune écriture.")
                 return
             if refus:
-                sys.exit(f"{len(refus)} compte(s) sans second facteur fort : aucune "
+                sys.exit(f"{len(refus)} compte(s) refusé(s) à la nomination : aucune "
                          "écriture (OTO_ADMIN_MFA=enforce).")
             cur.execute("UPDATE users SET role = 'super_admin', updated_at = NOW() "
                         "WHERE role = 'admin'")

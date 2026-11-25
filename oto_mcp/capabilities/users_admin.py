@@ -241,7 +241,8 @@ def _reset_mfa(ctx: ResolvedCtx, inp: ResetMfaInput) -> dict:
     target = _resolve_target(inp.target)
     if not db.get_user(target):
         raise AuthzDenied(404, "unknown_user", f"Compte {target!r} inconnu.")
-    from ..auth import annuaire, revocation_2fa, revocation_mot_de_passe
+    from ..auth import (alerte_facteurs_admin, annuaire, revocation_2fa,
+                        revocation_mot_de_passe)
     removed = annuaire.reset_user_mfa(target)
     # La Management API n'émet aucun webhook sur un facteur retiré : la fermeture qui suit
     # tout changement de double authentification est faite ici, session comprise.
@@ -252,8 +253,10 @@ def _reset_mfa(ctx: ResolvedCtx, inp: ResetMfaInput) -> dict:
         raise AuthzDenied(502, "logto_sessions_not_closed",
                           "Second factors were removed and API tokens revoked; closing "
                           "the Logto sessions failed. Retry the reset.") from e
-    revocation_2fa.alerter_si_admin(target, "reset_mfa")
+    role_admin = alerte_facteurs_admin.role_a_alerter(target)
     revocation_2fa.poser_aucun_facteur(target)
+    if role_admin:
+        alerte_facteurs_admin.alerter(target, role_admin, alerte_facteurs_admin.REMISE_A_ZERO)
     return {"ok": True, "sub": target, "removed": removed}
 
 

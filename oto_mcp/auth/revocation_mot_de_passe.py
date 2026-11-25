@@ -50,7 +50,7 @@ from typing import Any, Optional
 
 from .. import db
 from ..db import revocations_comptes
-from . import annuaire, revocation_2fa
+from . import alerte_facteurs_admin, annuaire, revocation_2fa
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,11 @@ def traiter(brut: bytes, evt: Any, signature: Optional[str],
         revocation_2fa.poser(sub, empreinte)
         return {"ignored": True, "event": event}
     rendu = fermer_tout(sub, f"double authentification changée ({event})")
-    revocation_2fa.alerter_si_admin(sub, event)
+    # Le rôle AVANT la pose : une base en panne laisse l'écart, la relivraison refait tout.
+    role_admin = alerte_facteurs_admin.role_a_alerter(sub)
     # Après la fermeture seulement : en échec, l'écart reste et la relivraison le retrouve.
     revocation_2fa.poser(sub, empreinte)
+    if role_admin:
+        # Après la pose : un courriel en échec ne fait pas relivrer (il ne lève pas).
+        alerte_facteurs_admin.alerter(sub, role_admin, event, evt.get("createdAt"))
     return {"ignored": False, "event": event, "reason": "mfa_changed", **rendu}
