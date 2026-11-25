@@ -101,7 +101,7 @@ def _credential_present(d: Directory) -> bool:
                 and os.environ.get(f"{d.credential}_SECRET"))
 
 
-def _mgmt_token(directory: "Directory | None" = None) -> str:
+def _mgmt_token(directory: "Directory | None" = None, *, timeout: float = 15) -> str:
     import requests
     d = directory or _primary_directory()
     cid = os.environ.get(f"{d.credential}_ID")
@@ -117,7 +117,7 @@ def _mgmt_token(directory: "Directory | None" = None) -> str:
     r = requests.post(
         f"{d.token_endpoint}/oidc/token",
         data={"grant_type": "client_credentials", "resource": _MGMT_RESOURCE, "scope": "all"},
-        auth=(cid, csec), headers={"User-Agent": _UA}, timeout=15,
+        auth=(cid, csec), headers={"User-Agent": _UA}, timeout=timeout,
     )
     r.raise_for_status()
     j = r.json()
@@ -174,6 +174,9 @@ def reset_user_mfa(sub: str) -> list[str]:
         d = requests.delete(f"{base}/api/users/{sub}/mfa-verifications/{v['id']}", headers=h, timeout=15)
         d.raise_for_status()
         removed.append(v["type"])
+    # Le verdict de la garde des administrateurs ne survit pas à ses facteurs.
+    from .. import garde_admin
+    garde_admin.oublier(sub)
     return removed
 
 
@@ -335,22 +338,26 @@ class LectureInachevee(RuntimeError):
     l'appelant dit « à refaire » (le webhook rend 502, Logto relivre)."""
 
 
-def facteurs_2fa(sub: str) -> list[dict]:
+def facteurs_2fa(sub: str, *, delai: float | None = None) -> list[dict]:
     """Les facteurs de double authentification de `sub` (annuaire primaire), tels que
     les rend la Management API (`GET /api/users/{id}/mfa-verifications` :
     `{id, type, createdAt, …}` par facteur). Un appel, borné à `_DELAI_REQUETE_S`.
-    Lève `LectureInachevee` si Logto refuse ou ne répond pas."""
+    Lève `LectureInachevee` si Logto refuse ou ne répond pas.
+
+    `delai` (secondes) borne l'appel ET l'obtention du jeton de gestion : la garde des
+    administrateurs (`garde_admin`) le paie dans le fil d'une requête, un Logto lent ne
+    doit pas le tenir plus longtemps."""
     import requests
     from urllib.parse import quote
 
     from ..tenancy import require_primary_tenant
     require_primary_tenant(sub, "lecture des facteurs de double authentification")
     try:
-        tok = _mgmt_token()
+        tok = _mgmt_token() if delai is None else _mgmt_token(timeout=delai)
         r = requests.get(
             f"{_logto_base()}/api/users/{quote(sub, safe='')}/mfa-verifications",
             headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
-            timeout=_DELAI_REQUETE_S)
+            timeout=_DELAI_REQUETE_S if delai is None else delai)
     except (RuntimeError, requests.RequestException) as e:
         raise LectureInachevee(
             f"facteurs de double authentification de {sub} : {e}") from e

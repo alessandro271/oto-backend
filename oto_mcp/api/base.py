@@ -40,6 +40,7 @@ from ..datastore.errors import (CODE_TABLEAU_PAR_NOM, est_un_nom_de_tableau,
 from .. import verrou_org
 from ..tenant_migration import alias_drain_armed
 from .. import garde_identite
+from .. import garde_admin
 
 #: Le tableau d'une route `/api/datastores/{tableau}/…` : là où le tampon de
 #: compatibilité (`deprecations`) remet le numéro à la place d'un nom traduit.
@@ -188,10 +189,11 @@ CLE_PORTEUR = "oto_porteur_authentifie"
 
 def _memoriser_porteur(request: Request, cle: tuple, sub: str, *, scopes=None,
                        token_id=None, token_kind=None, verrou=None,
-                       email_verified=None) -> None:
+                       email_verified=None, porteur=None) -> None:
     request.scope[CLE_PORTEUR] = {"cle": cle, "sub": sub, "scopes": scopes,
                                   "token_id": token_id, "token_kind": token_kind,
-                                  "verrou": verrou, "email_verified": email_verified}
+                                  "verrou": verrou, "email_verified": email_verified,
+                                  "porteur": porteur}
 
 
 _log = logging.getLogger(__name__)
@@ -280,6 +282,7 @@ async def _authenticate(
         service_identity.set_current(None)
         token_scopes.set_current(deja["scopes"], deja["token_id"])
         verrou_org.poser(deja["verrou"])
+        garde_admin.poser(deja.get("porteur"))
         servi = _maybe_view_as(deja["sub"], apply_view_as)
         if deja["verrou"] is not None and servi != deja["sub"] and verrou_org.courant():
             return None, _json_error(
@@ -312,6 +315,10 @@ async def _authenticate(
     # Le verrou d'org d'un jeton de délégation (`verrou_org.py`) : posé à None
     # d'abord, comme les deux variables ci-dessus — il ne survit à aucune requête.
     verrou_org.poser(None)
+    # Le porteur que lit la garde des administrateurs (`garde_admin`) : posé à None
+    # d'abord, puis POSITIVEMENT par chaque branche qui authentifie — jamais déduit
+    # d'une absence (un jeton nommé absent ne fait pas une session).
+    garde_admin.poser(None)
     if token.startswith(db.WORKER_SECRET_PREFIX):
         token_scopes.set_current(None)
         if not allow_api_token:
@@ -322,6 +329,7 @@ async def _authenticate(
         if not row:
             return None, _json_error(request, 401, "invalid_worker_secret")
         platform_worker.set_current(row)
+        garde_admin.poser(garde_admin.Porteur(garde_admin.MACHINE, row["worker_sub"]))
         _publier_principal(request, row["worker_sub"], token_kind="worker")
         return row["worker_sub"], None
 
@@ -439,9 +447,14 @@ async def _authenticate(
                 "A hosted agent's token does not call the REST API: a hosted agent works "
                 "through MCP, where its tool list is enforced.")
         verrou_org.poser(verrou := verrou_org.depuis_ligne(row))
+        porteur = garde_admin.Porteur(
+            garde_admin.DELEGATION if row.get("token_kind") == "delegation"
+            else garde_admin.JETON, row["sub"])
+        garde_admin.poser(porteur)
         _memoriser_porteur(request, cle, row["sub"], scopes=scopes,
                            token_id=row.get("token_id"),
-                           token_kind=row.get("token_kind"), verrou=verrou)
+                           token_kind=row.get("token_kind"), verrou=verrou,
+                           porteur=porteur)
         servi = _maybe_view_as(row["sub"], apply_view_as)
         # Le verrou ne vise que le porteur : « voir en tant que » un autre compte
         # l'éteindrait. Sous un jeton verrouillé, la consultation est refusée.
@@ -470,6 +483,7 @@ async def _authenticate(
         except service_identity.ServiceRefuse as refus:
             return None, _json_error(request, refus.status, refus.code, refus.detail)
         service_identity.set_current(principal)
+        garde_admin.poser(garde_admin.Porteur(garde_admin.MACHINE, principal["sub"]))
         _publier_principal(request, principal["sub"], token_kind="service")
         return principal["sub"], None
 
@@ -533,7 +547,12 @@ async def _authenticate(
         # précède déjà sur ce chemin ; celle-ci tient si un appelant l'omet.
         return None, _json_error(request, 403, refus.code, str(refus))
     _EMAIL_VERIFIE.set((sub, email_verifie))
-    _memoriser_porteur(request, cle, sub, email_verified=email_verifie)
+    # Les facteurs se lisent sous l'identité Logto VÉRIFIÉE (le `sub` du jeton, avant le
+    # drain d'alias) : un ancien identifiant redirigé n'a plus de ligne sous le canonique.
+    porteur = garde_admin.Porteur(garde_admin.SESSION, sub,
+                                  sub_logto=access_token.claims.get("sub"))
+    garde_admin.poser(porteur)
+    _memoriser_porteur(request, cle, sub, email_verified=email_verifie, porteur=porteur)
     servi = _maybe_view_as(sub, apply_view_as)
     # Session interactive : pas de jeton nommé, le porteur suffit. Publié quand
     # même — sinon le journal continuerait de le RE-DÉDUIRE de l'en-tête, et une

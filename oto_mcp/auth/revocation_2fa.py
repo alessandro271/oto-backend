@@ -101,6 +101,10 @@ def constater(sub: str, *, inscription: bool = False) -> tuple[bool, str]:
 
 def poser(sub: str, valeur: str) -> None:
     empreintes_2fa.poser(sub, valeur)
+    # Les facteurs ont changé (ou viennent d'être constatés) : le verdict de la garde
+    # des administrateurs (`garde_admin`) se relit, il n'attend pas la fin de son cache.
+    from .. import garde_admin
+    garde_admin.oublier(sub)
 
 
 def poser_aucun_facteur(sub: str) -> None:
