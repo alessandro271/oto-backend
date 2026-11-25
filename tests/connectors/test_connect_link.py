@@ -167,6 +167,29 @@ def test_reconnexion_d_un_compte_prete_ou_plateforme_sans_adresse(monkeypatch):
                                     "credential_row": ("platform", "k", "hunter", "")}) == {}
 
 
+def test_reconnexion_d_une_cle_d_org_vise_l_org_de_la_cle(monkeypatch):
+    """L'org du lien est celle de la ligne du coffre, jamais l'org courante de l'appelant."""
+    from oto_mcp import group_store, roles
+    from oto_mcp.middleware import error_envelope as EE
+    monkeypatch.setattr(EE, "current_user_sub_from_token", lambda: "u1")
+    monkeypatch.setattr("oto_mcp.access.current_org", lambda sub: 7)
+    membre_de = {7, 9}
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: org in membre_de)
+    d = EE._contrat_reconnexion({"resolved_connector": "hunter", "key_mode": "org",
+                                 "credential_row": ("org", "9", "hunter", "")})
+    assert d["space"] == "org"
+    assert d["url"] == f"{BASE}/o/9/org/connectors?connector=hunter&space=org"
+    # Une clé d'équipe : l'org de l'équipe.
+    monkeypatch.setattr(group_store, "get_group", lambda g: {"id": g, "org_id": 9})
+    d = EE._contrat_reconnexion({"resolved_connector": "hunter", "key_mode": "group",
+                                 "credential_row": ("group", "4", "hunter", "")})
+    assert d["url"] == f"{BASE}/o/9/org/teams/4/connectors?connector=hunter&space=team%3A4"
+    # Une clé d'une org dont l'appelant n'est pas membre (prêt entre orgs) : pas d'adresse.
+    membre_de.discard(9)
+    assert EE._contrat_reconnexion({"resolved_connector": "hunter", "key_mode": "org",
+                                    "credential_row": ("org", "9", "hunter", "")}) == {}
+
+
 def test_reauth_required_est_reconnu_au_nom():
     from oto_mcp.middleware import error_envelope as EE
 
@@ -239,6 +262,7 @@ def test_capacite_refus_nommes(contexte, monkeypatch):
         CAP._connect_link(_CTX, CAP.ConnectorConnectLinkInput(connector="hunter",
                                                               access="x"))
     assert e.value.code == "access_not_declared"
+    monkeypatch.setattr(CAP.group_store, "get_group", lambda g: {"id": g, "org_id": 7})
     monkeypatch.setattr(CAP.roles, "can_read_group", lambda sub, g: False)
     with pytest.raises(AuthzDenied) as e:
         CAP._connect_link(_CTX, CAP.ConnectorConnectLinkInput(connector="hunter",
@@ -286,3 +310,55 @@ def test_le_refus_sans_cle_porte_le_contrat():
     # Sans org, pas d'adresse : le refus d'origine, inchangé.
     nu = CL.sans_compte(CredentialUnavailable, "hunter", sub="u1", org=None, message="No key.")
     assert nu.error.message == "No key." and CL.lu(nu) == {}
+
+
+def test_equipe_d_une_autre_org_refusee_comme_inexistante(contexte, monkeypatch):
+    """Lisible par l'appelant, mais d'une autre org que celle de l'appel : `unknown_team`."""
+    monkeypatch.setattr(CAP.group_store, "get_group", lambda g: {"id": g, "org_id": 8})
+    monkeypatch.setattr(CAP.roles, "can_read_group", lambda sub, g: True)
+    monkeypatch.setattr(CAP.roles, "can_admin_group", lambda sub, g: True)
+    with pytest.raises(AuthzDenied) as e:
+        CAP._connect_link(_CTX, CAP.ConnectorConnectLinkInput(connector="hunter",
+                                                              space="team:5"))
+    assert e.value.code == "unknown_team"
+    # Inexistante : le même refus, mot pour mot.
+    monkeypatch.setattr(CAP.group_store, "get_group", lambda g: None)
+    with pytest.raises(AuthzDenied) as e2:
+        CAP._connect_link(_CTX, CAP.ConnectorConnectLinkInput(connector="hunter",
+                                                              space="team:5"))
+    assert (e2.value.code, str(e2.value)) == (e.value.code, str(e.value))
+    # De l'org de l'appel : servie.
+    monkeypatch.setattr(CAP.group_store, "get_group", lambda g: {"id": g, "org_id": 7})
+    out = CAP._connect_link(_CTX, CAP.ConnectorConnectLinkInput(connector="hunter",
+                                                                space="team:5"))
+    assert out["space"] == "team:5" and "/o/7/org/teams/5/" in out["url"]
+
+
+def _compte(monkeypatch, win):
+    from oto_mcp.access import chain_shadow
+    from oto_mcp.capabilities.connectors import instances
+    monkeypatch.setattr(chain_shadow, "resolution_rungs",
+                        lambda *a, **k: iter([win] if win else []))
+    monkeypatch.setattr(instances, "instance_ref_of_vault_row", lambda *a: "inst:12")
+    monkeypatch.setattr(CAP.db, "get_user", lambda sub: {"name": "Grace"})
+    return CAP._compte_qui_sert("u1", "gmail", 7, None)
+
+
+def test_le_label_adresse_d_un_compte_prete_est_masque(monkeypatch):
+    prete = SimpleNamespace(mode="user", entity_type="member", entity_id="7:autre-sub",
+                            account="grace@exemple.test")
+    compte = _compte(monkeypatch, prete)
+    assert "@" not in compte["label"] and "grace" not in str(compte)
+    # Le sien : son adresse lui est rendue.
+    sien = SimpleNamespace(mode="user", entity_type="member", entity_id="7:u1",
+                           account="moi@exemple.test")
+    assert _compte(monkeypatch, sien)["label"] == "moi@exemple.test"
+
+
+def test_compte_non_designable_refus_nomme(monkeypatch):
+    with pytest.raises(AuthzDenied) as e:
+        _compte(monkeypatch, None)
+    assert e.value.status == 409 and e.value.code == "serving_account_undesignatable"
+    assert "serving_account_undesignatable" in {
+        d.code for d in next(c for c in CAP.CAPABILITIES
+                             if c.key == "connector.connect").errors}

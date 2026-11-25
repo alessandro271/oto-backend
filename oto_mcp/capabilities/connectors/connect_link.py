@@ -22,7 +22,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from ... import access, credentials_store, db, providers, roles
+from ... import access, credentials_store, db, group_store, providers, roles
 from ...connectors import activation_gate, connect_link
 from ...connectors import readiness as connector_readiness
 from .._authz import ORG_MEMBER
@@ -74,12 +74,23 @@ def _refus_page(e: connect_link.PageDeConnexionAbsente) -> AuthzDenied:
 
 
 def _equipe(ctx: ResolvedCtx, equipe: str) -> int:
-    """The team of `team:<id>`, if the caller can see it — else the same refusal as a team
-    that does not exist (no oracle on other teams)."""
-    if not equipe.isdigit() or not roles.can_read_group(ctx.sub, int(equipe)):
+    """The team of `team:<id>`, if it belongs to the org of the call AND the caller can see
+    it — else the same refusal as a team that does not exist (no oracle on other teams, nor
+    on the teams of another org the caller also belongs to)."""
+    groupe = group_store.get_group(int(equipe)) if equipe.isdigit() else None
+    if (groupe is None or groupe.get("org_id") != ctx.org_id
+            or not roles.can_read_group(ctx.sub, int(equipe))):
         raise AuthzDenied(404, "unknown_team",
                           f"No team `{equipe}` you can see: `space` takes `team:<group_id>`.")
     return int(equipe)
+
+
+def _compte_non_designable(connector: str, pourquoi: str) -> AuthzDenied:
+    """The readiness says an account serves `connector`, but it cannot be designated: an
+    inconsistency of the vault, named (never a bare 500)."""
+    return AuthzDenied(409, "serving_account_undesignatable",
+                       f"An account serves `{connector}` here but {pourquoi}: retry the tool "
+                       f"directly, or report it with `feedback`.")
 
 
 def _owner(win, sub: str) -> dict:
@@ -115,7 +126,7 @@ def _compte_qui_sert(sub: str, connector: str, org, group) -> dict:
                                              probe=access.PRESENCE_PROBE, want="auto"),
                None)
     if win is None:
-        raise RuntimeError(f"`{connector}` is ready but no account resolves for it")
+        raise _compte_non_designable(connector, "no account resolves for it")
     porteur = providers.credential_provider(connector)
     owner = _owner(win, sub)
     ident = (instance_ref_of_vault_row(win.entity_type, win.entity_id or "", porteur,
@@ -125,10 +136,15 @@ def _compte_qui_sert(sub: str, connector: str, org, group) -> dict:
         ident = instance_refs.ref_for_credential(win.entity_type or "", win.entity_id or "",
                                                  porteur, win.account or "")
     if not ident:
-        raise RuntimeError(f"the account serving `{connector}` has no designatable id")
+        raise _compte_non_designable(connector, "it has no designatable id")
     con = providers.REGISTRY.get(connector)
-    return {"id": ident, "label": win.account or (con.label if con else connector),
-            "mode": win.mode, "owner": owner}
+    defaut = con.label if con else connector
+    label = win.account or defaut
+    # An account lent by another member is named by its connector, never by its address
+    # (a Google or Microsoft account's label is its email): same rule as the owner's name.
+    if win.mode == "user" and not owner.get("yours") and "@" in label:
+        label = defaut
+    return {"id": ident, "label": label, "mode": win.mode, "owner": owner}
 
 
 def _connect_link(ctx: ResolvedCtx, inp: ConnectorConnectLinkInput) -> dict:
@@ -207,6 +223,8 @@ CAPABILITIES += [
                           "caller cannot see"),
             DeclaredError(409, "connect_page_undeclared", "this instance or tenant "
                           "declares no page for this gesture (OTO_DASHBOARD_LINK_PATHS)"),
+            DeclaredError(409, "serving_account_undesignatable", "an account serves the "
+                          "connector here but the vault gives it no designatable id"),
         ),
         description=(
             "The page where a PERSON connects a connector — call it when a tool needs an "

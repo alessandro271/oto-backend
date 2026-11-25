@@ -74,10 +74,14 @@ def _contrat_reconnexion(trace: Optional[dict]) -> dict:
     refused, from the call's trace: which connector, under which key. Sync (DB) — via
     `run_in_threadpool`.
 
-    Only a key someone in the org can set again gets an address: the caller's own key
-    (`me`, in the org the key lives in), the org's (`org`) or a team's (`team:<id>`). A
-    key lent by another person, the tenant's or the platform's: none — the contract leaves
-    the host's key out, and the person cannot repair someone else's account."""
+    Which keys get an address, and in which org — always the org the key LIVES in, read on
+    its vault row, never the caller's current org:
+    - a personal key (`me`): only when it is the caller's own; one lent by another person
+      gets none (the person cannot repair someone else's account);
+    - the org's key (`org`) or a team's (`team:<id>`): ANY member the key served gets the
+      address, admin or not, provided they belong to that org; the page re-checks the right
+      to set the key at every gesture (a plain member sees there who can);
+    - the tenant's or the platform's key: none — the contract leaves the host's key out."""
     trace = trace or {}
     connector = trace.get("resolved_connector")
     mode = trace.get("key_mode")
@@ -85,18 +89,26 @@ def _contrat_reconnexion(trace: Optional[dict]) -> dict:
     sub = current_user_sub_from_token()
     if not connector or not sub:
         return {}
-    from .. import access
     if mode == "user":
         org_txt, _, titulaire = str(entity_id or "").partition(":")
         if entity_type != "member" or titulaire != sub or not org_txt.isdigit():
             return {}
         org, space = int(org_txt), "me"
-    elif mode == "org":
-        org, space = access.current_org(sub), "org"
-    elif mode == "group" and entity_id:
-        org, space = access.current_org(sub), connect_link.espace_d_equipe(entity_id)
+    elif mode == "org" and entity_type == "org" and str(entity_id or "").isdigit():
+        org, space = int(entity_id), "org"
+    elif mode == "group" and entity_type == "group" and str(entity_id or "").isdigit():
+        from .. import group_store
+        groupe = group_store.get_group(int(entity_id))
+        if groupe is None:
+            return {}
+        org, space = int(groupe["org_id"]), connect_link.espace_d_equipe(entity_id)
     else:
         return {}
+    # A key of an org the caller is not in (a cross-org loan): no page of theirs.
+    if mode != "user":
+        from .. import roles
+        if not roles.is_org_member(sub, org):
+            return {}
     return connect_link.details_du_refus("reconnect", connector, sub=sub, org=org,
                                          space=space)
 

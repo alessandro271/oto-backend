@@ -675,6 +675,17 @@ l'agent l'y mène en lui donnant l'adresse exacte.
   `salesforce_connect` (et leurs anciens noms `oto_…`), qui rendaient une URL de
   consentement avec son `state` : ces noms refusent en nommant le nouvel appel
   (`outils_retires`).
+- **Qui reçoit l'adresse d'une reconnexion** (`error_envelope._contrat_reconnexion`), sous
+  l'org où vit la clé, lue sur sa ligne du coffre (`entity_id`, ou l'org de l'équipe), jamais
+  l'org courante de l'appelant : une clé **personnelle**, seulement si elle est à l'appelant ;
+  une clé **d'org ou d'équipe**, tout membre de cette org qu'elle a servi, administrateur ou
+  non — la page revérifie le droit de poser la clé à chaque geste. Une clé d'une org dont
+  l'appelant n'est pas membre (prêt entre orgs) : pas d'adresse.
+- **La capacité ne désigne que ce qu'on peut nommer** : `space: team:<id>` refuse
+  `unknown_team` pour une équipe d'une autre org, comme pour une équipe inexistante ; le
+  `label` d'un compte prêté par un autre membre qui est une adresse (email d'un compte Google
+  ou Microsoft) est remplacé par le nom du connecteur ; un compte qui sert sans être
+  désignable est un refus nommé (409 `serving_account_undesignatable`), jamais un 500.
 - **Hors contrat, assumé** : une coupure par le tenant ou la plateforme n'a pas d'adresse
   (personne dans l'org ne la lève) ; une clé de l'hôte ou prêtée par une autre personne non
   plus. `administrators`, `shared_accounts` et `account_id` ne sont pas encore servis.
