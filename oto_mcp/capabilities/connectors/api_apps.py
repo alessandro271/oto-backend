@@ -148,14 +148,20 @@ class ConnectInput(BaseModel):
 
 
 class ApiAppConnect(BaseModel):
-    """Open `auth_url` in the browser: the API's own sign-in page. `redirect_uri` = oto's
-    callback, the one registered for the app's client at the sign-in server.
-    `sign_in_host` (where the member signs in) and `api_host` (where their access is then
-    used) are shown to the member BEFORE they leave for the sign-in page."""
-    auth_url: str
-    redirect_uri: str
-    sign_in_host: str
-    api_host: str
+    """The API's own sign-in page for the caller. The client MUST show `sign_in_host` and
+    `api_host` to the member before any redirection to `auth_url`, and redirect only
+    after the member confirms."""
+    auth_url: str = Field(description=(
+        "The sign-in page to open in the browser — only AFTER the member has seen "
+        "`sign_in_host` and `api_host` and confirmed."))
+    redirect_uri: str = Field(description=(
+        "oto's callback, the one registered for the app's client at the sign-in server."))
+    sign_in_host: str = Field(description=(
+        "Host of the sign-in server the member is sent to. The client MUST show it to "
+        "the member before any redirection to `auth_url`."))
+    api_host: str = Field(description=(
+        "Host of the API the member's access is then used on. The client MUST show it to "
+        "the member before any redirection to `auth_url`."))
 
 
 class ImportInput(BaseModel):
@@ -390,7 +396,10 @@ CAPABILITIES += [
     Capability(key="custom_api.apps.connect", handler=_connect, Input=ConnectInput,
                Output=ApiAppConnect, authz=ORG_MEMBER_OF("org_id"), mcp=None,
                description=("Start the caller's own sign-in to a Custom API app in "
-                            "`oauth2_user` mode: the URL of the API's sign-in page."),
+                            "`oauth2_user` mode: the URL of the API's sign-in page. The "
+                            "client MUST show `sign_in_host` and `api_host` to the member "
+                            "before any redirection to `auth_url`, and redirect only "
+                            "after the member confirms."),
                errors=(_NOT_FOUND,
                        DeclaredError(409, "api_app_not_oauth_user",
                                      "the app does not use per-member sign-in"),
