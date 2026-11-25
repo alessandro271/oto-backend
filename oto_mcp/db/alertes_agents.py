@@ -147,7 +147,7 @@ def agents_sans_forfait(attente_min: int = ATTENTE_FORFAIT_MIN) -> list[dict[str
             f"""
             SELECT t.id AS trigger_id, t.org_id, t.sub AS proprietaire,
                    COALESCE(NULLIF(t.label, ''), t.procedure) AS libelle,
-                   w.famille, w.statut AS forfait, w.travaux, w.depuis
+                   w.famille, w.statut AS forfait, e.travaux, e.depuis
               FROM runner_triggers t
               CROSS JOIN LATERAL (
                     SELECT MAX(j.finished_at) AS dernier_succes
@@ -175,6 +175,21 @@ def agents_sans_forfait(attente_min: int = ATTENTE_FORFAIT_MIN) -> list[dict[str
                        AND ab.updated_at < NOW() - make_interval(mins => %(attente)s)
                        AND NOT {_par_le_pool()}
                      GROUP BY rj.payload->>'model_family', ab.statut, ab.last_ok_at) w
+              -- Depuis QUAND et COMBIEN : comptés depuis le dernier succès, SANS la
+              -- fenêtre. La fenêtre dit seulement que la panne court encore ; bornés
+              -- par elle, une panne de seize jours s'annonçait vieille de sept, avec
+              -- sept passages manqués sur seize. Le premier travail de la série est
+              -- souvent celui qui a ÉCHOUÉ en constatant la déconnexion (`failed`).
+              CROSS JOIN LATERAL (
+                    SELECT MIN(j.created_at) AS depuis, COUNT(*)::int AS travaux
+                      FROM runner_jobs j
+                     WHERE {_DU_DECLENCHEUR}
+                       AND j.sub = t.sub
+                       AND j.payload->>'model_family' = w.famille
+                       AND j.status IN ('pending', 'expired', 'failed')
+                       AND j.created_at < NOW() - make_interval(mins => %(attente)s)
+                       AND (s.dernier_succes IS NULL
+                            OR j.created_at > s.dernier_succes)) e
              WHERE t.enabled
                -- L'agent tourne ENCORE sur cette famille : un agent passé depuis sur
                -- une clé n'a plus rien à reconnecter, même si un vieux travail attend.
