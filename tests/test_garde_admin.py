@@ -281,7 +281,9 @@ def porte_rest(monkeypatch):
     monkeypatch.setattr(base.db, "verify_api_token",
                         lambda t: {"sub": "u-1", "scopes": None, "token_id": 3,
                                    "token_kind": "delegation" if "deleg" in t else "user"})
-    monkeypatch.setattr(base.garde_identite, "refus", lambda sub: None)
+    monkeypatch.setattr(base.garde_identite, "refus", lambda sub, *a, **k: None)
+    monkeypatch.setattr(base.garde_identite, "entree_du_jeton",
+                        lambda sub, emis_le: (None, None))
     monkeypatch.setattr(base.db, "upsert_user", lambda *a, **k: None)
     monkeypatch.setattr(base.service_identity, "adresse_aux_services", lambda t: False)
     monkeypatch.setattr(base, "alias_drain_armed", lambda: False)
@@ -488,7 +490,9 @@ def porte_reelle(monkeypatch, roles, facteurs):
     monkeypatch.setattr(base.db, "verify_api_token",
                         lambda t: {"sub": OP, "scopes": None, "token_id": 3,
                                    "token_kind": "user"})
-    monkeypatch.setattr(base.garde_identite, "refus", lambda sub: None)
+    monkeypatch.setattr(base.garde_identite, "refus", lambda sub, *a, **k: None)
+    monkeypatch.setattr(base.garde_identite, "entree_du_jeton",
+                        lambda sub, emis_le: (None, None))
     monkeypatch.setattr(base.db, "upsert_user", lambda *a, **k: None)
     monkeypatch.setattr(base.service_identity, "adresse_aux_services", lambda t: False)
     monkeypatch.setattr(base, "alias_drain_armed", lambda: False)
