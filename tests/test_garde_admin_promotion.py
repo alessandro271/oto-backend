@@ -241,6 +241,7 @@ def test_retrograder_passe_toujours(base, facteurs, mode, chemin):
 class _Curseur:
     def __init__(self, lignes, ecrits):
         self.lignes, self.ecrits, self.rowcount = lignes, ecrits, 0
+        self.requetes = ecrits.requetes
 
     def __enter__(self):
         return self
@@ -249,6 +250,7 @@ class _Curseur:
         return False
 
     def execute(self, sql, *a):
+        self.requetes.append((sql, a))
         if sql.lstrip().startswith("UPDATE"):
             self.ecrits.append(sql)
             self.rowcount = len(self.lignes)
@@ -277,7 +279,10 @@ class _Connexion:
 @pytest.fixture
 def script(monkeypatch):
     from scripts import migrate_admin_to_super as m
-    ecrits = []
+    class _Ecrits(list):
+        """Les écritures, plus toutes les requêtes avec leurs paramètres."""
+    ecrits = _Ecrits()
+    ecrits.requetes = []
     lignes = [("a-1", "a1@example.test"), ("a-2", None)]
     monkeypatch.setenv("DATABASE_URL", "postgresql://banc/factice")
     monkeypatch.setattr(m.psycopg, "connect", lambda dsn: _Connexion(lignes, ecrits))
@@ -311,3 +316,17 @@ def test_script_off_et_report_ecrivent(script, facteurs, mode, valeur):
     facteurs["types"] = []
     m.main()
     assert ecrits[-1] == "commit"
+
+
+def test_script_ne_promeut_que_les_comptes_juges(script, facteurs, mode):
+    """Un `admin` nommé pendant le passage n'est pas promu sans contrôle : la liste est
+    lue sous verrou, et l'écriture ne vise que les comptes qui ont été jugés."""
+    m, ecrits = script
+    mode("enforce")
+    m.main()
+    select = next(sql for sql, _ in ecrits.requetes if sql.lstrip().startswith("SELECT"))
+    assert "FOR UPDATE" in select
+    update, params = next((sql, a) for sql, a in ecrits.requetes
+                          if sql.lstrip().startswith("UPDATE"))
+    assert "sub = ANY(%s)" in update
+    assert params == ((["a-1", "a-2"],),)

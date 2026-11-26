@@ -24,7 +24,8 @@ Nommer `super_admin` est une nomination comme une autre : sous `OTO_ADMIN_MFA`
 `report` ou `enforce`, chaque compte est jugé par `garde_admin.refus_promotion` (second
 facteur fort enrôlé chez Logto). En `enforce`, un seul refus et RIEN n'est écrit : le
 script nomme les comptes à équiper et sort en erreur. En `report`, le journal les nomme
-et l'écriture se fait.
+et l'écriture se fait. Les lignes lues sont verrouillées jusqu'au commit, et l'écriture ne
+porte que sur les comptes jugés : un `admin` nommé pendant le passage n'est pas promu.
 """
 from __future__ import annotations
 
@@ -42,7 +43,8 @@ def main() -> None:
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             # Liste avant écriture (pour le compte-rendu, et seul lookup en dry-run).
-            cur.execute("SELECT sub, email FROM users WHERE role = 'admin' ORDER BY created_at")
+            cur.execute("SELECT sub, email FROM users WHERE role = 'admin' ORDER BY created_at "
+                        "FOR UPDATE")
             rows = cur.fetchall()
             if not rows:
                 print("Aucun user role='admin' — rien à migrer (déjà à jour ?).")
@@ -61,7 +63,8 @@ def main() -> None:
                 sys.exit(f"{len(refus)} compte(s) refusé(s) à la nomination : aucune "
                          "écriture (OTO_ADMIN_MFA=enforce).")
             cur.execute("UPDATE users SET role = 'super_admin', updated_at = NOW() "
-                        "WHERE role = 'admin'")
+                        "WHERE role = 'admin' AND sub = ANY(%s)",
+                        ([sub for sub, _ in rows],))
             print(f"\n{cur.rowcount} ligne(s) mises à jour.")
         conn.commit()
 
