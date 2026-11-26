@@ -164,6 +164,7 @@ chemins = [
   "oto_mcp/auth/pkce.py",
   "oto_mcp/auth/revocation_mot_de_passe.py",
   "oto_mcp/auth/revocation_2fa.py",
+  "oto_mcp/auth/alerte_facteurs_admin.py",  # alerte des facteurs d'un admin : courriels + suivi
   "oto_mcp/auth/empreintes_2fa_pose.py",
   "oto_mcp/auth/platform_worker.py",
   "oto_mcp/auth/service_identity.py",

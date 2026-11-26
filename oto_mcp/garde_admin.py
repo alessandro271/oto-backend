@@ -301,3 +301,49 @@ def motif_brut(sub: Optional[str], exige: tuple[str, ...] = ROLES_BORNES
     from . import access
     role = access.role_hors_garde(sub)
     return motif(sub, role) if role in exige else None
+
+
+# ── La nomination : nul n'est NOMMÉ admin sans second facteur fort ──────────────
+#
+# La garde ci-dessus juge un opérateur à chaque requête ; celle-ci juge le GESTE qui
+# le fait opérateur. Sans elle, un compte sans facteur nommé `admin` sous `enforce`
+# porterait un rôle qu'il ne peut exercer, et sous `report` le relevé le découvrirait
+# après coup. Même mode, même sémantique : `off` ne lit rien (le tronc inchangé),
+# `report` journalise et laisse passer, `enforce` refuse — facteurs illisibles compris
+# (fail-closed). Lecture FRAÎCHE chez Logto (le cache est réécrit, pas consulté) : le
+# geste est rare, et le verdict ne doit pas dater de cinq minutes.
+
+CODE_PROMOTION = "admin_mfa_required_for_promotion"
+
+_PHRASES_PROMOTION = {
+    CODE_MFA: (
+        "This account has no strong second factor enrolled (authenticator app or "
+        "passkey; backup codes alone do not count). It cannot be made a platform "
+        "administrator until it enrols one."),
+    CODE_INVERIFIABLE: (
+        "The second factor of this account could not be verified with the identity "
+        "provider right now. It cannot be made a platform administrator until it can "
+        "be — retry in a minute."),
+}
+
+
+def refus_promotion(sub: str, role: str) -> Optional[Motif]:
+    """Pourquoi `sub` ne peut pas être NOMMÉ `role` — None si la nomination passe
+    (rôle non borné, garde coupée, `report`, facteur fort enrôlé). Appelé par tout
+    chemin qui écrit `users.role` vers un rôle d'administration."""
+    if role not in ROLES_BORNES:
+        return None
+    m = mode()
+    if m == "off":
+        return None
+    code = _lire_et_cacher(sub)
+    if code is None:
+        return None
+    if m == "report":
+        logger.warning("garde admin (report) : %s nommé `%s` sans second facteur fort — "
+                       "`enforce` refuserait la nomination (%s)", sub, role, code)
+        return None
+    # Facteurs illisibles : le même code que la garde par requête (réessayer), distinct
+    # de « aucun facteur » (enrôler).
+    return Motif(CODE_INVERIFIABLE if code == CODE_INVERIFIABLE else CODE_PROMOTION,
+                 _PHRASES_PROMOTION[code])

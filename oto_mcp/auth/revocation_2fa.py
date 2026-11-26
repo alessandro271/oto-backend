@@ -48,6 +48,9 @@ sans effet ; une livraison rejouée, ou deux livraisons concurrentes qui voient 
 Les écritures de facteurs par la Management API n'émettent aucun webhook : la remise à
 zéro par un opérateur (`capabilities/users_admin._reset_mfa`) ferme elle-même et pose
 l'empreinte d'aucun facteur.
+
+Quand le compte est un admin plateforme, une alerte part aussi (courriel au titulaire et
+aux autres admins, journal, suivi d'erreurs) : `alerte_facteurs_admin`.
 """
 from __future__ import annotations
 

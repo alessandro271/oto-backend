@@ -19,6 +19,13 @@ sans le nouveau palier le temps du déploiement) :
 Idempotent : ne touche que les lignes `role='admin'` ; relancé, il n'en trouve plus
 (les bootstrap `OTO_MCP_ADMIN_SUB` sont forcés super_admin par le code, hors DB —
 ne sont pas concernés). `--dry-run` pour compter sans écrire.
+
+Nommer `super_admin` est une nomination comme une autre : sous `OTO_ADMIN_MFA`
+`report` ou `enforce`, chaque compte est jugé par `garde_admin.refus_promotion` (second
+facteur fort enrôlé chez Logto). En `enforce`, un seul refus et RIEN n'est écrit : le
+script nomme les comptes à équiper et sort en erreur. En `report`, le journal les nomme
+et l'écriture se fait. Les lignes lues sont verrouillées jusqu'au commit, et l'écriture ne
+porte que sur les comptes jugés : un `admin` nommé pendant le passage n'est pas promu.
 """
 from __future__ import annotations
 
@@ -27,6 +34,8 @@ import sys
 
 import psycopg
 
+from oto_mcp import garde_admin
+
 
 def main() -> None:
     dry_run = "--dry-run" in sys.argv
@@ -34,7 +43,8 @@ def main() -> None:
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             # Liste avant écriture (pour le compte-rendu, et seul lookup en dry-run).
-            cur.execute("SELECT sub, email FROM users WHERE role = 'admin' ORDER BY created_at")
+            cur.execute("SELECT sub, email FROM users WHERE role = 'admin' ORDER BY created_at "
+                        "FOR UPDATE")
             rows = cur.fetchall()
             if not rows:
                 print("Aucun user role='admin' — rien à migrer (déjà à jour ?).")
@@ -42,11 +52,19 @@ def main() -> None:
             print(f"{len(rows)} user(s) admin → super_admin :")
             for sub, email in rows:
                 print(f"  - {sub}  {email or '(sans email)'}")
+            refus = [(sub, m) for sub, _ in rows
+                     if (m := garde_admin.refus_promotion(sub, "super_admin"))]
+            for sub, m in refus:
+                print(f"  ✗ {sub} : {m.code} — {m.message}")
             if dry_run:
                 print("\n[dry-run] aucune écriture.")
                 return
+            if refus:
+                sys.exit(f"{len(refus)} compte(s) refusé(s) à la nomination : aucune "
+                         "écriture (OTO_ADMIN_MFA=enforce).")
             cur.execute("UPDATE users SET role = 'super_admin', updated_at = NOW() "
-                        "WHERE role = 'admin'")
+                        "WHERE role = 'admin' AND sub = ANY(%s)",
+                        ([sub for sub, _ in rows],))
             print(f"\n{cur.rowcount} ligne(s) mises à jour.")
         conn.commit()
 

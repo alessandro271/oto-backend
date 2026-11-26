@@ -728,3 +728,64 @@ def send_embed_plafond_email(to: str, *, consommes: int, plafond: int) -> bool:
     return _envoyer(m, to, subject, _charte.page(
         m, contenu, preheader="indexation sémantique arrêtée pour la journée",
         mention=_charte.mention_transactionnelle(m, None), locale="fr"))
+
+
+#: Le changement de double authentification, lu par une personne (événement Logto, ou
+#: la remise à zéro par un opérateur, `alerte_facteurs_admin.REMISE_A_ZERO`).
+_CHANGEMENTS_FACTEURS = {
+    "User.Data.Updated": ("un facteur ajouté, retiré ou régénéré depuis les réglages du compte",
+                          "a factor added, removed or regenerated from the account settings"),
+    "PostSignIn": ("un facteur enrôlé pendant une connexion",
+                   "a factor enrolled during a sign-in"),
+    "PostRegister": ("un facteur enrôlé à l'inscription", "a factor enrolled at sign-up"),
+    "reset_mfa": ("tous les facteurs remis à zéro par un administrateur de la plateforme",
+                  "all factors reset by a platform administrator"),
+}
+
+
+def send_admin_facteurs_email(to: str, *, compte: str, role: str, changement: str,
+                              quand: str, titulaire: bool,
+                              locale: str | None = None) -> bool:
+    """L'alerte d'un changement de double authentification sur un compte d'administration
+    de la plateforme (`auth.alerte_facteurs_admin`). Au TITULAIRE (`titulaire`) : « si ce
+    n'est pas vous » ; aux autres admins : le geste à faire si le titulaire ne le
+    reconnaît pas. Quel compte, quel changement, quand — ni facteur, ni secret."""
+    m = _charte.marque(None)
+    # La langue du titulaire ; le courriel d'équipe est en français, comme les autres.
+    en = titulaire and locale == "en"
+    fr_txt, en_txt = _CHANGEMENTS_FACTEURS.get(changement, (changement, changement))
+    quoi = _email._esc(en_txt if en else fr_txt)
+    qui = _email._esc(compte)
+    date = _email._esc(quand)
+    if titulaire and en:
+        subject = "two-step verification changed on your administrator account"
+        contenu = (
+            f'<p style="{_charte.PARA}">the two-step verification of your platform '
+            f"administrator account <strong>{qui}</strong> ({_email._esc(role)}) changed: "
+            f"{quoi}, on {date} (UTC). All your sessions and API tokens were closed.</p>"
+            f'<p style="{_charte.PARA}">if this was not you, reply to this message or warn '
+            "another platform administrator right away: someone else may have access to "
+            "your account.</p>")
+    elif titulaire:
+        subject = "double authentification changée sur votre compte administrateur"
+        contenu = (
+            f'<p style="{_charte.PARA}">la double authentification de votre compte '
+            f"administrateur de la plateforme <strong>{qui}</strong> ({_email._esc(role)}) "
+            f"a changé : {quoi}, le {date} (UTC). Toutes vos sessions et vos jetons d'API "
+            "ont été fermés.</p>"
+            f'<p style="{_charte.PARA}">si ce n\'est pas vous, répondez à ce message ou '
+            "prévenez sans attendre un autre administrateur de la plateforme : quelqu'un "
+            "d'autre a peut-être accès à votre compte.</p>")
+    else:
+        subject = f"[équipe] double authentification changée : {compte}"
+        contenu = (
+            f'<p style="{_charte.PARA}">la double authentification du compte administrateur '
+            f"<strong>{qui}</strong> ({_email._esc(role)}) a changé : {quoi}, le {date} "
+            "(UTC). Le titulaire a reçu le même avis.</p>"
+            f'<p style="{_charte.PARA}">s\'il ne reconnaît pas ce geste : retirer son rôle '
+            "(<code>oto_admin_user op=set_role</code>), puis remettre ses facteurs à zéro "
+            "avec lui.</p>")
+    return _envoyer(m, to, subject, _charte.page(
+        m, contenu, preheader=subject,
+        mention=_charte.mention_transactionnelle(m, "en" if en else None),
+        locale="en" if en else "fr"))
