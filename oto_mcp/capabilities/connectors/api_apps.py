@@ -248,7 +248,9 @@ def _create(ctx: ResolvedCtx, inp: CreateInput) -> dict:
             raise AuthzDenied(404, "api_app_no_card_to_adopt",
                               f"No unbound org Custom API card `{account}` to adopt.")
         base = card["connection"] if inp.adopt_org_key else {}
-        connection = apps.valider_connexion(inp.connection or {}, base=base)
+        connection = apps.valider_connexion(
+            inp.connection or {}, base=base,
+            titulaire=egress.titulaire_de("org", inp.org_id))
         given = {**(card["definition"] if inp.adopt_org_key else {}),
                  **_definition_given(inp)}
         definition = apps.valider_definition(given, connection)
@@ -277,7 +279,8 @@ def _patch(ctx: ResolvedCtx, inp: PatchInput) -> dict:
             if k not in given or given.get(k) == old.get(k):
                 given[k] = ""
     try:
-        connection = (apps.valider_connexion(given, base=old)
+        connection = (apps.valider_connexion(
+            given, base=old, titulaire=egress.titulaire_de("org", app["org_id"]))
                       if given is not None else old)
         definition = apps.valider_definition(_definition_given(inp), connection)
     except apps.AppRefused as e:

@@ -17,7 +17,8 @@ can see.
   a signed URL only on request (`link=true`), to listen to it.
 
 `base_url` is a destination chosen by the user: every client construction goes
-through `egress.check_url` (tool AND probe).
+through `egress.check_url` (tool AND probe), and the client's token requests and
+API calls go out through a session pinned by the same guard at connection time.
 """
 from __future__ import annotations
 
@@ -119,7 +120,16 @@ def _upstream_message(e) -> str:
     return f"3CX rejected the request (HTTP {status}): {str(e.body)[:400]}"
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
+def _session(*, titulaire: tuple):
+    """The session the client's token requests AND API calls go out through: pinned by
+    the egress guard at connection time (`egress_transport`), under the same policy as
+    the early `check_url` on `base_url`, on behalf of the same holder (`titulaire`)."""
+    return egress_transport.session(connector="threecx", field="base_url",
+                                    titulaire=titulaire)
+
+
+def _verify(fields: dict, config: dict | None = None,
+            instance: tuple | None = None) -> None:  # noqa: ARG001 (config: probe contract)
     """"Test the connection" probe: the first page (one row) of today's call
     log, the smallest authenticated call that exercises the relevant permission.
     An empty page is a possible state, never a refusal."""
@@ -132,11 +142,14 @@ def _verify(fields: dict, config: dict | None = None) -> None:
         champs = _champs(fields)
     except ValueError as e:
         raise connector_verify.NonAutorise(str(e))
-    egress.check_url(champs["base_url"], connector="threecx")
+    titulaire = egress.titulaire_d_instance(instance)
+    egress.check_url(champs["base_url"], connector="threecx", field="base_url",
+                     titulaire=titulaire)
     today = date.today()
     try:
-        egress_transport.pinned(ThreeCXClient(**champs), connector="threecx").list_calls(
-            today.isoformat(), (today + timedelta(days=1)).isoformat(), top=1)
+        with _session(titulaire=titulaire) as s:
+            ThreeCXClient(**champs, session=s).list_calls(
+                today.isoformat(), (today + timedelta(days=1)).isoformat(), top=1)
     except UpstreamHTTPError as e:
         if e.status_code in (401, 403):
             raise connector_verify.NonAutorise(f"3CX HTTP {e.status_code}: {e.body}")
@@ -148,12 +161,16 @@ def client():
     guard — shared by every `threecx*` tool module."""
     from oto.tools.threecx import ThreeCXClient
 
+    fields = access.resolve_credential_fields(_NAME)
     try:
-        champs = _champs(access.resolve_credential_fields(_NAME))
+        champs = _champs(fields)
     except ValueError as e:
         raise _bad(str(e))
-    egress.check_url(champs["base_url"], connector="threecx")
-    return egress_transport.pinned(ThreeCXClient(**champs), connector="threecx")
+    # On behalf of the resolved row's holder (`egress.titulaire_des_champs`).
+    titulaire = egress.titulaire_des_champs(fields)
+    egress.check_url(champs["base_url"], connector="threecx", field="base_url",
+                     titulaire=titulaire)
+    return ThreeCXClient(**champs, session=_session(titulaire=titulaire))
 
 
 def run(fn):

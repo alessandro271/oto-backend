@@ -23,8 +23,9 @@ from typing import Optional
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import providers, credentials_store, db, org_store
+from .. import providers, credentials_store, db, egress, org_store
 from . import cascade, chain_shadow, quotas, resolve, scope
+from .resolved_credential import ChampsResolus
 
 
 # The TENANT key is the tenant's BYO (L-keys PR 1): it manages its own instance
@@ -76,7 +77,10 @@ def resolve_credential_fields(provider: str, account: Optional[str] = None) -> d
     credential IS the grant. Thin view on `resolve_credential`
     (user > group > org cascade, without the platform tier; `account` selects
     the account in multi-account)."""
-    return resolve.resolve_credential(provider, want="byo", account=account).fields
+    rc = resolve.resolve_credential(provider, want="byo", account=account)
+    champs = ChampsResolus(rc.fields)
+    champs.titulaire = egress.titulaire_de(rc.entity_type, rc.entity_id)
+    return champs
 
 
 def credential_mode_for(sub: str, provider: str, *,

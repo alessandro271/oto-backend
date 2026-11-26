@@ -86,14 +86,16 @@ def _fingerprint(fields: dict) -> str:
     return hashlib.sha256(json.dumps(ident, sort_keys=True).encode()).hexdigest()
 
 
-def guard(base_url: str) -> Callable[[str], None]:
-    """The egress guard of every login hop. Raises `egress.EgressRefused`."""
+def guard(base_url: str, *, titulaire: tuple) -> Callable[[str], None]:
+    """The egress guard of every login hop. Raises `egress.EgressRefused`. The
+    operator's named exceptions apply only to a hop on the card's own host, and only
+    those that name the card's holder (`titulaire`, `egress.titulaire_de`)."""
     base_host = (urlsplit(base_url).hostname or "").lower()
 
     def check(url: str) -> None:
         host = (urlsplit(url).hostname or "").lower()
         egress.check_url(url, connector=CONNECTOR, field="session",
-                         exceptions_declarees=host == base_host)
+                         titulaire=titulaire if host == base_host else egress.AUCUN)
     return check
 
 

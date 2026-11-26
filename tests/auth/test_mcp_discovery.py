@@ -7,9 +7,17 @@ import json
 
 import pytest
 
+from oto_mcp import egress
 from oto_mcp.auth import mcp_discovery as d
 
 MCP = "https://mcp.example.test/mcp"
+ORG = ("org", "1")   # the holder of the app being discovered
+
+
+def _valider(*a, **k):
+    """`valider_connexion` for an app of `ORG`."""
+    from oto_mcp.connectors import api_apps
+    return api_apps.valider_connexion(*a, titulaire=ORG, **k)
 PRM = {"resource": MCP, "authorization_servers": ["https://auth.example.test/oidc"],
        "scopes_supported": ["openid", "profile"]}
 ASM = {"issuer": "https://auth.example.test/oidc",
@@ -85,7 +93,7 @@ def web(monkeypatch):
 
 
 def test_la_decouverte_suit_le_401_puis_les_metadonnees(web):
-    m = d.discover(MCP)
+    m = d.discover(MCP, titulaire=ORG)
     assert m["resource"] == MCP and m["issuer"] == "https://auth.example.test/oidc"
     assert m["authorize_url"].endswith("/oidc/auth") and m["token_url"].endswith("/oidc/token")
     assert m["scope"] == "openid profile offline_access"   # offline_access asked for
@@ -94,13 +102,13 @@ def test_la_decouverte_suit_le_401_puis_les_metadonnees(web):
 
 def test_sans_en_tete_les_chemins_connus_suffisent(web, monkeypatch):
     web.post = lambda url, **k: _Rep(401)
-    assert d.discover(MCP)["token_url"].endswith("/oidc/token")
+    assert d.discover(MCP, titulaire=ORG)["token_url"].endswith("/oidc/token")
 
 
 def test_un_serveur_sans_metadonnees_refuse_en_le_nommant(web):
     web.pages.clear()
     with pytest.raises(d.DiscoveryRefused) as e:
-        d.discover(MCP)
+        d.discover(MCP, titulaire=ORG)
     assert e.value.code == "mcp_discovery_failed" and "RFC 9728" in e.value.message
 
 
@@ -108,13 +116,13 @@ def test_un_serveur_sans_pkce_s256_est_refuse(web):
     web.pages["https://auth.example.test/.well-known/oauth-authorization-server/oidc"] = \
         _Rep(body={**ASM, "code_challenge_methods_supported": ["plain"]})
     with pytest.raises(d.DiscoveryRefused):
-        d.discover(MCP)
+        d.discover(MCP, titulaire=ORG)
 
 
 def test_un_serveur_ouvert_le_dit(web, monkeypatch):
     web.post = lambda url, **k: _Rep(200, body={})
     with pytest.raises(d.DiscoveryRefused) as e:
-        d.discover(MCP)
+        d.discover(MCP, titulaire=ORG)
     assert e.value.code == "mcp_no_auth_needed"
 
 
@@ -168,11 +176,11 @@ def test_completer_l_app_ne_remplit_que_le_vide_et_l_ecrit_une_fois(web, monkeyp
 def test_une_app_mcp_peut_naitre_avec_sa_seule_adresse(monkeypatch):
     from oto_mcp.connectors import api_apps
     monkeypatch.setattr("oto_mcp.egress.check_url", lambda *a, **k: None)
-    out = api_apps.valider_connexion({"base_url": MCP, "protocol": "mcp",
+    out = _valider({"base_url": MCP, "protocol": "mcp",
                                       "auth_mode": "oauth2_user"})
     assert out["protocol"] == "mcp" and "authorize_url" not in out
     with pytest.raises(api_apps.AppRefused):
-        api_apps.valider_connexion({"base_url": "https://api.example.test",
+        _valider({"base_url": "https://api.example.test",
                                     "auth_mode": "oauth2_user"})
 
 
@@ -180,7 +188,7 @@ def test_une_ressource_d_un_autre_serveur_est_refusee(web):
     web.pages["https://mcp.example.test/.well-known/oauth-protected-resource/mcp"] = \
         _Rep(body={**PRM, "resource": "https://mcp.autre-serveur.test/mcp"})
     with pytest.raises(d.DiscoveryRefused) as e:
-        d.discover(MCP)
+        d.discover(MCP, titulaire=ORG)
     assert "another resource" in e.value.message
 
 
@@ -188,7 +196,7 @@ def test_des_metadonnees_d_un_autre_emetteur_sont_ignorees(web):
     web.pages["https://auth.example.test/.well-known/oauth-authorization-server/oidc"] = \
         _Rep(body={**ASM, "issuer": "https://auth.autre-serveur.test/oidc"})
     with pytest.raises(d.DiscoveryRefused) as e:
-        d.discover(MCP)
+        d.discover(MCP, titulaire=ORG)
     assert e.value.code == "mcp_discovery_failed"
 
 
@@ -219,7 +227,7 @@ def test_un_serveur_mcp_qui_republie_son_fournisseur_d_identite_est_admis(web):
         _Rep(body={**PRM, "authorization_servers": ["https://mcp.example.test"]})
     web.pages["https://mcp.example.test/.well-known/oauth-authorization-server"] = \
         _Rep(body={**ASM, "client_id_metadata_document_supported": None})
-    m = d.discover(MCP)
+    m = d.discover(MCP, titulaire=ORG)
     assert m["token_url"] == "https://auth.example.test/oidc/token" and m["cimd"] is False
 
 
@@ -227,25 +235,25 @@ def test_seules_les_adresses_saisies_par_l_admin_gardent_les_exceptions_d_egress
         web, monkeypatch):
     vus = []
     monkeypatch.setattr("oto_mcp.egress.check_url",
-                        lambda url, **k: vus.append((url, k["exceptions_declarees"])))
-    d.discover(MCP)
+                        lambda url, **k: vus.append((url, k["titulaire"])))
+    d.discover(MCP, titulaire=ORG)
     politique = dict(vus)
-    assert politique[MCP] is True                      # typed by the admin
+    assert politique[MCP] == ORG                       # typed by the admin: its org
     # Announced by the remote server: its metadata, its sign-in server's endpoints.
     assert politique["https://mcp.example.test/.well-known/oauth-protected-resource/mcp"] \
-        is False
-    assert politique["https://auth.example.test/oidc/token"] is False
-    assert politique["https://auth.example.test/oidc/auth"] is False
+        == egress.AGENT
+    assert politique["https://auth.example.test/oidc/token"] == egress.AGENT
+    assert politique["https://auth.example.test/oidc/auth"] == egress.AGENT
 
 
 def test_un_chemin_connu_sur_l_hote_saisi_garde_les_exceptions(web, monkeypatch):
     vus = []
     monkeypatch.setattr("oto_mcp.egress.check_url",
-                        lambda url, **k: vus.append((url, k["exceptions_declarees"])))
+                        lambda url, **k: vus.append((url, k["titulaire"])))
     web.post = lambda url, **k: _Rep(401)
-    d.discover(MCP)
+    d.discover(MCP, titulaire=ORG)
     assert ("https://mcp.example.test/.well-known/oauth-protected-resource/mcp",
-            True) in vus
+            ORG) in vus
 
 
 def test_le_corps_de_l_initialize_n_est_jamais_lu(web, monkeypatch):
@@ -253,7 +261,7 @@ def test_le_corps_de_l_initialize_n_est_jamais_lu(web, monkeypatch):
         "WWW-Authenticate": 'Bearer resource_metadata="https://mcp.example.test/'
                             '.well-known/oauth-protected-resource/mcp"'})
     web.post = lambda url, **k: rep
-    assert d.discover(MCP)["resource"] == MCP and not rep.lu
+    assert d.discover(MCP, titulaire=ORG)["resource"] == MCP and not rep.lu
 
 
 def test_une_inscription_trop_longue_n_est_pas_lue(web):
@@ -273,7 +281,7 @@ def test_un_refus_d_egress_pendant_la_decouverte_remonte(web, monkeypatch):
             raise egress.EgressRefused("connecteur `api` : destination interne refusée.")
     monkeypatch.setattr("oto_mcp.egress.check_url", check)
     with pytest.raises(egress.EgressRefused):
-        d.discover(MCP)
+        d.discover(MCP, titulaire=ORG)
 
 
 def test_un_champ_decouvert_que_l_admin_change_ou_vide_n_est_plus_marque(monkeypatch):
@@ -283,23 +291,23 @@ def test_un_champ_decouvert_que_l_admin_change_ou_vide_n_est_plus_marque(monkeyp
             "authorize_url": "https://auth.example.test/oidc/auth",
             "token_url": "https://auth.example.test/oidc/token",
             "oauth_client_id": "cid", "discovered": ["authorize_url", "token_url"]}
-    garde = api_apps.valider_connexion({"scope": "openid"}, base=base)
+    garde = _valider({"scope": "openid"}, base=base)
     assert garde["discovered"] == ["authorize_url", "token_url"]
-    meme = api_apps.valider_connexion({"token_url": base["token_url"]}, base=base)
+    meme = _valider({"token_url": base["token_url"]}, base=base)
     assert meme["discovered"] == ["authorize_url", "token_url"]
-    saisi = api_apps.valider_connexion(
+    saisi = _valider(
         {"token_url": "https://auth.example.test/autre/token"}, base=base)
     assert saisi["discovered"] == ["authorize_url"]
-    vide = api_apps.valider_connexion({"token_url": "", "authorize_url": ""}, base=base)
+    vide = _valider({"token_url": "", "authorize_url": ""}, base=base)
     assert "discovered" not in vide
     with pytest.raises(api_apps.AppRefused):    # never written through a route
-        api_apps.valider_connexion({"discovered": ["token_url"]}, base=base)
+        _valider({"discovered": ["token_url"]}, base=base)
 
 
 # --- one sign-in server, one resource ------------------------------------------------
 
 def test_chaque_requete_part_sur_une_session_gardee_avec_sa_politique(web):
-    d.discover(MCP)
+    d.discover(MCP, titulaire=ORG)
     # The address typed by the admin keeps the platform's exceptions; what the remote
     # server announced gets none.
     assert ("base url", False) in web.politiques
@@ -311,7 +319,7 @@ def test_des_points_hors_de_l_origine_de_l_emetteur_sont_refuses(web):
     web.pages["https://auth.example.test/.well-known/oauth-authorization-server/oidc"] = \
         _Rep(body={**ASM, "token_endpoint": "https://collecte.example.test/token"})
     with pytest.raises(d.DiscoveryRefused) as e:
-        d.discover(MCP)
+        d.discover(MCP, titulaire=ORG)
     assert e.value.code == "mcp_discovery_failed" and "origin" in e.value.message
 
 
@@ -321,21 +329,21 @@ def test_un_serveur_qui_republie_son_fournisseur_garde_l_origine_de_l_emetteur_a
     web.pages["https://mcp.example.test/.well-known/oauth-authorization-server"] = \
         _Rep(body={**ASM, "authorization_endpoint": "https://autre.example.test/auth"})
     with pytest.raises(d.DiscoveryRefused) as e:
-        d.discover(MCP)
+        d.discover(MCP, titulaire=ORG)
     assert "origin" in e.value.message
 
 
 def test_l_emetteur_et_son_annonce_d_iss_sont_releves(web):
     web.pages["https://auth.example.test/.well-known/oauth-authorization-server/oidc"] = \
         _Rep(body={**ASM, "authorization_response_iss_parameter_supported": True})
-    m = d.discover(MCP)
+    m = d.discover(MCP, titulaire=ORG)
     assert m["issuer"] == ASM["issuer"] and m["iss_parameter_supported"] is True
 
 
 def test_la_ressource_est_l_adresse_canonique_du_serveur(web):
     web.pages["https://mcp.example.test/.well-known/oauth-protected-resource/mcp"] = \
         _Rep(body={**PRM, "resource": "https://MCP.example.test:443/mcp/"})
-    assert d.discover(MCP)["resource"] == MCP
+    assert d.discover(MCP, titulaire=ORG)["resource"] == MCP
 
 
 def test_le_document_client_nomme_oto(web):
@@ -367,11 +375,11 @@ def test_l_enregistrement_refuse_des_points_oauth_sur_deux_origines(monkeypatch)
     from oto_mcp.connectors import api_apps
     monkeypatch.setattr("oto_mcp.egress.check_url", lambda *a, **k: None)
     with pytest.raises(api_apps.AppRefused) as e:
-        api_apps.valider_connexion(_conn(token_url="https://collecte.example.test/token"))
+        _valider(_conn(token_url="https://collecte.example.test/token"))
     assert e.value.code == "invalid_app_connection" and "same origin" in e.value.message
     with pytest.raises(api_apps.AppRefused):     # another port is another origin
-        api_apps.valider_connexion(_conn(token_url="https://auth.example.test:8443/t"))
-    assert api_apps.valider_connexion(_conn())["token_url"].endswith("/oidc/token")
+        _valider(_conn(token_url="https://auth.example.test:8443/t"))
+    assert _valider(_conn())["token_url"].endswith("/oidc/token")
 
 
 def test_en_mcp_la_ressource_est_l_adresse_du_serveur(monkeypatch):
@@ -379,9 +387,9 @@ def test_en_mcp_la_ressource_est_l_adresse_du_serveur(monkeypatch):
     monkeypatch.setattr("oto_mcp.egress.check_url", lambda *a, **k: None)
     mcp = {"base_url": MCP, "protocol": "mcp", "auth_mode": "oauth2_user"}
     with pytest.raises(api_apps.AppRefused) as e:
-        api_apps.valider_connexion({**mcp, "resource": "https://api.autre.test"})
+        _valider({**mcp, "resource": "https://api.autre.test"})
     assert "resource" in e.value.message
-    ok = api_apps.valider_connexion({**mcp, "resource": "https://MCP.example.test/mcp/"})
+    ok = _valider({**mcp, "resource": "https://MCP.example.test/mcp/"})
     assert ok["resource"] == "https://MCP.example.test/mcp/"
 
 
@@ -390,13 +398,13 @@ def test_l_emetteur_decouvert_tombe_quand_un_point_ou_l_adresse_change(monkeypat
     monkeypatch.setattr("oto_mcp.egress.check_url", lambda *a, **k: None)
     base = {**_conn(), "issuer": "https://auth.example.test/oidc",
             "iss_parameter_supported": True}
-    assert api_apps.valider_connexion({"scope": "openid"}, base=base)["issuer"]
+    assert _valider({"scope": "openid"}, base=base)["issuer"]
     # Points off the recorded issuer's origin are refused…
     with pytest.raises(api_apps.AppRefused):
-        api_apps.valider_connexion({"scope": "openid"},
+        _valider({"scope": "openid"},
                                    base={**base, "issuer": "https://autre.example.test"})
     # …and once the admin declares both points anew, the record no longer applies.
-    deux = api_apps.valider_connexion({"authorize_url": "https://autre.example.test/a",
+    deux = _valider({"authorize_url": "https://autre.example.test/a",
                                        "token_url": "https://autre.example.test/t"},
                                       base=base)
     assert "issuer" not in deux and "iss_parameter_supported" not in deux
@@ -405,11 +413,11 @@ def test_l_emetteur_decouvert_tombe_quand_un_point_ou_l_adresse_change(monkeypat
 def test_en_http_une_ressource_declaree_est_sur_l_origine_de_l_api(monkeypatch):
     from oto_mcp.connectors import api_apps
     monkeypatch.setattr("oto_mcp.egress.check_url", lambda *a, **k: None)
-    ok = api_apps.valider_connexion(_conn(resource="https://api.example.test/v1"))
+    ok = _valider(_conn(resource="https://api.example.test/v1"))
     assert ok["resource"] == "https://api.example.test/v1"
     for autre in ("https://autre-api.example.test", "https://api.example.test:8443",
                   "http://api.example.test", "urn:example:api"):
         with pytest.raises(api_apps.AppRefused) as e:
-            api_apps.valider_connexion(_conn(resource=autre))
+            _valider(_conn(resource=autre))
         assert "`resource`" in e.value.message, autre
-    assert "resource" not in api_apps.valider_connexion(_conn())
+    assert "resource" not in _valider(_conn())

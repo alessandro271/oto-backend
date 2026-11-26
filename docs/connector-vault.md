@@ -250,24 +250,75 @@ garde **lève** (`RuntimeError`, comme `config.public_host`) plutôt que de devi
 Un autre nom du même service (IP de la machine, domaine de tenant) n'est pas reconnu :
 comparer les adresses résolues refuserait tout site qui partage un frontal avec nous.
 
-**Les exceptions se DÉCLARENT** — variable d'environnement du service :
+**Chaque appel sortant dit au nom de qui il sort** (`titulaire`, paramètre OBLIGATOIRE
+de `egress.check_url`, `egress.decide` et des sessions d'`egress_transport`) :
+
+- un identifiant du coffre : sa ligne (`egress.titulaire_de(entity_type, entity_id)` —
+  `ResolvedCredential.titulaire`, `instance` d'une sonde via
+  `egress.titulaire_d_instance`, champs résolus via `egress.titulaire_des_champs`) ;
+- `egress.PLATEFORME` : un identifiant posé par l'opérateur ;
+- l'org d'une application de Custom API pour ce qu'un administrateur de cette org y a
+  saisi (découverte, `token_url` du jeton par membre) ;
+- `egress.AUCUN` : une clé dont la ligne n'existe pas encore (pose, échange d'un code) ;
+- `egress.AGENT` : une URL choisie par un agent (lecture de page, source `url`, import
+  public, avatar, CV) — aucune exception, et le refus le dit à l'agent.
+
+Un appel qui ne le dit pas ne s'exécute pas (`TypeError`). Le transport épinglé décide à
+la connexion avec le MÊME titulaire que le contrôle précoce.
+
+**Les exceptions se DÉCLARENT, chacune pour son titulaire** — variable d'environnement
+du service :
 
 ```
-OTO_EGRESS_ALLOW="pont-local=127.0.0.1:9000, service-interne=10.0.0.5:9002"
+OTO_EGRESS_ALLOW="pont-local=127.0.0.1:9000, pont-equipe=127.0.0.1:9002@group:3, pont-partage=10.0.0.5:9003@group:3,org:7"
 ```
 
-Une entrée = `nom=adresse:port`. **Adresse littérale obligatoire** (un nom d'hôte peut
-se déplacer sous nous) et **port obligatoire** (une exception par adresse seule
-ouvrirait toute la machine : le pont sur 9000 donnerait aussi l'administration du proxy
-sur 9001). Le défaut est **vide** : ce dépôt est public, les destinations réelles ne s'y
-écrivent pas. Une entrée illisible **lève** au lieu d'être lue « comme vide » — mais
-seulement sur le chemin d'une destination interne, donc une faute de frappe ne coupe pas
-le trafic public.
+Grammaire : `nom=adresse:port[@palier:id[,palier:id…]]`, entrées séparées par des
+virgules ou des retours à la ligne ; un morceau sans `=` qui suit une entrée à suffixe
+est un titulaire de plus. `palier` ∈ `group`, `org`, `tenant` ; `id` = l'`entity_id` de
+la ligne du coffre (l'id de l'équipe, de l'org, le slug du tenant).
+
+- **Sans `@`** : la plateforme seule. C'est le format d'avant, toujours lisible : une
+  exception posée avant les titulaires vaut désormais pour la plateforme seulement,
+  jusqu'à ce qu'on lui ajoute un titulaire.
+- **Avec `@palier:id`** : les seuls identifiants dont la ligne a EXACTEMENT ce palier et
+  cet id. Une équipe n'hérite pas des exceptions de son org, ni l'inverse ; une clé
+  personnelle de membre n'en reçoit aucune.
+
+**Déployer cette version (titulaires des exceptions).**
+
+1. AVANT de déployer : réécrire `OTO_EGRESS_ALLOW` en ajoutant leur titulaire
+   (`@palier:id`) à chaque exception qui sert une org ou un groupe ; une exception
+   sans `@` ne sert plus que la plateforme. Relire la valeur : une valeur mal formée
+   arrête le service au démarrage.
+2. Déployer. Au démarrage, le journal nomme (noms seulement) les exceptions restées
+   sans titulaire, donc réservées à la plateforme : « exceptions d'egress réservées à
+   la plateforme : a, b ; … ». Rien n'est journalisé quand il n'y en a pas.
+3. Retour arrière, dans l'ordre inverse : remettre l'ancienne valeur, sans `@`, AVANT
+   de revenir à la version précédente — son lecteur lève une erreur sur `@` à chaque
+   sortie vers une adresse interne.
+
+**Adresse littérale obligatoire** (un nom d'hôte peut se déplacer sous nous) et **port
+obligatoire** (une exception par adresse seule ouvrirait toute la machine : le pont sur
+9000 donnerait aussi l'administration du proxy sur 9001). Le défaut est **vide** : ce
+dépôt est public, les destinations réelles ne s'y écrivent pas. Une entrée illisible
+(destination sans port, nom d'hôte, palier inconnu, `@` sans id) **refuse le
+démarrage** (`egress.verifier_reglages`, appelé au boot) : jamais un repli sur une liste
+partielle ou vide. Le refus d'une destination interne propose l'entrée exacte, suffixe
+du titulaire compris.
 
 ⚠️ **Un pont oublié dans la liste échoue bruyamment**, avec le message ci-dessus : c'est
 voulu. Avant d'armer sur un déploiement, établir les destinations des instances
 existantes — `GET /api/settings/api-keys/{provider}` rend les champs NON secrets, donc
 `base_url`, sans jamais rendre de secret (scope `org`/`group` = admin du palier).
+
+**Aucune sortie réseau hors garde.** `tests/test_egress_titulaires.py` parcourt le code
+servi : `requests.<verbe>`/`requests.Session`, `httpx`, `aiohttp`, `urllib.request`,
+`socket.create_connection`/`socket.socket` y sont refusés hors d'une liste d'exceptions
+NOMMÉES (`_SORTIES_ADMISES`), chacune avec sa raison — une destination fixe du code, une
+table fermée, ou un service déclaré par l'opérateur. Une exception qui ne sert plus
+rougit aussi. Un sous-domaine saisi qui entre dans un nom d'hôte (Pipedrive) est validé
+à la forme stricte d'une étiquette DNS.
 
 **La garde fait foi à la CONNEXION (`oto_mcp/egress_transport.py`).** `check_url` reste
 le refus précoce, celui qui explique et nomme la carte. Mais le client HTTP résolvait
@@ -283,20 +334,30 @@ résolution : le processus parle légitimement à sa boucle locale. Les proxies
 d'environnement sont ignorés (`trust_env=False`) et un proxy explicite est refusé —
 derrière un proxy, c'est lui qui résout. Le dépôt ne lit aucune variable de proxy ; une instance derrière un proxy d'egress ou un magasin de certificats propre (`REQUESTS_CA_BUNDLE`) voit ces chemins échouer, fermés.
 
-Câblé : `web_read`/`web_image` (`tools/web.py`), une source `url` de fichier
+Câblé : `web_read`/`web_image` (`tools/web.py`), `infosec` (en-têtes HTTP, RDAP, journaux de certificats par la session gardée de l'agent ; la poignée TLS se connecte à l'adresse jugée par `egress.decide`), une source `url` de fichier
 (`file_source.py`), l'import d'une description publique
 (`api_operations.fetch_public_document`), le CV d'une candidature (`tools/wttj_resume.py`),
-l'import d'avatar, et la session des clients `api` (`tools/api.client_for`, login du mode
-session compris), `n8n`, `make`, `github`, `posthog`, `lucca`, `threecx` et du webhook
-`clay`, et l'échange du code OAuth de Salesforce sur `login_url` (`auth/salesforce.exchange_code`
-passe une session gardée à `auth/flow.exchange_code`, dont le défaut — hôte fixe des
-autres fournisseurs — ne change pas). Banc : `tests/test_egress_transport.py`.
+l'import d'avatar, la session des clients `n8n`, `make`, `github`, `posthog`, `lucca` et
+du webhook `clay` (`egress_transport.pinned`), et l'échange du code OAuth de Salesforce sur
+`login_url` (`auth/salesforce.exchange_code` passe une session gardée à
+`auth/flow.exchange_code`, dont le défaut — hôte fixe des autres fournisseurs — ne change
+pas). Les clients dont la lib prend une session à la construction (`session=`, oto-core
+v1.250.0) la reçoivent gardée, et TOUTES leurs requêtes y passent : `api`
+(`tools/api.client_for` : les appels et le login du mode session sur `base_url`, le jeton
+`oauth2` sur `token_url` par une session à part, `token_session=` ; le pont MCP
+`connectors/api_mcp` aussi), `wordpress` (sonde, index public, appels — `site_url`),
+`lighton` (`base_url`, SaaS compris), `salesforce` (l'échange du refresh token sur
+`login_url` et les appels sur l'`instance_url` rendue, chacun nommé dans le refus) et
+`threecx` (jeton ET appels — `base_url`). Politique : celle de l'ORIGINE du credential,
+la même pour leur `check_url` précoce et leur session (ci-dessous). Les sessions
+gardées reprennent le magasin de certificats de l'environnement (`REQUESTS_CA_BUNDLE`,
+puis `CURL_CA_BUNDLE`) pour la seule vérification TLS — une autorité privée chez un
+client ; les proxies d'environnement restent ignorés.
+Banc : `tests/test_egress_transport.py`.
 
-⚠️ **Ce qui reste sous le seul contrôle précoce, nommé** : les appels qu'oto-core fait par
-`requests.<verbe>` au niveau module, sans session à monter — `lighton`, `salesforce`
-(dont l'échange du refresh token sur `login_url`), `wordpress`, le jeton `oauth2` du
-connecteur `api` (`token_url`) et les jetons `threecx`. Les fermer demande un
-paramètre `session=` côté lib, donc un bump de pin.
+⚠️ **Ce qui reste sous le seul contrôle précoce** : un appel `requests.<verbe>` au niveau
+module dans la lib, qui ne passe pas par `.session` — `egress_transport.pinned` ne couvre
+que `client.session`. Le fermer demande un paramètre `session=` côté lib.
 
 ⚠️ **Contredit l'ADR 0037 §4**, qui décidait « zéro code SSRF dans le connecteur » et
 renvoyait le blocage des plages privées à un egress proxy « plus tard… si le besoin
@@ -1059,7 +1120,8 @@ Pour un service sans clé d'API, la carte `api` prend `auth_mode=session` : un i
 (secret) et des **étapes** (`session`, un objet JSON lu strictement par oto-core, `oto.tools.http.session`) —
 un POST JSON de login, puis, au besoin, le GET de l'URL que la réponse nomme et ses redirections. Chaque saut
 reste sur l'hôte de la `base_url`, un hôte listé ou le domaine déclaré, et passe par `egress.check_url`
-(`connectors/api_session.guard` ; les exceptions nommées ne valent que pour l'hôte de la `base_url`). Un 401
+(`connectors/api_session.guard` ; les exceptions nommées ne valent que pour l'hôte de la `base_url`, et
+pour une carte du palier plateforme). Un 401
 ou un renvoi vers une page de login déclenche un login complet et un seul rejeu ; refusé encore, la clé passe
 au rouge (`credential_rejected`). Le mode **ne fait que lire** : `api_post` et les verbes d'écriture
 d'`api_act` sont refusés par nom (`api_session_read_only`) avant tout envoi, `dry_run` compris — sauf une

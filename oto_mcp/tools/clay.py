@@ -83,7 +83,8 @@ def _url_mark(url: str) -> str:
     return hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
+def _verify(fields: dict, config: dict | None = None,
+            instance: tuple | None = None) -> None:
     """Probe for "test the connection" — otomata-tech/oto#69. Covers `auth` ONLY.
 
     Depending on the entry kind:
@@ -101,7 +102,8 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     url, _ = _webhook_of(fields)
     if not is_clay_webhook_url(url):
         raise ValueError("webhook: https://…clay.com/… URL expected")
-    egress.check_url(url, connector=CONNECTOR, field="webhook")
+    egress.check_url(url, connector=CONNECTOR, field="webhook",
+                     titulaire=egress.titulaire_d_instance(instance))
 
 
 REFERENCE_CHUNK = 30_000
@@ -232,11 +234,12 @@ def register(mcp: FastMCP) -> None:
                 "Clay card (type `table`, name = the name to pass here).")
         fields = access.resolve_credential_fields(CONNECTOR, account=name)
         url, token = _webhook_of(fields)
-        egress.check_url(url, connector=CONNECTOR, field="webhook")
+        titulaire = egress.titulaire_des_champs(fields)
+        egress.check_url(url, connector=CONNECTOR, field="webhook", titulaire=titulaire)
         try:
             hook = egress_transport.pinned(
                 ClayTableWebhook(url, auth_token=token, timeout=WEBHOOK_TIMEOUT),
-                connector=CONNECTOR, field="webhook")
+                connector=CONNECTOR, field="webhook", titulaire=titulaire)
         except ValueError as e:
             raise _bad(f"Table `{name}`: {e} — paste the webhook again on the Clay card.")
         return hook, entry, _url_mark(url)

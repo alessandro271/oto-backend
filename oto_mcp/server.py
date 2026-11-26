@@ -1191,6 +1191,12 @@ def main():
     from . import identite_instance
     identite_instance.verifier()
 
+    # Les exceptions de la garde d'egress (`OTO_EGRESS_ALLOW`) : une entrée mal formée
+    # refuse le démarrage ici, jamais un repli sur une liste partielle. Cf.
+    # `egress.verifier_reglages`.
+    from . import egress
+    egress.verifier_reglages()
+
     # Les réglages du tampon de compatibilité (`OTO_MCP_COMPAT_*`) : une valeur
     # illisible refuse le démarrage ici. Cf. `deprecations.verifier_reglages`.
     from . import deprecations

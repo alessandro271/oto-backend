@@ -84,7 +84,9 @@ def setup_params(label: str, base_url: Optional[str], auth_mode: Optional[str],
             raise _bad("`base_url` is the API root only: no user, no `?query`, no `#` — "
                        "a key never travels in a link; it is typed in the form.")
         try:
-            egress.check_url(base_url.strip(), connector="api", field="base_url")
+            # A pre-fill the AGENT chose for a setup link: no exception.
+            egress.check_url(base_url.strip(), connector="api", field="base_url",
+                             titulaire=egress.AGENT)
         except egress.EgressRefused as e:
             raise _bad(str(e))
         out["base_url"] = base_url.strip().rstrip("/")

@@ -277,10 +277,12 @@ def exchange_code(code: str, client_id: str, client_secret: str, login_url: str,
     from ..tools.salesforce import _sf_error_hint
     # `login_url` vient de la carte d'un administrateur d'org, et reçoit le code ET le
     # secret de l'application : l'échange sort par une session GARDÉE (la garde
-    # d'egress tient à la connexion, sur l'adresse jointe — `egress_transport`).
+    # d'egress tient à la connexion, sur l'adresse jointe — `egress_transport`). Ce
+    # flux échange le code AVANT que la ligne du coffre existe : aucun titulaire, donc
+    # aucune exception nommée (`egress.AUCUN`).
     try:
         with egress_transport.session(connector="salesforce", field="login_url",
-                                      exceptions_declarees=True) as s:
+                                      titulaire=egress.AUCUN) as s:
             return oauth_flow.exchange_code(
                 f"{_clean_login_url(login_url)}/services/oauth2/token",
                 code=code, client_id=client_id, client_secret=client_secret,

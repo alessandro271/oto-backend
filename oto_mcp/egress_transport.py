@@ -25,10 +25,23 @@ sessions gardées sont concernées, une politique par session.
 **Les proxies d'environnement sont ignorés** (`trust_env=False`) et un proxy
 explicite est REFUSÉ : derrière un proxy, c'est lui qui résout, et l'épinglage ne
 voit plus rien. Le dépôt ne lit aucune variable de proxy (`env_inventory.py`) ; une
-instance qui ferait sortir son trafic par un proxy d'egress, ou qui compterait sur
-un magasin de certificats posé par `REQUESTS_CA_BUNDLE` (que `trust_env=False`
-écarte aussi, avec `.netrc`), voit ces chemins-ci ÉCHOUER — fermé, jamais ouvert.
-La vérification TLS reste celle du magasin par défaut (`certifi`).
+instance qui ferait sortir son trafic par un proxy d'egress voit ces chemins-ci
+ÉCHOUER — fermé, jamais ouvert. `.netrc` est écarté aussi.
+
+**Le magasin de certificats de l'environnement, lui, est repris** : `trust_env=False`
+l'écartait avec le reste, et un connecteur installé chez un client derrière une
+autorité de certification privée ne vérifiait plus son serveur. `harden` relit donc
+`REQUESTS_CA_BUNDLE` puis `CURL_CA_BUNDLE`, dans l'ordre où `requests` les lit, et
+les pose en `verify` de la session. Cela ne touche que la VÉRIFICATION TLS : aucune
+destination n'est ajoutée, la décision sur l'adresse reste la même. Sans elles, le
+magasin par défaut (`certifi`).
+
+**Chaque session dit au nom de qui elle sort** (`titulaire`, OBLIGATOIRE) : la
+décision à la connexion est celle de `egress.check_url` pour le MÊME titulaire —
+les seules exceptions nommées qui le désignent (`egress.declared_exceptions`), aucune
+pour une URL choisie par un agent (`egress.AGENT`) ni pour personne
+(`egress.AUCUN`). C'est ce qui ferme le rebinding : la résolution qui fait foi est
+celle de la connexion, jugée avec la même règle.
 
 Le refus à la connexion lève `egress.EgressRefused` — un `ValueError`, que ni
 urllib3 ni requests n'attrapent : il traverse jusqu'à l'appelant, comme le refus
@@ -38,6 +51,7 @@ ce transport-ci est le point qui FAIT FOI.
 """
 from __future__ import annotations
 
+import os
 import socket
 import sys
 from dataclasses import dataclass
@@ -56,13 +70,12 @@ from . import egress
 
 @dataclass(frozen=True)
 class Politique:
-    """Ce que la garde dit dans son refus (`connector`, `field`) et si les
-    exceptions nommées de `OTO_EGRESS_ALLOW` s'appliquent : oui pour la destination
-    d'un credential posé par un administrateur, NON pour une URL choisie par un
-    agent (`egress.check_url`, `exceptions_declarees`)."""
+    """Ce que la garde dit dans son refus (`connector`, `field`) et au nom de qui on
+    sort (`titulaire`, `egress.titulaire_de`, `egress.PLATEFORME`, `egress.AUCUN` ou
+    `egress.AGENT`) : seules les exceptions nommées qui le désignent s'appliquent."""
     connector: str
     field: str
-    exceptions_declarees: bool
+    titulaire: tuple
 
 
 def _ouvrir(adresse: str, port: int, timeout, source_address, socket_options):
@@ -101,7 +114,7 @@ class _Epinglee:
             raise NameResolutionError(hote, self, socket.gaierror(
                 socket.EAI_NONAME, "no address"))
         egress.decide(hote, self.port, adresses, connector=p.connector,
-                      field=p.field, exceptions_declarees=p.exceptions_declarees)
+                      field=p.field, titulaire=p.titulaire)
 
         derniere: Exception | None = None
         for adresse in _ordre(adresses):
@@ -123,17 +136,17 @@ class _Epinglee:
         raise derniere  # type: ignore[misc]
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=4096)
 def _classes_de_pool(politique: Politique) -> dict:
     """Les classes de pool d'une politique — la politique vit SUR les classes,
     jamais dans les `pool_kwargs` (qui entrent dans la clé de pool d'urllib3).
 
     Mémorisées par politique (`Politique` est figée, donc hachable) : un client par
     appel (`tools/api.client_for`, une session par lecture d'URL) ne refabrique pas
-    quatre classes à chaque fois. Les politiques sont en nombre fini — un couple
-    (connecteur, champ, exceptions) écrit dans le code, jamais une valeur d'appel —
-    d'où un cache sans borne. Le dict rendu est partagé : on le recopie avant de le
-    poser sur un poolmanager."""
+    quatre classes à chaque fois. Le titulaire porte l'id d'une entité : les
+    politiques suivent le nombre d'équipes, d'orgs et de membres servis, d'où un cache
+    BORNÉ (une politique évincée se refabrique, à l'identique). Le dict rendu est
+    partagé : on le recopie avant de le poser sur un poolmanager."""
     class ConnexionHttp(_Epinglee, HTTPConnection):
         _politique = politique
 
@@ -177,31 +190,40 @@ class AdaptateurEpingle(HTTPAdapter):
             f"ne verrait plus l'adresse jointe. (Champ `{p.field}`.)")
 
 
+def _magasin_ca() -> str | None:
+    """Le magasin de certificats posé par l'environnement, lu comme `requests` le lit
+    quand il fait confiance à l'environnement (`REQUESTS_CA_BUNDLE`, puis
+    `CURL_CA_BUNDLE`)."""
+    return os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE") or None
+
+
 def harden(s: requests.Session, *, connector: str, field: str = "base_url",
-           exceptions_declarees: bool = True) -> requests.Session:
-    """Monte le transport épinglé sur `s` (http:// et https://) et coupe les
-    proxies d'environnement. Rend `s`. Le défaut est la politique d'un credential
-    posé par un administrateur ; une URL choisie par un agent passe
-    `exceptions_declarees=False`."""
-    adaptateur = AdaptateurEpingle(Politique(connector, field, exceptions_declarees))
+           titulaire: tuple) -> requests.Session:
+    """Monte le transport épinglé sur `s` (http:// et https://), coupe les proxies
+    d'environnement et reprend son magasin de certificats (`_magasin_ca`). Rend `s`.
+    `titulaire` OBLIGATOIRE : au nom de qui la session sort (`Politique`)."""
+    adaptateur = AdaptateurEpingle(Politique(connector, field,
+                                             egress._valider(titulaire)))
     s.mount("http://", adaptateur)
     s.mount("https://", adaptateur)
     s.trust_env = False
+    ca = _magasin_ca()
+    if ca and s.verify is True:
+        s.verify = ca
     return s
 
 
 def session(*, connector: str, field: str = "url",
-            exceptions_declarees: bool) -> requests.Session:
-    """Une session `requests` neuve, gardée (`harden`). La politique est
-    OBLIGATOIRE ici : une session créée pour un lecteur d'URL doit dire laquelle."""
+            titulaire: tuple) -> requests.Session:
+    """Une session `requests` neuve, gardée (`harden`), au nom de `titulaire`."""
     return harden(requests.Session(), connector=connector, field=field,
-                  exceptions_declarees=exceptions_declarees)
+                  titulaire=titulaire)
 
 
-def pinned(client, *, connector: str, field: str = "base_url"):
+def pinned(client, *, connector: str, field: str = "base_url", titulaire: tuple):
     """Un client d'oto-core qui porte sa `requests.Session` en `.session`, rendu avec
-    cette session gardée (politique d'un credential d'administrateur). Rend `client`.
+    cette session gardée au nom de `titulaire`. Rend `client`.
     ⚠️ Ne couvre que ce qui passe par `.session` : un appel `requests.<verbe>` au
     niveau module dans la lib reste hors du transport (`docs/connector-vault.md`)."""
-    harden(client.session, connector=connector, field=field)
+    harden(client.session, connector=connector, field=field, titulaire=titulaire)
     return client

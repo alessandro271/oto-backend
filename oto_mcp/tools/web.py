@@ -156,7 +156,7 @@ def check_url_public(url: str) -> None:
     and which let through a range the other refuses. One single seam."""
     try:
         egress.check_url(url, connector="web_read", field="url",
-                         exceptions_declarees=False)
+                         titulaire=egress.AGENT)
     except egress.EgressRefused as e:
         raise _bad(str(e)) from None
 
@@ -217,7 +217,7 @@ def _session_gardee() -> requests.Session:
     answer that changes between the check and the connection (rebinding) is refused
     there, and so is every redirect hop, which opens its own connection."""
     return egress_transport.session(connector="web_read", field="url",
-                                    exceptions_declarees=False)
+                                    titulaire=egress.AGENT)
 
 
 # ── tier ①: bare HTTP fetch, streamed, guarded ───────────────────────────────

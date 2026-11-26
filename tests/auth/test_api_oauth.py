@@ -157,15 +157,15 @@ def coffre(monkeypatch):
     return c
 
 
-#: The egress policy of each session the token requests went out on (`annoncee`).
+#: The holder of each session the token requests went out on (`titulaire`).
 POLITIQUES: list = []
 
 
 def _brancher(monkeypatch, post):
     """The pinned session (`api_oauth._session`) answers with `post`."""
     class _Session:
-        def __init__(self, annoncee):
-            POLITIQUES.append(annoncee)
+        def __init__(self, titulaire):
+            POLITIQUES.append(titulaire)
             self.post = post
     POLITIQUES.clear()
     monkeypatch.setattr(api_oauth, "_session", _Session)
@@ -419,7 +419,7 @@ def pont_declare(monkeypatch, dns_simule):
     """`auth.interne.test` is internal, reachable only through a declared exception."""
     monkeypatch.setattr("oto_mcp.egress.check_url", _GARDE)
     monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://oto.example.test")
-    monkeypatch.setenv("OTO_EGRESS_ALLOW", "pont=10.0.0.7:443")
+    monkeypatch.setenv("OTO_EGRESS_ALLOW", "pont=10.0.0.7:443@org:42")   # the app's org
     dns_simule.update({"auth.interne.test": {"10.0.0.7"}})
 
 
@@ -460,7 +460,7 @@ def test_un_renouvellement_vers_un_token_url_saisi_garde_l_exception(
               "authorize_url": SAISIE["connection"]["authorize_url"]}
     envois = _poste(monkeypatch, _Rep(200, {"access_token": "at", "expires_in": 3600}))
     assert api_oauth.access_token_for(LIGNE, champs) == "at" and len(envois) == 1
-    assert POLITIQUES == [False]        # the session keeps the declared exception
+    assert POLITIQUES == [("org", "42")]   # on behalf of the app's org
 
 
 # --- one sign-in server: origins and resource, at the three requests ----------------
@@ -667,10 +667,12 @@ def test_un_dns_qui_change_d_avis_entre_deux_echanges_est_refuse(monkeypatch):
     monkeypatch.setattr(egress_transport, "_ouvrir", ouvrir)
     url = APP["connection"]["token_url"]
     with pytest.raises(oauth_flow.OAuthExchangeRefused) as e:
-        api_oauth._token_request(url, {"grant_type": "x"}, annoncee=True)
+        api_oauth._token_request(url, {"grant_type": "x"}, annoncee=True,
+                                 titulaire=("org", "1"))
     assert "could not be reached" in str(e.value)
     with pytest.raises(oauth_flow.OAuthExchangeRefused) as e:
-        api_oauth._token_request(url, {"grant_type": "x"}, annoncee=True)
+        api_oauth._token_request(url, {"grant_type": "x"}, annoncee=True,
+                                 titulaire=("org", "1"))
     assert "127.0.0.1" in str(e.value)
     assert ouvertes == ["93.184.216.34"]
 

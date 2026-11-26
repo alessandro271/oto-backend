@@ -29,10 +29,30 @@ contournement.
 **Les exceptions sont NOMMÉES et déclarées**, jamais devinées : une destination
 interne légitime (un pont hébergé en boucle locale, un service sur le réseau
 privé) doit figurer dans la variable d'environnement `OTO_EGRESS_ALLOW`, au
-format `nom=adresse:port`, séparé par des virgules ou des retours à la ligne. La
-clé est une **adresse littérale et un port** — jamais un nom d'hôte : on autorise
-une destination, pas une étiquette qui peut se déplacer sous nous ; et jamais une
-adresse seule, sinon une exception pour un pont ouvrirait toute la machine.
+format `nom=adresse:port[@palier:id[,palier:id…]]`, séparé par des virgules ou des
+retours à la ligne. La clé est une **adresse littérale et un port** — jamais un nom
+d'hôte : on autorise une destination, pas une étiquette qui peut se déplacer sous
+nous ; et jamais une adresse seule, sinon une exception pour un pont ouvrirait toute
+la machine.
+
+**Chaque exception a son TITULAIRE.** Le suffixe `@palier:id` (`group`, `org` ou
+`tenant`, et l'identifiant de l'entité) nomme les identifiants qui y ont
+droit : celui dont la ligne du coffre a EXACTEMENT ce palier et cet id — une équipe
+n'hérite pas de son org ni l'inverse, un membre n'hérite de rien. Une exception
+SANS suffixe ne vaut que pour un identifiant du palier plateforme, posé par
+l'opérateur. Plusieurs titulaires se séparent par des virgules
+(`pont=127.0.0.1:9000@group:3,org:7`) : un morceau sans `=` qui suit une entrée à
+suffixe est un titulaire de plus. Une entrée mal formée refuse le démarrage
+(`verifier_reglages`). Une entrée sans suffixe — le format d'avant — se lit
+toujours, et vaut pour la plateforme seule.
+
+**Chaque appel dit au nom de qui il sort.** `titulaire` est un paramètre
+OBLIGATOIRE de `check_url`, `decide` et des sessions d'`egress_transport` : la
+ligne du coffre de l'identifiant servi (`titulaire_de`, `titulaire_d_instance`,
+`titulaire_des_champs`), `PLATEFORME`, `AUCUN` (pas encore de ligne : aucune
+exception) ou `AGENT` (une URL choisie par un agent : aucune exception, et le refus
+le dit à l'agent). Un appel qui ne le dit pas ne s'exécute pas.
+
 Le défaut est **vide** : ce fichier est public, les destinations réelles se
 déclarent au déploiement. Une destination absente de la liste échoue avec un
 message qui nomme la variable et le format — jamais en silence.
@@ -73,12 +93,56 @@ pas ce lot.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import socket
+from dataclasses import dataclass
+from typing import Optional
 from urllib.parse import urlsplit
+
+logger = logging.getLogger(__name__)
 
 #: Variable d'environnement qui porte les exceptions nommées.
 ALLOW_VAR = "OTO_EGRESS_ALLOW"
+
+#: Le titulaire d'une exception, ou celui au nom duquel on sort : `(palier, id)`.
+Titulaire = tuple[str, str]
+#: Un identifiant du palier plateforme (posé par l'opérateur) : les exceptions sans
+#: suffixe `@`. Le premier membre vaut `credentials_store.PLATFORM`.
+PLATEFORME: Titulaire = ("platform", "")
+#: Personne : aucune exception (une clé sans ligne du coffre, en cours de pose).
+AUCUN: Titulaire = ("", "")
+#: Une URL CHOISIE PAR UN AGENT (lecture de page, source `url`, document public) :
+#: aucune exception, et le refus dit le geste de ce lecteur-là.
+AGENT: Titulaire = ("agent", "")
+#: Les paliers qu'un suffixe `@palier:id` peut nommer. Pas le membre : la clé
+#: personnelle d'un membre n'hérite d'aucune exception.
+PALIERS_TITULAIRES = ("group", "org", "tenant")
+
+
+def titulaire_d_instance(instance) -> Titulaire:
+    """Le titulaire de la ligne qu'une sonde éprouve (`instance` =
+    `(entity_type, entity_id, account)`), `AUCUN` sans ligne (une clé en cours de
+    pose)."""
+    return titulaire_de(*(instance or (None, None))[:2])
+
+
+def titulaire_des_champs(champs) -> Titulaire:
+    """Le titulaire que portent des champs résolus (`access.ChampsResolus`, rendus par
+    `access.resolve_credential_fields`) ; `AUCUN` pour un dict nu."""
+    return _valider(getattr(champs, "titulaire", AUCUN))
+
+
+def titulaire_de(entity_type: Optional[str], entity_id) -> Titulaire:
+    """Le titulaire d'un identifiant d'après sa ligne du coffre
+    (`ResolvedCredential.entity_type`/`entity_id`, `instance` d'une sonde) : la
+    plateforme, son palier et son id, ou personne quand l'origine est inconnue. Une
+    clé de membre rend son propre couple, qu'aucune exception ne peut nommer."""
+    if entity_type == PLATEFORME[0]:
+        return PLATEFORME
+    if entity_type and entity_id not in (None, ""):
+        return (str(entity_type), str(entity_id))
+    return AUCUN
 
 
 class EgressRefused(ValueError):
@@ -143,27 +207,58 @@ def internal_reason(adresse: str) -> str | None:
 
 # ── les exceptions nommées ────────────────────────────────────────────────────
 
-def declared_exceptions(brut: str | None = None) -> dict[tuple[str, int], str]:
-    """Les exceptions déclarées, `(adresse, port) → nom`.
+@dataclass(frozen=True)
+class Exception_:
+    """Une exception déclarée : `titulaires` vide = la plateforme seulement."""
+    nom: str
+    adresse: str
+    port: int
+    titulaires: frozenset
 
-    Lit `OTO_EGRESS_ALLOW` quand `brut` est absent. Une entrée illisible LÈVE :
-    une liste d'exceptions qu'on ne sait pas lire ne s'interprète pas « comme
-    vide », elle se signale. Cette lecture n'a lieu qu'au moment de refuser, donc
-    une faute de frappe dans la variable n'atteint que les destinations internes
-    — jamais le trafic public."""
-    if brut is None:
-        brut = os.environ.get(ALLOW_VAR, "")
-    exceptions: dict[tuple[str, int], str] = {}
+
+_FORMAT = ("« nom=adresse:port[@palier:id[,palier:id…]] », p. ex. "
+           "« pont-local=127.0.0.1:9000 » (plateforme) ou "
+           "« pont-local=127.0.0.1:9000@group:3 »")
+
+
+def _titulaire(morceau: str, nom: str) -> Titulaire:
+    palier, _, ident = morceau.strip().partition(":")
+    palier, ident = palier.strip(), ident.strip()
+    if (palier not in PALIERS_TITULAIRES or not ident
+            or any(c.isspace() or c in "@=:" for c in ident)):
+        raise ValueError(
+            f"{ALLOW_VAR} : titulaire illisible {morceau.strip()!r} pour « {nom} » — "
+            f"un titulaire s'écrit « palier:id », palier parmi "
+            f"{', '.join(PALIERS_TITULAIRES)} ; une exception de la plateforme n'a "
+            f"pas de suffixe `@`. Format : {_FORMAT}.")
+    return (palier, ident)
+
+
+def _lire_exceptions(brut: str) -> list[Exception_]:
+    """Toutes les entrées de `brut`, titulaires compris. Une entrée illisible LÈVE :
+    une liste d'exceptions qu'on ne sait pas lire ne s'interprète pas « comme vide »,
+    elle se signale."""
+    lues: list[tuple[str, str, int, list]] = []
+    suffixee = False   # la dernière entrée lue porte un `@` : un morceau sans `=` la suit
     for entree in brut.replace("\n", ",").split(","):
         entree = entree.strip()
         if not entree:
             continue
+        if "=" not in entree:
+            if not suffixee:
+                raise ValueError(
+                    f"{ALLOW_VAR} : entrée illisible {entree!r} — format attendu "
+                    f"{_FORMAT}.")
+            lues[-1][3].append(_titulaire(entree, lues[-1][0]))
+            continue
         nom, _, destination = entree.partition("=")
         nom, destination = nom.strip(), destination.strip()
+        destination, arobase, titulaire = destination.partition("@")
+        destination = destination.strip()
         if not nom or not destination:
             raise ValueError(
                 f"{ALLOW_VAR} : entrée illisible {entree!r} — format attendu "
-                "« nom=adresse:port », p. ex. « pont-local=127.0.0.1:9000 ».")
+                f"{_FORMAT}.")
         adresse, _, port = destination.rpartition(":")
         adresse = adresse.strip().strip("[]")
         try:
@@ -176,8 +271,55 @@ def declared_exceptions(brut: str | None = None) -> dict[tuple[str, int], str]:
                 "ET un port (« 127.0.0.1:9000 ») : jamais par un nom d'hôte, qui "
                 "peut se déplacer sous nous, et jamais par une adresse seule, qui "
                 "ouvrirait toute la machine.") from None
-        exceptions[(str(ip), numero)] = nom
+        lues.append((nom, str(ip), numero,
+                     [_titulaire(titulaire, nom)] if arobase else []))
+        suffixee = bool(arobase)
+    return [Exception_(nom, adresse, port, frozenset(t)) for nom, adresse, port, t in lues]
+
+
+def _valider(titulaire) -> Titulaire:
+    """Un titulaire est un couple `(palier, id)` de chaînes : rien d'autre ne passe —
+    surtout pas un booléen hérité de l'ancienne politique."""
+    if (not isinstance(titulaire, tuple) or len(titulaire) != 2
+            or not all(isinstance(x, str) for x in titulaire)):
+        raise TypeError(f"titulaire d'egress invalide : {titulaire!r} — attendu un "
+                        "couple (palier, id), `egress.titulaire_de(...)`, PLATEFORME, "
+                        "AUCUN ou AGENT.")
+    return titulaire
+
+
+def declared_exceptions(brut: str | None = None, *,
+                        titulaire: Titulaire) -> dict[tuple[str, int], str]:
+    """Les exceptions déclarées qui valent pour `titulaire`, `(adresse, port) → nom` :
+    pour la plateforme, celles sans suffixe ; pour un autre titulaire, celles qui le
+    nomment EXACTEMENT ; pour personne (`AUCUN`) ni pour un agent (`AGENT`), aucune.
+
+    Lit `OTO_EGRESS_ALLOW` quand `brut` est absent. Une entrée illisible LÈVE (et
+    refuse le démarrage, `verifier_reglages`)."""
+    if brut is None:
+        brut = os.environ.get(ALLOW_VAR, "")
+    exceptions: dict[tuple[str, int], str] = {}
+    if _valider(titulaire) in (AUCUN, AGENT):
+        return exceptions
+    for e in _lire_exceptions(brut):
+        if (titulaire in e.titulaires if titulaire != PLATEFORME else not e.titulaires):
+            exceptions[(e.adresse, e.port)] = e.nom
     return exceptions
+
+
+def verifier_reglages() -> None:
+    """Au démarrage : `OTO_EGRESS_ALLOW` se lit en entier, ou le service ne démarre
+    pas — jamais un repli sur une liste partielle ou vide. Les exceptions SANS
+    titulaire (réservées à la plateforme) sont nommées dans le journal : une
+    exception posée avant les titulaires pour une org ou un groupe ne les sert plus,
+    et c'est ici qu'on le voit. Les noms seulement, jamais les adresses."""
+    plateforme = [e.nom for e in _lire_exceptions(os.environ.get(ALLOW_VAR, ""))
+                  if not e.titulaires]
+    if plateforme:
+        logger.warning(
+            "exceptions d'egress réservées à la plateforme : %s ; une exception qui "
+            "sert une org ou un groupe doit nommer son titulaire (@palier:id)",
+            ", ".join(plateforme))
 
 
 # ── l'instance elle-même ──────────────────────────────────────────────────────
@@ -203,14 +345,15 @@ def resolved_addresses(hote: str, port: int) -> set[str]:
 
 
 def check_url(url: str, *, connector: str, field: str = "base_url",
-              exceptions_declarees: bool = True) -> None:
+              titulaire: Titulaire) -> None:
     """Refuse `url` si son hôte résout vers une adresse interne non déclarée.
 
     Ne rend rien quand la destination est publique ou déclarée. `connector` et
     `field` ne servent qu'au message : un opérateur doit savoir QUELLE carte
     corriger, pas seulement que « quelque chose » a été refusé.
 
-    `exceptions_declarees=False` = la politique de l'URL CHOISIE PAR L'AGENT
+    `titulaire` est OBLIGATOIRE : au nom de qui on sort. `AGENT` = la politique de
+    l'URL CHOISIE PAR L'AGENT
     (`web_read`, une source `url` de fichier — oto#180) : la même décision sur ce
     qui est interne, mais AUCUNE exception ne s'applique. Les exceptions nommées
     de `OTO_EGRESS_ALLOW` couvrent la destination d'un credential posé par un
@@ -220,7 +363,10 @@ def check_url(url: str, *, connector: str, field: str = "base_url",
     alors le geste de CE lecteur-là, pas celui d'un opérateur. Jusqu'au
     12/09/2026, ces deux lecteurs portaient chacun leur propre garde, écrite
     avant celle-ci : même intention, trois textes, et une plage refusée ici
-    pouvait passer là."""
+    pouvait passer là.
+
+    Pour un identifiant, `titulaire_de(palier, id)` de sa ligne du coffre : seules
+    les exceptions qui le nomment s'appliquent (`declared_exceptions`)."""
     morceaux = urlsplit((url or "").strip())
     if morceaux.scheme not in ("http", "https"):
         raise EgressRefused(
@@ -241,8 +387,7 @@ def check_url(url: str, *, connector: str, field: str = "base_url",
             f"pas ({e}). La destination ne peut pas être contrôlée, donc elle "
             "n'est pas appelée.") from None
 
-    decide(hote, port, adresses, connector=connector, field=field,
-           exceptions_declarees=exceptions_declarees)
+    decide(hote, port, adresses, connector=connector, field=field, titulaire=titulaire)
 
 
 def refuse_instance(hote: str, *, connector: str, field: str) -> None:
@@ -256,23 +401,28 @@ def refuse_instance(hote: str, *, connector: str, field: str) -> None:
 
 
 def decide(hote: str, port: int, adresses, *, connector: str, field: str,
-           exceptions_declarees: bool) -> None:
+           titulaire: Titulaire) -> None:
     """LA décision, sur des adresses DÉJÀ résolues : lève si l'une d'elles est
-    interne sans exception applicable. Partagée par `check_url` (le refus précoce,
-    qui explique) et par le transport épinglé (`egress_transport`, qui fait foi
-    parce qu'il décide sur les adresses mêmes auxquelles il se connecte)."""
+    interne sans exception applicable — au `titulaire` de l'identifiant. Partagée par
+    `check_url` (le refus précoce, qui explique) et par le transport épinglé
+    (`egress_transport`, qui fait foi parce qu'il décide sur les adresses mêmes
+    auxquelles il se connecte)."""
+    _valider(titulaire)
+    applicables = None   # lues au premier refus possible : le trafic public n'y touche pas
     for adresse in sorted(adresses):
         raison = internal_reason(adresse)
         if raison is None:
             continue
-        if exceptions_declarees and declared_exceptions().get((adresse, port)) is not None:
+        if applicables is None:
+            applicables = declared_exceptions(titulaire=titulaire)
+        if applicables.get((adresse, port)) is not None:
             continue
         # Le déguisement : dire les DEUX. Un refus qui ne montre que l'adresse
         # résolue paraît absurde à qui a saisi un nom de domaine public, et un
         # refus qui ne montre que le nom saisi ne dit pas ce qui cloche.
         vu = (f"`{hote}`" if hote == adresse
               else f"`{hote}`, qui résout vers {adresse},")
-        if not exceptions_declarees:
+        if titulaire == AGENT:
             raise EgressRefused(
                 f"`{connector}` : destination refusée. {vu} est une adresse interne — "
                 f"{raison}. Depuis oto on ne lit que l'internet public : le service "
@@ -291,7 +441,27 @@ def decide(hote: str, port: int, adresses, *, connector: str, field: str,
             "pouvoir atteindre.\n"
             f"Si c'est une destination légitime (un pont hébergé), elle doit "
             f"être déclarée comme exception NOMMÉE dans la variable "
-            f"{ALLOW_VAR} du service, au format « nom=adresse:port » — ici "
-            f"« mon-pont={adresse}:{port} ». Tant qu'elle n'y figure pas "
-            f"l'appel est refusé : la liste ne se devine pas, elle se déclare. "
-            f"(Champ `{field}` de la carte {connector}.)")
+            f"{ALLOW_VAR} du service, pour le titulaire de cet identifiant, au "
+            f"format « nom=adresse:port[@palier:id] » — ici "
+            f"« mon-pont={adresse}:{port}{_suffixe(titulaire)} »{_note(titulaire)}. "
+            f"Tant qu'elle n'y "
+            f"figure pas l'appel est refusé : la liste ne se devine pas, elle se "
+            f"déclare. (Champ `{field}` de la carte {connector}.)")
+
+
+def _suffixe(titulaire: Titulaire) -> str:
+    if titulaire == PLATEFORME:
+        return ""
+    if titulaire[0] in PALIERS_TITULAIRES:
+        return f"@{titulaire[0]}:{titulaire[1]}"
+    return "@<palier>:<id>"
+
+
+def _note(titulaire: Titulaire) -> str:
+    if titulaire == PLATEFORME or titulaire[0] in PALIERS_TITULAIRES:
+        return ""
+    if titulaire == AUCUN:
+        return (" — le titulaire est l'équipe ou l'org dont la carte portera la clé, "
+                "une fois posée")
+    return (" — une clé personnelle de membre n'en reçoit aucune : la carte se pose "
+            "au palier d'une équipe ou de l'org")

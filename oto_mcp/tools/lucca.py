@@ -84,7 +84,8 @@ def _upstream_message(e) -> str:
     return f"Lucca rejected the request (HTTP {status}): {e.body}"
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
+def _verify(fields: dict, config: dict | None = None,
+            instance: tuple | None = None) -> None:
     """"Test the connection" probe (otomata-tech/oto#69).
 
     `list_departments()`: the smallest client call with no required
@@ -95,11 +96,12 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     from oto.tools.lucca import LuccaClient
     from oto.tools.common.errors import UpstreamHTTPError
 
-    egress.check_url(_base_url(fields["domain"]), connector="lucca")
+    titulaire = egress.titulaire_d_instance(instance)
+    egress.check_url(_base_url(fields["domain"]), connector="lucca", titulaire=titulaire)
     try:
         egress_transport.pinned(
             LuccaClient(api_key=fields["api_key"], domain=fields["domain"]),
-            connector="lucca").list_departments()
+            connector="lucca", titulaire=titulaire).list_departments()
     except UpstreamHTTPError as e:
         if e.status_code in (401, 403):
             raise connector_verify.NonAutorise(f"Lucca HTTP {e.status_code}: {e.body}")
@@ -118,10 +120,12 @@ def register(mcp: FastMCP) -> None:
         # file (~/.otomata/config.yaml) that doesn't exist on the server,
         # hence a no-op — redaction for the backend goes through
         # `FieldRedactionMiddleware` (see module docstring), not here.
-        egress.check_url(_base_url(creds.get("domain") or ""), connector="lucca")
+        titulaire = egress.titulaire_des_champs(creds)
+        egress.check_url(_base_url(creds.get("domain") or ""), connector="lucca",
+                         titulaire=titulaire)
         return egress_transport.pinned(
             LuccaClient(api_key=creds.get("api_key"), domain=creds.get("domain")),
-            connector="lucca")
+            connector="lucca", titulaire=titulaire)
 
     def _run(fn):
         try:

@@ -51,7 +51,7 @@ from .. import access, egress, egress_transport
 from ..connectors import verify as connector_verify
 
 
-def _check_host(host) -> None:
+def _check_host(host, *, titulaire: tuple) -> None:
     """Egress guard on the PostHog host, when set.
 
     Empty = the SaaS, a constant of the lib. Filled in, it designates a
@@ -59,7 +59,7 @@ def _check_host(host) -> None:
     internal network (`oto_mcp/egress.py`)."""
     valeur = (host or "").strip()
     if valeur:
-        egress.check_url(valeur, connector="posthog", field="host")
+        egress.check_url(valeur, connector="posthog", field="host", titulaire=titulaire)
 
 
 _DEFAULT_LIMIT = 100
@@ -116,7 +116,8 @@ def _upstream_message(e) -> str:
     return f"PostHog refused the request (HTTP {status}): {detail}"
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
+def _verify(fields: dict, config: dict | None = None,
+            instance: tuple | None = None) -> None:
     """"Test the connection" probe: identity → project → query.
 
     A PostHog key carries SCOPES chosen at creation: a key without
@@ -126,11 +127,12 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.posthog.client import PostHogClient
     cfg = config or {}
-    _check_host(cfg.get("host"))
+    titulaire = egress.titulaire_d_instance(instance)
+    _check_host(cfg.get("host"), titulaire=titulaire)
     client = egress_transport.pinned(
         PostHogClient(fields["api_key"], host=cfg.get("host") or None,
                       project_id=cfg.get("project_id") or None),
-        connector="posthog", field="host")
+        connector="posthog", field="host", titulaire=titulaire)
     client.current_user()
     project = client.resolve_project_id()
     try:
@@ -150,11 +152,12 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> PostHogClient:
         fields = access.resolve_credential_fields("posthog")
-        _check_host(fields.get("host"))
+        titulaire = egress.titulaire_des_champs(fields)
+        _check_host(fields.get("host"), titulaire=titulaire)
         return egress_transport.pinned(
             PostHogClient(fields["api_key"], host=fields.get("host") or None,
                           project_id=fields.get("project_id") or None),
-            connector="posthog", field="host")
+            connector="posthog", field="host", titulaire=titulaire)
 
     def _run(fn):
         try:

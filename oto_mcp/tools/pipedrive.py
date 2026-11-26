@@ -20,6 +20,7 @@ boundary is in the API (v1, offset pagination), so we might as well own it.
 """
 from __future__ import annotations
 
+import re
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
@@ -30,8 +31,24 @@ from .. import access
 from ..connectors import verify as connector_verify
 
 
+#: An account subdomain (`acme` for acme.pipedrive.com): one DNS label, nothing else —
+#: no dot, `@`, `:` or `/` that would make the URL name another host or a port.
+_SOUS_DOMAINE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
+
+
 def _domain(company_domain: Optional[str]) -> Optional[str]:
-    return (company_domain or "").strip().strip(".") or None
+    """The account subdomain, validated, or None (the generic API host). Raises
+    `ValueError` on anything but a single DNS label: the lib builds
+    `https://<it>.pipedrive.com`, so a dot, `@`, `:` or `/` would aim the API token at
+    another host."""
+    valeur = (company_domain or "").strip().lower()
+    if not valeur:
+        return None
+    if not _SOUS_DOMAINE.fullmatch(valeur):
+        raise ValueError(
+            "Pipedrive `company_domain` must be the account subdomain only (`acme` for "
+            "acme.pipedrive.com): letters, digits and `-`, 63 characters at most.")
+    return valeur
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (config: probe contract)
@@ -69,10 +86,11 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> PipedriveClient:
         creds = access.resolve_credential_fields("pipedrive")
-        return PipedriveClient(
-            api_token=creds.get("api_token"),
-            company_domain=_domain(creds.get("company_domain")),
-        )
+        try:
+            domaine = _domain(creds.get("company_domain"))
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e))) from None
+        return PipedriveClient(api_token=creds.get("api_token"), company_domain=domaine)
 
     # ---- dispatch helpers (`op=` pattern, ADR 0047) ----------------------
 

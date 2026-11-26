@@ -18,7 +18,8 @@ from .. import access, egress, egress_transport
 from ..connectors import verify as connector_verify
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
+def _verify(fields: dict, config: dict | None = None,
+            instance: tuple | None = None) -> None:
     """"Test connection" probe — otomata-tech/oto#69. Covers `auth` ONLY.
 
     `GET /organizations` (already in the client — `list_organizations`), the
@@ -30,10 +31,11 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.make import MakeClient
 
-    egress.check_url(fields["base_url"], connector="make")
+    titulaire = egress.titulaire_d_instance(instance)
+    egress.check_url(fields["base_url"], connector="make", titulaire=titulaire)
     egress_transport.pinned(MakeClient(
         api_token=fields["api_token"], base_url=fields["base_url"],
-    ), connector="make").list_organizations()
+    ), connector="make", titulaire=titulaire).list_organizations()
 
 
 def register(mcp: FastMCP) -> None:
@@ -43,10 +45,11 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> MakeClient:
         creds = access.resolve_credential_fields("make")
-        egress.check_url(creds.get("base_url") or "", connector="make")
+        titulaire = egress.titulaire_des_champs(creds)
+        egress.check_url(creds.get("base_url") or "", connector="make", titulaire=titulaire)
         return egress_transport.pinned(
             MakeClient(api_token=creds.get("api_token"), base_url=creds.get("base_url")),
-            connector="make")
+            connector="make", titulaire=titulaire)
 
     @mcp.tool()
     def make_list_organizations() -> dict:

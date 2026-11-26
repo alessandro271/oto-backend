@@ -3,7 +3,8 @@
 Les vérifications elles-mêmes (RDAP, DNS, SPF/DMARC/DKIM, listes de blocage, score de
 délivrabilité, CT, TLS, en-têtes) vivent dans oto-core depuis v1.233.0
 (`oto.tools.infosec.InfosecClient`, oto-now/connectors#244) et s'y testent. Ici, la part
-de l'hôte seulement : chaque op et ses arguments arrivent tels quels au client, le
+de l'hôte seulement : chaque sortie HTTP ou TLS passe par la garde d'egress de
+l'agent (`tests/test_egress_titulaires.py`), chaque op et ses arguments arrivent tels quels au client, le
 User-Agent est celui de l'instance (#968), un refus local (`ValueError`) devient
 `INVALID_PARAMS` AVANT tout appel réseau, un refus amont remonte tel quel.
 
@@ -16,6 +17,7 @@ import requests
 from mcp.types import INVALID_PARAMS
 from oto.tools.common.errors import UpstreamHTTPError
 
+from oto_mcp import egress
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.tools import infosec as I
 
@@ -82,21 +84,24 @@ def test_the_probes_present_this_instance(client):
 
 
 def test_the_user_agent_reaches_the_wire(monkeypatch):
-    """Bout en bout à travers la vraie lib (transport stubbé) : l'UA de l'hôte part
-    bien chez RDAP, et un domaine non enregistré reste une réponse, pas une erreur."""
+    """Bout en bout à travers l'enveloppe gardée (transport stubbé) : l'UA de l'hôte
+    part bien chez RDAP, par la session gardée de l'agent, et un domaine non
+    enregistré reste une réponse, pas une erreur."""
     seen = {}
 
     class _Resp:
         status_code = 404
 
-    def _get(url, **kw):
+    def _get(self, url, **kw):
         seen["url"], seen["headers"] = url, kw.get("headers")
+        seen["garde"] = self.get_adapter(url)._politique.titulaire
         return _Resp()
 
-    monkeypatch.setattr(requests, "get", _get)
+    monkeypatch.setattr(requests.Session, "get", _get)
     out = _tool()(op="whois", domain="contact@example.com")
     assert out["found"] is False and out["domain"] == "example.com"
     assert seen["headers"] == {"user-agent": I._ua()}
+    assert seen["garde"] == egress.AGENT
 
 
 # --- refus -------------------------------------------------------------------------

@@ -234,23 +234,29 @@ def client_for(fields: dict, headers: dict | None = None, *,
     """THE oto-core client for these credential fields — the only place one is built,
     for the agent's calls (`client_from_fields`) as for the REST import of a `doc_path`
     (`connectors/api_operations.fetch_doc_path_document`). The TWO destinations a
-    card carries are guarded: the called base, and — in oauth2 mode — the token
-    server, which goes out via `requests.post` from oto-core without passing through
-    `base_url`. Guarding only the first would leave an entire outbound path outside the
-    guard. In `session` mode, every hop of the login is guarded as it goes
+    card carries are guarded, early by `check_url` and at connection time by a pinned
+    session each (`egress_transport`): the called base (`session=`, which carries the
+    calls and the session mode's login), and — in oauth2 mode — the token server
+    (`token_session=`, kept apart from the session that carries the bearer it renews).
+    In `session` mode, every hop of the login is also checked as it goes
     (`api_session.guard`), and `row` — the vault row of these fields, required in that
     mode and in `visitor` mode — keeps the cookie jar (`api_session`). `headers` = the saved
-    definition's constant headers. Raises `egress.EgressRefused` or `ValueError`
-    (incomplete or invalid config): each caller translates them for its face."""
+    definition's constant headers. Every call goes out on behalf of the row's HOLDER
+    (`egress.titulaire_de(row)`): only the operator's named exceptions that name it
+    apply — none for a member's card, nor without a row. Raises `egress.EgressRefused` or `ValueError` (incomplete or
+    invalid config): each caller translates them for its face."""
+    titulaire = egress.titulaire_de(*(row or (None, None))[:2])
     base_url = (fields.get("base_url") or "").strip()
     mode = (fields.get("auth_mode") or "").strip()
     if not base_url or not mode:
         raise ValueError("`api` connector not configured: `base_url` and `auth_mode` "
                          "are required on the Custom API card")
-    egress.check_url(base_url, connector="api", field="base_url")
+    egress.check_url(base_url, connector="api", field="base_url",
+                     titulaire=titulaire)
     token_url = (fields.get("token_url") or "").strip()
     if mode.lower() in ("oauth2", "oauth2_user") and token_url:
-        egress.check_url(token_url, connector="api", field="token_url")
+        egress.check_url(token_url, connector="api", field="token_url",
+                         titulaire=titulaire)
     if mode.lower() == "oauth2_user":
         # Per-member sign-in (`auth/api_oauth.py`): the HOST turns the person's refresh
         # token into an access token, and oto-core calls as a plain `bearer`.
@@ -263,39 +269,30 @@ def client_for(fields: dict, headers: dict | None = None, *,
         except api_oauth.ApiOAuthRefused as e:
             raise ValueError(e.message) from None
         return api_operations.with_constant_headers(
-            _pinned(HttpConnectorClient(base_url, "bearer", {**fields, "token": token},
-                                        timeout=TIMEOUT)), headers)
+            HttpConnectorClient(base_url, "bearer", {**fields, "token": token},
+                                timeout=TIMEOUT,
+                                session=_session("base_url", titulaire)), headers)
     session = {}
     if api_session.keeps_jar(fields):
         if row is None:
             raise ValueError(f"the {mode.lower()} mode keeps its cookies in the card's "
                              "vault row, and none was given for this call")
-        session = {"guard": api_session.guard(base_url),
+        session = {"guard": api_session.guard(base_url, titulaire=titulaire),
                    "jar": api_session.read_jar(row, fields),
                    "on_jar": api_session.jar_writer(row, fields)}
-    client = HttpConnectorClient(base_url, mode, fields, timeout=TIMEOUT, **session)
-    return api_operations.with_constant_headers(_pinned(client), headers)
+    client = HttpConnectorClient(base_url, mode, fields, timeout=TIMEOUT,
+                                 session=_session("base_url", titulaire),
+                                 token_session=_session("token_url", titulaire), **session)
+    return api_operations.with_constant_headers(client, headers)
 
 
-def _pinned(client: HttpConnectorClient) -> HttpConnectorClient:
-    """The client's session goes out through the pinned transport (`egress_transport`):
-    the guard holds at CONNECTION time, on the addresses actually joined — a resolution
-    that changes after `check_url` (DNS rebinding) is refused there, and so is every
-    hop of a session-mode login. The session must be pinned BEFORE the auth configures
-    it (the session mode logs in right there), hence oto-core's private `_ready`
-    REPLACED by the same three steps on a guarded session — coupled to `_session` and
-    `_auth`, held by `tests/test_egress_transport.py`. Follow-up: a `session=`
-    parameter in oto-core. ⚠️ The oauth2 token request leaves through a module-level
-    `requests.post` in oto-core: outside this session, checked only by `check_url`."""
-    def _ready():
-        if client._session is None:
-            s = egress_transport.harden(requests.Session(), connector="api",
-                                        field="base_url")
-            client._auth.configure(s)
-            client._session = s
-        return client._session
-    client._ready = _ready
-    return client
+def _session(field: str, titulaire: tuple) -> requests.Session:
+    """A session pinned by the egress guard (`egress_transport`): the guard holds at
+    CONNECTION time, on the addresses actually joined — a resolution that changes
+    after `check_url` (DNS rebinding) is refused there, and so is every redirect hop.
+    `field` = the card's field this session goes to (`base_url`, `token_url`), named
+    in the refusal; `titulaire` = on whose behalf (the card's row holder)."""
+    return egress_transport.session(connector="api", field=field, titulaire=titulaire)
 
 
 def client_from_fields(f: dict, headers: dict | None = None, *,

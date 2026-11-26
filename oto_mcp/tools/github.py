@@ -133,7 +133,7 @@ def _create_branch_message(e, branch: str, ref: Optional[str]) -> Optional[str]:
     return None
 
 
-def _check_base_url(base_url) -> None:
+def _check_base_url(base_url, *, titulaire: tuple) -> None:
     """Egress guard on the Enterprise Server API URL, when it is set.
 
     Empty = github.com, a constant of the lib: nothing to check. When filled in,
@@ -141,10 +141,11 @@ def _check_base_url(base_url) -> None:
     platform's internal network (`oto_mcp/egress.py`)."""
     valeur = (base_url or "").strip()
     if valeur:
-        egress.check_url(valeur, connector="github")
+        egress.check_url(valeur, connector="github", titulaire=titulaire)
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
+def _verify(fields: dict, config: dict | None = None,  # noqa: ARG001
+            instance: tuple | None = None) -> None:
     """The "test connection" probe: `GET /user`, then the quota state.
 
     `/user` requires no particular scope: it separates "invalid token" (401)
@@ -158,10 +159,11 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
     who it is" — and that is exactly what it promises.
     """
     from oto.tools.github.client import GitHubClient
-    _check_base_url(fields.get("base_url"))
+    titulaire = egress.titulaire_d_instance(instance)
+    _check_base_url(fields.get("base_url"), titulaire=titulaire)
     client = egress_transport.pinned(
         GitHubClient(token=fields["token"], base_url=(fields.get("base_url") or None)),
-        connector="github")
+        connector="github", titulaire=titulaire)
     who = client.me()
     if not isinstance(who, dict) or not who.get("login"):
         raise ValueError(
@@ -177,10 +179,11 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> GitHubClient:
         creds = access.resolve_credential_fields("github")
-        _check_base_url(creds.get("base_url"))
+        titulaire = egress.titulaire_des_champs(creds)
+        _check_base_url(creds.get("base_url"), titulaire=titulaire)
         return egress_transport.pinned(
             GitHubClient(token=creds["token"], base_url=(creds.get("base_url") or None)),
-            connector="github")
+            connector="github", titulaire=titulaire)
 
     def _run(fn):
         try:

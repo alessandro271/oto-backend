@@ -25,11 +25,11 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from oto.tools.common.errors import UpstreamHTTPError
 
-from .. import access, egress, file_source
+from .. import access, egress, egress_transport, file_source
 from ..connectors import verify as connector_verify
 
 
-def _check_base_url(base_url) -> None:
+def _check_base_url(base_url, *, titulaire: tuple) -> None:
     """Egress guard on the private-instance URL, when set.
 
     Empty = the SaaS, a constant of the lib. Filled in, it designates a
@@ -37,10 +37,21 @@ def _check_base_url(base_url) -> None:
     network (`oto_mcp/egress.py`)."""
     valeur = (base_url or "").strip()
     if valeur:
-        egress.check_url(valeur, connector="lighton")
+        egress.check_url(valeur, connector="lighton", field="base_url",
+                         titulaire=titulaire)
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:
+def _session(*, titulaire: tuple):
+    """The session every LightOn request goes out through: pinned by the egress
+    guard at connection time (`egress_transport`), under the same policy as
+    `_check_base_url`, on behalf of the same holder (`titulaire`). Mounted on the SaaS too: its host is a
+    constant, the guard costs nothing there, and no path is left outside it."""
+    return egress_transport.session(connector="lighton", field="base_url",
+                                    titulaire=titulaire)
+
+
+def _verify(fields: dict, config: dict | None = None,
+            instance: tuple | None = None) -> None:  # noqa: ARG001 (config: probe contract)
     """"Test the connection" probe — otomata-tech/oto#69. Covers `auth` ONLY.
 
     `GET workspaces` (already in the client — `list_workspaces`): LightOn
@@ -57,10 +68,12 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     """
     from oto.tools.lighton import LightOnClient
 
-    _check_base_url(fields.get("base_url"))
-    LightOnClient(
-        api_key=fields["api_key"], base_url=fields.get("base_url"),
-    ).list_workspaces()
+    titulaire = egress.titulaire_d_instance(instance)
+    _check_base_url(fields.get("base_url"), titulaire=titulaire)
+    with _session(titulaire=titulaire) as s:
+        LightOnClient(
+            api_key=fields["api_key"], base_url=fields.get("base_url"), session=s,
+        ).list_workspaces()
 
 
 def register(mcp: FastMCP) -> None:
@@ -72,9 +85,12 @@ def register(mcp: FastMCP) -> None:
         return access.resolve_credential_fields("lighton")
 
     def _client(creds: dict) -> LightOnClient:
-        _check_base_url(creds.get("base_url"))
+        # On behalf of the resolved row's holder (`egress.titulaire_des_champs`).
+        titulaire = egress.titulaire_des_champs(creds)
+        _check_base_url(creds.get("base_url"), titulaire=titulaire)
         return LightOnClient(api_key=creds.get("api_key"),
-                             base_url=creds.get("base_url") or None)
+                             base_url=creds.get("base_url") or None,
+                             session=_session(titulaire=titulaire))
 
     def _default_workspace(creds: dict) -> Optional[int]:
         raw = (creds.get("workspace_id") or "").strip()
