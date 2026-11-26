@@ -755,6 +755,14 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     conn.execute(_commentaires_tableau.DDL_CONTRAINTE_CIBLE)
     if _index_absent(conn, _commentaires_tableau.INDEX_COLONNE):
         conn.execute(_commentaires_tableau.DDL_INDEX_COLONNE)
+    # Les suggestions des commentaires de procédure et de page (`suggestions_commentaires`)
+    # — les mêmes que pose la révision `20261126_1200_suggestions` : ordre
+    # indifférent. Gardées par le catalogue : sur une base à jour, aucun verrou.
+    from . import suggestions_commentaires as _suggestions
+    if _colonne_absente(conn, "procedure_comments", "resolved_at"):
+        conn.execute(_suggestions.DDL_PROCEDURES)
+    if _colonne_absente(conn, "doc_comments", "resolved_at"):
+        conn.execute(_suggestions.DDL_PAGES)
     # Le message au client et les messages Slack partis, sur l'épisode (`alertes_slack`) —
     # les mêmes que pose la révision `20261109_2120_alertes_slack` : ordre indifférent.
     from . import alertes_slack

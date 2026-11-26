@@ -652,7 +652,7 @@ oto_org	accept_invite archive create invite list_invites list_loans reject_invit
 oto_org_monitoring	adoption agents_en_echec call calls connectors export gaps run runs signals summary tool_quality	52f8af9af69f2165
 oto_org_settings	get preview set	c1dde528b1cb0895
 oto_procedure	archive create delete describe fork get library_get library_list list publish rename set share_get share_publish share_readers share_set share_unpublish unarchive unpublish	95e5d9b6e91cef3a
-oto_procedure_comment	-	147f9e0286ed060e
+oto_procedure_comment	-	bc4df4a4f8c5ef0f
 oto_procedure_comments	-	f9d839e28803009d
 oto_profile	get update	bcb6908e4296dc31
 oto_project	activity archive copy create get handoff inventory link lint list list_templates publish_mcp rank_link runs unarchive unlink unpublish_mcp update	d72ab709bdf7d17d

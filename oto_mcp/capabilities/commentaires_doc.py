@@ -27,6 +27,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .. import db, ownership
+from . import _suggestions
 from ._authz import SUB_ONLY
 from ._procedure_du_travail import procedure_du_travail
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
@@ -48,7 +49,9 @@ class DocCommentsInput(_Page):
 
 
 class DocCommentInput(_Page):
-    body: str = Field(description=f"The comment, plain text, 1 to {LONGUEUR_MAX} characters.")
+    body: str = Field(default="", description=(
+        f"The comment, plain text, up to {LONGUEUR_MAX} characters. Required, unless "
+        "`suggestion` is given (then it is an optional note on the edit)."))
     quote: Optional[str] = Field(default=None, description=(
         "The exact passage of the page the comment is about, as it reads (at most "
         f"{CITATION_MAX} characters). Omit to comment on the whole page. Not with "
@@ -58,6 +61,10 @@ class DocCommentInput(_Page):
         "passages apart."))
     reply_to: Optional[int] = Field(default=None, description=(
         "Reply to a thread: the `id` of its first comment."))
+    suggestion: Optional[str] = Field(default=None, description=(
+        "Suggest an edit: the text that should replace `quote` (\"\" = remove the "
+        "passage). Needs `quote`; not with `reply_to`. Someone who can edit the page "
+        "accepts or rejects it."))
 
     @field_validator("quote", "quote_prefix", mode="after")
     @classmethod
@@ -75,14 +82,17 @@ class DocCommentInput(_Page):
             raise ValueError("a reply has no `quote`: it belongs to its thread's passage")
         if not self.quote:
             self.quote_prefix = None
+        self.suggestion = _suggestions.valider(
+            suggestion=self.suggestion, quote=self.quote, reply_to=self.reply_to,
+            longueur_max=LONGUEUR_MAX)
+        if not self.body and self.suggestion is None:
+            raise ValueError("`body` is empty")
         return self
 
     @field_validator("body", mode="after")
     @classmethod
     def _corps(cls, v: str) -> str:
         v = v.strip()
-        if not v:
-            raise ValueError("`body` is empty")
         if len(v) > LONGUEUR_MAX:
             raise ValueError(f"`body` is longer than {LONGUEUR_MAX} characters")
         return v
@@ -92,7 +102,11 @@ class DeleteDocCommentInput(_Page):
     comment_id: int
 
 
-class DocComment(BaseModel):
+class ResolveDocSuggestionInput(_Page, _suggestions.ResolutionInput):
+    pass
+
+
+class DocComment(_suggestions.Champs):
     id: int
     reply_to: Optional[int] = Field(default=None, description=(
         "The thread's first comment, for a reply; null for a thread's first comment."))
@@ -121,6 +135,10 @@ class DocComments(BaseModel):
     comments: list[DocComment] = Field(description="Oldest first within the page.")
     next_before_id: Optional[int] = Field(default=None, description=(
         "Pass as `before_id` to read the older page. `null` = nothing older."))
+    suggestions: bool = Field(default=True, description=(
+        "This server stores suggested edits (`suggestion`) — always true here."))
+    can_edit: bool = Field(default=False, description=(
+        "The caller can edit the page, so may accept or reject its suggestions."))
 
 
 def _hors_travail() -> None:
@@ -141,15 +159,24 @@ def _page(ctx: ResolvedCtx, inp: _Page) -> tuple[dict, bool]:
     return row, ownership.can_govern(ctx.sub, docs_common.DOC_RTYPE, str(row["id"]))
 
 
-def _servi(c: dict, sub: Optional[str], gouverne: bool, emails: dict) -> dict:
+def _peut_ecrire(sub: Optional[str], row: dict) -> bool:
+    """Écrire la page = écrire son PROJET (`docs.common.can`, la garde des écritures de
+    `oto_doc`) ; un partage de la page seule n'est qu'une lecture."""
+    return sub is not None and docs_common.can(sub, row["project_id"], "write")
+
+
+def _servi(c: dict, sub: Optional[str], gouverne: bool, emails: dict, *,
+           ecrit: bool = False, canal: Optional[str] = None) -> dict:
     if c.get("deleted_at") is not None:
         return {"id": c["id"], "reply_to": None, "quote": c.get("quote"),
                 "quote_prefix": c.get("quote_prefix"), "version": None,
                 "author": None, "author_email": None, "body": "", "at": c["created_at"],
-                "mine": False, "can_delete": False, "deleted": True}
+                "mine": False, "can_delete": False, "deleted": True,
+                **_suggestions.champs(c, ecrit=False, emails=emails, canal=canal)}
     auteur = c["auteur_sub"]
     a_moi = auteur is not None and auteur == sub
     return {
+        **_suggestions.champs(c, ecrit=ecrit, emails=emails, canal=canal),
         "id": c["id"],
         "reply_to": c.get("parent_id"),
         "quote": c.get("quote"),
@@ -172,15 +199,19 @@ def _doc_comments(ctx: ResolvedCtx, inp: DocCommentsInput) -> dict:
     lus = db.doc_commentaires.lister(ident, avant_id=inp.before_id, limit=limit)
     suite = lus[limit - 1]["id"] if len(lus) > limit else None
     page = list(reversed(lus[:limit]))
-    emails = db.emails_by_subs([c["auteur_sub"] for c in page if c.get("deleted_at") is None])
+    emails = db.emails_by_subs(_suggestions.subs(page))
     total = (sum(1 for c in lus if c.get("deleted_at") is None)
              if inp.before_id is None and len(lus) <= limit
              else db.doc_commentaires.compter(ident))
+    ecrit = _peut_ecrire(ctx.sub, page_)
     return {
         "doc_id": ident,
         "total": total,
-        "comments": [_servi(c, ctx.sub, gouverne, emails) for c in page],
+        "comments": [_servi(c, ctx.sub, gouverne, emails, ecrit=ecrit, canal=ctx.channel)
+                     for c in page],
         "next_before_id": suite,
+        "suggestions": True,
+        "can_edit": ecrit,
     }
 
 
@@ -194,8 +225,9 @@ def _doc_comment(ctx: ResolvedCtx, inp: DocCommentInput) -> dict:
                 "FIRST comment)."))
     c = db.doc_commentaires.ajouter(
         int(page_["id"]), auteur_sub=ctx.sub, body=inp.body, parent_id=inp.reply_to,
-        quote=inp.quote, quote_prefix=inp.quote_prefix)
-    return _servi(c, ctx.sub, gouverne, db.emails_by_subs([ctx.sub]))
+        quote=inp.quote, quote_prefix=inp.quote_prefix, suggestion=inp.suggestion)
+    return _servi(c, ctx.sub, gouverne, db.emails_by_subs([ctx.sub]),
+                  ecrit=_peut_ecrire(ctx.sub, page_), canal=ctx.channel)
 
 
 def _delete_doc_comment(ctx: ResolvedCtx, inp: DeleteDocCommentInput) -> dict:
@@ -207,6 +239,27 @@ def _delete_doc_comment(ctx: ResolvedCtx, inp: DeleteDocCommentInput) -> dict:
         raise AuthzDenied(403, "comment_not_yours")
     db.doc_commentaires.retirer(c["id"])
     return {"deleted": True}
+
+
+def _resolve_doc_suggestion(ctx: ResolvedCtx, inp: ResolveDocSuggestionInput) -> dict:
+    """Accepte ou refuse une suggestion. N'écrit PAS la page : l'application remplace le
+    passage et l'enregistre d'abord, puis l'accepte."""
+    page_, gouverne = _page(ctx, inp)
+    ident = int(page_["id"])
+    c = db.doc_commentaires.lire(ident, inp.comment_id)
+    if c is None:
+        raise AuthzDenied(404, "comment_not_found")
+    if not _peut_ecrire(ctx.sub, page_):
+        raise AuthzDenied(403, "cannot_resolve_suggestion", (
+            "Only someone who can edit this page accepts or rejects its suggestions."))
+    fait = db.doc_commentaires.resoudre(ident, c["id"], resolution=inp.resolution,
+                                        sub=ctx.sub)
+    if fait is None:
+        raise AuthzDenied(409, "suggestion_not_pending", (
+            "This comment is not a pending suggestion (already resolved, or a plain "
+            "comment)."))
+    return _servi(fait, ctx.sub, gouverne, db.emails_by_subs(_suggestions.subs([fait])),
+                  ecrit=True, canal=ctx.channel)
 
 
 _CHEMIN = "/api/me/docs/{doc_id}/comments"
@@ -257,5 +310,23 @@ CAPABILITIES += [
         ),
         description=("Remove one comment from a memory page (its author or the page's "
                      "governor); a thread whose first comment is removed keeps its replies."),
+    ),
+    Capability(
+        key="me.doc.resolve_suggestion",
+        handler=_resolve_doc_suggestion,
+        Input=ResolveDocSuggestionInput,
+        Output=DocComment,
+        authz=SUB_ONLY,
+        rest=RestBinding(verb="POST", path=_CHEMIN + "/{comment_id}/resolve",
+                         provisoire=True),
+        errors=(
+            _INTROUVABLE, _HORS_TRAVAIL,
+            DeclaredError(404, "comment_not_found",
+                          "aucun commentaire vivant de cet `id` sur cette page"),
+            _suggestions.NE_PEUT_RESOUDRE, _suggestions.DEJA_RESOLUE,
+        ),
+        description=("Accept or reject a suggested edit on a memory page (someone who can "
+                     "edit it). Accepting does not change the page: the app saves it "
+                     "first, then marks the suggestion accepted."),
     ),
 ]

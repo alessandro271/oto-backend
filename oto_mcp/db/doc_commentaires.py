@@ -14,7 +14,8 @@ from typing import Optional
 
 from ._conn import _connect
 
-_COLONNES = "id, doc_id, parent_id, quote, quote_prefix, auteur_sub, body, created_at, deleted_at"
+_COLONNES = ("id, doc_id, parent_id, quote, quote_prefix, auteur_sub, body, created_at, "
+             "deleted_at, suggestion, resolution, resolved_by, resolved_at")
 
 # Ce qui se sert : le vivant, et la RACINE retirée d'un fil qui a encore des réponses
 # vivantes — servie comme « commentaire supprimé », pour que le fil garde son passage.
@@ -52,12 +53,13 @@ def compter(doc_id: int) -> int:
 
 def ajouter(doc_id: int, *, auteur_sub: Optional[str], body: str,
             parent_id: Optional[int] = None, quote: Optional[str] = None,
-            quote_prefix: Optional[str] = None) -> dict:
+            quote_prefix: Optional[str] = None, suggestion: Optional[str] = None) -> dict:
     with _connect() as conn:
         return dict(conn.execute(
             f"INSERT INTO doc_comments (doc_id, parent_id, quote, quote_prefix, auteur_sub, "
-            f"body) VALUES (%s, %s, %s, %s, %s, %s) RETURNING {_COLONNES}",
-            (int(doc_id), parent_id, quote, quote_prefix, auteur_sub, body)).fetchone())
+            f"body, suggestion) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_COLONNES}",
+            (int(doc_id), parent_id, quote, quote_prefix, auteur_sub, body,
+             suggestion)).fetchone())
 
 
 def lire(doc_id: int, comment_id: int, *, servi: bool = False) -> Optional[dict]:
@@ -77,3 +79,11 @@ def retirer(comment_id: int) -> bool:
         return conn.execute(
             "UPDATE doc_comments SET deleted_at = now() "
             "WHERE id = %s AND deleted_at IS NULL", (int(comment_id),)).rowcount == 1
+
+
+def resoudre(doc_id: int, comment_id: int, *, resolution: str,
+             sub: Optional[str]) -> Optional[dict]:
+    """Accepte ou refuse une suggestion EN ATTENTE (`db/suggestions_commentaires.py`)."""
+    from . import suggestions_commentaires as sc
+    return sc.resoudre("doc_comments", "doc_id", doc_id, comment_id,
+                       resolution=resolution, sub=sub, colonnes=_COLONNES)

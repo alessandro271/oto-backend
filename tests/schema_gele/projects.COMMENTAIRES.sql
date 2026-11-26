@@ -7,7 +7,11 @@ quote_prefix TEXT,
 auteur_sub TEXT,
 body TEXT NOT NULL,
 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-deleted_at TIMESTAMPTZ
+deleted_at TIMESTAMPTZ,
+suggestion TEXT,
+resolution TEXT,
+resolved_by TEXT,
+resolved_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_doc_comments_page
 ON doc_comments (doc_id, id) WHERE deleted_at IS NULL;
