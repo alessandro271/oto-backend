@@ -103,16 +103,23 @@ def _mount(monkeypatch, *, byo: bool = True, is_platform=None, quota=None,
     # (None : rien d'arrivé, le sondage d'Apollo prend le relais).
     from oto_mcp import apollo_receiver
     client.receveur = []
-    monkeypatch.setattr(apollo_receiver, "commander",
-                        lambda cle: (client.receveur.append(("commande",)) or
-                                 ("jeton", _RECEVEUR)))
+    # Le plafond se compte DANS la commande (`commander(cle, plafond=…)`, sous verrou) :
+    # le double le rejoue sur `du_jour`, les commandes déjà passées de l'org.
+    client.plafonds = []
+
+    def _commander(cle, plafond=None):
+        client.plafonds.append(plafond)
+        if plafond is not None and du_jour >= plafond:
+            raise apollo_receiver.PlafondDuJour(du_jour, plafond)
+        client.receveur.append(("commande",))
+        return "jeton", _RECEVEUR
+    monkeypatch.setattr(apollo_receiver, "commander", _commander)
     monkeypatch.setattr(apollo_receiver, "lier",
                         lambda j, rid: client.receveur.append(("lier", j, str(rid))))
     monkeypatch.setattr(apollo_receiver, "abandonner",
                         lambda j: client.receveur.append(("abandon", j)))
     monkeypatch.setattr(apollo_receiver, "resultat_recu", lambda rid, cle: recu)
     monkeypatch.setattr(apollo_receiver, "commande_connue", lambda rid, cle: connue)
-    monkeypatch.setattr(apollo_receiver, "commandes_du_jour", lambda cle: du_jour)
     client.releves = []
     monkeypatch.setattr(apollo_receiver, "marquer_releve",
                         lambda rid, cle: client.releves.append(str(rid)))
@@ -295,15 +302,46 @@ def test_your_own_key_has_no_org_cap(monkeypatch):
     assert client.match_person.called
 
 
-def test_an_unreadable_cap_falls_back_to_the_default(monkeypatch):
-    from oto_mcp.mcp_errors import McpError
+def test_your_own_key_orders_without_a_cap(monkeypatch):
+    m, client, _ = _mount(monkeypatch, byo=True, du_jour=0)
+    _tool(m, "apollo_reveal_phone")(person_id="p1")
+    assert client.plafonds == [None]
 
-    monkeypatch.setenv("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY", "beaucoup")
-    m, client, _ = _mount(monkeypatch, byo=False, du_jour=100)
-    with pytest.raises(McpError) as e:
-        _tool(m, "apollo_reveal_phone")(person_id="p1")
-    assert e.value.error.data["limit"] == 100
 
+def test_the_platform_order_carries_the_configured_cap(monkeypatch):
+    monkeypatch.setenv("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY", "7")
+    m, client, _ = _mount(monkeypatch, byo=False, du_jour=0)
+    _tool(m, "apollo_reveal_phone")(person_id="p1")
+    assert client.plafonds == [7]
+
+
+@pytest.mark.parametrize("lu", ["beaucoup", "-1", "1.5"])
+def test_an_unreadable_cap_refuses_to_start(monkeypatch, lu):
+    """Comme `access/platform_rate.verifier_reglages` : un réglage illisible empêche
+    le démarrage, jamais un défaut silencieux."""
+    from oto_mcp.tools import apollo as apollo_tool
+
+    monkeypatch.setenv("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY", lu)
+    with pytest.raises(ValueError, match="OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY"):
+        apollo_tool.verifier_reglages()
+
+
+@pytest.mark.parametrize("lu,attendu", [(None, 100), ("", 100), (" 0 ", 0), ("25", 25)])
+def test_a_readable_cap_is_read(monkeypatch, lu, attendu):
+    from oto_mcp.tools import apollo as apollo_tool
+
+    if lu is None:
+        monkeypatch.delenv("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY", raising=False)
+    else:
+        monkeypatch.setenv("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY", lu)
+    apollo_tool.verifier_reglages()
+    assert apollo_tool.plafond_reveals_org() == attendu
+
+
+def test_the_startup_runs_the_cap_guard():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "oto_mcp" / "server.py").read_text()
+    assert "apollo_outils.verifier_reglages()" in src
 
 def test_a_pending_check_traces_a_zero_not_an_absence(monkeypatch):
     m, client, _ = _mount(monkeypatch, byo=False)

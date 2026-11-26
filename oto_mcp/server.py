@@ -1168,6 +1168,10 @@ def main():
     # Budget d'opérations Google Ads (`OTO_GOOGLE_ADS_DAILY_OPS`) : même garde.
     from .tools import google_ads as google_ads_outils
     google_ads_outils.verifier_reglages()
+    # Plafond par org des reveals de téléphone Apollo sur la clé plateforme
+    # (`OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY`) : même garde.
+    from .tools import apollo as apollo_outils
+    apollo_outils.verifier_reglages()
     # Chemins des liens de l'instance (`OTO_DASHBOARD_LINK_PATHS`) : une déclaration
     # illisible ou un type de lien inconnu refuse le démarrage ici, jamais nos chemins
     # par défaut en silence. Cf. `links.verifier_reglages`.

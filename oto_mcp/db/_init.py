@@ -703,7 +703,7 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     if _colonne_absente(conn, "runner_triggers", alertes_agents.COLONNE_FORFAIT_ANNONCE):
         conn.execute(alertes_agents.DDL_COLONNE_FORFAIT_ANNONCE)
     # Le relevé d'un reveal de téléphone Apollo sur la clé plateforme — la même que pose
-    # la révision `20261124_1700_apollo_releve` : ordre indifférent entre elles.
+    # la révision `20261126_1200_apollo_releve` : ordre indifférent entre elles.
     from . import apollo_reveals as _apollo_reveals
     if _colonne_absente(conn, "apollo_phone_reveals", _apollo_reveals.COLONNE_RELEVE):
         conn.execute(_apollo_reveals.DDL_COLONNE_RELEVE)

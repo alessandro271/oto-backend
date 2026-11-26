@@ -71,7 +71,7 @@ def _mount(monkeypatch, *, match_return=None):
     # donc le sondage d'Apollo répond — le chemin que ce banc décrit.
     from oto_mcp import apollo_receiver
     monkeypatch.setattr(apollo_receiver, "commander",
-                        lambda cle: ("jeton", "https://mcp.acme.test/api/receivers/apollo/phones/jeton"))
+                        lambda cle, plafond=None: ("jeton", "https://mcp.acme.test/api/receivers/apollo/phones/jeton"))
     monkeypatch.setattr(apollo_receiver, "lier", lambda j, rid: None)
     monkeypatch.setattr(apollo_receiver, "abandonner", lambda j: None)
     monkeypatch.setattr(apollo_receiver, "resultat_recu", lambda rid, cle: None)
@@ -166,7 +166,7 @@ def test_the_poll_does_not_echo_a_damaged_id(monkeypatch):
     # donc le sondage d'Apollo répond — le chemin que ce banc décrit.
     from oto_mcp import apollo_receiver
     monkeypatch.setattr(apollo_receiver, "commander",
-                        lambda cle: ("jeton", "https://mcp.acme.test/api/receivers/apollo/phones/jeton"))
+                        lambda cle, plafond=None: ("jeton", "https://mcp.acme.test/api/receivers/apollo/phones/jeton"))
     monkeypatch.setattr(apollo_receiver, "lier", lambda j, rid: None)
     monkeypatch.setattr(apollo_receiver, "abandonner", lambda j: None)
     monkeypatch.setattr(apollo_receiver, "resultat_recu", lambda rid, cle: None)

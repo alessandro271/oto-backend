@@ -91,6 +91,37 @@ from ..datastore.identite import AdresseJson as Adresse
 logger = logging.getLogger(__name__)
 
 
+# --- the per-org daily cap on the platform key's phone reveals ---------------
+# A per-ORG ceiling on the platform key's phone reveals a day — counted on the
+# orders themselves (`apollo_phone_reveals`), so the `platform_unmetered` right that
+# lifts the per-person quota does not lift it: an unlimited org's runaway batch
+# stops here, not on the Apollo account's yearly credits.
+_ENV_PLAFOND_ORG = "OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY"
+_PLAFOND_ORG_DEFAUT = 100
+
+
+def plafond_reveals_org() -> int:
+    """`OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY`: phone reveals one org orders a UTC
+    day on the platform key; absent = 100, `0` = none. Anything but a whole number
+    ≥ 0 raises — at startup (`verifier_reglages`), never read as the default."""
+    lu = os.environ.get(_ENV_PLAFOND_ORG)
+    if lu is None or not lu.strip():
+        return _PLAFOND_ORG_DEFAUT
+    try:
+        n = int(lu.strip())
+    except ValueError:
+        n = -1
+    if n < 0:
+        raise ValueError(f"{_ENV_PLAFOND_ORG}={lu!r}: unreadable value, expected a "
+                         "whole number (0 or more)")
+    return n
+
+
+def verifier_reglages() -> None:
+    """Startup guard: an unreadable cap refuses to start, never read as the default."""
+    plafond_reveals_org()
+
+
 def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
@@ -154,22 +185,6 @@ def register(mcp: FastMCP) -> None:
     # depends on the plan, and none of our measurements quantifies it. An unknown
     # factor is not a zero factor.
     _UNITES_REVEAL_TELEPHONE = 9
-    # A per-ORG ceiling on the platform key's phone reveals a day — counted on the
-    # orders themselves (`apollo_phone_reveals`), so the `platform_unmetered` right that
-    # lifts the per-person quota does not lift it: an unlimited org's runaway batch
-    # stops here, not on the Apollo account's yearly credits.
-    _ENV_PLAFOND_ORG = "OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY"
-    _PLAFOND_ORG_DEFAUT = 100
-
-    def _plafond_reveals_org() -> int:
-        raw = os.environ.get("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY")
-        if raw is not None:
-            try:
-                return max(0, int(raw))
-            except ValueError:
-                logger.warning("%s=%r unreadable: the default (%s) applies",
-                               _ENV_PLAFOND_ORG, raw, _PLAFOND_ORG_DEFAUT)
-        return _PLAFOND_ORG_DEFAUT
     _BYO_REVEAL_EMAILS_PERSO = (
         "`reveal_personal_emails=True` NEVER goes through the platform key: "
         "Apollo bills this reveal ON TOP of the match, on a pot whose scale "
@@ -707,21 +722,22 @@ def register(mcp: FastMCP) -> None:
                 at 65 374 characters and the client refused it outright. Same price.
         """
         cle = _cle_telephone()
-        if cle.is_platform:
-            plafond = _plafond_reveals_org()
-            faites = apollo_receiver.commandes_du_jour(cle)
-            if faites >= plafond:
-                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
-                    f"Refusal `apollo_phone_daily_cap`: your organization has ordered "
-                    f"{faites} phone reveals today on the shared Apollo key, its daily "
-                    f"cap is {plafond}. It resets at midnight UTC — or set your own "
-                    "Apollo key, which has no such cap."),
-                    data={"code": "apollo_phone_daily_cap", "used": faites,
-                          "limit": plafond, "retryable": False}))
         client = ApolloClient(api_key=cle.key)
         # The order is born BEFORE the call: Apollo may POST before handing control
-        # back to us. If it cannot be born, nothing is paid yet — we raise.
-        jeton, destination = apollo_receiver.commander(cle)
+        # back to us. If it cannot be born, nothing is paid yet — we raise. On the
+        # platform key it is born only under the org's daily cap, counted and written
+        # in one locked transaction (parallel orders cannot overshoot it).
+        try:
+            jeton, destination = apollo_receiver.commander(
+                cle, plafond=plafond_reveals_org() if cle.is_platform else None)
+        except apollo_receiver.PlafondDuJour as p:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"Refusal `apollo_phone_daily_cap`: your organization has ordered "
+                f"{p.used} phone reveals today on the shared Apollo key, its daily "
+                f"cap is {p.limit}. It resets at midnight UTC — or set your own "
+                "Apollo key, which has no such cap."),
+                data={"code": "apollo_phone_daily_cap", "used": p.used,
+                      "limit": p.limit, "retryable": False}))
         try:
             out = client.match_person(
                 person_id=person_id, linkedin_url=linkedin_url, email=email,

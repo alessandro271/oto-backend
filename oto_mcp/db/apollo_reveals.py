@@ -38,7 +38,7 @@ INCONNU = "unknown"
 #: Sur la clé plateforme, quand le coût de la commande a été tracé pour le facturant —
 #: par la relève, ou par le relevé serveur. NULL = pas encore (et toujours NULL sur une
 #: clé propre : le client paie Apollo, rien n'est facturé). La révision
-#: `20261124_1700_apollo_releve` la pose ; le démarrage aussi (`db/_init.py`), même DDL.
+#: `20261126_1200_apollo_releve` la pose ; le démarrage aussi (`db/_init.py`), même DDL.
 COLONNE_RELEVE = "releve_le"
 DDL_COLONNE_RELEVE = (f"ALTER TABLE apollo_phone_reveals ADD COLUMN IF NOT EXISTS "
                       f"{COLONNE_RELEVE} TIMESTAMPTZ")
@@ -47,15 +47,37 @@ DDL_COLONNE_RELEVE = (f"ALTER TABLE apollo_phone_reveals ADD COLUMN IF NOT EXIST
 PREFIXE_PLATEFORME = "platform:"
 
 
+#: Le jour (UTC) d'une commande, tel que le plafond le compte.
+_DU_JOUR = ("created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') "
+            "AT TIME ZONE 'UTC'")
+
+
 def ouvrir(token_hash: str, org_id: Optional[int], sub: str,
-           cle_portee: str) -> None:
+           cle_portee: str, plafond: Optional[int] = None) -> Optional[int]:
     """La commande existe : son URL de réception est désormais valide 30 jours.
-    `cle_portee` : la clé Apollo qui la paie — celle que devra résoudre un lecteur."""
+    `cle_portee` : la clé Apollo qui la paie — celle que devra résoudre un lecteur.
+
+    `plafond` (clé plateforme) : la commande ne naît que si la portée en compte MOINS
+    aujourd'hui (UTC). Le compte et l'écriture tiennent dans UNE transaction, sous un
+    verrou consultatif par portée : deux commandes parallèles d'une même org passent
+    l'une après l'autre, la seconde voit la première — le plafond ne se dépasse pas.
+    Rend None quand la commande est née, sinon le compte du jour qui la refuse (rien
+    n'est écrit)."""
     with _connect() as conn:
+        if plafond is not None:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                         ("apollo-phone-cap|" + cle_portee,))
+            faites = int(conn.execute(
+                f"SELECT COUNT(*) AS n FROM apollo_phone_reveals "
+                f"WHERE cle_portee = %s AND {_DU_JOUR}",
+                (cle_portee,)).fetchone()["n"])
+            if faites >= plafond:
+                return faites
         conn.execute(
             "INSERT INTO apollo_phone_reveals (token_hash, org_id, sub, cle_portee) "
             "VALUES (%s, %s, %s, %s)",
             (token_hash, org_id, sub, cle_portee))
+    return None
 
 
 def lier_request_id(token_hash: str, request_id: str) -> None:
@@ -123,13 +145,13 @@ def lire(cle_portee: str, request_id: str) -> Optional[dict]:
 
 def commandes_du_jour(cle_portee: str) -> int:
     """Les commandes passées depuis minuit UTC dans cette portée — sur la clé plateforme,
-    la portée d'UNE org (`apollo_receiver.portee`) : le plafond par org en lit le compte.
-    Une commande abandonnée (personne trouvée) est retirée et ne compte pas."""
+    la portée d'UNE org (`apollo_receiver.portee`). Le plafond, lui, compte dans
+    `ouvrir`, sous verrou ; ceci n'est qu'une lecture. Une commande abandonnée
+    (personne trouvée) est retirée et ne compte pas."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM apollo_phone_reveals "
-            "WHERE cle_portee = %s "
-            "AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",
+            f"SELECT COUNT(*) AS n FROM apollo_phone_reveals "
+            f"WHERE cle_portee = %s AND {_DU_JOUR}",
             (cle_portee,)).fetchone()
     return int(row["n"])
 

@@ -367,7 +367,7 @@ def test_webhook_url_n_est_plus_au_schema_mais_reste_accepte(monkeypatch):
     monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: MagicMock(key="k", is_platform=False))
     monkeypatch.setattr(apollo_client, "ApolloClient", lambda **kw: client)
     monkeypatch.setattr(apollo_receiver, "commander",
-                        lambda cle: ("j", "https://mcp.acme.test/api/receivers/apollo/phones/j"))
+                        lambda cle, plafond=None: ("j", "https://mcp.acme.test/api/receivers/apollo/phones/j"))
     monkeypatch.setattr(apollo_receiver, "lier", lambda j, rid: None)
     m = FastMCP("t")
     apollo_tool.register(m)
@@ -406,7 +406,7 @@ def test_la_commande_est_abandonnee_quand_apollo_ne_trouve_personne(monkeypatch)
     gestes: list = []
     monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: MagicMock(key="k", is_platform=False))
     monkeypatch.setattr(apollo_client, "ApolloClient", lambda **kw: client)
-    monkeypatch.setattr(apollo_receiver, "commander", lambda cle: ("j", "https://x.test/r/j"))
+    monkeypatch.setattr(apollo_receiver, "commander", lambda cle, plafond=None: ("j", "https://x.test/r/j"))
     monkeypatch.setattr(apollo_receiver, "abandonner", lambda j: gestes.append(("abandon", j)))
     monkeypatch.setattr(apollo_receiver, "lier", lambda j, rid: gestes.append(("lier", j)))
     m = FastMCP("t")
@@ -547,3 +547,85 @@ def test_une_commande_pas_encore_livree_est_connue_de_son_org(commanditaire):
     apollo_receiver.lier(jeton, "5454")
     assert apollo_receiver.resultat_recu("5454", cle) is None, "rien de livré encore"
     assert apollo_receiver.commande_connue("5454", cle), "mais la commande existe"
+
+
+# --------------------------------------------------------------------------- #
+# Le plafond par org, sur une vraie base : compté et écrit d'un seul tenant
+# --------------------------------------------------------------------------- #
+
+def _du_jour(cle) -> int:
+    from oto_mcp import apollo_receiver
+    return apollo_receiver.commandes_du_jour(cle)
+
+
+@pytest.fixture
+def org_neuve(commanditaire, monkeypatch):
+    """Une org sans aucune commande du jour : la base du module garde celles des tests
+    d'avant, et le plafond les compterait."""
+    from oto_mcp import access
+    org = 7300 + next(_ORGS_NEUVES)
+    monkeypatch.setattr(access, "current_org", lambda sub: org)
+    return org
+
+
+_ORGS_NEUVES = __import__("itertools").count()
+
+
+def test_au_plafond_la_commande_ne_nait_pas_et_rien_n_est_ecrit(org_neuve):
+    from oto_mcp import apollo_receiver
+    cle = _cle_plateforme()
+    apollo_receiver.commander(cle, plafond=2)
+    apollo_receiver.commander(cle, plafond=2)
+    with pytest.raises(apollo_receiver.PlafondDuJour) as e:
+        apollo_receiver.commander(cle, plafond=2)
+    assert (e.value.used, e.value.limit) == (2, 2)
+    assert _du_jour(cle) == 2, "la commande refusée n'a rien écrit"
+
+
+def test_des_commandes_paralleles_ne_depassent_pas_le_plafond(org_neuve):
+    """Le compte et l'écriture tiennent sous un verrou consultatif par portée : huit
+    commandes simultanées d'une même org, plafond 3 — trois naissent, cinq sont
+    refusées, jamais quatre."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from oto_mcp import apollo_receiver
+    cle = _cle_plateforme()
+    depart = Barrier(8)
+
+    def une():
+        depart.wait()
+        try:
+            apollo_receiver.commander(cle, plafond=3)
+            return "née"
+        except apollo_receiver.PlafondDuJour:
+            return "refusée"
+
+    with ThreadPoolExecutor(8) as pool:
+        issues = sorted(pool.map(lambda _: une(), range(8)))
+    assert issues.count("née") == 3 and issues.count("refusée") == 5
+    assert _du_jour(cle) == 3
+
+
+def test_le_plafond_d_une_org_ne_touche_pas_l_autre(org_neuve, monkeypatch):
+    from oto_mcp import access, apollo_receiver
+    cle = _cle_plateforme()
+    apollo_receiver.commander(cle, plafond=1)
+    monkeypatch.setattr(access, "current_org", lambda sub: org_neuve + 1000)
+    apollo_receiver.commander(cle, plafond=1)   # l'autre org commande encore
+
+
+def test_le_plafond_compte_l_org_dont_les_cles_sont_consommees(org_neuve, monkeypatch):
+    """Même org que `platform_rate` (`heritage.org_des_cles`) : un bénéficiaire hors de
+    l'org d'un projet partagé, à qui rien n'est prêté, compte sous son compte — il
+    n'épuise pas le plafond de l'org du projet, ni ne lit ses commandes."""
+    from oto_mcp import access, apollo_receiver
+    from oto_mcp.access import heritage
+    cle = _cle_plateforme()
+    apollo_receiver.commander(cle, plafond=1)          # un membre de l'org
+    monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "sub-beneficiaire")
+    monkeypatch.setattr(heritage, "org_des_cles", lambda sub, org: None)
+    assert apollo_receiver.portee(cle).endswith(":user:sub-beneficiaire")
+    apollo_receiver.commander(cle, plafond=1)          # le bénéficiaire, lui, passe
+    with pytest.raises(apollo_receiver.PlafondDuJour):
+        apollo_receiver.commander(cle, plafond=1)

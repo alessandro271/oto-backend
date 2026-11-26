@@ -17,8 +17,8 @@ IF NOT EXISTS`, même DDL, sous garde de catalogue) ; l'ancien code l'ignore.
 Retour arrière : retire la colonne (le relevé serveur refacturerait les commandes déjà
 relues : le facturant n'en garde qu'une ligne par commande).
 
-Révision : 20261124_1700_apollo_releve
-Précédente : 20261124_1200_empreintes_2fa
+Révision : 20261126_1200_apollo_releve
+Précédente : 20261125_1103_revocations
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ from alembic import op
 
 from oto_mcp.db.apollo_reveals import COLONNE_RELEVE, DDL_COLONNE_RELEVE
 
-revision = "20261124_1700_apollo_releve"
-down_revision = "20261124_1200_empreintes_2fa"
+revision = "20261126_1200_apollo_releve"
+down_revision = "20261125_1103_revocations"
 branch_labels = None
 depends_on = None
 

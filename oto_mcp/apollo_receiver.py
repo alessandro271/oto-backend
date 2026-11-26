@@ -39,7 +39,7 @@ import secrets
 from typing import Any, Optional
 
 from . import access, config
-from .access import ResolvedCredential
+from .access import ResolvedCredential, heritage
 from .db import apollo_reveals as db_apollo
 
 logger = logging.getLogger(__name__)
@@ -88,17 +88,38 @@ def portee(cle: ResolvedCredential, sub: Optional[str] = None) -> str:
     if not cle.is_platform:
         return base
     sub = sub or access.current_user_sub_or_raise()
-    org = access.current_org(sub)
+    # L'org dont l'appel CONSOMME la clé commune — la même que compte
+    # `platform_rate` (`heritage.org_des_cles`) : un bénéficiaire hors de l'org d'un
+    # projet partagé, à qui rien n'est prêté, compte (et lit) sous son compte, pas
+    # sous l'org du projet.
+    org = heritage.org_des_cles(sub, access.current_org(sub))
     return f"{base}:org:{org}" if org is not None else f"{base}:user:{sub}"
 
 
-def commander(cle: ResolvedCredential) -> tuple[str, str]:
+class PlafondDuJour(Exception):
+    """La portée a déjà commandé `used` reveals aujourd'hui (UTC), son plafond est
+    `limit` : rien n'est écrit, rien n'est commandé chez Apollo."""
+
+    def __init__(self, used: int, limit: int) -> None:
+        super().__init__(f"{used}/{limit}")
+        self.used, self.limit = used, limit
+
+
+def commander(cle: ResolvedCredential,
+              plafond: Optional[int] = None) -> tuple[str, str]:
     """Ouvre une commande AVANT l'appel à Apollo, payée par `cle` (la clé Apollo que
-    l'appelant vient de résoudre). Rend `(jeton, url)`."""
+    l'appelant vient de résoudre). Rend `(jeton, url)`.
+
+    `plafond` : le nombre de commandes du jour (UTC) que la portée de `cle` ne dépasse
+    pas — compté et écrit d'un seul tenant (`db_apollo.ouvrir`), donc tenu même sous
+    des commandes parallèles. Atteint : lève `PlafondDuJour`."""
     sub = access.current_user_sub_or_raise()
     jeton = secrets.token_urlsafe(32)
     url = url_de_reception(jeton)
-    db_apollo.ouvrir(empreinte(jeton), access.current_org(sub), sub, portee(cle, sub))
+    refus = db_apollo.ouvrir(empreinte(jeton), access.current_org(sub), sub,
+                             portee(cle, sub), plafond=plafond)
+    if refus is not None:
+        raise PlafondDuJour(refus, plafond)  # type: ignore[arg-type]
     return jeton, url
 
 
@@ -257,13 +278,6 @@ def ecrire_numeros(result: dict, *, datastore: Any, row_id: Optional[str],
     return out
 
 
-def commandes_du_jour(cle: ResolvedCredential) -> int:
-    """Les commandes passées aujourd'hui (UTC) dans la portée de `cle` — sur la clé
-    plateforme, celles de l'org de l'appelant : le plafond par org de
-    `apollo_reveal_phone` en lit le compte."""
-    return db_apollo.commandes_du_jour(portee(cle))
-
-
 def marquer_releve(request_id: str, cle: ResolvedCredential) -> None:
     """La relève a tracé le coût de cette commande (clé plateforme) : le relevé serveur
     (`apollo_releve.py`) ne la facturera pas. Ne lève pas : la relève est servie, et le
@@ -272,3 +286,10 @@ def marquer_releve(request_id: str, cle: ResolvedCredential) -> None:
         db_apollo.marquer_releve(portee(cle), str(request_id))
     except Exception:  # noqa: BLE001 — journalisé ; le facturant dédoublonne
         logger.warning("receveur apollo : relève non marquée", exc_info=True)
+
+
+def commandes_du_jour(cle: ResolvedCredential) -> int:
+    """Les commandes passées aujourd'hui (UTC) dans la portée de `cle` — sur la clé
+    plateforme, celles de l'org dont l'appel consomme la clé. Une lecture : le plafond
+    de `apollo_reveal_phone`, lui, se compte dans `commander`, sous verrou."""
+    return db_apollo.commandes_du_jour(portee(cle))
